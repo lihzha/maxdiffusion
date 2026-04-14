@@ -54,7 +54,7 @@ if ! python3 -c 'import sys; assert sys.version_info >= (3, 12)' 2>/dev/null; th
             echo "No name provided. Using default name: '$venv_name'"
         fi
         echo "Creating virtual environment '$venv_name' with Python 3.12..."
-        python3 -m uv venv --python 3.12 "$venv_name" --seed
+        uv venv --python 3.12 "$venv_name" --seed
         printf '%s\n' "$(realpath -- "$venv_name")" >> /tmp/venv_created
         echo -e "\n\e[32mVirtual environment '$venv_name' created successfully!\e[0m"
         echo "To activate it, run the following command:"
@@ -110,7 +110,7 @@ fi
 export UV_SYSTEM_PYTHON=1
 
 # Install dependencies from requirements.txt first
-python3 -m uv pip install -U --resolution=lowest \
+uv pip install -U --resolution=lowest \
         -r dependencies/requirements/generated_requirements/requirements.txt \
         -r src/install_maxdiffusion_extra_deps/extra_deps_from_github.txt
 
@@ -121,22 +121,22 @@ if [[ "$MODE" == "stable" || ! -v MODE ]]; then
     echo "Installing stable jax, jaxlib for tpu"
     if [[ -n "$JAX_VERSION" ]]; then
       echo "Installing stable jax, jaxlib, libtpu version ${JAX_VERSION}"
-      python3 -m uv pip install "jax[tpu]==${JAX_VERSION}" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+      uv pip install "jax[tpu]==${JAX_VERSION}" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
     else
       echo "Installing stable jax, jaxlib, libtpu for tpu"
-      python3 -m uv pip install 'jax[tpu]>0.4' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+      uv pip install 'jax[tpu]>0.4' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
     fi
   elif [[ $DEVICE == "gpu" ]]; then
       echo "Installing stable jax, jaxlib for NVIDIA gpu"
     if [[ -n "$JAX_VERSION" ]]; then
         echo "Installing stable jax, jaxlib ${JAX_VERSION}"
-        python3 -m uv pip install -U "jax[cuda12]==${JAX_VERSION}" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+        uv pip install -U "jax[cuda12]==${JAX_VERSION}" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
     else
         echo "Installing stable jax, jaxlib, libtpu for NVIDIA gpu"
-        python3 -m uv pip install "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+        uv pip install "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
     fi
     export NVTE_FRAMEWORK=jax
-    python3 -m uv pip install transformer_engine[jax]==2.1.0
+    uv pip install transformer_engine[jax]==2.1.0
   fi
 
 elif [[ $MODE == "nightly" ]]; then
@@ -144,25 +144,25 @@ elif [[ $MODE == "nightly" ]]; then
   if [[ $DEVICE == "gpu" ]]; then
       echo "Installing jax-nightly, jaxlib-nightly"
       # Install jax-nightly
-      python3 -m uv pip install -U --pre jax jaxlib jax-cuda12-plugin[with_cuda] jax-cuda12-pjrt -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html
+      uv pip install -U --pre jax jaxlib jax-cuda12-plugin[with_cuda] jax-cuda12-pjrt -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html
       # Install Transformer Engine
       export NVTE_FRAMEWORK=jax
-      python3 -m uv pip install git+https://github.com/NVIDIA/TransformerEngine.git@stable
+      uv pip install git+https://github.com/NVIDIA/TransformerEngine.git@stable
   elif [[ $DEVICE == "tpu" ]]; then
     echo "Installing jax-nightly,jaxlib-nightly"
     # Install jax-nightly
-    python3 -m uv pip install --pre -U jax -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html
+    uv pip install --pre -U jax -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html
     # Install jaxlib-nightly
-    python3 -m uv pip install --pre -U jaxlib -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
+    uv pip install --pre -U jaxlib -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
     # Install libtpu-nightly
-    python3 -m uv pip install --pre -U libtpu-nightly -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+    uv pip install --pre -U libtpu-nightly -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
   fi
   echo "Installing nightly tensorboard plugin profile"
-  python3 -m uv pip install tbp-nightly --upgrade
+  uv pip install tbp-nightly --upgrade
 else
   echo -e "\n\nError: You can only set MODE to [stable,nightly].\n\n"
   exit 1
 fi
 
 # Install maxdiffusion
-python3 -m uv pip install --no-deps .
+uv pip install --no-deps .
