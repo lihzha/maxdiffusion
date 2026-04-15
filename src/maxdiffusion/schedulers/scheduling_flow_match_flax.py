@@ -244,7 +244,7 @@ class FlaxFlowMatchScheduler(FlaxSchedulerMixin, ConfigMixin):
     t_shifted = (t * self.config.shift) / (1 + (self.config.shift - 1) * t)
 
     # 3. Scale t to [0,  self.config.num_train_timesteps]
-    timesteps = t_shifted.squeeze() * self.config.num_train_timesteps
+    timesteps = t_shifted * self.config.num_train_timesteps
 
     return timesteps
 

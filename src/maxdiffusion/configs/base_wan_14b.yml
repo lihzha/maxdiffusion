@@ -27,7 +27,7 @@ gcs_metrics: False
 save_config_to_gcs: False
 log_period: 100
 
-pretrained_model_name_or_path: 'gs://pi0-cot/wan/wan-diffusers/'
+pretrained_model_name_or_path: '/home/zm2074/gcs_mount/wan/wan-diffusers/snapshots/38ec498cb3208fb688890f8cc7e94ede2cbd7f68'
 model_name: wan2.1
 model_type: 'T2V'
 
@@ -166,8 +166,8 @@ mesh_axes: ['data', 'fsdp', 'context', 'tensor']
 # conv_in : conv.shape[2] weight
 # conv_out : conv.shape[-1] weight
 logical_axis_rules: [
-                      ['batch', ['data', 'fsdp']],
-                      ['activation_batch', ['data', 'fsdp']],
+                      ['batch', 'data'],
+                      ['activation_batch', 'data'],
                       ['activation_self_attn_heads', ['context', 'tensor']],
                       ['activation_cross_attn_q_length', ['context', 'tensor']],
                       ['activation_length', 'context'],
@@ -210,7 +210,7 @@ dataset_type: 'tfrecord'  # Options: 'tfrecord', 'hf', 'tf', 'grain', 'synthetic
 # 2. Optionally set synthetic_num_samples (null=infinite, or a number like 10000)
 # 3. Optionally override dimensions with synthetic_override_* flags below
 #
-# synthetic_num_samples: null  # null for infinite, or set a number
+synthetic_num_samples: null  # null for infinite, or set a number
 #
 # Optional dimension overrides (comment out to use pipeline/config values):
 # synthetic_override_height: 720
@@ -234,6 +234,7 @@ load_tfrecord_cached: True
 train_data_dir: ''
 dataset_config_name: ''
 jax_cache_dir: ''
+model_cache_dir: '/tmp'
 hf_data_dir: ''
 hf_train_files: ''
 hf_access_token: ''
@@ -302,6 +303,7 @@ adam_b1: 0.9 # Exponential decay rate to track the first moment of past gradient
 adam_b2: 0.999 # Exponential decay rate to track the second moment of past gradients.
 adam_eps: 1.e-8 # A small constant applied to denominator outside of the square root.
 adam_weight_decay: 0.0 # AdamW Weight decay
+adam_mu_dtype: 'bfloat16' # dtype for Adam first moment accumulator; reduces optimizer memory on large models
 max_grad_norm: 1.0
 
 enable_profiler: False

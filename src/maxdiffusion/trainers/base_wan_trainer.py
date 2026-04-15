@@ -25,6 +25,7 @@ from flax.linen import partitioning as nn_partitioning
 from flax.training import train_state
 import jax
 from jax.experimental import multihost_utils
+from jax.sharding import NamedSharding, PartitionSpec as P
 import jax.numpy as jnp
 from maxdiffusion import max_logging, max_utils, train_utils
 from maxdiffusion.generate_wan import inference_generate_video
@@ -189,6 +190,13 @@ class BaseWanTrainer(abc.ABC):
       del pipeline.vae
       del pipeline.vae_cache
 
+    # When using pre-cached embeddings (tfrecord dataset), the text encoder and
+    # tokenizer are not needed during training and consume ~9GB of HBM per chip.
+    if self.config.dataset_type == "tfrecord" or self.config.load_tfrecord_cached:
+      for attr in ("text_encoder", "tokenizer", "image_encoder", "image_processor"):
+        if hasattr(pipeline, attr):
+          delattr(pipeline, attr)
+
     mesh = pipeline.mesh
     train_data_iterator = self.load_dataset(mesh, pipeline=pipeline, is_training=True)
 
@@ -267,14 +275,31 @@ class BaseWanTrainer(abc.ABC):
         del restore_args["opt_state"]
         del optimizer
       state = jax.tree.map(_to_array, state)
-      state_spec = nnx.get_partition_spec(state)
-      state = jax.lax.with_sharding_constraint(state, state_spec)
-      state_shardings = nnx.get_named_sharding(state, mesh)
-      if jax.process_index() == 0 and restore_args:
-        max_logging.log("--- Optimizer State Sharding Spec (opt_state) ---")
-        pretty_string = pprint.pformat(state_spec.opt_state, indent=4, width=60)
-        max_logging.log(pretty_string)
-        max_logging.log("------------------------------------------------")
+      # Replicate scalar (0-d) arrays (e.g. state.step, optimizer count) across
+      # all mesh devices.  TrainState.create initialises these on a single device;
+      # without replication the JIT sees incompatible device sets for scalars vs
+      # sharded weight tensors.
+      _replicated_sharding = NamedSharding(mesh, P())
+      def _replicate_scalar(x):
+        if isinstance(x, jax.Array) and x.ndim == 0:
+          return jax.device_put(x, _replicated_sharding)
+        return x
+      state = jax.tree_util.tree_map(_replicate_scalar, state)
+      # jnp.zeros_like on VariableState does NOT copy sharding_rules, so
+      # optimizer moments (mu, nu) have no sharding_rules.  nnx.get_partition_spec
+      # therefore returns P() (replicated) for them, and with_sharding_constraint
+      # would try to allgather each shard into a full replicated tensor, OOMing on
+      # large models.  Fix: constrain only params (which carry correct
+      # sharding_rules), then derive state_shardings from the actual .sharding
+      # attribute on each array so the JIT sees the correct sharding for all arrays.
+      params_spec = nnx.get_partition_spec(state.params)
+      state = state.replace(
+          params=jax.lax.with_sharding_constraint(state.params, params_spec)
+      )
+      state_shardings = jax.tree_util.tree_map(
+          lambda x: x.sharding if isinstance(x, jax.Array) else None,
+          state,
+      )
     if self.config.hardware != "gpu":
       max_utils.delete_pytree(params)
     data_shardings = self.get_data_shardings(mesh)

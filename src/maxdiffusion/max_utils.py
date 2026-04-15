@@ -483,12 +483,18 @@ def create_learning_rate_schedule(learning_rate, learning_rate_schedule_steps, w
 
 
 def create_optimizer(config, learning_rate_scheduler):
+  mu_dtype_str = getattr(config, "adam_mu_dtype", None)
+  mu_dtype = None
+  if mu_dtype_str:
+    import jax.numpy as jnp
+    mu_dtype = {"bfloat16": jnp.bfloat16, "float16": jnp.float16, "float32": jnp.float32}.get(mu_dtype_str)
   return optax.adamw(
       learning_rate=learning_rate_scheduler,
       b1=config.adam_b1,
       b2=config.adam_b2,
       eps=config.adam_eps,
       weight_decay=config.adam_weight_decay,
+      mu_dtype=mu_dtype,
   )
 
 
