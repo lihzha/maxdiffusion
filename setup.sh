@@ -106,8 +106,10 @@ if [[ -n $JAX_VERSION && ! ($MODE == "stable" || -z $MODE) ]]; then
   exit 1
 fi
 
-# Set uv to use system python by default
-export UV_SYSTEM_PYTHON=1
+# Respect an activated virtualenv (e.g. maxdiffusion_venv) instead of forcing system Python.
+# Forcing UV_SYSTEM_PYTHON=1 caused uv to resolve against /usr/bin/python3.10 even when a
+# 3.12 venv was active, breaking cp312-only wheels like array-record.
+export UV_SYSTEM_PYTHON=0
 
 # Install dependencies from requirements.txt first
 uv pip install -U --resolution=lowest \
