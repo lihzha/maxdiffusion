@@ -80,7 +80,8 @@ python src/maxdiffusion/train_wan.py \
     height=1280 \
     width=720 \
     num_frames=81 \
-    flash_min_seq_length=0
+    flash_min_seq_length=0 \
+    allow_split_physical_axes=True
 
 # unmount
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
