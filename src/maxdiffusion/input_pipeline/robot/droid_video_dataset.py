@@ -274,9 +274,9 @@ class DroidVideoDataset:
         clip_length = self.clip_length  # capture for lambda
 
         def extract_clip(start: tf.Tensor) -> dict:
-            frame_bytes = tf.slice(images, [start], [clip_length])  # [clip_length] bytes
+            frames = images[start : start + clip_length]  # [clip_length, H, W, C] uint8
             instruction = instructions[start]
-            return {"frame_bytes": frame_bytes, "language_instruction": instruction}
+            return {"frames": frames, "language_instruction": instruction}
 
         return tf.data.Dataset.from_tensor_slices(start_indices).map(
             extract_clip, num_parallel_calls=self._num_parallel_calls
@@ -285,20 +285,10 @@ class DroidVideoDataset:
     # ── Per-clip decoding ────────────────────────────────────────────────────
 
     def _decode_clip(self, sample: dict) -> dict:
-        """Decode JPEG bytes and resize to (height, width)."""
+        """Cast uint8 pixel frames to float32, resize to (height, width)."""
         height, width = self.height, self.width
-
-        def decode_frame(frame_bytes: tf.Tensor) -> tf.Tensor:
-            img = tf.io.decode_jpeg(frame_bytes, channels=3)
-            img = tf.image.resize(img, [height, width], method="bilinear")
-            return tf.cast(img, tf.float32) / 255.0
-
-        frames = tf.map_fn(
-            decode_frame,
-            sample["frame_bytes"],
-            fn_output_signature=tf.TensorSpec([height, width, 3], tf.float32),
-        )  # [clip_length, H, W, 3]
-
+        frames = tf.cast(sample["frames"], tf.float32) / 255.0  # [clip_length, H, W, 3]
+        frames = tf.image.resize(frames, [height, width], method="bilinear")
         return {
             "frames": frames,
             "language_instruction": sample["language_instruction"],
