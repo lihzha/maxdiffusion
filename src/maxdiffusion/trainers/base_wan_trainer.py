@@ -174,6 +174,15 @@ class BaseWanTrainer(abc.ABC):
   def get_eval_step(self, pipeline, mesh, state_shardings, eval_data_shardings):
     """Returns the evaluation step function."""
 
+  def preprocess_batch(self, batch, pipeline):
+    """Optional hook for on-the-fly batch encoding.
+
+    Override in subclasses that use raw-pixel datasets (e.g. dataset_type="droid")
+    to encode frames into latents before the training step. The default
+    implementation is a no-op for pre-encoded TFRecord datasets.
+    """
+    return batch
+
   def start_training(self):
     with nn_partitioning.axis_rules(self.config.logical_axis_rules):
       pipeline, opt_state, step = self.checkpointer.load_checkpoint()
@@ -185,7 +194,10 @@ class BaseWanTrainer(abc.ABC):
       # Generate a sample before training to compare against generated sample after training.
       pretrained_video_path = generate_sample(self.config, pipeline, filename_prefix="pre-training-")
 
-    if self.config.eval_every == -1 or (not self.config.enable_generate_video_for_eval):
+    needs_vae_for_training = getattr(self.config, "dataset_type", "") == "droid"
+    if not needs_vae_for_training and (
+        self.config.eval_every == -1 or (not self.config.enable_generate_video_for_eval)
+    ):
       # save some memory.
       del pipeline.vae
       del pipeline.vae_cache
@@ -326,6 +338,7 @@ class BaseWanTrainer(abc.ABC):
         start_step_time = datetime.datetime.now()
 
         next_batch_future = executor.submit(load_next_batch, train_data_iterator, example_batch, self.config)
+        example_batch = self.preprocess_batch(example_batch, pipeline)
         with (
             jax.profiler.StepTraceAnnotation("train", step_num=step),
             pipeline.mesh,

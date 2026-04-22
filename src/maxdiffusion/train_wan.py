@@ -27,9 +27,12 @@ import flax
 
 
 def train(config):
-  from maxdiffusion.trainers.wan_trainer import WanTrainer
-
-  trainer = WanTrainer(config)
+  if config.model_type == "I2V":
+    from maxdiffusion.trainers.wan_i2v_trainer import WanI2VTrainer
+    trainer = WanI2VTrainer(config)
+  else:
+    from maxdiffusion.trainers.wan_trainer import WanTrainer
+    trainer = WanTrainer(config)
   trainer.start_training()
 
 

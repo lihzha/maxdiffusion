@@ -195,10 +195,18 @@ allow_split_physical_axes: False
 
 # Dataset
 # Replace with dataset path or train_data_dir. One has to be set.
+# dataset_type options:
+#   'tfrecord'  — pre-encoded latents (see wan_i2v_data_preprocessing.py)
+#   'droid'     — on-the-fly encoding from existing DROID TFDS records;
+#                 set train_data_dir to the parent of the droid/ TFDS directory
+#   'synthetic' — random tensors for smoke-testing
 dataset_name: 'diffusers/pokemon-gpt4-captions'
 train_split: 'train'
 dataset_type: 'tfrecord'
 cache_latents_text_encoder_outputs: True
+# Stride between clip start indices when dataset_type='droid'.
+# stride=1 gives maximum overlap; stride=num_frames gives non-overlapping clips.
+droid_clip_stride: 1
 # cache_latents_text_encoder_outputs only apply to dataset_type="tf",
 # only apply to small dataset that fits in memory
 # prepare image latents and text encoder outputs

@@ -120,8 +120,41 @@ def make_data_iterator(
         pipeline=pipeline,
         is_training=is_training,
     )
+  elif config.dataset_type == "droid":
+    return _make_droid_video_iterator(config, mesh, global_batch_size)
   else:
-    assert False, f"Unknown dataset_type {config.dataset_type}, dataset_type must be in (tf, tfrecord, hf, grain, synthetic)"
+    assert False, f"Unknown dataset_type {config.dataset_type}, dataset_type must be in (tf, tfrecord, hf, grain, synthetic, droid)"
+
+
+def _make_droid_video_iterator(config, mesh, global_batch_size):
+  """Build a MultiHostDataLoadIterator from DroidVideoDataset.
+
+  The iterator yields raw pixel batches:
+      frames:               [B, clip_length, height, width, 3]  float32
+      language_instruction: [B]                                  bytes
+
+  On-the-fly VAE / T5 / CLIP encoding is the trainer's responsibility
+  (see WanI2VTrainer.preprocess_batch).
+  """
+  from maxdiffusion.input_pipeline.robot.droid_video_dataset import DroidVideoDataset
+
+  per_host_batch = global_batch_size // jax.process_count()
+
+  dataset_obj = DroidVideoDataset(
+      data_dir=config.train_data_dir,
+      clip_length=config.num_frames,
+      height=config.height,
+      width=config.width,
+      stride=getattr(config, "droid_clip_stride", 1),
+      split="train",
+      seed=config.seed,
+      batch_size=per_host_batch,
+      shuffle=config.enable_data_shuffling,
+      shard_for_training=True,
+  )
+
+  train_iter = multihost_dataloading.MultiHostDataLoadIterator(dataset_obj.dataset, mesh)
+  return train_iter
 
 
 def make_dreambooth_train_iterator(config, mesh, global_batch_size, tokenizer, vae, vae_params):

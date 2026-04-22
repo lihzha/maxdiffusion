@@ -191,7 +191,7 @@ class SyntheticDataSource:
 
 def _generate_wan_sample(rng_key: jax.Array, dimensions: Dict[str, Any], is_training: bool) -> Dict[str, np.ndarray]:
   """Generate a single batch of synthetic data for WAN model."""
-  keys = jax.random.split(rng_key, 3)
+  keys = jax.random.split(rng_key, 5)
 
   per_host_batch_size = dimensions["per_host_batch_size"]
 
@@ -214,10 +214,24 @@ def _generate_wan_sample(rng_key: jax.Array, dimensions: Dict[str, Any], is_trai
       "encoder_hidden_states": np.array(encoder_hidden_states),
   }
 
+  if dimensions.get("is_i2v", False):
+    condition_shape = (
+        per_host_batch_size,
+        17,
+        dimensions["num_latent_frames"],
+        dimensions["latent_height"],
+        dimensions["latent_width"],
+    )
+    data["condition"] = np.array(jax.random.normal(keys[2], shape=condition_shape, dtype=jnp.float32))
+    if dimensions.get("model_name") == "wan2.1":
+      data["encoder_hidden_states_image"] = np.array(
+          jax.random.normal(keys[3], shape=(per_host_batch_size, 257, 1280), dtype=jnp.float32)
+      )
+
   # For evaluation, also generate timesteps
   if not is_training:
     timesteps = jax.random.randint(
-        keys[2], shape=(per_host_batch_size,), minval=0, maxval=dimensions["num_train_timesteps"], dtype=jnp.int32
+        keys[4], shape=(per_host_batch_size,), minval=0, maxval=dimensions["num_train_timesteps"], dtype=jnp.int32
     )
     data["timesteps"] = np.array(timesteps)
 
@@ -249,6 +263,12 @@ def _make_wan_synthetic_iterator(config, mesh, global_batch_size, pipeline, is_t
   num_channels_latents = get_wan_dimension(
       config, pipeline, "num_channels_latents", pipeline_path="transformer.config.in_channels", default_value=16
   )
+
+  # I2V: transformer.config.in_channels=33 is the post-concat model input (16 noisy + 17 condition).
+  # Latents alone are always 16-channel; condition is concatenated inside the train step.
+  is_i2v = getattr(config, "model_type", None) == "I2V"
+  if is_i2v:
+    num_channels_latents = 16
 
   # VAE scale factors from pipeline attributes
   vae_scale_factor_spatial = get_wan_dimension(
@@ -290,6 +310,8 @@ def _make_wan_synthetic_iterator(config, mesh, global_batch_size, pipeline, is_t
       "vae_scale_factor_spatial": vae_scale_factor_spatial,
       "vae_scale_factor_temporal": vae_scale_factor_temporal,
       "num_train_timesteps": num_train_timesteps,
+      "is_i2v": is_i2v,
+      "model_name": getattr(config, "model_name", None),
   }
 
   log_synthetic_config("WAN", dimensions, per_host_batch_size, is_training, num_samples)
