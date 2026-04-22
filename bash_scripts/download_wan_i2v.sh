@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ID="Wan-AI/Wan2.1-I2V-14B-720P-Diffusers"
-GCS_DEST="${1:-gs://pi0-cot/wan/wan-i2v-diffusers}"
+GCS_DEST="${1:-gs://v6_east1d/wan/wan-i2v-diffusers}"
 HF_BASE="https://huggingface.co/${REPO_ID}/resolve/main"
 
 echo "Downloading ${REPO_ID} → ${GCS_DEST}"
