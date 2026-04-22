@@ -24,13 +24,17 @@ if ! mountpoint -q "$GCS_MOUNT"; then
     "$GCS_BUCKET" "$GCS_MOUNT"
 fi
 
-# --- 3. Resolve the I2V model snapshot dir ---
-export WAN_MODEL_DIR="$(ls -d $GCS_MOUNT/wan/wan-diffusers/snapshots/*/* 2>/dev/null | head -1)"
-if [ -z "$WAN_MODEL_DIR" ]; then
-  echo "ERROR: could not find WAN model snapshot under $GCS_MOUNT/wan/wan-diffusers/snapshots/"
+# --- 3. I2V model path ---
+# The I2V model (Wan2.1-I2V-14B-720P-Diffusers) must be downloaded separately from the T2V model.
+# To download: python3 -c "from huggingface_hub import snapshot_download; \
+#   snapshot_download('Wan-AI/Wan2.1-I2V-14B-720P-Diffusers', local_dir='/tmp/wan-i2v-diffusers', ignore_patterns=['*.pth'])"
+# Then: gsutil -m cp -r /tmp/wan-i2v-diffusers gs://pi0-cot/wan/wan-i2v-diffusers/
+export WAN_I2V_MODEL_DIR="$GCS_MOUNT/wan/wan-i2v-diffusers"
+if [ ! -f "$WAN_I2V_MODEL_DIR/model_index.json" ]; then
+  echo "ERROR: I2V model not found at $WAN_I2V_MODEL_DIR — download it first (see comment above)."
   exit 1
 fi
-echo "Using WAN_MODEL_DIR=$WAN_MODEL_DIR"
+echo "Using WAN_I2V_MODEL_DIR=$WAN_I2V_MODEL_DIR"
 
 # --- 4. XLA flags ---
 export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
@@ -73,7 +77,7 @@ python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
     run_name=i2v-test-run-1 \
     output_dir=gs://v6_east1d/i2v-test-run-1 \
-    pretrained_model_name_or_path=$WAN_MODEL_DIR \
+    pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
     dataset_type=synthetic \
     attention=flash \
     weights_dtype=bfloat16 \
@@ -97,7 +101,7 @@ python src/maxdiffusion/train_wan.py \
 #     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
 #     run_name=i2v-tfrecord-run-1 \
 #     output_dir=gs://v6_east1d/i2v-tfrecord-run-1 \
-#     pretrained_model_name_or_path=$WAN_MODEL_DIR \
+#     pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
 #     dataset_type=tfrecord \
 #     train_data_dir=gs://v6_east1d/wan_i2v_tfrecords/train \
 #     cache_latents_text_encoder_outputs=True \
@@ -123,7 +127,7 @@ python src/maxdiffusion/train_wan.py \
 #     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
 #     run_name=i2v-droid-run-1 \
 #     output_dir=gs://v6_east1d/i2v-droid-run-1 \
-#     pretrained_model_name_or_path=$WAN_MODEL_DIR \
+#     pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
 #     dataset_type=droid \
 #     train_data_dir=/path/to/tfds_parent/ \
 #     droid_clip_stride=8 \
