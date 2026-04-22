@@ -27,7 +27,8 @@ if ! mountpoint -q "$GCS_MOUNT"; then
 fi
 
 # --- 4. Resolve the actual snapshot dir containing config.json ---
-export WAN_MODEL_DIR="$(ls -d $GCS_MOUNT/wan/wan-diffusers/snapshots/*/* | head -1)"
+# Use a gs:// path so all multi-host workers can access it without a local gcsfuse mount.
+export WAN_MODEL_DIR="$(gsutil ls gs://$GCS_BUCKET/wan/wan-diffusers/snapshots/*/* | head -1 | sed 's|/$||')"
 echo "Using WAN_MODEL_DIR=$WAN_MODEL_DIR"
 
 
