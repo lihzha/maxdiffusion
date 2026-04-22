@@ -72,28 +72,28 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 #
 # Uncomment and set the right dataset_type / train_data_dir for your run.
 
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
-python src/maxdiffusion/train_wan.py \
-    src/maxdiffusion/configs/base_wan_i2v_14b.yml \
-    run_name=i2v-test-run-1 \
-    output_dir=gs://v6_east1d/i2v-test-run-1 \
-    pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
-    dataset_type=synthetic \
-    attention=flash \
-    weights_dtype=bfloat16 \
-    activations_dtype=bfloat16 \
-    remat_policy=FULL \
-    ici_fsdp_parallelism=2 \
-    ici_data_parallelism=1 \
-    ici_tensor_parallelism=1 \
-    ici_context_parallelism=4 \
-    scan_layers=True \
-    max_train_steps=1000 \
-    per_device_batch_size=0.25 \
-    height=720 \
-    width=1280 \
-    num_frames=81 \
-    flash_min_seq_length=0
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
+# python src/maxdiffusion/train_wan.py \
+#     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
+#     run_name=i2v-test-run-1 \
+#     output_dir=gs://v6_east1d/i2v-test-run-1 \
+#     pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
+#     dataset_type=synthetic \
+#     attention=flash \
+#     weights_dtype=bfloat16 \
+#     activations_dtype=bfloat16 \
+#     remat_policy=FULL \
+#     ici_fsdp_parallelism=2 \
+#     ici_data_parallelism=1 \
+#     ici_tensor_parallelism=1 \
+#     ici_context_parallelism=4 \
+#     scan_layers=True \
+#     max_train_steps=1000 \
+#     per_device_batch_size=0.25 \
+#     height=720 \
+#     width=1280 \
+#     num_frames=81 \
+#     flash_min_seq_length=0
 
 # --- TFRecord path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
@@ -122,30 +122,30 @@ python src/maxdiffusion/train_wan.py \
 #     flash_min_seq_length=0
 
 # --- DROID path (uncomment to use) ---
-# XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
-# python src/maxdiffusion/train_wan.py \
-#     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
-#     run_name=i2v-droid-run-1 \
-#     output_dir=gs://v6_east1d/i2v-droid-run-1 \
-#     pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
-#     dataset_type=droid \
-#     train_data_dir=/path/to/tfds_parent/ \
-#     droid_clip_stride=8 \
-#     attention=flash \
-#     weights_dtype=bfloat16 \
-#     activations_dtype=bfloat16 \
-#     remat_policy=FULL \
-#     ici_fsdp_parallelism=2 \
-#     ici_data_parallelism=1 \
-#     ici_tensor_parallelism=1 \
-#     ici_context_parallelism=4 \
-#     scan_layers=True \
-#     max_train_steps=1000 \
-#     per_device_batch_size=0.25 \
-#     height=480 \
-#     width=832 \
-#     num_frames=49 \
-#     flash_min_seq_length=0
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
+python src/maxdiffusion/train_wan.py \
+    src/maxdiffusion/configs/base_wan_i2v_14b.yml \
+    run_name=i2v-droid-run-1 \
+    output_dir=gs://v6_east1d/i2v-droid-run-1 \
+    pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
+    dataset_type=droid \
+    train_data_dir=gs://v6_east1d/OXE/droid \
+    droid_clip_stride=8 \
+    attention=flash \
+    weights_dtype=bfloat16 \
+    activations_dtype=bfloat16 \
+    remat_policy=FULL \
+    ici_fsdp_parallelism=2 \
+    ici_data_parallelism=1 \
+    ici_tensor_parallelism=1 \
+    ici_context_parallelism=4 \
+    scan_layers=True \
+    max_train_steps=1000 \
+    per_device_batch_size=0.25 \
+    height=480 \
+    width=832 \
+    num_frames=49 \
+    flash_min_seq_length=0
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
