@@ -1,4 +1,5 @@
 # --- 5. Activate the training env ---
+source ~/.zshrc
 source ~/maxdiffusion_venv/bin/activate
 cd ~/maxdiffusion
 
