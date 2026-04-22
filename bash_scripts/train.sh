@@ -63,7 +63,7 @@ python src/maxdiffusion/train_wan.py \
     run_name=test-run-8 \
     output_dir=gs://v6_east1d/test-run-8 \
     pretrained_model_name_or_path=$WAN_MODEL_DIR \
-    train_data_dir=gs://v6_east1d/wan_tfr_dataset_pusa_v1_lihan/train \
+    train_data_dir=gs://v6_east1d/wan_tfr_dataset_pusa_v1_tenny/train \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
