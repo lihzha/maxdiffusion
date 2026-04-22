@@ -1,6 +1,5 @@
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.zshrc
-git clone https://github.com/lihzha/maxdiffusion.git
 cd maxdiffusion
 git checkout tenny-dev
 uv venv --python 3.12 ~/maxdiffusion_venv --seed
