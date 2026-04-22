@@ -4,6 +4,17 @@ cd ~/maxdiffusion
 
 # --- 4. Resolve the actual snapshot dir containing config.json ---
 export GCS_MOUNT=/home/irom-lab/gcs-mount
+export GCS_BUCKET=v6_east1d
+
+if ! mountpoint -q "$GCS_MOUNT"; then
+  gcsfuse \
+    --implicit-dirs \
+    --file-cache-max-size-mb=-1 \
+    --cache-dir=/dev/shm/gcsfuse-cache \
+    "$GCS_BUCKET" "$GCS_MOUNT"
+fi
+
+
 export WAN_MODEL_DIR="$(ls -d $GCS_MOUNT/wan/wan-diffusers/snapshots/*/* | head -1)"
 echo "Using WAN_MODEL_DIR=$WAN_MODEL_DIR"
 
