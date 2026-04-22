@@ -436,15 +436,13 @@ class ConfigMixin:
 
     try:
       # Load config dict
-      f = open(config_file)
-      diffusers_config_dict = json.load(f)
+      with open(config_file) as f:
+        diffusers_config_dict = json.load(f)
       for k, v in diffusers_config_dict.items():
         if isinstance(v, list) and len(v) > 0 and v[0] == "diffusers":
           v[0] = "maxdiffusion"
-      with open(config_file, "w") as fp:
-        json.dump(diffusers_config_dict, fp)
 
-      config_dict = cls._dict_from_json_file(config_file)
+      config_dict = diffusers_config_dict
 
       commit_hash = extract_commit_hash(config_file)
     except (json.JSONDecodeError, UnicodeDecodeError):
