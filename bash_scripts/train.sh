@@ -38,16 +38,16 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_14b.yml \
-    run_name=test-run-64 \
-    output_dir=gs://v6_east1d/test-run-64 \
+    run_name=test-run-8 \
+    output_dir=gs://v6_east1d/test-run-8 \
     pretrained_model_name_or_path=$WAN_MODEL_DIR \
     train_data_dir=gs://v6_east1d/wan_tfr_dataset_pusa_v1_lihan/train \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
-    ici_fsdp_parallelism=8 \
-    ici_data_parallelism=2 \
+    ici_fsdp_parallelism=2 \
+    ici_data_parallelism=1 \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=4 \
     scan_layers=True \
