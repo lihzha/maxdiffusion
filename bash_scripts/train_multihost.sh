@@ -18,17 +18,16 @@ fi
 
 # --- 3. Mount the bucket (cache on /dev/shm because / is full) ---
 mkdir -p "$GCS_MOUNT" /dev/shm/gcsfuse-cache
-if ! mountpoint -q "$GCS_MOUNT"; then
-  gcsfuse \
-    --implicit-dirs \
-    --file-cache-max-size-mb=-1 \
-    --cache-dir=/dev/shm/gcsfuse-cache \
-    "$GCS_BUCKET" "$GCS_MOUNT"
-fi
+# Always unmount first to clear any stale handle from a previous killed run.
+fusermount -uz "$GCS_MOUNT" 2>/dev/null || true
+gcsfuse \
+  --implicit-dirs \
+  --file-cache-max-size-mb=-1 \
+  --cache-dir=/dev/shm/gcsfuse-cache \
+  "$GCS_BUCKET" "$GCS_MOUNT"
 
 # --- 4. Resolve the actual snapshot dir containing config.json ---
-# Use a gs:// path so all multi-host workers can access it without a local gcsfuse mount.
-export WAN_MODEL_DIR="$(gsutil ls gs://$GCS_BUCKET/wan/wan-diffusers/snapshots/*/* | head -1 | sed 's|/$||')"
+export WAN_MODEL_DIR="$(ls -d $GCS_MOUNT/wan/wan-diffusers/snapshots/*/* | head -1)"
 echo "Using WAN_MODEL_DIR=$WAN_MODEL_DIR"
 
 
