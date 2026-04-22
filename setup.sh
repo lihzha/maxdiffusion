@@ -47,10 +47,10 @@ if ! python3 -c 'import sys; assert sys.version_info >= (3, 12)' 2>/dev/null; th
         maxdiffusion_dir=$(pwd)
         cd
         # Ask for the venv name
-        read -p "Please enter a name for your new virtual environment (default: maxdiffusion_venv): " venv_name
+        read -p "Please enter a name for your new virtual environment (default: .venv): " venv_name
         # Use a default name if the user provides no input
         if [ -z "$venv_name" ]; then
-            venv_name="maxdiffusion_venv"
+            venv_name=".venv"
             echo "No name provided. Using default name: '$venv_name'"
         fi
         echo "Creating virtual environment '$venv_name' with Python 3.12..."
