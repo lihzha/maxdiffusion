@@ -12,7 +12,6 @@ Output per sample:
 from __future__ import annotations
 
 import contextlib
-import os
 
 import jax
 import psutil
@@ -51,6 +50,39 @@ def _tf_data_options(deterministic: bool = False) -> tf.data.Options:
     return opts
 
 
+def _episode_to_traj(episode: dict) -> tf.data.Dataset:
+    """Convert an RLDS episode (with nested steps Dataset) to a single-element
+    Dataset containing a trajectory dict with [T, ...] shaped tensors.
+
+    Replicates what dlimp.DLataset.from_rlds does: stacks per-step fields and
+    re-wraps episode-level metadata under traj_metadata so the rest of the
+    pipeline can use [...][0] indexing on file_path.
+    """
+    file_path = episode["episode_metadata"]["file_path"]  # scalar string
+    steps = episode["steps"]
+
+    # Batch all steps into [T, ...] tensors. DROID trajectories are at most a
+    # few hundred frames; 1_000_000 is a safe upper bound and does not
+    # pre-allocate memory.
+    batched = steps.batch(1_000_000)
+
+    def _build_traj(batch: dict) -> dict:
+        return {
+            "observation": batch["observation"],
+            "language_instruction": batch["language_instruction"],
+            "language_instruction_2": batch["language_instruction_2"],
+            "language_instruction_3": batch["language_instruction_3"],
+            "traj_metadata": {
+                "episode_metadata": {
+                    # Wrap in a length-1 tensor so callers can use [...][0].
+                    "file_path": tf.expand_dims(file_path, 0),
+                }
+            },
+        }
+
+    return batched.map(_build_traj)  # single-element Dataset per trajectory
+
+
 class DroidVideoDataset:
     """Iterate DROID TFDS records and yield fixed-length video clips.
 
@@ -81,7 +113,7 @@ class DroidVideoDataset:
         shuffle:               Whether to shuffle at file level and with a
                                post-window buffer.
         shuffle_buffer:        Size of the post-window shuffle buffer (clips).
-        num_parallel_reads:    Passed to ``dl.DLataset.from_rlds``.
+        num_parallel_reads:    Passed to tfds.ReadConfig as interleave_cycle_length.
         num_parallel_calls:    Used for tf.data map operations.
         tfds_name:             Override the TFDS dataset name. Defaults to
                                ``"droid"``.
@@ -124,21 +156,25 @@ class DroidVideoDataset:
         want_val = split == "val"
         deterministic = want_val
 
-        import dlimp as dl
-
         builder = tfds.builder(tfds_name, data_dir=data_dir)
 
-        dataset: dl.DLataset = dl.DLataset.from_rlds(
-            builder,
+        read_config = tfds.ReadConfig(
+            interleave_cycle_length=num_parallel_reads,
+            shuffle_seed=seed if (shuffle and not deterministic) else None,
+        )
+        episodes = builder.as_dataset(
             split="all",
-            shuffle=shuffle and not deterministic,
-            num_parallel_reads=num_parallel_reads,
+            shuffle_files=shuffle and not deterministic,
+            read_config=read_config,
         )
 
         if shard_for_training and not want_val:
-            dataset = dataset.shard(jax.process_count(), jax.process_index())
+            episodes = episodes.shard(jax.process_count(), jax.process_index())
 
-        dataset = dataset.with_options(_tf_data_options(deterministic))
+        episodes = episodes.with_options(_tf_data_options(deterministic))
+
+        # ── Convert RLDS episodes → trajectory dicts ─────────────────────────
+        dataset = episodes.flat_map(_episode_to_traj)
 
         # ── Trajectory-level filters ────────────────────────────────────────
         if filter_success:
@@ -159,7 +195,6 @@ class DroidVideoDataset:
 
         # ── Train / val split (hash on trajectory ID) ───────────────────────
         def _traj_id(traj) -> tf.Tensor:
-            """Derive a stable string ID from the file path."""
             return traj["traj_metadata"]["episode_metadata"]["file_path"][0]
 
         def _split_filter(traj):
@@ -172,10 +207,9 @@ class DroidVideoDataset:
         dataset = dataset.filter(_split_filter)
 
         # ── Per-trajectory image / instruction selection ─────────────────────
-        dataset = dataset.traj_map(self._select_camera_and_instruction, num_parallel_calls)
+        dataset = dataset.map(self._select_camera_and_instruction, num_parallel_calls=num_parallel_calls)
 
         # ── Windowing: trajectory → clips ────────────────────────────────────
-        # DLataset is a tf.data.Dataset subclass; flat_map is available.
         dataset = dataset.flat_map(self._traj_to_clips)
 
         # ── Per-clip image decoding & resizing ───────────────────────────────
@@ -213,19 +247,15 @@ class DroidVideoDataset:
         )  # [T] of JPEG-encoded bytes
 
         # Select one of three language instructions.
-        lang_candidates = tf.stack(
-            [traj[k] for k in _LANGUAGE_KEYS], axis=0
-        )  # [3, T]
+        lang_candidates = tf.stack([traj[k] for k in _LANGUAGE_KEYS], axis=0)  # [3, T]
         lang_idx = tf.cast(
-            tf.random.stateless_uniform(
-                [], seed=[seed_pair[0] + 1, seed_pair[1]], minval=0, maxval=3, dtype=tf.int32
-            ),
+            tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]], minval=0, maxval=3, dtype=tf.int32),
             tf.int32,
         )
         instructions = lang_candidates[lang_idx]  # [T]
 
         return {
-            "images": images,            # [T] bytes
+            "images": images,  # [T] bytes
             "instructions": instructions,  # [T] string
             "traj_len": traj_len,
         }
@@ -234,7 +264,7 @@ class DroidVideoDataset:
 
     def _traj_to_clips(self, traj: dict) -> tf.data.Dataset:
         """Convert one trajectory dict into a dataset of fixed-length clips."""
-        images = traj["images"]          # [T] bytes
+        images = traj["images"]  # [T] bytes
         instructions = traj["instructions"]  # [T] string
         traj_len = tf.shape(images)[0]
 
