@@ -14,30 +14,39 @@ HF_BASE="https://huggingface.co/${REPO_ID}/resolve/main"
 
 echo "Downloading ${REPO_ID} → ${GCS_DEST}"
 
-# List all files in the repo (uses huggingface_hub, which is tiny in memory).
-mapfile -t FILES < <(python3 - <<'EOF'
-from huggingface_hub import list_repo_files
-for f in list_repo_files("Wan-AI/Wan2.1-I2V-14B-720P-Diffusers"):
-    # Skip legacy PyTorch weights (redundant with safetensors, saves ~15 GB).
-    if not f.endswith(".pth"):
-        print(f)
+# List all files with their expected sizes from the HF repo.
+# Format per line: "<size_bytes> <path>"
+mapfile -t FILE_ENTRIES < <(python3 - <<'EOF'
+from huggingface_hub import list_repo_tree
+for item in list_repo_tree("Wan-AI/Wan2.1-I2V-14B-720P-Diffusers", recursive=True):
+    if not hasattr(item, 'size'):
+        continue  # skip directory entries
+    if item.path.endswith(".pth"):
+        continue  # skip legacy PyTorch weights (~15 GB saved)
+    print(item.size, item.path)
 EOF
 )
 
-echo "Found ${#FILES[@]} files to download."
+echo "Found ${#FILE_ENTRIES[@]} files to download."
 
-for filepath in "${FILES[@]}"; do
+for entry in "${FILE_ENTRIES[@]}"; do
+    expected_size="${entry%% *}"
+    filepath="${entry#* }"
     gcs_path="${GCS_DEST}/${filepath}"
     hf_url="${HF_BASE}/${filepath}"
 
-    # Skip if already present (allows resuming interrupted downloads).
+    # Check if already present with the correct size; re-download if truncated.
     if gsutil -q stat "${gcs_path}" 2>/dev/null; then
-        echo "  [skip] ${filepath}"
-        continue
+        actual_size=$(gsutil ls -l "${gcs_path}" 2>/dev/null | awk 'NR==1{print $1}')
+        if [ "${actual_size}" = "${expected_size}" ]; then
+            echo "  [skip] ${filepath}"
+            continue
+        fi
+        echo "  [redownload — size mismatch: got ${actual_size}, want ${expected_size}] ${filepath}"
+        gsutil rm "${gcs_path}"
     fi
 
     echo "  [fetch] ${filepath}"
-    # -L follows redirects; -f fails fast on HTTP errors; -S shows errors.
     if [ -n "${HF_TOKEN:-}" ]; then
         curl -fsSL -H "Authorization: Bearer ${HF_TOKEN}" "${hf_url}" \
             | gsutil cp - "${gcs_path}"
