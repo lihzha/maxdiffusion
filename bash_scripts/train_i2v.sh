@@ -129,7 +129,7 @@ python src/maxdiffusion/train_wan.py \
     output_dir=gs://v6_east1d/i2v-droid-run-1 \
     pretrained_model_name_or_path=$WAN_I2V_MODEL_DIR \
     dataset_type=droid \
-    train_data_dir=gs://v6_east1d/OXE/droid \
+    train_data_dir=gs://v6_east1d/OXE \
     droid_clip_stride=8 \
     attention=flash \
     weights_dtype=bfloat16 \

@@ -167,4 +167,4 @@ else
 fi
 
 # Install maxdiffusion
-uv pip install --no-deps .
+uv pip install --no-deps -e .
