@@ -58,7 +58,7 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 --xla_tpu_assign_all_reduce_scatter_layout=true'
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
-uv run src/maxdiffusion/train_wan.py \
+uv run --no-sync src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_14b.yml \
     run_name=test-run-64 \
     output_dir=gs://v6_east1d/test-run-64 \
