@@ -198,7 +198,7 @@ class BaseWanTrainer(abc.ABC):
             # Generate a sample before training to compare against generated sample after training.
             pretrained_video_path = generate_sample(self.config, pipeline, filename_prefix="pre-training-")
 
-        needs_vae_for_training = getattr(self.config, "dataset_type", "") == "droidd"
+        needs_vae_for_training = getattr(self.config, "dataset_type", "") == "droid"
         if not needs_vae_for_training and (
             self.config.eval_every == -1 or (not self.config.enable_generate_video_for_eval)
         ):
