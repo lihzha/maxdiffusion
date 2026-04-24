@@ -103,17 +103,18 @@ class FlaxResnetBlock2D(nn.Module):
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
   norm_num_groups: int = 32
+  norm_eps: float = 1e-5
   precision: jax.lax.Precision = None
 
   def setup(self):
     out_channels = self.in_channels if self.out_channels is None else self.out_channels
 
     self.norm1 = nn.GroupNorm(
-        num_groups=self.norm_num_groups, epsilon=1e-5, dtype=self.dtype, param_dtype=self.weights_dtype
+        num_groups=self.norm_num_groups, epsilon=self.norm_eps, dtype=self.dtype, param_dtype=self.weights_dtype
     )
 
     self.norm2 = nn.GroupNorm(
-        num_groups=self.norm_num_groups, epsilon=1e-5, dtype=self.dtype, param_dtype=self.weights_dtype
+        num_groups=self.norm_num_groups, epsilon=self.norm_eps, dtype=self.dtype, param_dtype=self.weights_dtype
     )
     self.dropout = nn.Dropout(self.dropout_prob)
 

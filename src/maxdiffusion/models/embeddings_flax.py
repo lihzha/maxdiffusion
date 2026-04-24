@@ -218,6 +218,39 @@ class FlaxTimesteps(nn.Module):
     )
 
 
+def svd_micro_cond_embed(
+    fps_id: jnp.ndarray,
+    motion_bucket_id: jnp.ndarray,
+    cond_aug: jnp.ndarray,
+    per_dim: int = 256,
+) -> jnp.ndarray:
+  """SVD micro-conditioning ADM vector.
+
+  Sinusoidally embeds each of ``(fps_id, motion_bucket_id, cond_aug)`` into
+  ``per_dim`` dims and concatenates to a single 768-dim vector per sample.
+  Corresponds to ``sgm.modules.encoders.modules.ConcatTimestepEmbedderND`` with
+  three scalar inputs, and matches Diffusers'
+  ``UNetSpatioTemporalConditionModel.add_time_proj`` (``flip_sin_to_cos=True``,
+  ``downscale_freq_shift=0``).
+
+  Each input must be a 1-D array with shape ``(B,)``. Output shape
+  ``(B, 3 * per_dim)``.
+
+  This is parameter-free (matches sgm's ``Timestep``: pure sinusoidal; the SGM
+  checkpoint has no weights for these embedders).
+  """
+  fps_emb = get_sinusoidal_embeddings(
+      fps_id, embedding_dim=per_dim, flip_sin_to_cos=True, freq_shift=0
+  )
+  motion_emb = get_sinusoidal_embeddings(
+      motion_bucket_id, embedding_dim=per_dim, flip_sin_to_cos=True, freq_shift=0
+  )
+  aug_emb = get_sinusoidal_embeddings(
+      cond_aug, embedding_dim=per_dim, flip_sin_to_cos=True, freq_shift=0
+  )
+  return jnp.concatenate([fps_emb, motion_emb, aug_emb], axis=-1)
+
+
 def get_1d_rotary_pos_embed(
     dim: int,
     pos: Union[jnp.array, int],

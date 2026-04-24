@@ -677,6 +677,21 @@ def _apply_attention_dot(
     )
 
     hidden_states = hidden_states.transpose(1, 0, 2)
+    # Undo the heads→batch merge that `_reshape_heads_to_batch_dim` did
+    # above. Mirrors the non-chunked path (see below, line with
+    # `_reshape_batch_dim_to_heads`). Without this, the caller sees
+    # (B*heads, seq, dim_head) and the downstream residual add breaks with
+    # "incompatible shapes for broadcasting: (B*heads, ...) vs (B, ...)".
+    # Pre-existing bug — this branch had no caller until the SVD port
+    # wired `use_memory_efficient_attention` through.
+    if not split_head_dim:
+      hidden_states = _reshape_batch_dim_to_heads(hidden_states, heads)
+    else:
+      # split_head_dim=True would have failed on the 3-arg transpose above.
+      raise NotImplementedError(
+          "use_memory_efficient_attention=True is incompatible with "
+          "split_head_dim=True (the transpose dance assumes 3D Q/K/V)."
+      )
   else:
     if split_head_dim:
       attention_scores = jnp.einsum("b t n h, b f n h -> b n f t", key_states, query_states)
