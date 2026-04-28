@@ -6,6 +6,12 @@
 #
 #      https://www.apache.org/licenses/LICENSE-2.0
 
+from .action_encoder_flax import FlaxActionEncoder  # noqa: F401
+from .ctrl_world_flax import (  # noqa: F401
+    CtrlWorldTrainConfig,
+    action_world_train_step,
+    build_action_encoder,
+)
 from .video_autoencoder_flax import FlaxSVDAutoencoderKL  # noqa: F401
 from .video_decoder_flax import (  # noqa: F401
     FlaxAE3DConv,

@@ -6,4 +6,5 @@
 #
 #      https://www.apache.org/licenses/LICENSE-2.0
 
+from .pipeline_flax_ctrl_world import FlaxCtrlWorldPipeline  # noqa: F401
 from .pipeline_flax_svd import FlaxStableVideoDiffusionPipeline  # noqa: F401

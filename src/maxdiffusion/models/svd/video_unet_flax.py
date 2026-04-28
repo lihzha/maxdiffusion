@@ -382,6 +382,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
       return_dict: bool = True,
       train: bool = False,
       cross_attention_kwargs: Optional[Union[Dict, FrozenDict]] = None,
+      frame_level_cond: bool = False,
   ) -> Union[FlaxVideoUNetOutput, Tuple]:
     # 1. time
     if not isinstance(timesteps, jnp.ndarray):
@@ -405,6 +406,19 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
       add_emb = jnp.repeat(add_emb, num_frames, axis=0)
       # t_emb may be (1, time_embed_dim) (scalar timesteps); broadcast.
       t_emb = t_emb + add_emb
+
+    # 2b. frame-level cross-attn context (Ctrl-World / action-conditioned SVD).
+    # Base SVD passes encoder_hidden_states pre-tiled to (B*T, 1, C). Ctrl-World
+    # instead passes a per-frame context (B, T, C) and reshapes it here so each
+    # frame attends to its own token. We detect the case by rank=3 with a
+    # leading dim equal to batch rather than batch*num_frames.
+    if frame_level_cond and encoder_hidden_states.ndim == 3:
+      b_lead = encoder_hidden_states.shape[0]
+      # If the caller already flattened to (B*T, S, C), leave it alone.
+      if b_lead * num_frames == sample.shape[0]:
+        encoder_hidden_states = encoder_hidden_states.reshape(
+            b_lead * num_frames, -1, encoder_hidden_states.shape[-1]
+        )
 
     # 3. conv_in (NCHW -> NHWC)
     sample = jnp.transpose(sample, (0, 2, 3, 1))
