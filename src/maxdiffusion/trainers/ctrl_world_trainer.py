@@ -1,0 +1,483 @@
+"""Action-conditioned SVD (Ctrl-World) trainer.
+
+Loads UNet + VAE config from the SVD HF-Diffusers directory at
+``config.pretrained_model_name_or_path`` (with ``from_pt=True`` so the same
+loader handles both the upstream SVD repo and the directory produced by
+``scripts/convert_ctrl_world_ckpt.py``). The action encoder is fresh-init by
+default; pass ``action_encoder_init_path`` to warm-start from a Ctrl-World
+checkpoint.
+
+Latents are pre-encoded on disk (see docs/ctrl_world_data_format.md), so the
+trainer never instantiates the VAE — it only needs the scaling factor (read
+from ``config.vae_scaling_factor``) to unscale the channel-concat conditioning
+stream inside ``action_world_train_step``.
+
+State is FSDP-sharded across the ``fsdp`` mesh axis using the logical
+partition annotations baked into ``FlaxVideoUNet`` (action-encoder params are
+tiny and fall back to replicated). Data is sharded along all named mesh axes
+(``[data, fsdp, context, tensor]``) along the batch axis — concretely on a
+single-host 8-chip v6e mesh that becomes pure data-parallel data sharding.
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+from typing import Any, Dict
+
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import numpy as np
+import orbax.checkpoint as ocp
+from flax.linen import partitioning as nn_partitioning
+from flax.linen.spmd import LogicallyPartitioned
+from flax.training import train_state
+from jax.sharding import NamedSharding, PartitionSpec as P
+from safetensors.torch import load_file as load_torch_safetensors
+
+from maxdiffusion import max_logging, max_utils
+from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
+from maxdiffusion.models.svd.action_encoder_flax import FlaxActionEncoder
+from maxdiffusion.models.svd.ctrl_world_flax import (
+    CtrlWorldTrainConfig,
+    action_world_train_step,
+)
+from maxdiffusion.models.svd.video_unet_flax import FlaxVideoUNet
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
+    return CtrlWorldTrainConfig(
+        num_history=config.num_history,
+        num_frames=config.num_frames,
+        action_dim=config.action_dim,
+        hidden_size=config.hidden_size,
+        text_embed_dim=config.text_embed_dim,
+        p_mean=config.ctrl_p_mean,
+        p_std=config.ctrl_p_std,
+        cond_aug_max=config.ctrl_cond_aug_max,
+        history_sigma_std=config.ctrl_history_sigma_std,
+        cfg_drop_prob=config.ctrl_cfg_drop_prob,
+        fps_id=config.ctrl_fps_id,
+        motion_bucket_id=config.ctrl_motion_bucket_id,
+        noise_aug_strength=config.ctrl_noise_aug_strength,
+        his_cond_zero=config.ctrl_his_cond_zero,
+    )
+
+
+def _load_action_encoder_params(path: str, dtype) -> Dict[str, Any]:
+    """Load Ctrl-World's 3-layer MLP from a torch safetensors dump."""
+    pt = load_torch_safetensors(path)
+    return {
+        "linear_1": {
+            "kernel": jnp.asarray(pt["action_encode.0.weight"].numpy().T, dtype=dtype),
+            "bias":   jnp.asarray(pt["action_encode.0.bias"].numpy(),    dtype=dtype),
+        },
+        "linear_2": {
+            "kernel": jnp.asarray(pt["action_encode.2.weight"].numpy().T, dtype=dtype),
+            "bias":   jnp.asarray(pt["action_encode.2.bias"].numpy(),    dtype=dtype),
+        },
+        "linear_3": {
+            "kernel": jnp.asarray(pt["action_encode.4.weight"].numpy().T, dtype=dtype),
+            "bias":   jnp.asarray(pt["action_encode.4.bias"].numpy(),    dtype=dtype),
+        },
+    }
+
+
+def _dtype_from_str(name: str):
+    return {"bfloat16": jnp.bfloat16, "float16": jnp.float16, "float32": jnp.float32}[name]
+
+
+def _maybe_unbox(x):
+    if isinstance(x, LogicallyPartitioned):
+        return x.unbox()
+    return x
+
+
+def _unbox_tree(tree):
+    return jax.tree_util.tree_map(
+        _maybe_unbox, tree, is_leaf=lambda x: isinstance(x, LogicallyPartitioned)
+    )
+
+
+# ── Trainer ──────────────────────────────────────────────────────────────────
+
+
+class CtrlWorldTrainer:
+    """Self-contained Linen trainer for action-conditioned SVD."""
+
+    def __init__(self, config):
+        self.config = config
+        self.dtype = _dtype_from_str(config.activations_dtype)
+        self.weights_dtype = _dtype_from_str(config.weights_dtype)
+        self.train_cfg = _build_ctrl_world_train_config(config)
+
+    # ── Setup ──────────────────────────────────────────────────────────────────
+
+    def _build_mesh(self):
+        devices = max_utils.create_device_mesh(self.config)
+        return jax.sharding.Mesh(devices, self.config.mesh_axes)
+
+    def _load_modules(self, mesh):
+        max_logging.log(
+            f"[ctrl_world] loading UNet from {self.config.pretrained_model_name_or_path}/unet"
+        )
+        with mesh:
+            unet, unet_params = FlaxVideoUNet.from_pretrained(
+                self.config.pretrained_model_name_or_path,
+                subfolder="unet",
+                dtype=self.dtype,
+                weights_dtype=self.weights_dtype,
+                from_pt=self.config.from_pt,
+                use_safetensors=True,
+                attention_kernel=self.config.attention,
+                temporal_attention_kernel=self.config.temporal_attention,
+                use_memory_efficient_attention=self.config.use_memory_efficient_attention,
+                flash_block_sizes=max_utils.get_flash_block_sizes(self.config) or {},
+                flash_min_seq_length=self.config.flash_min_seq_length,
+                mesh=mesh,
+                precision=max_utils.get_precision(self.config),
+                norm_num_groups=self.config.norm_num_groups,
+            )
+
+        action_encoder = FlaxActionEncoder(
+            action_dim=self.config.action_dim,
+            hidden_size=self.config.hidden_size,
+            text_embed_dim=self.config.text_embed_dim,
+            dtype=self.dtype,
+            weights_dtype=self.weights_dtype,
+        )
+        if self.config.action_encoder_init_path:
+            max_logging.log(
+                f"[ctrl_world] loading action encoder from {self.config.action_encoder_init_path}"
+            )
+            ae_params = _load_action_encoder_params(
+                self.config.action_encoder_init_path, self.weights_dtype
+            )
+        else:
+            max_logging.log("[ctrl_world] initialising action encoder from scratch")
+            ae_params = action_encoder.init_weights(
+                jax.random.PRNGKey(self.config.seed), batch=1, num_frames=1
+            )
+
+        return unet, unet_params, action_encoder, ae_params
+
+    def _build_optimizer(self, num_steps: int):
+        schedule_steps = (
+            self.config.learning_rate_schedule_steps
+            if self.config.learning_rate_schedule_steps > 0
+            else num_steps
+        )
+        lr_schedule = max_utils.create_learning_rate_schedule(
+            self.config.learning_rate,
+            schedule_steps,
+            self.config.warmup_steps_fraction,
+            num_steps,
+        )
+        tx = max_utils.create_optimizer(self.config, lr_schedule)
+        return tx, lr_schedule
+
+    # ── Sharding-aware state construction ──────────────────────────────────────
+
+    def _build_sharded_state(self, mesh, unet, unet_params, action_encoder, ae_params, tx):
+        """Build a TrainState whose leaves are FSDP-sharded across the mesh.
+
+        Path:
+          1. Build a *boxed* TrainState (UNet params keep their
+             ``LogicallyPartitioned`` wrappers from ``from_pretrained``;
+             ``tx.init`` propagates the wrappers through optimizer state).
+          2. Read partition specs from the boxed tree and translate logical →
+             mesh shardings via ``nn.logical_to_mesh_sharding``.
+          3. ``jax.device_put`` the boxed state onto the matching shardings —
+             this is where data actually leaves device 0 and gets sharded.
+          4. Unbox to drop the wrappers, leaving raw sharded arrays.
+        """
+        config = self.config
+
+        # Step 1 — boxed state. Note that we feed unet_params unmodified;
+        # tx.init's tree_map preserves the LogicallyPartitioned wrappers.
+        params = {"unet": unet_params, "action_encoder": ae_params}
+        with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+            state = train_state.TrainState.create(
+                apply_fn=lambda *a, **k: None, params=params, tx=tx
+            )
+            # Step 2 — derive shardings from the boxed tree.
+            state_logical_specs = nn.get_partition_spec(state)
+            state_shardings = nn.logical_to_mesh_sharding(
+                state_logical_specs, mesh, config.logical_axis_rules
+            )
+        # Step 3 — actually shard onto devices.
+        state = jax.device_put(state, state_shardings)
+        # Step 4 — drop LogicallyPartitioned wrappers; downstream tx.update
+        # and apply_fns expect raw arrays.
+        state = max_utils.unbox_logicallypartioned_trainstate(state)
+        # The shardings tree was derived from the *boxed* state, so it carries
+        # the same LogicallyPartitioned wrappers in its tree structure. Unbox
+        # those too so jit's in/out_shardings line up with the unboxed state.
+        state_shardings = max_utils.unbox_logicallypartioned_trainstate(state_shardings)
+        return state, state_shardings
+
+    # ── Steps ──────────────────────────────────────────────────────────────────
+
+    def _build_train_step(self, apply_fns, state_shardings, data_shardings):
+        cfg = self.train_cfg
+        vae_scaling_factor = float(self.config.vae_scaling_factor)
+        weights_dtype = self.weights_dtype
+
+        def loss_fn(params, batch, rng):
+            return action_world_train_step(
+                rng=rng, params=params, apply_fns=apply_fns, batch=batch,
+                cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=True,
+            )
+
+        grad_fn = jax.value_and_grad(loss_fn)
+
+        def step_fn(state, batch, rng):
+            batch = jax.tree_util.tree_map(
+                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, batch
+            )
+            loss, grads = grad_fn(state.params, batch, rng)
+            grad_norm = jnp.sqrt(sum(jnp.sum(g.astype(jnp.float32) ** 2)
+                                     for g in jax.tree_util.tree_leaves(grads)))
+            new_state = state.apply_gradients(grads=grads)
+            metrics = {"loss": loss, "grad_norm": grad_norm}
+            return new_state, metrics
+
+        return jax.jit(
+            step_fn,
+            in_shardings=(state_shardings, data_shardings, None),
+            out_shardings=(state_shardings, None),
+            donate_argnums=(0,),
+        )
+
+    def _build_eval_step(self, apply_fns, state_shardings, data_shardings):
+        cfg = self.train_cfg
+        vae_scaling_factor = float(self.config.vae_scaling_factor)
+        weights_dtype = self.weights_dtype
+
+        def eval_loss(params, batch, rng):
+            batch = jax.tree_util.tree_map(
+                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, batch
+            )
+            return action_world_train_step(
+                rng=rng, params=params, apply_fns=apply_fns, batch=batch,
+                cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=False,
+            )
+
+        # Wrap to take a TrainState (so we can pass the same state object) and
+        # return only the loss.
+        def step_fn(state, batch, rng):
+            return eval_loss(state.params, batch, rng)
+
+        return jax.jit(
+            step_fn,
+            in_shardings=(state_shardings, data_shardings, None),
+            out_shardings=None,
+        )
+
+    # ── Training loop ──────────────────────────────────────────────────────────
+
+    def start_training(self):
+        config = self.config
+        mesh = self._build_mesh()
+        unet, unet_params, action_encoder, ae_params = self._load_modules(mesh)
+
+        apply_fns = {"unet": unet.apply, "action_encoder": action_encoder.apply}
+        tx, lr_schedule = self._build_optimizer(config.max_train_steps)
+
+        state, state_shardings = self._build_sharded_state(
+            mesh, unet, unet_params, action_encoder, ae_params, tx
+        )
+        del unet_params, ae_params  # freed inside state
+
+        if jax.process_index() == 0:
+            num_params = sum(int(np.prod(p.shape)) for p in jax.tree_util.tree_leaves(state.params))
+            max_logging.log(f"[ctrl_world] trainable params: {num_params / 1e6:.1f}M")
+
+        # Data shardings — match the global array layout produced by
+        # MultiHostDataLoadIterator (sharded along axis 0 over all named axes).
+        batch_pspec = NamedSharding(mesh, P(*config.data_sharding))
+        data_shardings = {
+            "latent":      batch_pspec,
+            "action":      batch_pspec,
+            "text_embeds": batch_pspec,
+        }
+
+        train_iter = make_data_iterator(
+            config,
+            jax.process_index(),
+            jax.process_count(),
+            mesh,
+            self._global_batch_size_to_load(),
+            is_training=True,
+        )
+
+        train_step_fn = self._build_train_step(apply_fns, state_shardings, data_shardings)
+        eval_step_fn = self._build_eval_step(apply_fns, state_shardings, data_shardings)
+
+        # Checkpointing.
+        ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, "checkpoints")
+        ckpt_mgr = self._build_checkpoint_manager(ckpt_dir)
+        state, start_step = self._maybe_restore(ckpt_mgr, state, state_shardings)
+        if start_step:
+            max_logging.log(f"[ctrl_world] resumed at step {start_step}")
+
+        rng = jax.random.PRNGKey(config.seed + 1)
+        if jax.process_index() == 0:
+            max_logging.log("***** Running training *****")
+            max_logging.log(f"  Per-host batch size: {self._global_batch_size_to_load() // jax.process_count()}")
+            max_logging.log(f"  Global batch size:   {self._global_batch_size_to_load()}")
+            max_logging.log(f"  Devices:             {jax.device_count()}")
+            max_logging.log(f"  Max train steps:     {config.max_train_steps}")
+            max_logging.log(f"  Output dir:          {config.output_dir}")
+
+        recent_loss: list[float] = []
+        recent_grad: list[float] = []
+        last_step_time = datetime.datetime.now()
+
+        for step in range(start_step, config.max_train_steps):
+            batch = next(train_iter)
+            rng, step_rng = jax.random.split(rng)
+
+            with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+                state, metrics = train_step_fn(state, batch, step_rng)
+                metrics["loss"].block_until_ready()
+
+            recent_loss.append(float(metrics["loss"]))
+            recent_grad.append(float(metrics["grad_norm"]))
+            now = datetime.datetime.now()
+            if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
+                lr = float(lr_schedule(step))
+                avg_loss = sum(recent_loss) / len(recent_loss)
+                avg_grad = sum(recent_grad) / len(recent_grad)
+                steps_per_sec = config.log_period / (now - last_step_time).total_seconds()
+                max_logging.log(
+                    f"step {step + 1}/{config.max_train_steps} "
+                    f"loss={avg_loss:.4f} grad_norm={avg_grad:.3f} "
+                    f"lr={lr:.2e} steps/s={steps_per_sec:.2f}"
+                )
+                recent_loss.clear()
+                recent_grad.clear()
+                last_step_time = now
+
+            if (
+                config.eval_every > 0
+                and (step + 1) % config.eval_every == 0
+            ):
+                self._run_eval(eval_step_fn, state, mesh, step + 1, rng)
+
+            if (
+                config.checkpoint_every > 0
+                and (step + 1) % config.checkpoint_every == 0
+            ):
+                self._save_checkpoint(ckpt_mgr, step + 1, state)
+
+        if config.save_final_checkpoint:
+            self._save_checkpoint(ckpt_mgr, config.max_train_steps, state)
+        ckpt_mgr.wait_until_finished()
+
+    # ── Eval ───────────────────────────────────────────────────────────────────
+
+    def _run_eval(self, eval_step_fn, state, mesh, step: int, rng):
+        config = self.config
+        if not config.eval_data_dir:
+            max_logging.log("[ctrl_world] eval_every>0 but eval_data_dir is empty; skipping eval")
+            return
+        max_logging.log(f"[ctrl_world] starting eval at step {step}")
+        eval_iter = make_data_iterator(
+            config,
+            jax.process_index(),
+            jax.process_count(),
+            mesh,
+            self._global_batch_size_to_load(),
+            is_training=False,
+        )
+        max_batches = max(1, int(getattr(config, "eval_max_batches", 50)))
+        losses: list[float] = []
+        eval_start = datetime.datetime.now()
+        for i in range(max_batches):
+            try:
+                batch = next(eval_iter)
+            except StopIteration:
+                break
+            rng, sub = jax.random.split(rng)
+            with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+                loss = eval_step_fn(state, batch, sub)
+                loss.block_until_ready()
+            losses.append(float(loss))
+        if losses and jax.process_index() == 0:
+            mean = sum(losses) / len(losses)
+            elapsed = (datetime.datetime.now() - eval_start).total_seconds()
+            max_logging.log(
+                f"[ctrl_world] eval step={step} batches={len(losses)} "
+                f"mean_loss={mean:.4f} elapsed={elapsed:.1f}s"
+            )
+
+    # ── Checkpoints ────────────────────────────────────────────────────────────
+
+    def _build_checkpoint_manager(self, ckpt_dir: str) -> ocp.CheckpointManager:
+        if not ckpt_dir.startswith("gs://"):
+            os.makedirs(ckpt_dir, exist_ok=True)
+        item_names = ("params", "step")
+        item_handlers = {
+            "params": ocp.StandardCheckpointHandler(),
+            "step":   ocp.JsonCheckpointHandler(),
+        }
+        if self.config.save_optimizer:
+            item_names = item_names + ("opt_state",)
+            item_handlers["opt_state"] = ocp.StandardCheckpointHandler()
+        options = ocp.CheckpointManagerOptions(
+            create=True,
+            max_to_keep=3,
+            enable_async_checkpointing=True,
+        )
+        return ocp.CheckpointManager(
+            ckpt_dir,
+            item_names=item_names,
+            item_handlers=item_handlers,
+            options=options,
+        )
+
+    def _save_checkpoint(self, mgr: ocp.CheckpointManager, step: int, state):
+        if jax.process_index() == 0:
+            max_logging.log(f"[ctrl_world] saving checkpoint at step {step}")
+        items = {
+            "params": ocp.args.StandardSave(state.params),
+            "step":   ocp.args.JsonSave({"step": int(step)}),
+        }
+        if self.config.save_optimizer:
+            items["opt_state"] = ocp.args.StandardSave(state.opt_state)
+        mgr.save(step, args=ocp.args.Composite(**items))
+
+    def _maybe_restore(self, mgr: ocp.CheckpointManager, state, state_shardings):
+        """Returns (state, start_step). state is unchanged if no ckpt exists."""
+        del state_shardings  # StandardRestore reuses the input arrays' shardings
+        latest = mgr.latest_step()
+        if latest is None:
+            return state, 0
+        max_logging.log(f"[ctrl_world] restoring checkpoint at step {latest}")
+        restore_args = {
+            "params": ocp.args.StandardRestore(state.params),
+            "step":   ocp.args.JsonRestore(),
+        }
+        if self.config.save_optimizer:
+            restore_args["opt_state"] = ocp.args.StandardRestore(state.opt_state)
+        restored = mgr.restore(latest, args=ocp.args.Composite(**restore_args))
+        new_state = state.replace(params=restored["params"])
+        if self.config.save_optimizer and "opt_state" in restored:
+            new_state = new_state.replace(opt_state=restored["opt_state"])
+        return new_state, int(restored["step"]["step"])
+
+    # ── Misc ───────────────────────────────────────────────────────────────────
+
+    def _global_batch_size_to_load(self) -> int:
+        if self.config.global_batch_size and self.config.global_batch_size > 0:
+            return int(self.config.global_batch_size)
+        per_device = self.config.per_device_batch_size
+        gbs = max(1, int(jax.device_count() * per_device))
+        if gbs % jax.process_count() != 0:
+            gbs = (gbs // jax.process_count() + 1) * jax.process_count()
+        return gbs
