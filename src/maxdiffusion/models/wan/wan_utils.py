@@ -342,6 +342,11 @@ def load_wan_vae(pretrained_model_name_or_path: str, eval_shapes: dict, device: 
         renamed_pt_key = renamed_pt_key.replace("time_conv.weight", "time_conv.conv.weight")
         renamed_pt_key = renamed_pt_key.replace("quant_conv", "quant_conv.conv")
         renamed_pt_key = renamed_pt_key.replace("conv_shortcut", "conv_shortcut.conv")
+        # WAN 2.2 (2p2) VAE stores downsampler/upsampler inside the resnets list.
+        # Map singular downsampler/upsampler keys to the correct resnets index
+        # (num_res_blocks=2 → downsampler at resnets.2, upsampler at resnets.3).
+        renamed_pt_key = renamed_pt_key.replace(".downsampler.", ".resnets.2.")
+        renamed_pt_key = renamed_pt_key.replace(".upsampler.", ".resnets.3.")
         if "decoder" in renamed_pt_key:
           renamed_pt_key = renamed_pt_key.replace("resample.1.bias", "resample.layers.1.bias")
           renamed_pt_key = renamed_pt_key.replace("resample.1.weight", "resample.layers.1.weight")

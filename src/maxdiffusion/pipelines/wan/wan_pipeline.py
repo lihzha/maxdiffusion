@@ -32,6 +32,7 @@ from ...max_utils import get_flash_block_sizes, get_precision, device_put_replic
 from ...models.wan.wan_utils import load_wan_transformer, load_wan_vae
 from ...models.wan.transformers.transformer_wan import WanModel
 from ...models.wan.autoencoder_kl_wan import AutoencoderKLWan, AutoencoderKLWanCache
+from ...models.wan.autoencoder_kl_wan_2p2 import AutoencoderKLWan2p2
 from maxdiffusion.video_processor import VideoProcessor
 from ...schedulers.scheduling_unipc_multistep_flax import FlaxUniPCMultistepScheduler, UniPCMultistepSchedulerState
 from transformers import AutoTokenizer, UMT5EncoderModel
@@ -261,7 +262,8 @@ class WanPipeline:
     self.vae_logical_axis_rules = kwargs.get("vae_logical_axis_rules", config.logical_axis_rules)
 
     self.vae_scale_factor_temporal = 2 ** sum(self.vae.temperal_downsample) if getattr(self, "vae", None) else 4
-    self.vae_scale_factor_spatial = 2 ** len(self.vae.temperal_downsample) if getattr(self, "vae", None) else 8
+    _patch_size = getattr(self.vae, "patch_size", 1) if getattr(self, "vae", None) else 1
+    self.vae_scale_factor_spatial = _patch_size * 2 ** len(self.vae.temperal_downsample) if getattr(self, "vae", None) else 8
     self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
     self.p_run_inference = None
@@ -298,8 +300,12 @@ class WanPipeline:
   def load_vae(
       cls, devices_array: np.array, mesh: Mesh, rngs: nnx.Rngs, config: HyperParameters, vae_logical_axis_rules: tuple = None
   ):
+    # Choose VAE class based on z_dim: z_dim=48 means the 2p2 patch-based VAE
+    vae_config_dict = AutoencoderKLWan.load_config(config.pretrained_model_name_or_path, subfolder="vae")
+    VAEClass = AutoencoderKLWan2p2 if vae_config_dict.get("z_dim", 16) >= 48 else AutoencoderKLWan
+
     def create_model(rngs: nnx.Rngs, config: HyperParameters):
-      wan_vae = AutoencoderKLWan.from_config(
+      wan_vae = VAEClass.from_config(
           config.pretrained_model_name_or_path,
           subfolder="vae",
           rngs=rngs,
@@ -629,7 +635,6 @@ class WanPipeline:
     vae_devices_array = flat_devices.reshape(total_devices // vae_spatial, vae_spatial)
 
     vae_mesh = Mesh(vae_devices_array, ("redundant", "vae_spatial"))
-    vae_mesh.vae_spatial_axis_name = "vae_spatial"
     max_logging.log(
         f"Created VAE specific mesh with axes ('redundant', 'vae_spatial') to support spatial sharding of {vae_spatial}."
     )

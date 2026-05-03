@@ -21,6 +21,7 @@ from maxdiffusion.checkpointing.wan_checkpointer_2_1 import WanCheckpointer2_1
 from maxdiffusion.checkpointing.wan_checkpointer_2_2 import WanCheckpointer2_2
 from maxdiffusion.checkpointing.wan_checkpointer_i2v_2p1 import WanCheckpointerI2V_2_1
 from maxdiffusion.checkpointing.wan_checkpointer_i2v_2p2 import WanCheckpointerI2V_2_2
+from maxdiffusion.checkpointing.wan_checkpointer_ti2v_2p2 import WanCheckpointerTI2V_2_2
 from maxdiffusion import pyconfig, max_logging, max_utils
 from absl import app
 from maxdiffusion.train_utils import transformer_engine_context
@@ -121,6 +122,23 @@ def call_pipeline(config, pipeline, prompt, negative_prompt):
       )
     else:
       raise ValueError(f"Unsupported model_name for I2V in config: {model_key}")
+  elif model_type == "TI2V":
+    image = load_image(config.image_url)
+    if model_key == WAN2_2:
+      return pipeline(
+          prompt=prompt,
+          image=image,
+          negative_prompt=negative_prompt,
+          height=config.height,
+          width=config.width,
+          num_frames=config.num_frames,
+          num_inference_steps=config.num_inference_steps,
+          guidance_scale=config.guidance_scale,
+          use_cfg_cache=config.use_cfg_cache,
+          use_sen_cache=config.use_sen_cache,
+      )
+    else:
+      raise ValueError(f"Unsupported model_name for TI2V in config: {model_key}")
   elif model_type == "T2V":
     if model_key == WAN2_1:
       return pipeline(
@@ -199,6 +217,8 @@ def run(config, pipeline=None, filename_prefix="", commit_hash=None):
     elif model_key == WAN2_2:
       if model_type == "I2V":
         checkpoint_loader = WanCheckpointerI2V_2_2(config=config)
+      elif model_type == "TI2V":
+        checkpoint_loader = WanCheckpointerTI2V_2_2(config=config)
       else:
         checkpoint_loader = WanCheckpointer2_2(config=config)
     else:
