@@ -126,22 +126,24 @@ class WanPipelineTI2V_2_2(WanPipeline):
     else:
       latents = latents.astype(dtype)
 
+    # Encode condition image(s) to latent space. latent_condition shape: (B, F, H, W, C)
     latent_condition, _ = self.prepare_latents_i2v_base(image, num_frames, dtype, last_image)
-    mask_lat_size = jnp.ones((batch_size, 1, num_frames, latent_height, latent_width), dtype=dtype)
-    if last_image is None:
-      mask_lat_size = mask_lat_size.at[:, :, 1:, :, :].set(0)
-    else:
-      mask_lat_size = mask_lat_size.at[:, :, 1:-1, :, :].set(0)
 
-    first_frame_mask = mask_lat_size[:, :, 0:1]
-    first_frame_mask = jnp.repeat(first_frame_mask, self.vae_scale_factor_temporal, axis=2)
-    mask_lat_size = jnp.concatenate([first_frame_mask, mask_lat_size[:, :, 1:]], axis=2)
-    mask_lat_size = mask_lat_size.reshape(
-        batch_size, 1, num_latent_frames, self.vae_scale_factor_temporal, latent_height, latent_width
-    )
-    mask_lat_size = jnp.transpose(mask_lat_size, (0, 2, 4, 5, 3, 1)).squeeze(-1)
-    condition = jnp.concatenate([mask_lat_size, latent_condition], axis=-1)
-    return latents, condition, None
+    # Embed conditioning directly into the latent array (per-token timestep approach):
+    # frame 0 (and last frame if provided) are set to their clean encoded latents.
+    # The denoising loop assigns timestep=0 to those tokens so the transformer treats
+    # them as already-clean, conditioning the generation without channel concatenation.
+    latents = latents.at[:, 0:1, :, :, :].set(latent_condition[:, 0:1, :, :, :])
+    if last_image is not None:
+      latents = latents.at[:, -1:, :, :, :].set(latent_condition[:, -1:, :, :, :])
+
+    # Return the clean frame latents so the denoising loop can restore them after each step.
+    if last_image is not None:
+      clean_latent = jnp.concatenate([latent_condition[:, 0:1], latent_condition[:, -1:]], axis=1)
+    else:
+      clean_latent = latent_condition[:, 0:1]  # (B, 1, H, W, C)
+
+    return latents, clean_latent, None
 
   def __call__(
       self,
@@ -211,7 +213,7 @@ class WanPipelineTI2V_2_2(WanPipeline):
       rng = jax.random.key(self.config.seed)
     latents_rng, _ = jax.random.split(rng)
 
-    latents, condition, _ = self.prepare_latents(
+    latents, clean_latent, _ = self.prepare_latents(
         image=image_tensor,
         batch_size=effective_batch_size,
         height=height,
@@ -233,7 +235,7 @@ class WanPipelineTI2V_2_2(WanPipeline):
       data_sharding = jax.sharding.NamedSharding(self.mesh, P(*self.config.data_sharding))
 
     latents = jax.device_put(latents, data_sharding)
-    condition = jax.device_put(condition, data_sharding)
+    clean_latent = jax.device_put(clean_latent, data_sharding)
     prompt_embeds = jax.device_put(prompt_embeds, data_sharding)
     negative_prompt_embeds = jax.device_put(negative_prompt_embeds, data_sharding)
 
@@ -245,6 +247,7 @@ class WanPipelineTI2V_2_2(WanPipeline):
         use_cfg_cache=use_cfg_cache,
         use_sen_cache=use_sen_cache,
         height=height,
+        has_last_image=last_image_tensor is not None,
     )
 
     with self.mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
@@ -253,7 +256,7 @@ class WanPipelineTI2V_2_2(WanPipeline):
           state=state,
           rest=rest,
           latents=latents,
-          condition=condition,
+          clean_latent=clean_latent,
           prompt_embeds=prompt_embeds,
           negative_prompt_embeds=negative_prompt_embeds,
           scheduler_state=scheduler_state,
@@ -266,12 +269,31 @@ class WanPipelineTI2V_2_2(WanPipeline):
     return self._decode_latents_to_video(latents)
 
 
+def _build_per_token_timestep(latents: jnp.array, t, has_last_image: bool) -> jnp.array:
+  """Build a per-token 2D timestep array for the WAN 2.2 Ti2V per-token conditioning scheme.
+
+  First-frame token positions receive t=0 (clean); all other positions receive t.
+  If has_last_image, the last-frame token positions also receive t=0.
+
+  latents shape: (B, num_latent_frames, latent_h, latent_w, C)  [BFHWC]
+  Returns: (B, seq_len) where seq_len = num_latent_frames * (H//2) * (W//2)
+  """
+  bsz, num_latent_frames, latent_h, latent_w, _ = latents.shape
+  tokens_per_frame = (latent_h // 2) * (latent_w // 2)  # spatial patch size is (2, 2)
+  seq_len = num_latent_frames * tokens_per_frame
+  timestep_2d = jnp.full((bsz, seq_len), t, dtype=jnp.int32)
+  timestep_2d = timestep_2d.at[:, :tokens_per_frame].set(0)
+  if has_last_image:
+    timestep_2d = timestep_2d.at[:, -tokens_per_frame:].set(0)
+  return timestep_2d
+
+
 def run_inference_ti2v_2_2(
     graphdef,
     state,
     rest,
     latents: jnp.array,
-    condition: jnp.array,
+    clean_latent: jnp.array,
     prompt_embeds: jnp.array,
     negative_prompt_embeds: jnp.array,
     guidance_scale: float,
@@ -281,12 +303,16 @@ def run_inference_ti2v_2_2(
     use_cfg_cache: bool = False,
     use_sen_cache: bool = False,
     height: int = 480,
+    has_last_image: bool = False,
 ):
-  """Denoising loop for WAN 2.2 TI2V (single transformer, I2V-style latent conditioning).
+  """Denoising loop for WAN 2.2 TI2V using per-token timestep conditioning.
 
-  Image conditioning is provided via `condition` (mask + VAE-encoded first frame
-  concatenated channel-wise with the noisy latents). No CLIP image embeddings
-  are used; this follows the WAN 2.2 VAE-latent conditioning scheme.
+  The transformer takes only the 48-channel noisy latents (no channel concat).
+  Image conditioning is embedded by initialising frame-0 (and optionally the
+  last frame) of `latents` with their clean VAE-encoded values, and assigning
+  timestep=0 to those token positions via a 2D per-token timestep array.
+  After each scheduler step, those frames are restored to `clean_latent` to
+  prevent the scheduler from corrupting them.
 
   Supports two optional caching strategies:
     use_cfg_cache: FasterCache-style CFG caching with FFT frequency compensation.
@@ -294,6 +320,12 @@ def run_inference_ti2v_2_2(
   """
   do_cfg = guidance_scale > 1.0
   bsz = latents.shape[0]
+
+  def _restore_clean_frames(lat):
+    lat = lat.at[:, 0:1, :, :, :].set(clean_latent[:, 0:1, :, :, :])
+    if has_last_image:
+      lat = lat.at[:, -1:, :, :, :].set(clean_latent[:, -1:, :, :, :])
+    return lat
 
   # ── SenCache path ──
   if use_sen_cache and do_cfg:
@@ -311,7 +343,6 @@ def run_inference_ti2v_2_2(
     num_train_timesteps = float(scheduler.config.num_train_timesteps)
 
     prompt_embeds_combined = jnp.concatenate([prompt_embeds, negative_prompt_embeds], axis=0)
-    condition_doubled = jnp.concatenate([condition] * 2)
 
     ref_noise_pred = None
     ref_latent = None
@@ -330,16 +361,16 @@ def run_inference_ti2v_2_2(
       )
 
       if force_compute:
+        timestep_2d = _build_per_token_timestep(latents, t, has_last_image)
         latents_doubled = jnp.concatenate([latents, latents], axis=0)
-        latent_model_input = jnp.concatenate([latents_doubled, condition_doubled], axis=-1)
-        latent_model_input = jnp.transpose(latent_model_input, (0, 4, 1, 2, 3))
-        timestep = jnp.broadcast_to(t, bsz * 2)
+        latent_model_input = jnp.transpose(latents_doubled, (0, 4, 1, 2, 3))
+        timestep_doubled = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
         noise_pred, _, _ = transformer_forward_pass_full_cfg(
             graphdef,
             state,
             rest,
             latent_model_input,
-            timestep,
+            timestep_doubled,
             prompt_embeds_combined,
             guidance_scale=guidance_scale,
             encoder_hidden_states_image=None,
@@ -352,6 +383,7 @@ def run_inference_ti2v_2_2(
         accum_dt = 0.0
         reuse_count = 0
         latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
+        latents = _restore_clean_frames(latents)
         continue
 
       dx_norm = float(jnp.sqrt(jnp.mean((latents - ref_latent) ** 2)))
@@ -365,16 +397,16 @@ def run_inference_ti2v_2_2(
         reuse_count += 1
         cache_count += 1
       else:
+        timestep_2d = _build_per_token_timestep(latents, t, has_last_image)
         latents_doubled = jnp.concatenate([latents, latents], axis=0)
-        latent_model_input = jnp.concatenate([latents_doubled, condition_doubled], axis=-1)
-        latent_model_input = jnp.transpose(latent_model_input, (0, 4, 1, 2, 3))
-        timestep = jnp.broadcast_to(t, bsz * 2)
+        latent_model_input = jnp.transpose(latents_doubled, (0, 4, 1, 2, 3))
+        timestep_doubled = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
         noise_pred, _, _ = transformer_forward_pass_full_cfg(
             graphdef,
             state,
             rest,
             latent_model_input,
-            timestep,
+            timestep_doubled,
             prompt_embeds_combined,
             guidance_scale=guidance_scale,
             encoder_hidden_states_image=None,
@@ -388,6 +420,7 @@ def run_inference_ti2v_2_2(
         reuse_count = 0
 
       latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
+      latents = _restore_clean_frames(latents)
 
     print(
         f"[SenCache] Cached {cache_count}/{num_inference_steps} steps "
@@ -410,10 +443,7 @@ def run_inference_ti2v_2_2(
 
     prompt_cond_embeds = prompt_embeds
     prompt_embeds_combined = jnp.concatenate([prompt_embeds, negative_prompt_embeds], axis=0)
-    condition_cond = condition
-    condition_doubled = jnp.concatenate([condition] * 2)
 
-    # Single transformer: all steps are eligible for caching
     first_full_seen = False
     step_is_cache = []
     for s in range(num_inference_steps):
@@ -427,7 +457,6 @@ def run_inference_ti2v_2_2(
       if not is_cache:
         first_full_seen = True
 
-    # Single denoising phase: apply high-freq correction boost uniformly
     w1, w2 = 1.0, 1.0 + cfg_cache_alpha
 
     cached_noise_cond = None
@@ -435,17 +464,16 @@ def run_inference_ti2v_2_2(
 
     for step in range(num_inference_steps):
       t = jnp.array(scheduler_state.timesteps, dtype=jnp.int32)[step]
+      timestep_2d = _build_per_token_timestep(latents, t, has_last_image)
 
       if step_is_cache[step]:
-        latent_model_input = jnp.concatenate([latents, condition_cond], axis=-1)
-        latent_model_input = jnp.transpose(latent_model_input, (0, 4, 1, 2, 3))
-        timestep = jnp.broadcast_to(t, bsz)
+        latent_model_input = jnp.transpose(latents, (0, 4, 1, 2, 3))
         noise_pred, cached_noise_cond = transformer_forward_pass_cfg_cache(
             graphdef,
             state,
             rest,
             latent_model_input,
-            timestep,
+            timestep_2d,
             prompt_cond_embeds,
             cached_noise_cond,
             cached_noise_uncond,
@@ -456,15 +484,14 @@ def run_inference_ti2v_2_2(
         )
       else:
         latents_doubled = jnp.concatenate([latents, latents], axis=0)
-        latent_model_input = jnp.concatenate([latents_doubled, condition_doubled], axis=-1)
-        latent_model_input = jnp.transpose(latent_model_input, (0, 4, 1, 2, 3))
-        timestep = jnp.broadcast_to(t, bsz * 2)
+        latent_model_input = jnp.transpose(latents_doubled, (0, 4, 1, 2, 3))
+        timestep_doubled = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
         noise_pred, cached_noise_cond, cached_noise_uncond = transformer_forward_pass_full_cfg(
             graphdef,
             state,
             rest,
             latent_model_input,
-            timestep,
+            timestep_doubled,
             prompt_embeds_combined,
             guidance_scale=guidance_scale,
             encoder_hidden_states_image=None,
@@ -472,29 +499,28 @@ def run_inference_ti2v_2_2(
 
       noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
       latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
+      latents = _restore_clean_frames(latents)
     return latents
 
   # ── Basic path (no cache) ──
   if do_cfg:
     prompt_embeds_combined = jnp.concatenate([prompt_embeds, negative_prompt_embeds], axis=0)
-    condition_combined = jnp.concatenate([condition] * 2)
   else:
     prompt_embeds_combined = prompt_embeds
-    condition_combined = condition
 
   for step in range(num_inference_steps):
     t = jnp.array(scheduler_state.timesteps, dtype=jnp.int32)[step]
+    timestep_2d = _build_per_token_timestep(latents, t, has_last_image)
     latents_input = jnp.concatenate([latents, latents], axis=0) if do_cfg else latents
-    latent_model_input = jnp.concatenate([latents_input, condition_combined], axis=-1)
-    latent_model_input = jnp.transpose(latent_model_input, (0, 4, 1, 2, 3))
-    timestep = jnp.broadcast_to(t, latents_input.shape[0])
+    latent_model_input = jnp.transpose(latents_input, (0, 4, 1, 2, 3))
+    timestep_for_transformer = jnp.concatenate([timestep_2d, timestep_2d], axis=0) if do_cfg else timestep_2d
 
     noise_pred, _ = transformer_forward_pass(
         graphdef,
         state,
         rest,
         latent_model_input,
-        timestep,
+        timestep_for_transformer,
         prompt_embeds_combined,
         do_cfg,
         guidance_scale,
@@ -502,4 +528,5 @@ def run_inference_ti2v_2_2(
     )
     noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
     latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
+    latents = _restore_clean_frames(latents)
   return latents

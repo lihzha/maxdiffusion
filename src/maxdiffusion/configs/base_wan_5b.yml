@@ -60,7 +60,7 @@ jit_initializers: True
 # Set true to load weights from pytorch
 from_pt: True
 split_head_dim: True
-attention: 'flash' # Supported attention: dot_product, flash, cudnn_flash_te, ring, ulysses
+attention: 'cudnn_flash_te' # Supported attention: dot_product, flash, cudnn_flash_te, ring, ulysses
 flash_min_seq_length: 0
 
 # If mask_padding_tokens is True, we pass in segment ids to splash attention to avoid attending to padding tokens.
@@ -124,7 +124,7 @@ diffusion_scheduler_config: {
 base_output_directory: ""
 
 # Hardware
-hardware: 'tpu' # Supported hardware types are 'tpu', 'gpu'
+hardware: 'gpu' # Supported hardware types are 'tpu', 'gpu'
 skip_jax_distributed_system: False
 
 # Parallelism
@@ -287,8 +287,8 @@ profiler_steps: 10
 enable_jax_named_scopes: False
 
 # Generation parameters
-prompt: "A happy dog wagging it's tail."
-prompt_2: "A cat and a dog baking a cake together in a kitchen. The cat is carefully measuring flour, while the dog is stirring the batter with a wooden spoon. The kitchen is cozy, with sunlight streaming through the window."
+prompt: "A hero crying as the camera pans out."
+prompt_2: "A hero crying as the camera pans out."
 negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
 do_classifier_free_guidance: True
 height: 480
@@ -298,7 +298,7 @@ guidance_scale: 5.0
 flow_shift: 3.0
 
 # Input image URL for TI2V conditioning (first frame anchor)
-image_url: "/home/zheng/Research/maxdiffusion/closeup-shot-cute-golden-retriever-puppy-resting-grass-ground.jpg"
+image_url: "test_lightning.png"
 
 # Diffusion CFG cache (FasterCache-style)
 use_cfg_cache: False
