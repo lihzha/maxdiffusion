@@ -122,8 +122,10 @@ def make_data_iterator(
     )
   elif config.dataset_type == "droid":
     return _make_droid_video_iterator(config, mesh, global_batch_size)
+  elif config.dataset_type == "ctrl_world":
+    return _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training=is_training)
   else:
-    assert False, f"Unknown dataset_type {config.dataset_type}, dataset_type must be in (tf, tfrecord, hf, grain, synthetic, droid)"
+    assert False, f"Unknown dataset_type {config.dataset_type}, dataset_type must be in (tf, tfrecord, hf, grain, synthetic, droid, ctrl_world)"
 
 
 def _make_droid_video_iterator(config, mesh, global_batch_size):
@@ -155,6 +157,46 @@ def _make_droid_video_iterator(config, mesh, global_batch_size):
 
   train_iter = multihost_dataloading.MultiHostDataLoadIterator(dataset_obj.dataset, mesh)
   return train_iter
+
+
+def _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training: bool):
+  """TFRecord iterator for action-conditioned SVD (Ctrl-World) training.
+
+  Yields per-window dicts with pre-encoded latents, normalised actions, and
+  pre-computed CLIP text embeddings. See docs/ctrl_world_data_format.md.
+  """
+  from maxdiffusion.input_pipeline.robot.ctrl_world_droid_dataset import (
+      CtrlWorldDroidLatentDataset,
+  )
+
+  per_host_batch = global_batch_size // jax.process_count()
+  data_dir = config.train_data_dir if is_training else config.eval_data_dir
+  if not data_dir:
+    raise ValueError(
+        "ctrl_world dataset requires train_data_dir (and eval_data_dir for eval). "
+        "Point them at gs://<bucket>/<root>/{train,val} as documented in "
+        "docs/ctrl_world_data_format.md."
+    )
+
+  dataset_obj = CtrlWorldDroidLatentDataset(
+      data_dir=data_dir,
+      stats_path=config.stats_path,
+      num_history=config.num_history,
+      num_frames=config.num_frames,
+      action_dim=config.action_dim,
+      text_embed_dim=config.text_embed_dim,
+      batch_size=per_host_batch,
+      split="train" if is_training else "val",
+      seed=config.seed,
+      down_sample=config.ctrl_world_down_sample,
+      max_skip=config.ctrl_world_max_skip,
+      max_skip_his=config.ctrl_world_max_skip_his,
+      skip_his_zero_prob=config.ctrl_world_skip_his_zero_prob,
+      shuffle=config.enable_data_shuffling and is_training,
+      shuffle_buffer=config.ctrl_world_shuffle_buffer,
+      shard_for_training=True,
+  )
+  return multihost_dataloading.MultiHostDataLoadIterator(dataset_obj.dataset, mesh)
 
 
 def make_dreambooth_train_iterator(config, mesh, global_batch_size, tokenizer, vae, vae_params):
