@@ -184,3 +184,8 @@ gha-creds-*.json
 
 # JAX cache
 .jax_cache/
+
+model
+sbatch
+outputs
+slurm_outputs

@@ -1149,7 +1149,7 @@ class AutoencoderKLWan2p2(nnx.Module, FlaxModelMixin, ConfigMixin):
       self,
       rngs: nnx.Rngs,
       base_dim: int = 160,
-      base_dec_dim: int = 256,
+      decoder_base_dim: int = 256,
       z_dim: int = 48,
       dim_mult: Tuple[int] = [1, 2, 4, 4],
       num_res_blocks: int = 2,
@@ -1256,6 +1256,7 @@ class AutoencoderKLWan2p2(nnx.Module, FlaxModelMixin, ConfigMixin):
           0.7468,
           0.7744,
       ],
+      clip_output: bool = False,
       mesh: jax.sharding.Mesh = None,
       dtype: jnp.dtype = jnp.float32,
       weights_dtype: jnp.dtype = jnp.float32,
@@ -1266,6 +1267,7 @@ class AutoencoderKLWan2p2(nnx.Module, FlaxModelMixin, ConfigMixin):
     self.temporal_upsample = temperal_downsample[::-1]
     self.latents_mean = latents_mean
     self.latents_std = latents_std
+    self.clip_output = clip_output
 
     self.patch_size = 2
     self.patchify = WanPatchify(patch_size=self.patch_size)
@@ -1310,7 +1312,7 @@ class AutoencoderKLWan2p2(nnx.Module, FlaxModelMixin, ConfigMixin):
 
     self.decoder = WanDecoder3d(
         rngs=rngs,
-        dim=base_dec_dim,
+        dim=decoder_base_dim,
         z_dim=z_dim,
         dim_mult=dim_mult,
         num_res_blocks=num_res_blocks,
@@ -1401,7 +1403,8 @@ class AutoencoderKLWan2p2(nnx.Module, FlaxModelMixin, ConfigMixin):
     feat_cache._feat_map = dec_feat_map
 
     out = self.unpatchify(out)
-    out = jnp.clip(out, min=-1.0, max=1.0)
+    if self.clip_output:
+      out = jnp.clip(out, min=-1.0, max=1.0)
     feat_cache.init_cache()
     if not return_dict:
       return (out,)

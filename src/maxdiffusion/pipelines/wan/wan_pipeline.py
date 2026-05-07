@@ -302,7 +302,7 @@ class WanPipeline:
   ):
     # Choose VAE class based on z_dim: z_dim=48 means the 2p2 patch-based VAE
     vae_config_dict = AutoencoderKLWan.load_config(config.pretrained_model_name_or_path, subfolder="vae")
-    VAEClass = AutoencoderKLWan2p2 if vae_config_dict.get("z_dim", 16) >= 48 else AutoencoderKLWan
+    VAEClass = AutoencoderKLWan2p2 if vae_config_dict.get("z_dim", 16) == 48 else AutoencoderKLWan
 
     def create_model(rngs: nnx.Rngs, config: HyperParameters):
       wan_vae = VAEClass.from_config(
@@ -310,8 +310,8 @@ class WanPipeline:
           subfolder="vae",
           rngs=rngs,
           mesh=mesh,
-          dtype=jnp.float32,
-          weights_dtype=jnp.float32,
+          dtype=jnp.bfloat16,
+          weights_dtype=jnp.bfloat16,
       )
       return wan_vae
 
