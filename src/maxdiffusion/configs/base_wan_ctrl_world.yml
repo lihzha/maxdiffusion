@@ -1,0 +1,273 @@
+# Base config for action-conditioned WAN 5B Ti2V (Ctrl-World style) training.
+#
+# Initialises from the WAN 2.2 Ti2V 5B diffusers checkpoint and adds a small
+# NNX action encoder that maps per-frame robot actions into the cross-attention
+# space. Action tokens are prepended to T5 text tokens before the WAN
+# transformer's text projection — no changes to the transformer itself.
+#
+# Data: pre-encoded TFRecord shards (WAN VAE latents + T5 text tokens + actions).
+# See docs/wan_ctrl_world_data_format.md.
+#
+# Frame constraint: (num_history + num_frames - 1) % 4 == 0 must hold for WAN
+# temporal compression (factor 4). Default 4+5=9 → (9-1)/4=2 ✓.
+#
+# Usage:
+#   python src/maxdiffusion/train_wan.py \
+#       src/maxdiffusion/configs/base_wan_ctrl_world.yml \
+#       run_name=my-run \
+#       output_dir=gs://<bucket>/wan-ctrl-world/my-run \
+#       train_data_dir=gs://<bucket>/wan_ctrl_world_droid/train \
+#       eval_data_dir=gs://<bucket>/wan_ctrl_world_droid/val
+
+run_name: ''
+
+metrics_file: ""
+write_metrics: True
+timing_metrics_file: ""
+write_timing_metrics: True
+gcs_metrics: False
+save_config_to_gcs: False
+log_period: 100
+
+# WAN 2.2 Ti2V 5B: source of UNet/transformer weights. The action encoder is
+# always initialised from scratch (no pretrained action encoder assumed).
+pretrained_model_name_or_path: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers'
+model_name: wan2.2
+model_type: 'AC_TI2V'
+
+from_pt: True
+weights_dtype: 'bfloat16'
+activations_dtype: 'bfloat16'
+precision: "DEFAULT"
+scan_layers: True
+jit_initializers: True
+split_head_dim: True
+
+attention: 'cudnn_flash_te'
+temporal_attention: 'dot_product'
+use_memory_efficient_attention: False
+flash_min_seq_length: 4096
+flash_block_sizes: {}
+norm_num_groups: 32
+dropout: 0.0
+mask_padding_tokens: True
+attention_sharding_uniform: True
+
+train_text_encoder: False
+text_encoder_learning_rate: 0.0
+snr_gamma: -1.0
+
+timestep_bias: {
+  strategy: "none",
+  multiplier: 1.0,
+  begin: 0,
+  end: 1000,
+  portion: 0.25
+}
+
+base_output_directory: ""
+hardware: 'tpu'
+skip_jax_distributed_system: False
+
+mesh_axes: ['data', 'fsdp', 'context', 'tensor']
+logical_axis_rules: [
+                      ['batch', ['data', 'fsdp']],
+                      ['activation_batch', ['data', 'fsdp']],
+                      ['activation_self_attn_heads', ['context', 'tensor']],
+                      ['activation_cross_attn_q_length', ['context', 'tensor']],
+                      ['activation_length', 'context'],
+                      ['activation_heads', 'tensor'],
+                      ['mlp', 'tensor'],
+                      ['embed', ['context', 'fsdp']],
+                      ['heads', 'tensor'],
+                      ['norm', 'tensor'],
+                      ['conv_batch', ['data', 'context', 'fsdp']],
+                      ['out_channels', 'tensor'],
+                      ['conv_out', 'context'],
+                    ]
+data_sharding: [['data', 'fsdp', 'context', 'tensor']]
+
+dcn_data_parallelism: 1
+dcn_fsdp_parallelism: -1
+dcn_context_parallelism: 1
+dcn_tensor_parallelism: 1
+ici_data_parallelism: 1
+ici_fsdp_parallelism: -1
+ici_context_parallelism: 1
+ici_tensor_parallelism: 1
+allow_split_physical_axes: False
+
+# ── Dataset ────────────────────────────────────────────────────────────────────
+dataset_name: ''
+train_split: 'train'
+dataset_type: 'wan_ctrl_world'
+cache_latents_text_encoder_outputs: True  # latents and T5 embeds are pre-encoded
+dataset_save_location: ''
+load_tfrecord_cached: False
+train_data_dir: ''
+eval_data_dir: ''
+dataset_config_name: ''
+jax_cache_dir: ''
+hf_data_dir: ''
+hf_train_files: ''
+hf_access_token: ''
+image_column: 'image'
+caption_column: 'text'
+enable_data_shuffling: True
+reuse_example_batch: False
+
+# ── WAN model architecture (must match pretrained checkpoint) ──────────────────
+# WAN 2.2 Ti2V 5B architecture dims.
+in_channels: 16
+out_channels: 16
+text_dim: 4096           # T5 encoder output dim
+freq_dim: 256
+ffn_dim: 13824
+num_layers: 40
+num_attention_heads: 40
+attention_head_dim: 128  # inner_dim = 40 * 128 = 5120
+
+# ── Action conditioning ────────────────────────────────────────────────────────
+# Ctrl-World style: action tokens prepended to T5 text tokens in cross-attention.
+# Action encoder: (B, T_act, action_dim) → (B, T_act, wan_text_dim=4096).
+
+num_history: 4            # observed frames per clip
+num_frames: 5             # future frames to predict
+# Total raw frames = num_history + num_frames = 9.
+# WAN F_lat = (9-1)//4 + 1 = 3. Constraint: (total-1) % 4 == 0.
+
+action_dim: 7             # cartesian (6) + gripper (1)
+wan_text_dim: 4096        # must equal pretrained T5 output dim
+wan_action_encoder_hidden_dim: 1024
+
+# Number of latent frames corresponding to history (anchored at t=0 at inference).
+# With num_history=4 and WAN temporal compression 4, the first latent frame
+# roughly encodes the first ~4 raw frames.
+num_history_latent_frames: 1
+
+# CFG dropout probability on action tokens (zeroed for 5% of samples).
+ctrl_cfg_drop_prob: 0.05
+
+# ── Video resolution ───────────────────────────────────────────────────────────
+# Robot data resolution. height/width must be divisible by 8.
+# Example: single camera 192×320; 3 cameras stacked = 576×320.
+height: 192
+width: 320
+num_frames_raw: 9   # informational only; actual num_frames for WAN is F_lat
+
+# ── Training loop ──────────────────────────────────────────────────────────────
+learning_rate: 1.e-5
+scale_lr: False
+max_train_samples: -1
+max_train_steps: 200000
+num_train_epochs: 1
+seed: 0
+output_dir: 'wan-ctrl-world-output'
+per_device_batch_size: 1.0
+global_batch_size: 0
+global_batch_size_to_train_on: 1
+global_batch_size_to_load: 1
+
+warmup_steps_fraction: 0.05
+learning_rate_schedule_steps: -1
+save_optimizer: False
+
+adam_b1: 0.9
+adam_b2: 0.999
+adam_eps: 1.e-8
+adam_weight_decay: 0.0
+opt_enable_grad_clipping: False
+max_grad_value: 1.0
+opt_enable_grad_global_norm_clipping: True
+max_grad_norm: 1.0
+
+# Whether to apply flow-matching per-sample loss weighting.
+disable_training_weights: False
+
+remat_policy: "MATMUL_WITHOUT_BATCH"
+names_which_can_be_saved: []
+names_which_can_be_offloaded: []
+
+checkpoint_every: 5000
+checkpoint_dir: ""
+enable_single_replica_ckpt_restoring: False
+save_final_checkpoint: True
+
+eval_every: 2000
+eval_data_dir: ""
+eval_max_batches: 50
+
+enable_profiler: False
+skip_first_n_steps_for_profiler: 5
+profiler_steps: 10
+enable_jax_named_scopes: False
+
+# ── Fields kept for pyconfig compat (unused by this trainer) ──────────────────
+unet_checkpoint: ''
+revision: ''
+min_guidance_scale: 1.0
+max_guidance_scale: 2.5
+guidance_scale: 5.0
+flow_shift: 3.0
+guidance_rescale: 0.0
+num_inference_steps: 25
+fps: 16
+fps_id: 6
+motion_bucket_id: 127
+cond_aug: 0.02
+decode_chunk_size: 8
+vae_scale_factor: 0.18215
+vae_scaling_factor: 0.18215
+image_url: ''
+prompt: ''
+prompt_2: ''
+negative_prompt: ''
+do_classifier_free_guidance: True
+image_encoder_pretrained_model_name_or_path: ''
+lightning_from_pt: False
+lightning_repo: ""
+lightning_ckpt: ""
+enable_lora: False
+lora_config: {
+  rank: [],
+  lora_model_name_or_path: [],
+  weight_name: [],
+  adapter_name: [],
+  scale: [],
+  from_pt: []
+}
+enable_mllog: False
+controlnet_model_name_or_path: ''
+controlnet_from_pt: False
+controlnet_conditioning_scale: 0.0
+controlnet_image: ''
+quantization: ''
+quantization_local_shard_count: -1
+compile_topology_num_slices: -1
+use_qwix_quantization: False
+quantization_calibration_method: "absmax"
+qwix_module_path: ".*"
+enable_generate_video_for_eval: False
+eval_max_number_of_samples_in_bucket: 0
+enable_ssim: False
+enable_ml_diagnostics: False
+profiler_gcs_path: ""
+enable_ondemand_xprof: False
+tfrecords_dir: ''
+no_records_per_shard: 0
+enable_eval_timesteps: False
+timesteps_list: []
+num_eval_samples: 0
+center_crop: False
+random_flip: False
+tokenize_captions_num_proc: 4
+transform_images_num_proc: 4
+resolution: 320
+
+diffusion_scheduler_config: {
+  prediction_type: 'v_prediction',
+  sigma_min: 0.002,
+  sigma_max: 700.0,
+  rho: 7.0,
+  timestep_spacing: 'edm'
+}
