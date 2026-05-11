@@ -372,6 +372,10 @@ class WanCtrlWorldTrainer:
                 rest_of_state=rest_of_state,
             )
 
+        # Free the pre-shard param copy on TPU; GPU JAX needs it pinned.
+        if config.hardware != "gpu":
+            max_utils.delete_pytree(params)
+
         # 5. Shard state across devices
         state, state_shardings = self._shard_state(mesh, state)
         data_shardings = self._data_shardings(mesh)
