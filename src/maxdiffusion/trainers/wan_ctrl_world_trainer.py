@@ -49,7 +49,6 @@ import jax
 import jax.numpy as jnp
 import jaxopt
 import numpy as np
-import optax
 import orbax.checkpoint as ocp
 from flax import nnx
 from flax.linen import partitioning as nn_partitioning
@@ -334,9 +333,7 @@ class WanCtrlWorldTrainer:
             self.config.warmup_steps_fraction,
             num_steps,
         )
-        tx = optax.adafactor(learning_rate=lr_schedule)
-        if self.config.opt_enable_grad_global_norm_clipping:
-            tx = optax.chain(optax.clip_by_global_norm(self.config.max_grad_norm), tx)
+        tx = max_utils.create_optimizer(self.config, lr_schedule)
         return tx, lr_schedule
 
     # ── Sharding ──────────────────────────────────────────────────────────────
@@ -345,16 +342,6 @@ class WanCtrlWorldTrainer:
         with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
             state_spec = nnx.get_partition_spec(state)
             state_shardings = nnx.get_named_sharding(state, mesh)
-            # Adafactor stores 1-D row/col factor vectors whose rank is
-            # incompatible with the 2-D partition spec inferred from the
-            # corresponding parameter. Replicate all opt_state tensors
-            # (they are tiny with Adafactor so this is free).
-            replicated_spec = jax.tree.map(lambda _: P(), state.opt_state)
-            replicated_sharding = jax.tree.map(
-                lambda _: NamedSharding(mesh, P()), state.opt_state
-            )
-            state_spec = state_spec.replace(opt_state=replicated_spec)
-            state_shardings = state_shardings.replace(opt_state=replicated_sharding)
             state = jax.lax.with_sharding_constraint(state, state_spec)
         return state, state_shardings
 
