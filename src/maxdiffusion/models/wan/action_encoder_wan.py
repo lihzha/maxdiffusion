@@ -1,18 +1,15 @@
 """Action encoder for action-conditioned WAN video generation.
 
-NNX 3-layer SiLU MLP that lifts per-frame robot actions into the WAN
-cross-attention space so they can be prepended to T5 text token sequences.
+Per-latent-frame 3-layer SiLU MLP: the 4 raw-frame actions that correspond
+to one latent frame are concatenated into a single 28-dim vector and encoded
+into the WAN cross-attention space.
 
-    action (B, T, action_dim)  →  (B, T, out_dim=4096)
+    action (B, F_lat, 4, action_dim) → (B, F_lat, out_dim=4096)
 
-The output dim matches the T5 text embedding dim (text_dim in the WAN config,
-default 4096). Action tokens are concatenated with T5 tokens before the WAN
-transformer's text_embedder projection, which applies a shared Linear to the
-combined sequence — action tokens pass through the same (4096 → 5120) linear
-as text tokens. No changes to the WAN model are needed.
-
-Mirrors the FlaxActionEncoder used by the SVD Ctrl-World trainer but written
-in NNX so it integrates cleanly with nnx.split / nnx.merge.
+Concatenating preserves temporal ordering across the 4 frames so the network
+can learn velocity and trajectory-shape features. The output token is used as
+K/V in the WAN transformer's per-frame cross-attention (frame_level_cond=True),
+where the image latent's spatial patches are the queries.
 """
 
 import jax
@@ -21,15 +18,15 @@ from flax import nnx
 
 
 class NNXWanActionEncoder(nnx.Module):
-    """3-layer SiLU MLP mapping robot actions to the WAN cross-attention dim.
+    """3-layer SiLU MLP encoding 4 concatenated raw-frame actions per latent frame.
 
     Args:
         rngs:         NNX Rngs for parameter initialisation.
-        action_dim:   Width of per-frame action vectors (7 for DROID EEF).
+        action_dim:   Width of a single raw-frame action vector (7 for DROID EEF).
+        num_actions:  Number of raw frames concatenated per latent frame (4 for WAN 4× temporal compression).
         hidden_dim:   Width of hidden layers.
-        out_dim:      Output feature dim — must equal the WAN text_dim (4096)
-                      so action tokens can be concatenated with T5 tokens.
-        dtype:        Activation dtype (bfloat16 in mixed-precision training).
+        out_dim:      Output width — must equal wan_text_dim (4096).
+        dtype:        Activation dtype.
         weights_dtype: Parameter storage dtype.
     """
 
@@ -37,6 +34,7 @@ class NNXWanActionEncoder(nnx.Module):
         self,
         rngs: nnx.Rngs,
         action_dim: int = 7,
+        num_actions: int = 4,
         hidden_dim: int = 1024,
         out_dim: int = 4096,
         dtype: jnp.dtype = jnp.bfloat16,
@@ -46,7 +44,7 @@ class NNXWanActionEncoder(nnx.Module):
         kaiming = nnx.initializers.he_normal()
 
         self.linear_1 = nnx.Linear(
-            in_features=action_dim,
+            in_features=action_dim * num_actions,   # 28 for 4×7
             out_features=hidden_dim,
             rngs=rngs,
             dtype=dtype,
@@ -74,22 +72,23 @@ class NNXWanActionEncoder(nnx.Module):
         action: jax.Array,
         text_embed: jax.Array | None = None,
     ) -> jax.Array:
-        """Encode per-frame robot actions, optionally fusing a pooled text embed.
+        """Encode 4 concatenated raw-frame actions per latent frame.
 
         Args:
-            action:     ``(B, T, action_dim)`` normalised action sequence.
-            text_embed: ``(B, out_dim)`` pooled text embedding (e.g. mean of T5
-                        tokens). Broadcast-added to every action token, matching
-                        the additive text-fusion used by SVD Ctrl-World.
+            action:     ``(B, F_lat, 4, action_dim)`` normalised action sequence.
+            text_embed: ``(B, out_dim)`` pooled T5 embedding, broadcast-added
+                        as a per-sample bias.
 
         Returns:
-            ``(B, T, out_dim)`` action token embeddings.
+            ``(B, F_lat, out_dim)`` — one action token per latent frame.
         """
-        x = action.astype(self.dtype)
-        x = jax.nn.silu(self.linear_1(x))
-        x = jax.nn.silu(self.linear_2(x))
-        x = self.linear_3(x)
+        B, F, T_a, A = action.shape
+        # Flatten frames into batch and concatenate the 4 actions into one vector.
+        x = action.reshape(B * F, T_a * A).astype(self.dtype)  # (B*F, 4*action_dim)
+        x = jax.nn.silu(self.linear_1(x))  # (B*F, hidden_dim)
+        x = jax.nn.silu(self.linear_2(x))  # (B*F, hidden_dim)
+        x = self.linear_3(x)               # (B*F, out_dim)
         if text_embed is not None:
-            # (B, out_dim) → (B, 1, out_dim), broadcast across T
-            x = x + text_embed[:, None, :].astype(x.dtype)
-        return x
+            # Tile (B, out_dim) → (B*F, out_dim): repeat each sample F times.
+            x = x + jnp.repeat(text_embed, F, axis=0).astype(x.dtype)
+        return x.reshape(B, F, -1)         # (B, F_lat, out_dim)

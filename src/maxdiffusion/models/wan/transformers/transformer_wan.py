@@ -375,6 +375,7 @@ class WanTransformerBlock(nnx.Module):
       deterministic: bool = True,
       rngs: nnx.Rngs = None,
       encoder_attention_mask: Optional[jax.Array] = None,
+      frame_level_cond: bool = False,
   ):
     with self.conditional_named_scope("transformer_block"):
       # Support both global [B, 6, dim] and per-token [B, seq_len, 6, dim] temb.
@@ -423,13 +424,29 @@ class WanTransformerBlock(nnx.Module):
         with self.conditional_named_scope("cross_attn_norm"):
           norm_hidden_states = self.norm2(hidden_states.astype(jnp.float32)).astype(hidden_states.dtype)
         with self.conditional_named_scope("cross_attn_attn"):
-          attn_output = self.attn2(
-              hidden_states=norm_hidden_states,
-              encoder_hidden_states=encoder_hidden_states,
-              deterministic=deterministic,
-              rngs=rngs,
-              encoder_attention_mask=encoder_attention_mask,
-          )
+          if frame_level_cond:
+            # SVD-style per-frame locking: each latent frame's patches attend only
+            # to that frame's single action token.
+            # hidden_states: (B, F_lat*Sp, D), encoder: (B, F_lat, D)
+            B, L, D = norm_hidden_states.shape
+            F = encoder_hidden_states.shape[1]
+            hs_r = norm_hidden_states.reshape(B * F, L // F, D)
+            enc_r = encoder_hidden_states.reshape(B * F, 1, D)
+            attn_output = self.attn2(
+                hidden_states=hs_r,
+                encoder_hidden_states=enc_r,
+                deterministic=deterministic,
+                rngs=rngs,
+            )
+            attn_output = attn_output.reshape(B, L, D)
+          else:
+            attn_output = self.attn2(
+                hidden_states=norm_hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                deterministic=deterministic,
+                rngs=rngs,
+                encoder_attention_mask=encoder_attention_mask,
+            )
         with self.conditional_named_scope("cross_attn_residual"):
           hidden_states = hidden_states + attn_output
 
@@ -613,6 +630,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       skip_blocks: Optional[jax.Array] = None,
       cached_residual: Optional[jax.Array] = None,
       return_residual: bool = False,
+      frame_level_cond: bool = False,
   ) -> Union[jax.Array, Tuple[jax.Array, jax.Array], Dict[str, jax.Array]]:
     hidden_states = nn.with_logical_constraint(hidden_states, ("batch", None, None, None, None))
     batch_size, _, num_frames, height, width = hidden_states.shape
@@ -678,6 +696,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
               deterministic,
               rngs_carry,
               encoder_attention_mask,
+              frame_level_cond=frame_level_cond,
           )
           new_carry = (hidden_states, rngs_carry)
           return new_carry, None
@@ -707,6 +726,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
                 deterministic,
                 rngs,
                 encoder_attention_mask=encoder_attention_mask,
+                frame_level_cond=frame_level_cond,
             )
 
           rematted_layer_forward = self.gradient_checkpoint.apply(

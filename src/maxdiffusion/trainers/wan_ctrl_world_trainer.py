@@ -49,6 +49,7 @@ import jax
 import jax.numpy as jnp
 import jaxopt
 import numpy as np
+import optax
 import orbax.checkpoint as ocp
 from flax import nnx
 from flax.linen import partitioning as nn_partitioning
@@ -84,7 +85,9 @@ class TrainState(train_state.TrainState):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _dtype(name: str) -> jnp.dtype:
+def _dtype(name: str | jnp.dtype) -> jnp.dtype:
+    if isinstance(name, jnp.dtype):
+        return name
     return {"bfloat16": jnp.bfloat16, "float16": jnp.float16, "float32": jnp.float32}[name]
 
 
@@ -138,11 +141,20 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
     def loss_fn(params):
         model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
 
-        latents = data["latent"][:bsz].astype(weights_dtype)        # (B,16,F_lat,H,W)
-        actions = data["action"][:bsz].astype(weights_dtype)        # (B,T_act,7)
+        latents = data["latent"][:bsz].astype(weights_dtype)        # (B,C,F_lat,H,W)
+        actions = data["action"][:bsz].astype(weights_dtype)        # (B,T_raw,7)
         text_tokens = data["text_embeds"][:bsz].astype(weights_dtype)  # (B,512,4096)
 
         b, _, F_lat, H_lat, W_lat = latents.shape
+
+        # Group 4 consecutive raw-frame actions per latent frame.
+        # Latent frame f ← raw frames [4f, 4f+1, 4f+2, 4f+3], clamped to T_raw-1
+        # so the last (partial) group is padded by repeating the final raw frame.
+        act_idx = jnp.clip(
+            jnp.arange(F_lat)[:, None] * 4 + jnp.arange(4)[None, :],
+            0, actions.shape[1] - 1,
+        )  # (F_lat, 4)
+        actions_grouped = actions[:, act_idx, :]   # (B, F_lat, 4, 7)
 
         # ── Sample a global denoising timestep for the future frames ──────────
         timesteps = scheduler.sample_timesteps(timestep_rng, b)
@@ -160,10 +172,12 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         # ── Per-token timestep: history → 0, future → t ───────────────────────
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
 
-        # ── Action conditioning (additive text fusion, same as SVD Ctrl-World) ─
-        # Pool T5 token sequence → single (B, 4096) vector, then add inside encoder.
-        text_pooled = text_tokens.mean(axis=1)                 # (B, 4096)
-        action_tokens = model.action_encoder(actions, text_pooled)  # (B, T_act, 4096)
+        # ── Action conditioning ───────────────────────────────────────────────
+        # The encoder aggregates 4 raw-frame actions into one token per latent
+        # frame. The transformer's frame_level_cond cross-attention then lets
+        # each latent frame's patches attend to its corresponding action token.
+        text_pooled = text_tokens.mean(axis=1)                           # (B, 4096)
+        action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
         action_tokens = _apply_cfg_dropout(drop_rng, action_tokens, config.ctrl_cfg_drop_prob)
 
         # ── WAN transformer forward (per-token timestep triggers Ti2V path) ───
@@ -173,6 +187,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             encoder_hidden_states=action_tokens,
             deterministic=False,
             rngs=nnx.Rngs(dropout=drop_rng),
+            frame_level_cond=True,
         )
 
         # ── Loss on future latent frames only ─────────────────────────────────
@@ -225,6 +240,10 @@ class WanCtrlWorldTrainer:
         split = "train" if is_training else "val"
         ds = WanCtrlWorldDroidDataset(
             data_dir=config.train_data_dir if is_training else config.eval_data_dir,
+            stats_path=config.action_stats_path,
+            n_hist=config.num_history_latent_frames,
+            n_fut=config.num_future_latent_frames,
+            action_dim=config.action_dim,
             batch_size=max(1, int(jax.local_device_count() * config.per_device_batch_size)),
             split=split,
             seed=config.seed,
@@ -245,6 +264,7 @@ class WanCtrlWorldTrainer:
         return NNXWanActionEncoder(
             rngs=nnx.Rngs(jax.random.key(self.config.seed)),
             action_dim=self.config.action_dim,
+            num_actions=4,  # WAN 4× temporal compression → 4 raw frames per latent frame
             hidden_dim=self.config.wan_action_encoder_hidden_dim,
             out_dim=self.config.wan_text_dim,
             dtype=_dtype(self.config.activations_dtype),
@@ -314,7 +334,9 @@ class WanCtrlWorldTrainer:
             self.config.warmup_steps_fraction,
             num_steps,
         )
-        tx = max_utils.create_optimizer(self.config, lr_schedule)
+        tx = optax.adafactor(learning_rate=lr_schedule)
+        if self.config.opt_enable_grad_global_norm_clipping:
+            tx = optax.chain(optax.clip_by_global_norm(self.config.max_grad_norm), tx)
         return tx, lr_schedule
 
     # ── Sharding ──────────────────────────────────────────────────────────────
@@ -323,7 +345,17 @@ class WanCtrlWorldTrainer:
         with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
             state_spec = nnx.get_partition_spec(state)
             state_shardings = nnx.get_named_sharding(state, mesh)
-        state = jax.lax.with_sharding_constraint(state, state_spec)
+            # Adafactor stores 1-D row/col factor vectors whose rank is
+            # incompatible with the 2-D partition spec inferred from the
+            # corresponding parameter. Replicate all opt_state tensors
+            # (they are tiny with Adafactor so this is free).
+            replicated_spec = jax.tree.map(lambda _: P(), state.opt_state)
+            replicated_sharding = jax.tree.map(
+                lambda _: NamedSharding(mesh, P()), state.opt_state
+            )
+            state_spec = state_spec.replace(opt_state=replicated_spec)
+            state_shardings = state_shardings.replace(opt_state=replicated_sharding)
+            state = jax.lax.with_sharding_constraint(state, state_spec)
         return state, state_shardings
 
     def _data_shardings(self, mesh) -> dict:
@@ -358,7 +390,7 @@ class WanCtrlWorldTrainer:
             graphdef, params, rest_of_state = nnx.split(combined, nnx.Param, ...)
 
         if jax.process_index() == 0:
-            n_params = sum(int(np.prod(v.value.shape)) for v in jax.tree_util.tree_leaves(params))
+            n_params = sum(int(np.prod(v.shape)) for v in jax.tree_util.tree_leaves(params))
             max_logging.log(f"[wan_ctrl_world] trainable params: {n_params / 1e6:.1f}M")
 
         # 4. Build optimizer and train state
@@ -524,6 +556,13 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     text_tokens = data["text_embeds"][:bsz].astype(weights_dtype)
 
     b, _, F_lat, H_lat, W_lat = latents.shape
+
+    act_idx = jnp.clip(
+        jnp.arange(F_lat)[:, None] * 4 + jnp.arange(4)[None, :],
+        0, actions.shape[1] - 1,
+    )  # (F_lat, 4)
+    actions_grouped = actions[:, act_idx, :]  # (B, F_lat, 4, 7)
+
     timesteps = scheduler.sample_timesteps(timestep_rng, b)
 
     # Future frames noised; history frames clean.
@@ -537,13 +576,14 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
 
     text_pooled = text_tokens.mean(axis=1)
-    action_tokens = model.action_encoder(actions, text_pooled)
+    action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
 
     model_pred = model.transformer(
         hidden_states=noisy_latents,
         timestep=timestep_2d,
         encoder_hidden_states=action_tokens,
         deterministic=True,
+        frame_level_cond=True,
     )
 
     diff = target_future - model_pred[:, :, n_hist:]

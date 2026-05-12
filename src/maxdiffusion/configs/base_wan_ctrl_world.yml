@@ -8,16 +8,16 @@
 # Data: pre-encoded TFRecord shards (WAN VAE latents + T5 text tokens + actions).
 # See docs/wan_ctrl_world_data_format.md.
 #
-# Frame constraint: (num_history + num_frames - 1) % 4 == 0 must hold for WAN
-# temporal compression (factor 4). Default 4+5=9 → (9-1)/4=2 ✓.
 #
 # Usage:
-#   python src/maxdiffusion/train_wan.py \
-#       src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-#       run_name=my-run \
-#       output_dir=gs://<bucket>/wan-ctrl-world/my-run \
-#       train_data_dir=gs://<bucket>/wan_ctrl_world_droid/train \
-#       eval_data_dir=gs://<bucket>/wan_ctrl_world_droid/val
+# NCCL_DEBUG=INFO NCCL_P2P_DISABLE=1 TF_GPU_ALLOCATOR=cuda_malloc_async \
+# XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=0,1 \
+# python src/maxdiffusion/train_wan.py \
+#     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
+#     run_name=test \
+#     output_dir=wan-ctrl-world-output \
+#     train_data_dir=droid_wan_tfrecords_test/train \
+#     eval_data_dir=droid_wan_tfrecords_test/val
 
 run_name: ''
 
@@ -31,9 +31,15 @@ log_period: 100
 
 # WAN 2.2 Ti2V 5B: source of UNet/transformer weights. The action encoder is
 # always initialised from scratch (no pretrained action encoder assumed).
-pretrained_model_name_or_path: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers'
+pretrained_model_name_or_path: 'model/Wan2.2-TI2V-5B-Diffusers'
 model_name: wan2.2
 model_type: 'AC_TI2V'
+
+# Overrides the transformer from pretrained_model_name_or_path
+wan_transformer_pretrained_model_name_or_path: ''
+
+unet_checkpoint: ''
+revision: ''
 
 from_pt: True
 weights_dtype: 'bfloat16'
@@ -43,8 +49,10 @@ scan_layers: True
 jit_initializers: True
 split_head_dim: True
 
+# Replicate VAE across devices instead of using the model's sharding annotations for sharding.
+replicate_vae: False
+
 attention: 'cudnn_flash_te'
-temporal_attention: 'dot_product'
 use_memory_efficient_attention: False
 flash_min_seq_length: 4096
 flash_block_sizes: {}
@@ -85,6 +93,19 @@ logical_axis_rules: [
                       ['out_channels', 'tensor'],
                       ['conv_out', 'context'],
                     ]
+vae_logical_axis_rules: [
+                          ['activation_batch', 'redundant'],
+                          ['activation_length', 'vae_spatial'],
+                          ['activation_heads', null],
+                          ['activation_kv_length', null],
+                          ['embed', null],
+                          ['heads', null],
+                          ['norm', null],
+                          ['conv_batch', 'redundant'],
+                          ['out_channels', 'vae_spatial'],
+                          ['conv_out', 'vae_spatial'],
+                          ['conv_in', 'vae_spatial'],
+                        ]
 data_sharding: [['data', 'fsdp', 'context', 'tensor']]
 
 dcn_data_parallelism: 1
@@ -131,29 +152,24 @@ attention_head_dim: 128  # inner_dim = 40 * 128 = 5120
 # Ctrl-World style: action tokens prepended to T5 text tokens in cross-attention.
 # Action encoder: (B, T_act, action_dim) → (B, T_act, wan_text_dim=4096).
 
-num_history: 4            # observed frames per clip
-num_frames: 5             # future frames to predict
-# Total raw frames = num_history + num_frames = 9.
-# WAN F_lat = (9-1)//4 + 1 = 3. Constraint: (total-1) % 4 == 0.
-
 action_dim: 7             # cartesian (6) + gripper (1)
 wan_text_dim: 4096        # must equal pretrained T5 output dim
 wan_action_encoder_hidden_dim: 1024
 
-# Number of latent frames corresponding to history (anchored at t=0 at inference).
-# With num_history=4 and WAN temporal compression 4, the first latent frame
-# roughly encodes the first ~4 raw frames.
+# Windowing in latent space. Each latent frame corresponds to 4 raw frames.
+# Total window = n_hist + n_fut latent frames; dataset outputs 4*(n_hist+n_fut) raw actions.
 num_history_latent_frames: 1
+num_future_latent_frames: 1
+
+# Path to action_stats.json (state_01 / state_99 arrays, produced by the data script).
+action_stats_path: 'droid_wan_tfrecords_test/action_stats.json'
 
 # CFG dropout probability on action tokens (zeroed for 5% of samples).
 ctrl_cfg_drop_prob: 0.05
 
 # ── Video resolution ───────────────────────────────────────────────────────────
-# Robot data resolution. height/width must be divisible by 8.
-# Example: single camera 192×320; 3 cameras stacked = 576×320.
-height: 192
-width: 320
-num_frames_raw: 9   # informational only; actual num_frames for WAN is F_lat
+height: 320 #576
+width:  192 #1024
 
 # ── Training loop ──────────────────────────────────────────────────────────────
 learning_rate: 1.e-5
@@ -195,7 +211,7 @@ save_final_checkpoint: True
 
 eval_every: 2000
 eval_data_dir: ""
-eval_max_batches: 50
+eval_max_batches: 1
 
 enable_profiler: False
 skip_first_n_steps_for_profiler: 5
@@ -254,7 +270,10 @@ enable_ml_diagnostics: False
 profiler_gcs_path: ""
 enable_ondemand_xprof: False
 tfrecords_dir: ''
-no_records_per_shard: 0
+no_records_per_shard: 50
+data_root: ''
+max_episodes: -1
+max_frames: -1
 enable_eval_timesteps: False
 timesteps_list: []
 num_eval_samples: 0
