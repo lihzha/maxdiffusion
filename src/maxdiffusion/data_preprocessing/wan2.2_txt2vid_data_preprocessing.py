@@ -29,7 +29,8 @@ Usage:
     no_records_per_shard=50 \
     action_stats_path=action_stats_test.json \
     max_frames=300 \
-    max_episodes=200
+    max_episodes=200 \
+    start_episode=0
 """
 
 from __future__ import annotations
@@ -37,7 +38,11 @@ from __future__ import annotations
 import functools
 import json
 import os
+import queue
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
 
 import cv2
@@ -112,7 +117,7 @@ def compute_action_stats(annotation_dir: str, max_episodes: int = -1) -> tuple[n
 # ── Video loading ─────────────────────────────────────────────────────────────
 
 
-def load_video_frames(video_path: str, height: int, width: int) -> np.ndarray | None:
+def load_video_frames(video_path: str, *, height: int, width: int) -> np.ndarray | None:
     """Load all frames, resize to (height, width). Returns (T, H, W, 3) float32 in [-1,1]."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -163,6 +168,66 @@ def encode_episode(
     return [arr[i] for i in range(NUM_CAMERAS)]
 
 
+# ── Prefetch pipeline ─────────────────────────────────────────────────────────
+
+_SENTINEL    = object()
+_WORK_DONE   = object()
+
+
+def _load_one_episode(fname, ann_dir, config, pipeline, t5_lock):
+    """Load, decode, and T5-encode one episode.
+
+    Returns (ep_id, text_embed, raw_action, frames_per_cam) or None.
+    """
+    ep_id = int(os.path.splitext(fname)[0])
+
+    with open(os.path.join(ann_dir, fname)) as f:
+        meta = json.load(f)
+
+    text   = (meta["texts"] or [""])[0]
+    states = np.array(meta["states"], dtype=np.float32)
+
+    cam_list = meta.get("videos", [])
+    if len(cam_list) < NUM_CAMERAS:
+        return None
+
+    video_paths = [
+        os.path.join(config.data_root, cam_list[i].get("video_path", ""))
+        for i in range(NUM_CAMERAS)
+    ]
+    if not all(os.path.exists(p) for p in video_paths):
+        return None
+
+    load_fn = functools.partial(load_video_frames, height=config.height, width=config.width)
+    with ThreadPoolExecutor(max_workers=NUM_CAMERAS) as ex:
+        all_cam_frames = list(ex.map(load_fn, video_paths))
+
+    if any(f is None for f in all_cam_frames):
+        return None
+
+    T_vid = min(len(f) for f in all_cam_frames)
+    T_ep  = min(len(states), T_vid)
+    if config.max_frames > 0:
+        T_ep = min(T_ep, config.max_frames)
+    if T_ep < 1:
+        return None
+
+    with t5_lock:
+        text_embed_pt = pipeline._get_t5_prompt_embeds(text, max_sequence_length=T5_SEQ_LEN)
+    text_embed = text_embed_pt[0].detach().float().numpy().astype(np.float16)  # (512, 4096)
+
+    return (ep_id, text_embed, states[:T_ep], [f[:T_ep] for f in all_cam_frames])
+
+
+def _loader_worker(work_queue, out_queue, ann_dir, config, pipeline, t5_lock):
+    """Pull filenames from work_queue, load episodes, push results to out_queue."""
+    while True:
+        fname = work_queue.get()
+        if fname is _WORK_DONE:
+            break
+        out_queue.put(_load_one_episode(fname, ann_dir, config, pipeline, t5_lock))
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -185,6 +250,9 @@ def run(config) -> None:
             json.dump({"state_01": p01.tolist(), "state_99": p99.tolist()}, f, indent=2)
         print(f"Saved action stats → {stats_out}", flush=True)
 
+    if config.action_stats_only:
+        return
+
     # ── Load pipeline (VAE + text encoder, no transformer) ────────────────────
     print("Loading pipeline …", flush=True)
     pipeline = WanPipelineTI2V_2_2.from_pretrained(config, load_transformer=False)
@@ -192,84 +260,99 @@ def run(config) -> None:
 
     # ── Collect episode list ──────────────────────────────────────────────────
     json_files = sorted(f for f in os.listdir(ann_dir) if f.endswith(".json"))
+    start = config.start_episode if config.start_episode > 0 else 0
+    if start:
+        json_files = json_files[start:]
     if config.max_episodes > 0:
         json_files = json_files[: config.max_episodes]
-    print(f"Processing {len(json_files)} episodes ({split} split) …", flush=True)
+    print(f"Processing {len(json_files)} episodes ({split} split, starting at index {start}) …", flush=True)
 
     # ── Write TFRecords ───────────────────────────────────────────────────────
-    shard_idx        = 0
+    shard_idx        = start // config.no_records_per_shard
     shard_count      = 0
     total_episodes   = 0
     skipped_episodes = 0
 
-    writer = tf.io.TFRecordWriter(os.path.join(out_dir, f"shard-{shard_idx:04d}.tfrecord"))
+    writer = None
 
-    for ep_idx, fname in enumerate(json_files):
-        ep_id = int(os.path.splitext(fname)[0])
+    n_workers      = config.prefetch_workers
+    work_queue     = queue.Queue()
+    prefetch_queue = queue.Queue(maxsize=n_workers * 2)
+    t5_lock        = threading.Lock()
 
-        with open(os.path.join(ann_dir, fname)) as f:
-            meta = json.load(f)
+    for fname in json_files:
+        work_queue.put(fname)
+    for _ in range(n_workers):
+        work_queue.put(_WORK_DONE)
 
-        text   = (meta["texts"] or [""])[0]
-        states = np.array(meta["states"], dtype=np.float32)  # (T_ep, 7) raw
+    workers = [
+        threading.Thread(
+            target=_loader_worker,
+            args=(work_queue, prefetch_queue, ann_dir, config, pipeline, t5_lock),
+            daemon=True,
+        )
+        for _ in range(n_workers)
+    ]
+    for w in workers:
+        w.start()
 
-        cam_list = meta.get("videos", [])
-        if len(cam_list) < NUM_CAMERAS:
+    def _coordinator():
+        for w in workers:
+            w.join()
+        prefetch_queue.put(_SENTINEL)
+
+    threading.Thread(target=_coordinator, daemon=True).start()
+
+    ep_idx       = 0
+    t_encode_sum = 0.0
+    t_window     = 0
+    while True:
+        item = prefetch_queue.get()
+        if item is _SENTINEL:
+            break
+        if item is None:
             skipped_episodes += 1
+            ep_idx += 1
             continue
 
-        video_paths = [
-            os.path.join(config.data_root, cam_list[i].get("video_path", ""))
-            for i in range(NUM_CAMERAS)
-        ]
-        if not all(os.path.exists(p) for p in video_paths):
-            skipped_episodes += 1
-            continue
-
-        # ── Load frames ───────────────────────────────────────────────────────
-        all_cam_frames = [load_video_frames(p, config.height, config.width) for p in video_paths]
-        if any(f is None for f in all_cam_frames):
-            skipped_episodes += 1
-            continue
-
-        T_vid = min(len(f) for f in all_cam_frames)
-        T_ep  = min(len(states), T_vid)
-        if config.max_frames > 0:
-            T_ep = min(T_ep, config.max_frames)
-        if T_ep < 1:
-            skipped_episodes += 1
-            continue
-
-        frames_per_cam = [f[:T_ep] for f in all_cam_frames]
-        raw_action     = states[:T_ep]  # (T_ep, 7)
-
-        # ── Encode text ───────────────────────────────────────────────────────
-        text_embed_pt = pipeline._get_t5_prompt_embeds(text, max_sequence_length=T5_SEQ_LEN)
-        text_embed = text_embed_pt[0].detach().float().numpy().astype(np.float16)  # (512, 4096)
+        ep_id, text_embed, raw_action, frames_per_cam = item
 
         # ── Encode VAE (full episode, all cameras) ────────────────────────────
+        t0 = time.perf_counter()
         latents_per_cam = encode_episode(frames_per_cam, p_vae_encode)
+        jax.effects_barrier()  # ensure GPU work is done before stopping the clock
+        t_encode_sum += time.perf_counter() - t0
+        t_window     += 1
+
         # 3 × (F_lat, C, H_lat, W_lat) float16, time-first
         F_lat = latents_per_cam[0].shape[0]
 
+        if writer is None:
+            writer = tf.io.TFRecordWriter(os.path.join(out_dir, f"shard-{shard_idx:04d}.tfrecord"))
         writer.write(_serialize_example(latents_per_cam, raw_action, text_embed, ep_id, F_lat))
         shard_count    += 1
         total_episodes += 1
+        ep_idx         += 1
 
         if shard_count >= config.no_records_per_shard:
             writer.close()
+            writer = None
             shard_idx  += 1
             shard_count = 0
-            writer = tf.io.TFRecordWriter(os.path.join(out_dir, f"shard-{shard_idx:04d}.tfrecord"))
 
-        if (ep_idx + 1) % 100 == 0:
+        if ep_idx % 100 == 0:
+            avg_s = t_encode_sum / t_window if t_window else 0.0
             print(
-                f"  [{ep_idx + 1}/{len(json_files)}] {total_episodes} written, "
-                f"{skipped_episodes} skipped",
+                f"  [{ep_idx}/{len(json_files)}] {total_episodes} written, "
+                f"{skipped_episodes} skipped | "
+                f"vae encode {avg_s:.2f}s/traj (last {t_window})",
                 flush=True,
             )
+            t_encode_sum = 0.0
+            t_window     = 0
 
-    writer.close()
+    if writer is not None:
+        writer.close()
     print(
         f"\nDone. {total_episodes} episodes → {shard_idx + 1} shards in {out_dir}\n"
         f"Skipped {skipped_episodes} episodes.",
@@ -280,6 +363,7 @@ def run(config) -> None:
 def main(argv: Sequence[str]) -> None:
     pyconfig.initialize(argv)
     run(pyconfig.config)
+    os._exit(0)  # bypass JAX/XLA CUDA cleanup hang
 
 
 if __name__ == "__main__":

@@ -189,3 +189,4 @@ model
 sbatch
 outputs
 slurm_outputs
+*tfrecords*
