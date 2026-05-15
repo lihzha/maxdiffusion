@@ -190,3 +190,4 @@ sbatch
 outputs
 slurm_outputs
 *tfrecords*
+wan-ctrl-world-output

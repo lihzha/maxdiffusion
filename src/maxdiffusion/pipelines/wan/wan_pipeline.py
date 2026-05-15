@@ -595,6 +595,46 @@ class WanPipeline:
 
     return latent_condition, video_condition
 
+  def _encode_video_to_t2v_latents(self, video: jax.Array) -> jax.Array:
+    """Encodes a pixel video to normalized T2V latents.
+
+    Args:
+      video: [B, C, T, H, W] float32 in [-1, 1].
+
+    Returns:
+      Normalized latents in [B, C_z, T', H', W'] (channels-first T2V format).
+    """
+    vae_dtype = getattr(self.vae, "dtype", jnp.float32)
+    video = video.astype(vae_dtype)
+    with self.vae_mesh, nn_partitioning.axis_rules(self.vae_logical_axis_rules):
+      encoded = self.vae.encode(video, self.vae_cache)[0].mode()
+    # VAE encode returns [B, T', H', W', C_z] (channels-last).
+    latents_mean = jnp.array(self.vae.latents_mean).reshape(1, 1, 1, 1, self.vae.z_dim)
+    latents_std = jnp.array(self.vae.latents_std).reshape(1, 1, 1, 1, self.vae.z_dim)
+    encoded = (encoded.astype(jnp.float32) - latents_mean) / latents_std
+    # Transpose to [B, C_z, T', H', W'] to match T2V latents.
+    return jnp.transpose(encoded, (0, 4, 1, 2, 3))
+
+  def _encode_video_to_i2v_latents(self, video: jax.Array, dtype: jnp.dtype) -> jax.Array:
+    """Encodes a pixel video to normalized I2V latents (channels-last).
+
+    Args:
+      video: [B, C, T, H, W] float32 in [-1, 1].
+      dtype: target dtype for the output latents.
+
+    Returns:
+      Normalized latents in [B, T', H', W', C_z] (channels-last I2V format).
+    """
+    vae_dtype = getattr(self.vae, "dtype", jnp.float32)
+    video = video.astype(vae_dtype)
+    with self.mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
+      encoded = self.vae.encode(video, self.vae_cache)[0].mode()
+    # VAE encode returns [B, T', H', W', C_z] (channels-last).
+    latents_mean = jnp.array(self.vae.latents_mean).reshape(1, 1, 1, 1, self.vae.z_dim)
+    latents_std = jnp.array(self.vae.latents_std).reshape(1, 1, 1, 1, self.vae.z_dim)
+    encoded = (encoded.astype(jnp.float32) - latents_mean) / latents_std
+    return encoded.astype(dtype)
+
   def _denormalize_latents(self, latents: jax.Array) -> jax.Array:
     """Denormalizes latents using VAE statistics."""
     latents_mean = jnp.array(self.vae.latents_mean).reshape(1, self.vae.z_dim, 1, 1, 1)

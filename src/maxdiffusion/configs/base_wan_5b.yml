@@ -246,7 +246,7 @@ max_train_samples: -1
 max_train_steps: 1500
 num_train_epochs: 1
 seed: 0
-output_dir: 'sdxl-model-finetuned'
+output_dir: '/scratch/gpfs/AM43/zz8976/maxdiffusion/wan-ctrl-world-output'
 per_device_batch_size: 1.0
 # If global_batch_size % jax.device_count is not 0, use FSDP sharding.
 global_batch_size: 0
@@ -305,6 +305,11 @@ use_cfg_cache: False
 
 # Sensitivity-Aware Cache (arXiv:2602.24208)
 use_sen_cache: False
+
+# Privileged future-frame conditioning (set conditioning_video in __call__).
+# -1 = use all frames from the conditioning video as context.
+# >0 = use at most this many clean future frames prepended to the DiT input.
+num_privileged_frames: -1
 
 # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
 guidance_rescale: 0.0
