@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import os
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 from maxdiffusion.checkpointing.checkpointing_utils import (create_orbax_checkpoint_manager)
@@ -35,8 +36,9 @@ class WanCheckpointer(ABC):
     self.checkpoint_type = checkpoint_type
     self.opt_state = None
 
+    checkpoint_dir = os.path.abspath(self.config.checkpoint_dir)
     self.checkpoint_manager: ocp.CheckpointManager = create_orbax_checkpoint_manager(
-        self.config.checkpoint_dir,
+        checkpoint_dir,
         enable_checkpointing=True,
         save_interval_steps=1,
         checkpoint_type=checkpoint_type,

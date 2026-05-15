@@ -178,7 +178,7 @@ width:  192 #1024
 learning_rate: 1.e-5
 scale_lr: False
 max_train_samples: -1
-max_train_steps: 200000
+max_train_steps: 10001
 num_train_epochs: 1
 seed: 0
 output_dir: 'wan-ctrl-world-output'
