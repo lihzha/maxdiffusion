@@ -26,7 +26,7 @@ from maxdiffusion import pyconfig, max_logging, max_utils
 from absl import app
 from maxdiffusion.train_utils import transformer_engine_context
 from maxdiffusion.utils import export_to_video
-from maxdiffusion.utils.loading_utils import load_image
+from maxdiffusion.utils.loading_utils import load_image, load_video
 from google.cloud import storage
 import flax
 from maxdiffusion.common_types import WAN2_1, WAN2_2
@@ -124,6 +124,9 @@ def call_pipeline(config, pipeline, prompt, negative_prompt):
       raise ValueError(f"Unsupported model_name for I2V in config: {model_key}")
   elif model_type == "TI2V":
     image = load_image(config.image_url)
+    conditioning_video = None
+    if hasattr(config, "conditioning_video") and config.conditioning_video:
+      conditioning_video = load_video(config.conditioning_video)
     if model_key == WAN2_2:
       return pipeline(
           prompt=prompt,
@@ -136,6 +139,7 @@ def call_pipeline(config, pipeline, prompt, negative_prompt):
           guidance_scale=config.guidance_scale,
           use_cfg_cache=config.use_cfg_cache,
           use_sen_cache=config.use_sen_cache,
+          conditioning_video=conditioning_video,
       )
     else:
       raise ValueError(f"Unsupported model_name for TI2V in config: {model_key}")

@@ -180,7 +180,7 @@ max_train_samples: -1
 max_train_steps: 10001
 num_train_epochs: 1
 seed: 0
-output_dir: 'wan-ctrl-world-output'
+output_dir: '/scratch/gpfs/AM43/zz8976/maxdiffusion/wan-ctrl-world-output'
 per_device_batch_size: 1.0
 global_batch_size: 0
 global_batch_size_to_train_on: 1
