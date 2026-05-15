@@ -160,9 +160,8 @@ wan_text_dim: 4096        # must equal pretrained T5 output dim
 wan_action_encoder_hidden_dim: 1024
 
 # Windowing in latent space. Each latent frame corresponds to 4 raw frames.
-# Total window = n_hist + n_fut latent frames; dataset outputs 4*(n_hist+n_fut) raw actions.
+# n_fut is determined per batch as min(traj_len in batch) - n_hist
 num_history_latent_frames: 1
-num_future_latent_frames: 1
 
 # Path to action_stats.json (state_01 / state_99 arrays, produced by the data script).
 action_stats_path: 'droid_wan_tfrecords_test/action_stats.json'

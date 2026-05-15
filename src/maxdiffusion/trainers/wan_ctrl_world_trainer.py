@@ -241,7 +241,6 @@ class WanCtrlWorldTrainer:
             data_dir=config.train_data_dir if is_training else config.eval_data_dir,
             stats_path=config.action_stats_path,
             n_hist=config.num_history_latent_frames,
-            n_fut=config.num_future_latent_frames,
             action_dim=config.action_dim,
             batch_size=max(1, int(jax.local_device_count() * config.per_device_batch_size)),
             split=split,
