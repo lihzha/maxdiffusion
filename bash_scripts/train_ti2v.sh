@@ -1,7 +1,5 @@
 # --- 1. Activate the training env ---
-source ~/.zshrc
-source ~/maxdiffusion_venv/bin/activate
-cd ~/maxdiffusion
+source .venv/bin/activate
 
 # --- 2. Bucket mount ---
 export GCS_BUCKET=v6_east1d
@@ -147,3 +145,5 @@ python src/maxdiffusion/train_wan.py \
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
+
+#tpu create v6 --name v6-8-02-catherine --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout catherine-dev && bash bash_scripts/setup.sh && bash bash_scripts/train_ti2v.sh" 
