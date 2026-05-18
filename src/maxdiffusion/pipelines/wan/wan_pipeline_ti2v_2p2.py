@@ -108,36 +108,29 @@ class WanPipelineTI2V_2_2(WanPipeline):
       n_priv: int = 0,
   ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
     num_channels_latents = self.vae.z_dim
-    num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
+    # num_frames = frames to generate (excludes the anchor frame).
+    # Total output latent frames = anchor(1) + gen(num_frames // temporal_scale).
+    num_latent_gen_frames = num_frames // self.vae_scale_factor_temporal
+    num_latent_frames = 1 + num_latent_gen_frames
     latent_height = height // self.vae_scale_factor_spatial
     latent_width = width // self.vae_scale_factor_spatial
 
     shape = (batch_size, num_latent_frames, latent_height, latent_width, num_channels_latents)
 
     if latents is None:
-      latents = jax.random.normal(rng, shape=shape, dtype=jnp.float32)
+        latents = jax.random.normal(rng, shape=shape, dtype=jnp.float32)
     else:
       latents = latents.astype(dtype)
 
-    if oracle_latents is not None:
-      # Oracle conditioning: future frames from conditioning_video are prepended
-      # before frame_0 in the latent tensor and treated exactly like frame_0 —
-      # they receive t=0 in the per-token timestep and are restored after every
-      # scheduler step, so the model sees them as clean context throughout.
-      # Layout: [oracle_1..n_priv (t=0), frame_0 (t=0), noisy_gen_1..T'-1]
-      # The oracle prefix is stripped from the output after the denoising loop.
+    if oracle_latents is not None and n_priv > 0:
       frame_0 = oracle_latents[:, 0:1, :, :, :]
-      gen_shape = (batch_size, num_latent_frames - 1, latent_height, latent_width, num_channels_latents)
-      gen_frames = jax.random.normal(rng, shape=gen_shape, dtype=jnp.float32)
-      if n_priv > 0:
-        oracle_future = oracle_latents[:, 1:1 + n_priv, :, :, :]
-        latents = jnp.concatenate([oracle_future, frame_0, gen_frames], axis=1)
-        clean_latent = jnp.concatenate([oracle_future, frame_0], axis=1)  # (B, n_priv+1, H, W, C)
-      else:
-        latents = jnp.concatenate([frame_0, gen_frames], axis=1)
-        clean_latent = frame_0  # (B, 1, H, W, C)
+      oracle_future = oracle_latents[:, 1:1 + n_priv, :, :, :]
+      noisy_gen = latents[:, 1:1 + n_priv, :, :, :]  # random noise, same shape as oracle_future
+      latents = jnp.concatenate([frame_0, oracle_future, noisy_gen], axis=1)
+      clean_latent = jnp.concatenate([frame_0, oracle_future], axis=1)  # (B, 1+n_priv, H, W, C)
+    
     else:
-      # Standard image path: encode the anchor image(s) via VAE.
+      total_pixel_frames = 1 + num_frames
       if hasattr(image, "detach"):
         image = image.detach().cpu().numpy()
       image = jnp.array(image)
@@ -146,7 +139,7 @@ class WanPipelineTI2V_2_2(WanPipeline):
           last_image = last_image.detach().cpu().numpy()
         last_image = jnp.array(last_image)
 
-      latent_condition, _ = self.prepare_latents_i2v_base(image, num_frames, dtype, last_image)
+      latent_condition, _ = self.prepare_latents_i2v_base(image, total_pixel_frames, dtype, last_image)
       latents = latents.at[:, 0:1, :, :, :].set(latent_condition[:, 0:1, :, :, :])
       if last_image is not None:
         latents = latents.at[:, -1:, :, :, :].set(latent_condition[:, -1:, :, :, :])
@@ -190,14 +183,15 @@ class WanPipelineTI2V_2_2(WanPipeline):
     width = width or self.config.width
     num_frames = num_frames or self.config.num_frames
 
-    if num_frames % self.vae_scale_factor_temporal != 1:
+    # num_frames = frames to generate; must be a multiple of the temporal scale factor.
+    if num_frames % self.vae_scale_factor_temporal != 0:
       max_logging.log(
-          f"`num_frames - 1` has to be divisible by {self.vae_scale_factor_temporal}. "
-          f"Rounding {num_frames} to the nearest valid number."
+          f"`num_frames` has to be divisible by {self.vae_scale_factor_temporal}. "
+          f"Rounding {num_frames} down to the nearest valid number."
       )
-      num_frames = num_frames // self.vae_scale_factor_temporal * self.vae_scale_factor_temporal + 1
+      num_frames = (num_frames // self.vae_scale_factor_temporal) * self.vae_scale_factor_temporal
       max_logging.log(f"Adjusted num_frames to: {num_frames}")
-    num_frames = max(num_frames, 1)
+    num_frames = max(num_frames, self.vae_scale_factor_temporal)
 
     # image_embeds is always None for WAN 2.2 (VAE latent conditioning, no CLIP)
     prompt_embeds, negative_prompt_embeds, _, effective_batch_size = self._prepare_model_inputs_i2v(
@@ -216,7 +210,9 @@ class WanPipelineTI2V_2_2(WanPipeline):
     oracle_latents = None
     n_priv = 0
     if conditioning_video is not None:
-      oracle_latents = self._encode_video_to_i2v_latents(conditioning_video, prompt_embeds.dtype)
+      oracle_latents = self._encode_video_to_i2v_latents(
+          conditioning_video, prompt_embeds.dtype, total_pixel_frames=1 + num_frames
+      )
       if privileged:
         num_privileged_frames = getattr(self.config, "num_privileged_frames", -1)
         n_available = oracle_latents.shape[1] - 1  # T' - 1 (all frames except frame 0)
@@ -268,6 +264,13 @@ class WanPipelineTI2V_2_2(WanPipeline):
     prompt_embeds = jax.device_put(prompt_embeds, data_sharding)
     negative_prompt_embeds = jax.device_put(negative_prompt_embeds, data_sharding)
 
+    frame_positions = None
+    if n_priv > 0:
+      # Oracle frames (positions 1..n_priv) and noisy gen frames (positions n_priv+1..2*n_priv)
+      # share the same temporal RoPE indices so the model sees the noisy frames as the same
+      # temporal slots as the oracle reference frames, not as a continuation.
+      frame_positions = tuple([0] + list(range(1, n_priv + 1)) + list(range(1, n_priv + 1)))
+
     p_run_inference = partial(
         run_inference_ti2v_2_2,
         guidance_scale=guidance_scale,
@@ -278,6 +281,7 @@ class WanPipelineTI2V_2_2(WanPipeline):
         height=height,
         has_last_image=last_image_tensor is not None and oracle_latents is None,
         n_priv=n_priv,
+        frame_positions=frame_positions,
     )
 
     with self.mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
@@ -292,7 +296,8 @@ class WanPipelineTI2V_2_2(WanPipeline):
           scheduler_state=scheduler_state,
       )
       if n_priv > 0:
-        latents = latents[:, n_priv:, :, :, :]  # strip oracle prefix; keep frame_0 + gen frames
+        # Strip clean oracle prefix; keep frame_0 + denoised gen frames
+        latents = jnp.concatenate([latents[:, 0:1], latents[:, n_priv + 1:]], axis=1)
       latents = jnp.transpose(latents, (0, 4, 1, 2, 3))
       latents = self._denormalize_latents(latents)
 
@@ -340,6 +345,7 @@ def run_inference_ti2v_2_2(
     height: int = 480,
     has_last_image: bool = False,
     n_priv: int = 0,
+    frame_positions: Optional[tuple] = None,
 ):
   """Denoising loop for WAN 2.2 TI2V using per-token timestep conditioning.
 
@@ -414,6 +420,7 @@ def run_inference_ti2v_2_2(
             prompt_embeds_combined,
             guidance_scale=guidance_scale,
             encoder_hidden_states_image=None,
+            frame_positions=frame_positions,
         )
         noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
         ref_noise_pred = noise_pred
@@ -450,6 +457,7 @@ def run_inference_ti2v_2_2(
             prompt_embeds_combined,
             guidance_scale=guidance_scale,
             encoder_hidden_states_image=None,
+            frame_positions=frame_positions,
         )
         noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
         ref_noise_pred = noise_pred
@@ -521,6 +529,7 @@ def run_inference_ti2v_2_2(
             w1=jnp.float32(w1),
             w2=jnp.float32(w2),
             encoder_hidden_states_image=None,
+            frame_positions=frame_positions,
         )
       else:
         latents_doubled = jnp.concatenate([latents, latents], axis=0)
@@ -535,6 +544,7 @@ def run_inference_ti2v_2_2(
             prompt_embeds_combined,
             guidance_scale=guidance_scale,
             encoder_hidden_states_image=None,
+            frame_positions=frame_positions,
         )
 
       noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
@@ -565,6 +575,7 @@ def run_inference_ti2v_2_2(
         do_cfg,
         guidance_scale,
         encoder_hidden_states_image=None,
+        frame_positions=frame_positions,
     )
     noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
     latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()

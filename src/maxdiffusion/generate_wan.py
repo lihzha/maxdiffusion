@@ -14,6 +14,8 @@
 
 from typing import Sequence
 import jax
+import jax.numpy as jnp
+import numpy as np
 import time
 import os
 import subprocess
@@ -126,7 +128,18 @@ def call_pipeline(config, pipeline, prompt, negative_prompt):
     image = load_image(config.image_url)
     conditioning_video = None
     if hasattr(config, "conditioning_video") and config.conditioning_video:
-      conditioning_video = load_video(config.conditioning_video)
+      import PIL.Image
+      frames = load_video(config.conditioning_video)  # List[PIL.Image]
+      # Resize to target resolution to match generation latent spatial dims
+      frames = [f.convert("RGB").resize((config.width, config.height), PIL.Image.LANCZOS) for f in frames]
+      # Use frame 0 of the conditioning video as the anchor image so the VAE-encoded
+      # frame_0 latent is identical across the image path and oracle path.
+      image = frames[0]
+      # Stack to [T, H, W, C], normalize to [-1, 1], then reshape to [B, C, T, H, W]
+      arr = np.stack([np.array(f) for f in frames], axis=0).astype(np.float32)
+      arr = arr / 127.5 - 1.0  # [T, H, W, C]
+      arr = arr.transpose(3, 0, 1, 2)  # [C, T, H, W]
+      conditioning_video = jnp.array(arr)[None]  # [1, C, T, H, W]
     if model_key == WAN2_2:
       return pipeline(
           prompt=prompt,

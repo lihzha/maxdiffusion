@@ -287,20 +287,20 @@ profiler_steps: 10
 enable_jax_named_scopes: False
 
 # Generation parameters
-prompt: "The robot arm picks up the pen and puts it in the clear container. The gripper missed during the first attempt, and succeeds in the second. The video starts with what a valid video would look like, followed by the initial frame."
-prompt_2: "The robot arm picks up the pen and puts it in the clear container. The gripper missed during the first attempt, and succeeds in the second. The video starts with what a valid video would look like, followed by the initial frame."
+prompt: "A stationary camera views a modern kitchenette countertop with stacked paper cups, cabinets, and a robotic manipulator arm mounted beside the counter. Starting from a resting position near the countertop, the robot arm smoothly lifts upward and extends toward the upper cabinet area. The gripper rotates and makes fine alignment adjustments as it approaches the cabinet handle, moving with precise, realistic control, and open and closes the cabinet. The environment remains static while the robot performs a fast, deliberate manipulation motion consistent with a household-assistant robot policy rollout. Natural indoor lighting, real-world robotics lab aesthetic, smooth continuous motion, high realism, no camera movement."
+prompt_2: "A stationary camera views a modern kitchenette countertop with stacked paper cups, cabinets, and a robotic manipulator arm mounted beside the counter. Starting from a resting position near the countertop, the robot arm smoothly lifts upward and extends toward the upper cabinet area. The gripper rotates and makes fine alignment adjustments as it approaches the cabinet handle, moving with precise, realistic control, and open and closes the cabinet. The environment remains static while the robot performs a fast, deliberate manipulation motion consistent with a household-assistant robot policy rollout. Natural indoor lighting, real-world robotics lab aesthetic, smooth continuous motion, high realism, no camera movement."
 negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
 do_classifier_free_guidance: True
-height: 480
-width: 832
-num_frames: 81
+height: 704
+width: 1280
+num_frames: 80
 guidance_scale: 5.0
 flow_shift: 3.0
 
 # Input image URL for TI2V conditioning (first frame anchor)
-image_url: "model/Wan2.2-TI2V-5B-Diffusers/examples/i2v_input.JPG"
+image_url: "frame0.png" #"model/Wan2.2-TI2V-5B-Diffusers/examples/i2v_input.JPG"
 # Path to conditioning video for privileged future-frame conditioning. Empty string disables it.
-conditioning_video: "text_droid_inference.mp4"
+conditioning_video: "" #"test_droid_inference.mp4"
 
 # Diffusion CFG cache (FasterCache-style)
 use_cfg_cache: False
@@ -311,7 +311,7 @@ use_sen_cache: False
 # Privileged future-frame conditioning (set conditioning_video in __call__).
 # -1 = use all frames from the conditioning video as context.
 # >0 = use at most this many clean future frames prepended to the DiT input.
-num_privileged_frames: -1
+num_privileged_frames: 0
 
 # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
 guidance_rescale: 0.0

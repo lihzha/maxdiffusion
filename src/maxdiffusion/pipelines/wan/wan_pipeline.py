@@ -615,25 +615,44 @@ class WanPipeline:
     # Transpose to [B, C_z, T', H', W'] to match T2V latents.
     return jnp.transpose(encoded, (0, 4, 1, 2, 3))
 
-  def _encode_video_to_i2v_latents(self, video: jax.Array, dtype: jnp.dtype) -> jax.Array:
-    """Encodes a pixel video to normalized I2V latents (channels-last).
+  def _encode_video_to_i2v_latents(
+      self, video: jax.Array, dtype: jnp.dtype, total_pixel_frames: int
+  ) -> jax.Array:
+    """Encodes conditioning video frames to I2V oracle latents (channels-last).
+
+    Oracle latent 0 is encoded as [frame_0, zeros, ...] via prepare_latents_i2v_base,
+    matching the i2v training conditioning exactly.  Oracle latents 1..T'-1 come
+    from encoding the full video with frame 0 zeroed, so future latents are
+    independent of frame_0's content.
 
     Args:
       video: [B, C, T, H, W] float32 in [-1, 1].
       dtype: target dtype for the output latents.
+      total_pixel_frames: total pixel frames for the oracle-0 VAE call
+        (= 1 + num_gen_frames), must match what prepare_latents_i2v_base uses.
 
     Returns:
-      Normalized latents in [B, T', H', W', C_z] (channels-last I2V format).
+      Normalized latents in [B, T', H', W', C_z] (channels-last).
     """
+    # Oracle latent 0: [frame_0, zeros, ...] — identical to image / i2v training path.
+    frame_0 = video[:, :, 0, :, :]  # [B, C, H, W]
+    latent_0, _ = self.prepare_latents_i2v_base(frame_0, total_pixel_frames, dtype)
+
+    # Oracle latents 1..T'-1: full video with frame 0 zeroed so future latents are
+    # independent of frame_0.
+    B, C, T, H, W = video.shape
+    future_video = jnp.concatenate(
+        [jnp.zeros((B, C, 1, H, W), dtype=video.dtype), video[:, :, 1:, :, :]], axis=2
+    )
     vae_dtype = getattr(self.vae, "dtype", jnp.float32)
-    video = video.astype(vae_dtype)
+    future_video = future_video.astype(vae_dtype)
     with self.mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
-      encoded = self.vae.encode(video, self.vae_cache)[0].mode()
-    # VAE encode returns [B, T', H', W', C_z] (channels-last).
+      encoded = self.vae.encode(future_video, self.vae_cache)[0].mode()
     latents_mean = jnp.array(self.vae.latents_mean).reshape(1, 1, 1, 1, self.vae.z_dim)
     latents_std = jnp.array(self.vae.latents_std).reshape(1, 1, 1, 1, self.vae.z_dim)
     encoded = (encoded.astype(jnp.float32) - latents_mean) / latents_std
-    return encoded.astype(dtype)
+
+    return jnp.concatenate([latent_0[:, 0:1, :, :, :], encoded[:, 1:, :, :, :].astype(dtype)], axis=1)
 
   def _denormalize_latents(self, latents: jax.Array) -> jax.Array:
     """Denormalizes latents using VAE statistics."""
@@ -882,6 +901,7 @@ def transformer_forward_pass(
     skip_blocks=None,
     cached_residual=None,
     return_residual=False,
+    frame_positions=None,
 ):
   wan_transformer = nnx.merge(graphdef, sharded_state, rest_of_state)
   outputs = wan_transformer(
@@ -892,6 +912,7 @@ def transformer_forward_pass(
       skip_blocks=skip_blocks,
       cached_residual=cached_residual,
       return_residual=return_residual,
+      frame_positions=frame_positions,
   )
 
   if return_residual:
@@ -912,7 +933,7 @@ def transformer_forward_pass(
   return noise_pred, latents
 
 
-@partial(jax.jit, static_argnames=("guidance_scale",))
+@partial(jax.jit, static_argnames=("guidance_scale", "frame_positions"))
 def transformer_forward_pass_full_cfg(
     graphdef,
     sharded_state,
@@ -922,6 +943,7 @@ def transformer_forward_pass_full_cfg(
     prompt_embeds_combined: jnp.array,
     guidance_scale: float,
     encoder_hidden_states_image=None,
+    frame_positions=None,
 ):
   """Full CFG forward pass.
 
@@ -940,6 +962,7 @@ def transformer_forward_pass_full_cfg(
       skip_blocks=False,
       cached_residual=None,
       return_residual=False,
+      frame_positions=frame_positions,
   )
   noise_cond = noise_pred[:bsz]
   noise_uncond = noise_pred[bsz:]
@@ -947,7 +970,7 @@ def transformer_forward_pass_full_cfg(
   return noise_pred_merged, noise_cond, noise_uncond
 
 
-@partial(jax.jit, static_argnames=("guidance_scale",))
+@partial(jax.jit, static_argnames=("guidance_scale", "frame_positions"))
 def transformer_forward_pass_cfg_cache(
     graphdef,
     sharded_state,
@@ -961,6 +984,7 @@ def transformer_forward_pass_cfg_cache(
     w1: float = 1.0,
     w2: float = 1.0,
     encoder_hidden_states_image=None,
+    frame_positions=None,
 ):
   """CFG-Cache forward pass with FFT frequency-domain compensation.
 
@@ -986,6 +1010,7 @@ def transformer_forward_pass_cfg_cache(
       timestep=timestep_cond,
       encoder_hidden_states=prompt_cond_embeds,
       encoder_hidden_states_image=encoder_hidden_states_image,
+      frame_positions=frame_positions,
   )
 
   # FFT over spatial dims (H, W) — last 2 dims of [B, C, F, H, W]

@@ -30,6 +30,9 @@ def train(config):
   if config.model_type == "I2V":
     from maxdiffusion.trainers.wan_i2v_trainer import WanI2VTrainer
     trainer = WanI2VTrainer(config)
+  elif config.model_type == "TI2V":
+    from maxdiffusion.trainers.wan_ti2v_trainer import WanTI2VTrainer
+    trainer = WanTI2VTrainer(config)
   elif config.model_type == "AC_TI2V":
     from maxdiffusion.trainers.wan_ctrl_world_trainer import WanCtrlWorldTrainer
     trainer = WanCtrlWorldTrainer(config)

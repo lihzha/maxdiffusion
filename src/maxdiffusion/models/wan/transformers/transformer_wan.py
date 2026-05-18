@@ -68,14 +68,15 @@ class WanRotaryPosEmbed(nnx.Module):
     self.max_seq_len = max_seq_len
     self.theta = theta
 
-  def __call__(self, hidden_states: jax.Array) -> jax.Array:
+  def __call__(self, hidden_states: jax.Array, frame_positions=None) -> jax.Array:
     _, num_frames, height, width, _ = hidden_states.shape
     p_t, p_h, p_w = self.patch_size
     ppf, pph, ppw = num_frames // p_t, height // p_h, width // p_w
 
     freqs_split = get_frequencies(self.max_seq_len, self.theta, self.attention_head_dim)
 
-    freqs_f = jnp.expand_dims(jnp.expand_dims(freqs_split[0][:ppf], axis=1), axis=1)
+    temporal_freqs = freqs_split[0][jnp.array(frame_positions)] if frame_positions is not None else freqs_split[0][:ppf]
+    freqs_f = jnp.expand_dims(jnp.expand_dims(temporal_freqs, axis=1), axis=1)
     freqs_f = jnp.broadcast_to(freqs_f, (ppf, pph, ppw, freqs_split[0].shape[-1]))
 
     freqs_h = jnp.expand_dims(jnp.expand_dims(freqs_split[1][:pph], axis=0), axis=2)
@@ -631,6 +632,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       cached_residual: Optional[jax.Array] = None,
       return_residual: bool = False,
       frame_level_cond: bool = False,
+      frame_positions: Optional[tuple] = None,
   ) -> Union[jax.Array, Tuple[jax.Array, jax.Array], Dict[str, jax.Array]]:
     hidden_states = nn.with_logical_constraint(hidden_states, ("batch", None, None, None, None))
     batch_size, _, num_frames, height, width = hidden_states.shape
@@ -641,7 +643,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
 
     hidden_states = jnp.transpose(hidden_states, (0, 2, 3, 4, 1))
     with self.conditional_named_scope("rotary_embedding"):
-      rotary_emb = self.rope(hidden_states)
+      rotary_emb = self.rope(hidden_states, frame_positions=frame_positions)
     with self.conditional_named_scope("patch_embedding"):
       hidden_states = self.patch_embedding(hidden_states)
       hidden_states = jax.lax.collapse(hidden_states, 1, -1)
