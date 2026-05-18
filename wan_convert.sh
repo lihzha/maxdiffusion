@@ -23,7 +23,7 @@ python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py 
     data_root=/n/fs/iromdata/droid_ctrl_world \
     tfrecords_dir=/n/fs/iromdata/droid_wan \
     train_split=train \
-    no_records_per_shard=200 \
+    no_records_per_shard=10 \
     action_stats_path=/n/fs/iromdata/droid_wan/action_stats.json \
     max_frames=300 \
     max_episodes=-1 \
