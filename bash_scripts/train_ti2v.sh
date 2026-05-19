@@ -92,7 +92,7 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 
 # --- TFRecord path (uncomment to use) ---
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
-python src/maxdiffusion/train_wan.py \
+python src/maxdiffusion/train_wan.py \f
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     run_name=ti2v-tfrecord-run-1 \
     output_dir=gs://v6_east1d/ti2v-tfrecord-run-1 \
@@ -115,7 +115,7 @@ python src/maxdiffusion/train_wan.py \
     per_device_batch_size=1.0 \
     height=720 \
     width=1280 \
-    num_frames=81 \
+    num_frames=80 \
     flash_min_seq_length=0 \
     hardware='tpu' 
 
