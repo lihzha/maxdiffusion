@@ -100,7 +100,7 @@ python src/maxdiffusion/train_wan.py \
     dataset_type=tfrecord \
     train_data_dir=gs://v6_east1d/droid_wan_tfrecords_test_full/train \
     eval_data_dir=gs://v6_east1d/droid_wan_tfrecords_test_full/val \
-    action_stats_path=gs://v6_east1d/droid_wan_tfrecords_test_full/action_stats.json \
+    action_stats_path=gs://v6_east1d/droid_wan_tfrecords_test_full/action_stats_test.json \
     cache_latents_text_encoder_outputs=True \
     attention=flash \
     weights_dtype=bfloat16 \
