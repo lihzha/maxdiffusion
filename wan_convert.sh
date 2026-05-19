@@ -20,20 +20,22 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     pretrained_model_name_or_path=model/Wan2.2-TI2V-5B-Diffusers \
-    data_root=/n/fs/iromdata/droid_ctrl_world \
-    tfrecords_dir=/n/fs/iromdata/droid_wan \
-    train_split=train \
+    raw_data_root=/n/fs/iromdata/droid_raw/1.0.1 \
+    data_root=droid_wan_tfrecords_test_full \
+    video_index_path=droid_wan_tfrecords_test/video_index.json \
     no_records_per_shard=10 \
-    action_stats_path=/n/fs/iromdata/droid_wan/action_stats.json \
+    action_stats_path=action_stats_test.json \
     max_frames=300 \
-    max_episodes=-1 \
-    # start_episode=0 \
+    max_episodes=200 \
+    start_episode=0 \
+    hardware=gpu
 
 # python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py \
 #     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
 #     pretrained_model_name_or_path=model/Wan2.2-TI2V-5B-Diffusers \
-#     data_root=/n/fs/iromdata/droid_ctrl_world \
-#     tfrecords_dir=/n/fs/iromdata/droid_wan \
+#     raw_data_root=/n/fs/iromdata/droid_raw/1.0.1 \
+#     data_root=/n/fs/iromdata/droid_wan \
+#     video_index_path=/n/fs/iromdata/droid_wan/video_index.json \
 #     train_split=val \
 #     no_records_per_shard=200 \
 #     action_stats_path=/n/fs/iromdata/droid_wan/action_stats.json \

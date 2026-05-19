@@ -1,8 +1,11 @@
 """Convert DROID Ctrl-World episodes to TFRecord shards for WAN Ctrl-World training.
 
-Source layout:
-  data_root/annotation/{train_split}/<episode_id>.json   — metadata, states, actions
-  data_root/videos/{train_split}/<episode_id>/<cam>.mp4  — raw video (cameras 0/1/2)
+Source layout (all from raw_data_root):
+  raw_data_root/{LAB}/{outcome}/{date}/{timestamp}/
+    metadata_<uuid>.json                    — camera serial → uuid mapping
+    trajectory.h5                           — robot states / actions
+    recordings/MP4/<cam_serial>.mp4         — raw video (wrist, ext1, ext2)
+  raw_data_root/aggregated-annotations-*.json — language instructions keyed by uuid
 
 Output layout:
   tfrecords_dir/{train_split}/shard-NNNN.tfrecord
@@ -19,15 +22,24 @@ Each TFRecord example stores one full episode as a latent sequence:
 Latents are time-first (F_lat on axis 0) for easy windowing at read time.
 Actions are stored raw; normalisation is applied at read time by the dataset.
 
+Episode ordering
+----------------
+The script first builds (or loads) a stable id→video-path index from raw_data_root.
+Episodes are sorted by UUID so that every run — regardless of start_episode — sees
+the same canonical ordering.  The index is saved to video_index_path and reused on
+subsequent calls, which guarantees that start_episode=0..N-1 and start_episode=N..
+are always disjoint and cover the same episodes.
+
 Usage:
   python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     pretrained_model_name_or_path=model/Wan2.2-TI2V-5B-Diffusers \
-    data_root=/n/fs/iromdata/droid_ctrl_world \
-    tfrecords_dir=droid_wan_tfrecords_test \
-    train_split=train \
+    raw_data_root=/n/fs/iromdata/droid_raw/1.0.1 \
+    data_root=droid_wan_tfrecords_test \
+    video_index_path=droid_wan_tfrecords_test/video_index.json \
     no_records_per_shard=50 \
     action_stats_path=action_stats_test.json \
+    val_fraction=0.05 \
     max_frames=300 \
     max_episodes=200 \
     start_episode=0
@@ -39,6 +51,7 @@ import functools
 import json
 import os
 import queue
+import random
 import sys
 import threading
 import time
@@ -46,6 +59,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
 
 import cv2
+import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -94,24 +108,155 @@ def _serialize_example(
     return tf.train.Example(features=tf.train.Features(feature=feature)).SerializeToString()
 
 
+# ── Raw DROID helpers ─────────────────────────────────────────────────────────
+
+
+def load_aggregated_annotations(raw_root: str) -> dict[str, str]:
+    """Load aggregated-annotations-*.json, returning {uuid: text}."""
+    matches = [
+        f for f in os.listdir(raw_root)
+        if f.startswith("aggregated-annotations") and f.endswith(".json")
+    ]
+    if not matches:
+        return {}
+    with open(os.path.join(raw_root, sorted(matches)[-1])) as fh:
+        data = json.load(fh)
+    return {uuid: entry.get("language_instruction1", "") for uuid, entry in data.items()}
+
+
+def load_states_from_h5(h5_path: str) -> np.ndarray | None:
+    """Read (T, 7) float32 states from a raw DROID trajectory H5 file."""
+    try:
+        with h5py.File(h5_path, "r") as f:
+            cart  = f["observation/robot_state/cartesian_position"][:]   # (T, 6)
+            grip  = f["observation/robot_state/gripper_position"][:]     # (T,)
+        return np.concatenate([cart, grip[:, None]], axis=1).astype(np.float32)
+    except Exception:
+        return None
+
+
 # ── Action stats ──────────────────────────────────────────────────────────────
 
 
-def compute_action_stats(annotation_dir: str, max_episodes: int = -1) -> tuple[np.ndarray, np.ndarray]:
+def compute_action_stats(episode_index: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     print("Computing action stats …", flush=True)
     all_states: list[np.ndarray] = []
-    json_files = sorted(f for f in os.listdir(annotation_dir) if f.endswith(".json"))
-    if max_episodes > 0:
-        json_files = json_files[:max_episodes]
-    for fname in json_files:
-        with open(os.path.join(annotation_dir, fname)) as f:
-            meta = json.load(f)
-        all_states.append(np.array(meta["states"], dtype=np.float32))
+    for entry in episode_index:
+        states = load_states_from_h5(entry["h5_path"])
+        if states is not None:
+            all_states.append(states)
     all_np = np.concatenate(all_states, axis=0)
     p01 = np.percentile(all_np, 1, axis=0).astype(np.float32)
     p99 = np.percentile(all_np, 99, axis=0).astype(np.float32)
     print(f"  p01 = {p01.tolist()}\n  p99 = {p99.tolist()}", flush=True)
     return p01, p99
+
+
+# ── Episode index ─────────────────────────────────────────────────────────────
+def build_video_index(raw_root: str, index_path: str) -> list[dict]:
+    """Walk raw_root to build a stable id→video-path index sorted by UUID.
+
+    Each raw DROID episode lives at:
+      raw_root/{LAB}/{outcome}/{date}/{timestamp}/
+        metadata_{uuid}.json          — has wrist/ext1/ext2 camera serials
+        recordings/MP4/{serial}.mp4   — one file per camera
+
+    Returns a list of dicts (sorted by uuid, integer id = list index):
+      {"id": int, "uuid": str, "h5_path": str, "videos": [wrist_path, ext1_path, ext2_path]}
+
+    Saves the list to index_path as JSON.
+    """
+    entries: list[dict] = []
+    skipped = 0
+
+    for lab_entry in sorted(os.scandir(raw_root), key=lambda e: e.name):
+        if not lab_entry.is_dir():
+            continue
+        for outcome_entry in sorted(os.scandir(lab_entry.path), key=lambda e: e.name):
+            if not outcome_entry.is_dir():
+                continue
+            for date_entry in sorted(os.scandir(outcome_entry.path), key=lambda e: e.name):
+                if not date_entry.is_dir():
+                    continue
+                for ts_entry in sorted(os.scandir(date_entry.path), key=lambda e: e.name):
+                    if not ts_entry.is_dir():
+                        continue
+                    p = ts_entry.path
+
+                    mp4_dir = os.path.join(p, "recordings", "MP4")
+                    if not os.path.isdir(mp4_dir):
+                        print(f"  skip {p}: no recordings/MP4 dir", flush=True)
+                        skipped += 1
+                        continue
+
+                    # Find the metadata JSON to get camera serials and UUID.
+                    meta_files = [
+                        f for f in os.listdir(p)
+                        if f.startswith("metadata_") and f.endswith(".json")
+                    ]
+                    if not meta_files:
+                        print(f"  skip {p}: no metadata_*.json", flush=True)
+                        skipped += 1
+                        continue
+
+                    try:
+                        with open(os.path.join(p, meta_files[0]), encoding="utf-8", errors="replace") as fh:
+                            meta = json.load(fh)
+                    except Exception as exc:
+                        print(f"  skip {p}: failed to parse {meta_files[0]}: {exc}", flush=True)
+                        skipped += 1
+                        continue
+
+                    uuid = meta.get(
+                        "uuid",
+                        meta_files[0].removeprefix("metadata_").removesuffix(".json"),
+                    )
+                    wrist = meta.get("wrist_cam_serial", "")
+                    ext1  = meta.get("ext1_cam_serial", "")
+                    ext2  = meta.get("ext2_cam_serial", "")
+
+                    video_paths = [
+                        os.path.join(mp4_dir, f"{serial}.mp4")
+                        for serial in (wrist, ext1, ext2)
+                    ]
+                    missing = [vp for vp in video_paths if not os.path.exists(vp)]
+                    if missing:
+                        print(f"  skip {p}: missing video(s): {missing}", flush=True)
+                        skipped += 1
+                        continue
+
+                    h5_path = os.path.join(p, "trajectory.h5")
+                    if not os.path.exists(h5_path):
+                        print(f"  skip {p}: no trajectory.h5", flush=True)
+                        skipped += 1
+                        continue
+
+                    entries.append({"uuid": uuid, "h5_path": h5_path, "videos": video_paths})
+
+    # Sort by UUID first for a deterministic base order, then shuffle so that
+    # any contiguous slice (train prefix / val suffix) is a random split.
+    entries.sort(key=lambda e: e["uuid"])
+    random.Random(42).shuffle(entries)
+    for i, e in enumerate(entries):
+        e["id"] = i
+
+    os.makedirs(os.path.dirname(os.path.abspath(index_path)), exist_ok=True)
+    with open(index_path, "w") as fh:
+        json.dump(entries, fh)
+
+    print(
+        f"Built video index: {len(entries)} episodes → {index_path}"
+        + (f" ({skipped} dirs skipped)" if skipped else ""),
+        flush=True,
+    )
+    return entries
+
+
+def load_video_index(index_path: str) -> list[dict]:
+    with open(index_path) as fh:
+        entries = json.load(fh)
+    print(f"Loaded video index: {len(entries)} episodes from {index_path}", flush=True)
+    return entries
 
 
 # ── Video loading ─────────────────────────────────────────────────────────────
@@ -174,29 +319,21 @@ _SENTINEL    = object()
 _WORK_DONE   = object()
 
 
-def _load_one_episode(fname, ann_dir, config, pipeline, t5_lock):
+def _load_one_episode(index_entry, annotations, config, pipeline, t5_lock):
     """Load, decode, and T5-encode one episode.
 
+    index_entry:  dict with 'id', 'uuid', 'h5_path', 'videos'
+    annotations:  {uuid: text} from aggregated-annotations-*.json
     Returns (ep_id, text_embed, raw_action, frames_per_cam) or None.
     """
-    ep_id = int(os.path.splitext(fname)[0])
+    ep_id       = index_entry["id"]
+    video_paths = index_entry["videos"]
 
-    with open(os.path.join(ann_dir, fname)) as f:
-        meta = json.load(f)
-
-    text   = (meta["texts"] or [""])[0]
-    states = np.array(meta["states"], dtype=np.float32)
-
-    cam_list = meta.get("videos", [])
-    if len(cam_list) < NUM_CAMERAS:
+    states = load_states_from_h5(index_entry["h5_path"])
+    if states is None:
         return None
 
-    video_paths = [
-        os.path.join(config.data_root, cam_list[i].get("video_path", ""))
-        for i in range(NUM_CAMERAS)
-    ]
-    if not all(os.path.exists(p) for p in video_paths):
-        return None
+    text = annotations.get(index_entry["uuid"], "")
 
     load_fn = functools.partial(load_video_frames, height=config.height, width=config.width)
     with ThreadPoolExecutor(max_workers=NUM_CAMERAS) as ex:
@@ -219,76 +356,52 @@ def _load_one_episode(fname, ann_dir, config, pipeline, t5_lock):
     return (ep_id, text_embed, states[:T_ep], [f[:T_ep] for f in all_cam_frames])
 
 
-def _loader_worker(work_queue, out_queue, ann_dir, config, pipeline, t5_lock):
-    """Pull filenames from work_queue, load episodes, push results to out_queue."""
+def _loader_worker(work_queue, out_queue, annotations, config, pipeline, t5_lock):
+    """Pull index entries from work_queue, load episodes, push results to out_queue."""
     while True:
-        fname = work_queue.get()
-        if fname is _WORK_DONE:
+        entry = work_queue.get()
+        if entry is _WORK_DONE:
             break
-        out_queue.put(_load_one_episode(fname, ann_dir, config, pipeline, t5_lock))
+        out_queue.put(_load_one_episode(entry, annotations, config, pipeline, t5_lock))
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
-def run(config) -> None:
-    split    = config.train_split
-    ann_dir  = os.path.join(config.data_root, "annotation", split)
-    out_dir  = os.path.join(config.tfrecords_dir, split)
+def _write_split(
+    split: str,
+    index_slice: list[dict],
+    out_dir: str,
+    shard_start: int,
+    p_vae_encode,
+    annotations: dict,
+    config,
+    pipeline,
+) -> None:
+    """Encode and write one split (train or val) to TFRecord shards."""
     os.makedirs(out_dir, exist_ok=True)
+    print(f"Processing {len(index_slice)} episodes ({split} split) …", flush=True)
 
-    # ── Action stats ──────────────────────────────────────────────────────────
-    stats_path = config.action_stats_path
-    if stats_path and os.path.exists(stats_path):
-        print(f"Loaded action stats from {stats_path}", flush=True)
-    else:
-        train_ann_dir = os.path.join(config.data_root, "annotation", "train")
-        p01, p99 = compute_action_stats(train_ann_dir, max_episodes=config.max_episodes)
-        stats_out = stats_path or os.path.join(config.tfrecords_dir, "action_stats.json")
-        os.makedirs(os.path.dirname(os.path.abspath(stats_out)), exist_ok=True)
-        with open(stats_out, "w") as f:
-            json.dump({"state_01": p01.tolist(), "state_99": p99.tolist()}, f, indent=2)
-        print(f"Saved action stats → {stats_out}", flush=True)
-
-    if config.action_stats_only:
-        return
-
-    # ── Load pipeline (VAE + text encoder, no transformer) ────────────────────
-    print("Loading pipeline …", flush=True)
-    pipeline = WanPipelineTI2V_2_2.from_pretrained(config, load_transformer=False)
-    p_vae_encode = functools.partial(vae_encode, vae=pipeline.vae, vae_cache=pipeline.vae_cache)
-
-    # ── Collect episode list ──────────────────────────────────────────────────
-    json_files = sorted(f for f in os.listdir(ann_dir) if f.endswith(".json"))
-    start = config.start_episode if config.start_episode > 0 else 0
-    if start:
-        json_files = json_files[start:]
-    if config.max_episodes > 0:
-        json_files = json_files[: config.max_episodes]
-    print(f"Processing {len(json_files)} episodes ({split} split, starting at index {start}) …", flush=True)
-
-    # ── Write TFRecords ───────────────────────────────────────────────────────
-    shard_idx        = start // config.no_records_per_shard
+    shard_idx        = shard_start
     shard_count      = 0
     total_episodes   = 0
     skipped_episodes = 0
-
-    writer = None
+    writer           = None
 
     n_workers      = config.prefetch_workers
     work_queue     = queue.Queue()
     prefetch_queue = queue.Queue(maxsize=n_workers * 2)
     t5_lock        = threading.Lock()
 
-    for fname in json_files:
-        work_queue.put(fname)
+    for entry in index_slice:
+        work_queue.put(entry)
     for _ in range(n_workers):
         work_queue.put(_WORK_DONE)
 
     workers = [
         threading.Thread(
             target=_loader_worker,
-            args=(work_queue, prefetch_queue, ann_dir, config, pipeline, t5_lock),
+            args=(work_queue, prefetch_queue, annotations, config, pipeline, t5_lock),
             daemon=True,
         )
         for _ in range(n_workers)
@@ -317,14 +430,12 @@ def run(config) -> None:
 
         ep_id, text_embed, raw_action, frames_per_cam = item
 
-        # ── Encode VAE (full episode, all cameras) ────────────────────────────
         t0 = time.perf_counter()
         latents_per_cam = encode_episode(frames_per_cam, p_vae_encode)
-        jax.effects_barrier()  # ensure GPU work is done before stopping the clock
+        jax.effects_barrier()
         t_encode_sum += time.perf_counter() - t0
         t_window     += 1
 
-        # 3 × (F_lat, C, H_lat, W_lat) float16, time-first
         F_lat = latents_per_cam[0].shape[0]
 
         if writer is None:
@@ -343,7 +454,7 @@ def run(config) -> None:
         if ep_idx % 100 == 0:
             avg_s = t_encode_sum / t_window if t_window else 0.0
             print(
-                f"  [{ep_idx}/{len(json_files)}] {total_episodes} written, "
+                f"  [{ep_idx}/{len(index_slice)}] {total_episodes} written, "
                 f"{skipped_episodes} skipped | "
                 f"vae encode {avg_s:.2f}s/traj (last {t_window})",
                 flush=True,
@@ -354,10 +465,83 @@ def run(config) -> None:
     if writer is not None:
         writer.close()
     print(
-        f"\nDone. {total_episodes} episodes → {shard_idx + 1} shards in {out_dir}\n"
-        f"Skipped {skipped_episodes} episodes.",
+        f"Done ({split}). {total_episodes} episodes → {shard_idx - shard_start + (1 if total_episodes else 0)} shards"
+        f" in {out_dir}  (skipped {skipped_episodes})",
         flush=True,
     )
+
+
+def run(config) -> None:
+    # ── Build or load stable episode index (needed for stats too) ────────────
+    index_path = config.video_index_path
+    if os.path.exists(index_path):
+        episode_index = load_video_index(index_path)
+    else:
+        episode_index = build_video_index(config.raw_data_root, index_path)
+
+    # ── Language annotations ──────────────────────────────────────────────────
+    annotations = load_aggregated_annotations(config.raw_data_root)
+    print(f"Loaded {len(annotations)} language annotations", flush=True)
+
+    # ── Slice index into train and val ────────────────────────────────────────
+    start = max(config.start_episode, 0)
+    tail  = episode_index[start:]
+    if config.max_episodes > 0:
+        tail = tail[: config.max_episodes]
+
+    val_frac    = max(0.0, min(1.0, config.val_fraction))
+    n_val       = round(len(tail) * val_frac)
+    n_train     = len(tail) - n_val
+    train_slice = tail[:n_train]
+    val_slice   = tail[n_train:]
+
+    # ── Split metadata ────────────────────────────────────────────────────────
+    os.makedirs(config.data_root, exist_ok=True)
+    meta_out = os.path.join(config.data_root, "split_metadata.json")
+    with open(meta_out, "w") as f:
+        json.dump(
+            {
+                "train": [{"id": e["id"], "uuid": e["uuid"], "h5_path": e["h5_path"], "videos": e["videos"]} for e in train_slice],
+                "val":   [{"id": e["id"], "uuid": e["uuid"], "h5_path": e["h5_path"], "videos": e["videos"]} for e in val_slice],
+            },
+            f, indent=2,
+        )
+    print(f"Split metadata → {meta_out}  (train={len(train_slice)}, val={len(val_slice)})", flush=True)
+
+    # ── Action stats (train split only) ──────────────────────────────────────
+    stats_path = config.action_stats_path
+    if stats_path and os.path.exists(stats_path):
+        print(f"Loaded action stats from {stats_path}", flush=True)
+    else:
+        p01, p99 = compute_action_stats(train_slice)
+        stats_out = stats_path or os.path.join(config.data_root, "action_stats.json")
+        os.makedirs(os.path.dirname(os.path.abspath(stats_out)), exist_ok=True)
+        with open(stats_out, "w") as f:
+            json.dump({"state_01": p01.tolist(), "state_99": p99.tolist()}, f, indent=2)
+        print(f"Saved action stats → {stats_out}", flush=True)
+
+    if config.action_stats_only:
+        return
+
+    # ── Load pipeline (VAE + text encoder, no transformer) ────────────────────
+    print("Loading pipeline …", flush=True)
+    pipeline = WanPipelineTI2V_2_2.from_pretrained(config, load_transformer=False)
+    p_vae_encode = functools.partial(vae_encode, vae=pipeline.vae, vae_cache=pipeline.vae_cache)
+
+    # ── Write splits ──────────────────────────────────────────────────────────
+    _write_split(
+        "train", train_slice,
+        os.path.join(config.data_root, "train"),
+        start // config.no_records_per_shard,
+        p_vae_encode, annotations, config, pipeline,
+    )
+    if val_slice:
+        _write_split(
+            "val", val_slice,
+            os.path.join(config.data_root, "val"),
+            0,
+            p_vae_encode, annotations, config, pipeline,
+        )
 
 
 def main(argv: Sequence[str]) -> None:
