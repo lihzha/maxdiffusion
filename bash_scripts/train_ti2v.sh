@@ -1,7 +1,5 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
-# git clone https://github.com/lihzha/maxdiffusion.git
-until cd maxdiffusion; dp sleep 1; done # wait until the repo is cloned
 git checkout origin/catherine-dev
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
