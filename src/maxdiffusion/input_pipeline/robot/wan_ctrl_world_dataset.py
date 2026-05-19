@@ -109,6 +109,7 @@ class WanCtrlWorldDroidDataset:
         data_dir: str,
         stats_path: str,
         n_hist: int = 1,
+        max_latent_frames: int = -1,
         action_dim: int = 7,
         batch_size: int,
         split: str = "train",
@@ -122,6 +123,7 @@ class WanCtrlWorldDroidDataset:
 
         self._is_train = split == "train"
         self.n_hist = n_hist
+        self.max_latent_frames = max_latent_frames
         self.action_dim = action_dim
         self._seed = seed
 
@@ -155,15 +157,15 @@ class WanCtrlWorldDroidDataset:
         ds = ds.with_options(_tf_options(deterministic=not self._is_train))
         ds = ds.map(self._parse, num_parallel_calls=AUTOTUNE)
 
-        # Drop episodes too short for at least one future frame.
-        ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], n_hist + 1))
+        # Drop episodes shorter than the fixed window (or n_hist+1 if no fixed window).
+        min_len = max_latent_frames if max_latent_frames > 0 else n_hist + 1
+        ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], min_len))
 
         if self._is_train:
             ds = ds.repeat()
         if shuffle and self._is_train:
             ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=True)
 
-        # Batch trajectories; window size = min(traj_len in batch), determined per batch.
         ds = ds.padded_batch(batch_size, padded_shapes=None, drop_remainder=True)
         ds = ds.map(self._build_batch, num_parallel_calls=AUTOTUNE)
         ds = ds.prefetch(AUTOTUNE)
@@ -216,8 +218,8 @@ class WanCtrlWorldDroidDataset:
         # batch["cam*"]:     (B, T_max, C, H_lat, W_lat) float16  (padded)
         # batch["action_raw"]: (B, T_ep_max, 7) float32            (padded)
 
-        min_len = tf.reduce_min(batch["traj_len"])  # scalar — window covers full shortest traj
-        W = min_len
+        # Use a fixed window so all batches have the same shape (avoids JAX recompilation).
+        W = self.max_latent_frames if self.max_latent_frames > 0 else tf.reduce_min(batch["traj_len"])
         B = tf.shape(batch["traj_len"])[0]
 
         # Random start per trajectory in [0, traj_len - W].
