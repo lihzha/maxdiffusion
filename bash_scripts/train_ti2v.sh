@@ -6,7 +6,6 @@ git checkout origin/catherine-dev
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
-bash setup.sh MODE=stable DEVICE=tpu #set up twice to make sure everything is installed correctly 
 
 # --- 2. Bucket mount ---
 export GCS_BUCKET=v6_east1d
@@ -30,7 +29,7 @@ if ! mountpoint -q "$GCS_MOUNT"; then
 fi
 
 # --- 3. TI2V model path ---
-export WAN_TI2V_MODEL_DIR="$GCS_MOUNT/wan/wan_5b"
+export WAN_TI2V_MODEL_DIR="$GCS_MOUNT/wan/Wan2.2-TI2V-5B-Diffusers"
 
 source ./maxdiffusion_venv/bin/activate
 
@@ -119,7 +118,8 @@ python src/maxdiffusion/train_wan.py \
     height=720 \
     width=1280 \
     num_frames=81 \
-    flash_min_seq_length=0
+    flash_min_seq_length=0 \
+    hardware='tpu' 
 
 # --- DROID path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \

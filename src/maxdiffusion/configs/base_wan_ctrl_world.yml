@@ -77,7 +77,7 @@ timestep_bias: {
 }
 
 base_output_directory: ""
-hardware: 'gpu'
+hardware: 'tpu'
 skip_jax_distributed_system: False
 
 mesh_axes: ['data', 'fsdp', 'context', 'tensor']
