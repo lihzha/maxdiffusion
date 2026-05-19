@@ -116,7 +116,7 @@ python src/maxdiffusion/train_wan.py \
     height=720 \
     width=1280 \
     num_frames=80 \
-    flash_min_seq_length=0 \
+    flash_min_seq_length=128 \
     hardware='tpu' 
 
 # --- DROID path (uncomment to use) ---
