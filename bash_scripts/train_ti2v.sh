@@ -1,11 +1,12 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
-git clone https://github.com/lihzha/maxdiffusion.git
+# git clone https://github.com/lihzha/maxdiffusion.git
 cd maxdiffusion
 git checkout origin/catherine-dev
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
+bash setup.sh MODE=stable DEVICE=tpu #set up twice to make sure everything is installed correctly 
 
 # --- 2. Bucket mount ---
 export GCS_BUCKET=v6_east1d

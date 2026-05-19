@@ -202,6 +202,10 @@ def generate_timestep_weights(config, num_timesteps):
 @contextmanager
 def transformer_engine_context():
   """If TransformerEngine is available, this context manager will provide the library with MaxDiffusion-specific details needed for correct operation."""
+  import importlib.util
+  if importlib.util.find_spec("transformer_engine") is None:
+    yield
+    return
   try:
     from transformer_engine.jax.sharding import global_shard_guard, MeshResource
     # Inform TransformerEngine of MaxDiffusion's physical mesh resources.
