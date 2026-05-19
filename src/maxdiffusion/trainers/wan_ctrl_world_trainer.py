@@ -146,14 +146,17 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
 
         b, _, F_lat, H_lat, W_lat = latents.shape
 
-        # Group 4 consecutive raw-frame actions per latent frame.
-        # Latent frame f ← raw frames [4f, 4f+1, 4f+2, 4f+3], clamped to T_raw-1
-        # so the last (partial) group is padded by repeating the final raw frame.
+        # Group raw-frame actions per latent frame, matching WAN's causal VAE encoding:
+        #   anchor (f=0): raw frame 0 only  → action[0] + zero-pad slots [1,2,3]
+        #   future (f≥1): raw frames [4f-3 .. 4f] → actions[4f-3, 4f-2, 4f-1, 4f]
+        f = jnp.arange(F_lat)
+        starts = jnp.where(f == 0, 0, 4 * f - 3)                            # (F_lat,)
         act_idx = jnp.clip(
-            jnp.arange(F_lat)[:, None] * 4 + jnp.arange(4)[None, :],
+            starts[:, None] + jnp.arange(4)[None, :],
             0, actions.shape[1] - 1,
         )  # (F_lat, 4)
-        actions_grouped = actions[:, act_idx, :]   # (B, F_lat, 4, 7)
+        actions_grouped = actions[:, act_idx, :]                             # (B, F_lat, 4, 7)
+        actions_grouped = actions_grouped.at[:, 0, 1:, :].set(0.0)          # zero-pad anchor slots
 
         # ── Sample a global denoising timestep for the future frames ──────────
         timesteps = scheduler.sample_timesteps(timestep_rng, b)
@@ -237,10 +240,13 @@ class WanCtrlWorldTrainer:
         )
         config = self.config
         split = "train" if is_training else "val"
+        # Derive fixed latent window from num_frames (1 anchor + (num_frames-1)//4 predicted).
+        max_latent_frames = 1 + (config.num_frames - 1) // 4
         ds = WanCtrlWorldDroidDataset(
             data_dir=config.train_data_dir if is_training else config.eval_data_dir,
             stats_path=config.action_stats_path,
             n_hist=config.num_history_latent_frames,
+            max_latent_frames=max_latent_frames,
             action_dim=config.action_dim,
             batch_size=max(1, int(jax.local_device_count() * config.per_device_batch_size)),
             split=split,

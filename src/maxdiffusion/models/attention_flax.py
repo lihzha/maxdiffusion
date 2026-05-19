@@ -250,18 +250,15 @@ def _select_flash_block_sizes(
 
   block_size_q = flash_block_sizes.block_q if flash_block_sizes else q_max_block_size
   use_tokamax = attention_kernel in ["tokamax_flash", "tokamax_ring"]
-  # Round query_seq_len up to a multiple of 128 so all block sizes satisfy the
-  # splash attention kernel constraint (must be a multiple of NUM_LANES=128).
-  q_aligned = ((query_seq_len + 127) // 128) * 128
   return splash_attention_kernel.BlockSizes(
       block_q=block_size_q,
-      block_kv_compute=kv_max_block_size,
-      block_kv=kv_max_block_size,
+      block_kv_compute=min(kv_max_block_size, key_seq_len),
+      block_kv=min(kv_max_block_size, key_seq_len),
       block_q_dkv=block_size_q,
-      block_kv_dkv=kv_max_block_size,
-      block_kv_dkv_compute=min(kv_max_block_size, q_aligned),
+      block_kv_dkv=min(kv_max_block_size, key_seq_len),
+      block_kv_dkv_compute=min(kv_max_block_size, query_seq_len),
       block_q_dq=None if use_tokamax else block_size_q,
-      block_kv_dq=None if use_tokamax else min(kv_max_block_size, q_aligned),
+      block_kv_dq=None if use_tokamax else min(kv_max_block_size, query_seq_len),
       use_fused_bwd_kernel=True if use_tokamax else False,
   )
 
