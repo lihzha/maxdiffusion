@@ -1,16 +1,15 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.zshrc
 git clone https://github.com/lihzha/maxdiffusion.git
 cd maxdiffusion
-git checkout tenny-dev
-uv venv --python 3.12 ~/maxdiffusion_venv --seed
-source ~/maxdiffusion_venv/bin/activate
+git checkout origin/catherine-dev
+uv venv --python 3.12 ./maxdiffusion_venv --seed
+source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
 export GCS_BUCKET=v6_east1d
-export GCS_MOUNT=/home/allen/gcs-mount
+export GCS_MOUNT=/home/zheng/gcs-mount
 
 if ! command -v gcsfuse >/dev/null; then
   export GCSFUSE_REPO=gcsfuse-$(lsb_release -c -s)
@@ -31,13 +30,8 @@ fi
 
 # --- 3. TI2V model path ---
 export WAN_TI2V_MODEL_DIR="$GCS_MOUNT/wan/wan_5b"
-if [ ! -f "$WAN_TI2V_MODEL_DIR/model_index.json" ]; then
-  echo "ERROR: TI2V model not found at $WAN_TI2V_MODEL_DIR — download it first (see comment above)."
-  exit 1
-fi
-echo "Using WAN_TI2V_MODEL_DIR=$WAN_TI2V_MODEL_DIR"
 
-source ~/maxdiffusion_venv/bin/activate
+source ./maxdiffusion_venv/bin/activate
 
 # --- 4. XLA flags ---
 export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
