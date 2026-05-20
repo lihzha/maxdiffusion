@@ -221,6 +221,9 @@ skip_first_n_steps_for_profiler: 5
 profiler_steps: 10
 enable_jax_named_scopes: False
 
+# ── Inference ──────────────────────────────────────────────────────────────────
+num_eval_videos: 1            # number of eval episodes to generate
+
 # ── Fields kept for pyconfig compat (unused by this trainer) ──────────────────
 unet_checkpoint: ''
 revision: ''
@@ -229,7 +232,7 @@ max_guidance_scale: 2.5
 guidance_scale: 5.0
 flow_shift: 3.0
 guidance_rescale: 0.0
-num_inference_steps: 25
+num_inference_steps: 50
 fps: 16
 fps_id: 6
 motion_bucket_id: 127
