@@ -22,7 +22,7 @@ import os
 from itertools import islice
 from typing import Sequence
 
-import imageio.v3 as iio
+from maxdiffusion.utils import export_to_video
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -130,6 +130,8 @@ def run_denoising(
     n_hist: int,
     rng: jax.Array,
     dtype,
+    mesh,
+    logical_axis_rules,
 ) -> jnp.ndarray:
     """Denoise future latent frames from random noise, conditioned on history + actions.
 
@@ -157,8 +159,9 @@ def run_denoising(
     )
 
     timesteps_np = np.array(sched_state.timesteps)
-    for t in timesteps_np:
-        latents = p_step(params, latents, jnp.array(t))
+    with mesh, nn_partitioning.axis_rules(logical_axis_rules):
+      for t in timesteps_np:
+          latents = p_step(params, latents=latents, timestep=jnp.array(t))
 
     return latents[:, :, n_hist:]   # (B, C, n_fut, H, W)
 
@@ -167,9 +170,18 @@ def run_denoising(
 
 
 def _decode_latents(pipeline: WanPipelineTI2V_2_2, latents: jnp.ndarray) -> np.ndarray:
-    """Decode (B, C, F, H, W) latents → (B, F, H, W, 3) float32 frames in [0, 1]."""
-    latents_chanlast = jnp.transpose(latents, [0, 2, 3, 4, 1])  # (B, F, H, W, C)
-    return pipeline._decode_latents_to_video(latents_chanlast)   # (B, F, H, W, 3)
+    """Decode (B, C, F, H*3, W) latents → (B, F, H*3, W, 3).
+
+    The 3 cameras were encoded separately and stacked along H, so we split,
+    decode each independently, then concatenate along H.
+    """
+    B, C, F, H3, W = latents.shape
+    H = H3 // 3
+    cam_videos = []
+    for i in range(3):
+        cam = latents[:, :, :, i * H:(i + 1) * H, :]        # (B, C, F, H, W)
+        cam_videos.append(pipeline._decode_latents_to_video(cam))     # (B, F, H, W, 3)
+    return np.concatenate(cam_videos, axis=2)                 # (B, F, H*3, W, 3)
 
 
 def _save_comparison_video(
@@ -182,12 +194,17 @@ def _save_comparison_video(
     def to_uint8(x):
         return (np.clip(x, 0.0, 1.0) * 255).astype(np.uint8)
 
-    gt_u8 = to_uint8(gt_frames[0])     # (F, H, W, 3)
+    gt_u8 = to_uint8(gt_frames[0])     # (F, H, W, 3)  — H = 3 * h_cam
     pred_u8 = to_uint8(pred_frames[0])
-    combined = np.concatenate([gt_u8, pred_u8], axis=1)  # (F, H*2, W, 3)
+    F, H, W, _ = gt_u8.shape
+    h = H // 3
+    # Split 3 camera views stacked in H, then arrange them width-wise.
+    gt_wide   = np.concatenate(np.split(gt_u8,   3, axis=1), axis=2)  # (F, h, W*3, 3)
+    pred_wide = np.concatenate(np.split(pred_u8, 3, axis=1), axis=2)  # (F, h, W*3, 3)
+    combined  = np.concatenate([gt_wide, pred_wide], axis=1)           # (F, h*2, W*3, 3)
 
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-    iio.imwrite(path, combined, fps=fps, plugin="pyav")
+    export_to_video(list(combined), path, fps=fps)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -277,7 +294,8 @@ def run(argv: Sequence[str]) -> None:
             _encode_actions,
             graphdef=graphdef,
             rest_of_state=rest_of_state,
-        )
+        ),
+        static_argnames=["F_lat"],
     )
 
     # ── Inference loop ────────────────────────────────────────────────────────
@@ -299,7 +317,7 @@ def run(argv: Sequence[str]) -> None:
         n_fut = gt_future.shape[2]
 
         # Encode actions (constant across denoising steps).
-        action_tokens = p_encode(params, actions, text_tokens, F_lat)   # (1, F_lat, 4096)
+        action_tokens = p_encode(params, actions=actions, text_tokens=text_tokens, F_lat=F_lat)  # (1, F_lat, 4096)
 
         # Denoising.
         rng, step_rng = jax.random.split(rng)
@@ -308,6 +326,8 @@ def run(argv: Sequence[str]) -> None:
             clean_hist, n_fut, action_tokens,
             scheduler, num_inference_steps,
             n_hist, step_rng, weights_dtype,
+            mesh=pipeline.mesh,
+            logical_axis_rules=config.logical_axis_rules,
         )
 
         # Decode GT and predicted full sequences.
