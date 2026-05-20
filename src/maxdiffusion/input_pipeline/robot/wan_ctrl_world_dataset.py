@@ -84,9 +84,14 @@ class WanCtrlWorldDroidDataset:
     Expects TFRecord shards at ``data_dir/shard-*.tfrecord`` produced by
     ``make_wan_ctrl_world_tfrecords.py``.
 
-    Trajectories are batched together; within each batch the window size is set
-    to ``min(traj_len in batch)``, so ``n_fut = min_traj_len - n_hist`` varies
-    per batch. Three camera latents are concatenated along H, then transposed to
+    Trajectories are batched together. Window size W is determined per batch:
+
+    * ``max_latent_frames > 0``: W = ``max_latent_frames`` (static shapes, no
+      JAX recompilation). Only trajectories of at least that length are kept.
+    * ``max_latent_frames <= 0``: W = ``min(traj_len in batch)`` (dynamic; JAX
+      recompiles on each unique W).
+
+    Three camera latents are concatenated along H, then transposed to
     channel-first, matching the trainer's expected layout.
 
     Args:
@@ -94,6 +99,8 @@ class WanCtrlWorldDroidDataset:
         stats_path:         Path to ``action_stats.json`` with ``state_01`` /
                             ``state_99`` arrays for per-dimension normalisation.
         n_hist:             Number of history latent frames per window.
+        max_latent_frames:  Fixed total window length (n_hist + n_fut). Pass
+                            ``-1`` (default) to use per-batch dynamic sizing.
         action_dim:         Width of a single raw-frame action (default 7).
         batch_size:         Per-host batch size.
         split:              ``"train"`` or ``"val"``.
@@ -210,7 +217,7 @@ class WanCtrlWorldDroidDataset:
     def _build_batch(self, batch: dict) -> dict:
         """Build one training batch from a trajectory-level padded batch.
 
-        Window size W = min(traj_len in batch); n_fut = W - n_hist.
+        Window size W = max_latent_frames if fixed, else min(traj_len in batch).
         A random start is sampled per trajectory so the window fits within its
         valid (non-padded) frames.
         """
