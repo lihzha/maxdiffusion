@@ -170,7 +170,7 @@ action_stats_path: 'droid_wan_tfrecords_test/action_stats.json'
 ctrl_cfg_drop_prob: 0.05
 
 # ── Video resolution ───────────────────────────────────────────────────────────
-height: 720 #576
+height: 704 #576
 width:  1280 #1024
 num_frames: 81
 
