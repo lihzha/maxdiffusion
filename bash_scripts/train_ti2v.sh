@@ -94,13 +94,13 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-    run_name=ti2v-tfrecord-run-1 \
-    output_dir=gs://v6_east1d/ti2v-tfrecord-run-1 \
+    run_name=test \
+    output_dir=gs://v6_east1d/checkpoints/wan-ti2v \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
-    train_data_dir=gs://v6_east1d/droid_wan_tfrecords_test_full/train \
-    eval_data_dir=gs://v6_east1d/droid_wan_tfrecords_test_full/val \
-    action_stats_path=gs://v6_east1d/droid_wan_tfrecords_test_full/action_stats_test.json \
+    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/train \
+    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/val \
+    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_test/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=flash \
     weights_dtype=bfloat16 \
