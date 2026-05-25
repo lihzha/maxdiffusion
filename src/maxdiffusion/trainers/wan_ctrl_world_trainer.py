@@ -62,6 +62,45 @@ from maxdiffusion.schedulers import FlaxFlowMatchScheduler
 from maxdiffusion.train_utils import load_next_batch
 
 
+# ── Action grouping ───────────────────────────────────────────────────────────
+
+
+def _group_actions(
+    actions: jnp.ndarray,
+    F_lat: int,
+    traj_starts: jnp.ndarray,
+) -> jnp.ndarray:
+    """Map (B, 4*F_lat, 7) raw actions → (B, F_lat, 4, 7).
+
+    traj_starts: (B,) latent index in the trajectory where this window begins.
+
+    The dataset shifts raw_starts back by 3 so that for mid-trajectory windows
+    (traj_starts>0) action window index 4k..4k+3 aligns with the 4 raw frames
+    the WAN VAE used to encode latent k.  Trajectory-start windows
+    (traj_starts==0) keep the non-uniform formula with zero-padding on the
+    single-frame VAE anchor.
+    """
+    B = actions.shape[0]
+    f = jnp.arange(F_lat)
+    offsets = jnp.where(
+        (traj_starts == 0)[:, None],
+        jnp.where(f == 0, 0, 4 * f - 3)[None, :],   # non-uniform for traj anchor
+        (4 * f)[None, :],                              # uniform for mid-trajectory
+    )  # (B, F_lat)
+    act_idx = jnp.clip(
+        offsets[:, :, None] + jnp.arange(4)[None, None, :],
+        0, actions.shape[1] - 1,
+    )  # (B, F_lat, 4)
+    grouped = actions[jnp.arange(B)[:, None, None], act_idx, :]  # (B, F_lat, 4, 7)
+    # Zero-pad slots [1,2,3] of f=0 for trajectory-start windows.
+    zero_mask = (
+        (traj_starts == 0)[:, None, None]
+        & (f == 0)[None, :, None]
+        & (jnp.arange(4) > 0)[None, None, :]
+    )  # (B, F_lat, 4)
+    return jnp.where(zero_mask[..., None], 0.0, grouped)
+
+
 # ── Combined model ────────────────────────────────────────────────────────────
 
 
@@ -143,20 +182,11 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         latents = data["latent"][:bsz].astype(weights_dtype)        # (B,C,F_lat,H,W)
         actions = data["action"][:bsz].astype(weights_dtype)        # (B,T_raw,7)
         text_tokens = data["text_embeds"][:bsz].astype(weights_dtype)  # (B,512,4096)
+        traj_starts = data["starts"][:bsz]                           # (B,) int32
 
         b, _, F_lat, H_lat, W_lat = latents.shape
 
-        # Group raw-frame actions per latent frame, matching WAN's causal VAE encoding:
-        #   anchor (f=0): raw frame 0 only  → action[0] + zero-pad slots [1,2,3]
-        #   future (f≥1): raw frames [4f-3 .. 4f] → actions[4f-3, 4f-2, 4f-1, 4f]
-        f = jnp.arange(F_lat)
-        starts = jnp.where(f == 0, 0, 4 * f - 3)                            # (F_lat,)
-        act_idx = jnp.clip(
-            starts[:, None] + jnp.arange(4)[None, :],
-            0, actions.shape[1] - 1,
-        )  # (F_lat, 4)
-        actions_grouped = actions[:, act_idx, :]                             # (B, F_lat, 4, 7)
-        actions_grouped = actions_grouped.at[:, 0, 1:, :].set(0.0)          # zero-pad anchor slots
+        actions_grouped = _group_actions(actions, F_lat, traj_starts)  # (B, F_lat, 4, 7)
 
         # ── Sample a global denoising timestep for the future frames ──────────
         timesteps = scheduler.sample_timesteps(timestep_rng, b)
@@ -356,6 +386,7 @@ class WanCtrlWorldTrainer:
             "latent":      pspec,
             "action":      pspec,
             "text_embeds": pspec,
+            "starts":      pspec,
         }
 
     # ── Main training entry point ─────────────────────────────────────────────
@@ -546,14 +577,11 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     latents = data["latent"][:bsz].astype(weights_dtype)
     actions = data["action"][:bsz].astype(weights_dtype)
     text_tokens = data["text_embeds"][:bsz].astype(weights_dtype)
+    traj_starts = data["starts"][:bsz]  # (B,) int32
 
     b, _, F_lat, H_lat, W_lat = latents.shape
 
-    act_idx = jnp.clip(
-        jnp.arange(F_lat)[:, None] * 4 + jnp.arange(4)[None, :],
-        0, actions.shape[1] - 1,
-    )  # (F_lat, 4)
-    actions_grouped = actions[:, act_idx, :]  # (B, F_lat, 4, 7)
+    actions_grouped = _group_actions(actions, F_lat, traj_starts)  # (B, F_lat, 4, 7)
 
     timesteps = scheduler.sample_timesteps(timestep_rng, b)
 

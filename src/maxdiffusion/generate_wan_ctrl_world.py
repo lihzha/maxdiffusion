@@ -45,20 +45,32 @@ from maxdiffusion.trainers.wan_ctrl_world_trainer import (
 # ── Action grouping (mirrors updated _train_step) ─────────────────────────────
 
 
-def _group_actions(actions: jnp.ndarray, F_lat: int) -> jnp.ndarray:
+def _group_actions(
+    actions: jnp.ndarray, F_lat: int, traj_starts: jnp.ndarray
+) -> jnp.ndarray:
     """Map (B, 4*F_lat, 7) raw actions → (B, F_lat, 4, 7) grouped per latent frame.
 
-    Anchor frame (f=0) uses raw frame 0 only; slots [1,2,3] are zeroed.
-    Future frame f≥1 uses raw frames [4f-3 .. 4f].
+    traj_starts: (B,) latent index in the trajectory where this window begins.
+    See wan_ctrl_world_trainer._group_actions for the full alignment rationale.
     """
+    B = actions.shape[0]
     f = jnp.arange(F_lat)
-    starts = jnp.where(f == 0, 0, 4 * f - 3)
+    offsets = jnp.where(
+        (traj_starts == 0)[:, None],
+        jnp.where(f == 0, 0, 4 * f - 3)[None, :],
+        (4 * f)[None, :],
+    )  # (B, F_lat)
     act_idx = jnp.clip(
-        starts[:, None] + jnp.arange(4)[None, :], 0, actions.shape[1] - 1
-    )  # (F_lat, 4)
-    grouped = actions[:, act_idx, :]                         # (B, F_lat, 4, 7)
-    grouped = grouped.at[:, 0, 1:, :].set(0.0)              # zero-pad anchor slots
-    return grouped
+        offsets[:, :, None] + jnp.arange(4)[None, None, :],
+        0, actions.shape[1] - 1,
+    )  # (B, F_lat, 4)
+    grouped = actions[jnp.arange(B)[:, None, None], act_idx, :]  # (B, F_lat, 4, 7)
+    zero_mask = (
+        (traj_starts == 0)[:, None, None]
+        & (f == 0)[None, :, None]
+        & (jnp.arange(4) > 0)[None, None, :]
+    )
+    return jnp.where(zero_mask[..., None], 0.0, grouped)
 
 
 # ── Inference step (single denoising iteration) ───────────────────────────────
@@ -107,12 +119,13 @@ def _encode_actions(
     actions: jnp.ndarray,
     text_tokens: jnp.ndarray,
     F_lat: int,
+    traj_starts: jnp.ndarray,
 ) -> jnp.ndarray:
     """Encode grouped actions into cross-attention tokens."""
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
-    actions_grouped = _group_actions(actions, F_lat)       # (B, F_lat, 4, 7)
-    text_pooled = text_tokens.mean(axis=1)                 # (B, 4096)
-    return model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
+    actions_grouped = _group_actions(actions, F_lat, traj_starts)  # (B, F_lat, 4, 7)
+    text_pooled = text_tokens.mean(axis=1)                          # (B, 4096)
+    return model.action_encoder(actions_grouped, text_pooled)       # (B, F_lat, 4096)
 
 
 # ── Full denoising loop ───────────────────────────────────────────────────────
@@ -310,6 +323,7 @@ def run(argv: Sequence[str]) -> None:
         latent = jnp.array(batch["latent"]).astype(weights_dtype)       # (1, C, W, H, Wl)
         actions = jnp.array(batch["action"]).astype(weights_dtype)      # (1, 4*W, 7)
         text_tokens = jnp.array(batch["text_embeds"]).astype(weights_dtype)  # (1, 512, 4096)
+        traj_starts = jnp.array(batch["starts"])                         # (1,) int32
 
         _, _, F_lat, _, _ = latent.shape
         clean_hist = latent[:, :, :n_hist, :, :]                        # (1, C, n_hist, H, Wl)
@@ -317,7 +331,10 @@ def run(argv: Sequence[str]) -> None:
         n_fut = gt_future.shape[2]
 
         # Encode actions (constant across denoising steps).
-        action_tokens = p_encode(params, actions=actions, text_tokens=text_tokens, F_lat=F_lat)  # (1, F_lat, 4096)
+        action_tokens = p_encode(
+            params, actions=actions, text_tokens=text_tokens,
+            F_lat=F_lat, traj_starts=traj_starts,
+        )  # (1, F_lat, 4096)
 
         # Denoising.
         rng, step_rng = jax.random.split(rng)

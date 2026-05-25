@@ -248,12 +248,16 @@ class WanCtrlWorldDroidDataset:
         latent = tf.transpose(latent, [0, 2, 1, 3, 4])
 
         # Action window: 4 raw frames per latent frame.
+        # Shift back 3 so that for mid-trajectory windows (starts>0) the anchor
+        # frame's action window covers raw frames [4s-3..4s], matching what the
+        # WAN VAE encoded.  For trajectory-start windows (starts==0) the shift
+        # is clamped to 0 and the trainer zero-pads the unused anchor slots.
         T_ep_max = tf.shape(batch["action_raw"])[1]
-        raw_starts = starts * 4  # (B,)
-        raw_frame_indices = (
-            tf.expand_dims(raw_starts, 1) + tf.expand_dims(tf.range(4 * W), 0)
+        raw_starts = tf.maximum(starts * 4 - 3, 0)  # (B,)
+        raw_frame_indices = tf.clip_by_value(
+            tf.expand_dims(raw_starts, 1) + tf.expand_dims(tf.range(4 * W), 0),
+            0, T_ep_max - 1,
         )  # (B, 4W)
-        raw_frame_indices = tf.clip_by_value(raw_frame_indices, 0, T_ep_max - 1)
         action_raw = tf.gather(batch["action_raw"], raw_frame_indices, batch_dims=1)  # (B, 4W, 7)
 
         # Normalise to [-1, 1].
@@ -264,6 +268,7 @@ class WanCtrlWorldDroidDataset:
             "latent":      latent,
             "action":      action,
             "text_embeds": batch["text_embed"],
+            "starts":      tf.cast(starts, tf.int32),
         }
 
     def __iter__(self):
