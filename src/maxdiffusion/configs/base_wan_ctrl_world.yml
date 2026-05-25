@@ -207,12 +207,12 @@ remat_policy: "MATMUL_WITHOUT_BATCH"
 names_which_can_be_saved: []
 names_which_can_be_offloaded: []
 
-checkpoint_every: 5000
+checkpoint_every: 200
 checkpoint_dir: ""
 enable_single_replica_ckpt_restoring: False
 save_final_checkpoint: True
 
-eval_every: 2000
+eval_every: 200
 eval_data_dir: ""
 eval_max_batches: 1
 
