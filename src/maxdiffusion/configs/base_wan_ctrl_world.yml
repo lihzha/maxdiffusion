@@ -285,6 +285,7 @@ max_episodes: -1
 val_fraction: 0.05
 start_episode: 0
 action_stats_only: False
+setup_only: False
 max_frames: -1
 enable_eval_timesteps: False
 timesteps_list: []

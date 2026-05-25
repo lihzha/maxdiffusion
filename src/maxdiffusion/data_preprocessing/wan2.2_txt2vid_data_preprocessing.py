@@ -55,6 +55,7 @@ import random
 import sys
 import threading
 import time
+import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
 
@@ -64,6 +65,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')  # TF is CPU-only (TFRecord I/O); leave GPU for JAX
 from absl import app
 
 _SRC = os.path.join(os.path.dirname(__file__), "..", "..", "..")
@@ -140,11 +142,16 @@ def load_states_from_h5(h5_path: str) -> np.ndarray | None:
 
 def compute_action_stats(episode_index: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     print("Computing action stats …", flush=True)
-    all_states: list[np.ndarray] = []
-    for entry in episode_index:
-        states = load_states_from_h5(entry["h5_path"])
-        if states is not None:
-            all_states.append(states)
+    h5_paths = [e["h5_path"] for e in episode_index]
+    nworkers = min(16, len(h5_paths))
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(nworkers) as pool:
+        results = []
+        for i, r in enumerate(pool.imap(load_states_from_h5, h5_paths), 1):
+            results.append(r)
+            if i % 1000 == 0:
+                print(f"  {i}/{len(h5_paths)} files read", flush=True)
+    all_states = [s for s in results if s is not None]
     all_np = np.concatenate(all_states, axis=0)
     p01 = np.percentile(all_np, 1, axis=0).astype(np.float32)
     p99 = np.percentile(all_np, 99, axis=0).astype(np.float32)
@@ -262,8 +269,11 @@ def load_video_index(index_path: str) -> list[dict]:
 # ── Video loading ─────────────────────────────────────────────────────────────
 
 
-def load_video_frames(video_path: str, *, height: int, width: int) -> np.ndarray | None:
-    """Load all frames, resize to (height, width). Returns (T, H, W, 3) float32 in [-1,1]."""
+def load_video_frames(video_path: str, *, height: int, width: int, max_frames: int = 0) -> np.ndarray | None:
+    """Load frames, resize to (height, width). Returns (T, H, W, 3) uint8.
+
+    Stops early after max_frames if set, avoiding decoding unused tail frames.
+    """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return None
@@ -275,10 +285,12 @@ def load_video_frames(video_path: str, *, height: int, width: int) -> np.ndarray
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
         frames.append(frame)
+        if max_frames > 0 and len(frames) >= max_frames:
+            break
     cap.release()
     if not frames:
         return None
-    return np.stack(frames).astype(np.float32) / 127.5 - 1.0
+    return np.stack(frames)  # uint8 (T, H, W, 3) — normalized to float32 at encode time
 
 
 # ── VAE encoding ──────────────────────────────────────────────────────────────
@@ -302,15 +314,18 @@ def vae_encode(video: jax.Array, rng: jax.Array, vae, vae_cache) -> jax.Array:
 
 
 def encode_episode(
-    frames_per_cam: list[np.ndarray],  # 3 × (T_ep, H, W, 3) float32
+    frames_per_cam: list[np.ndarray],  # 3 × (T_ep, H, W, 3) uint8
     p_vae_encode,
 ) -> list[np.ndarray]:
-    """Encode a full episode for all cameras, returning time-first float16 latents."""
-    x = jnp.array(np.stack(frames_per_cam, axis=0))  # (3, T_ep, H, W, 3)
-    latent = p_vae_encode(video=x, rng=jax.random.key(0))  # (3, C, F_lat, H_lat, W_lat)
-    latent = jnp.transpose(latent, (0, 2, 1, 3, 4))        # (3, F_lat, C, H_lat, W_lat)
-    arr = np.array(latent, dtype=np.float16)
-    return [arr[i] for i in range(NUM_CAMERAS)]
+    """Encode each camera separately to keep peak GPU memory at 1× episode size."""
+    results = []
+    for cam_frames in frames_per_cam:
+        x = jnp.array(cam_frames.astype(np.float32) / 127.5 - 1.0)[None]  # (1, T_ep, H, W, 3)
+        latent = p_vae_encode(video=x, rng=jax.random.key(0))              # (1, C, F_lat, H_lat, W_lat)
+        latent = jnp.transpose(latent, (0, 2, 1, 3, 4))                    # (1, F_lat, C, H_lat, W_lat)
+        results.append(np.array(latent[0], dtype=np.float16))
+        del x, latent  # release GPU buffers before next camera
+    return results
 
 
 # ── Prefetch pipeline ─────────────────────────────────────────────────────────
@@ -319,7 +334,7 @@ _SENTINEL    = object()
 _WORK_DONE   = object()
 
 
-def _load_one_episode(index_entry, annotations, config, pipeline, t5_lock):
+def _load_one_episode(index_entry, annotations, config, pipeline, t5_lock, t5_cache):
     """Load, decode, and T5-encode one episode.
 
     index_entry:  dict with 'id', 'uuid', 'h5_path', 'videos'
@@ -335,7 +350,7 @@ def _load_one_episode(index_entry, annotations, config, pipeline, t5_lock):
 
     text = annotations.get(index_entry["uuid"], "")
 
-    load_fn = functools.partial(load_video_frames, height=config.height, width=config.width)
+    load_fn = functools.partial(load_video_frames, height=config.height, width=config.width, max_frames=config.max_frames)
     with ThreadPoolExecutor(max_workers=NUM_CAMERAS) as ex:
         all_cam_frames = list(ex.map(load_fn, video_paths))
 
@@ -350,19 +365,21 @@ def _load_one_episode(index_entry, annotations, config, pipeline, t5_lock):
         return None
 
     with t5_lock:
-        text_embed_pt = pipeline._get_t5_prompt_embeds(text, max_sequence_length=T5_SEQ_LEN)
-    text_embed = text_embed_pt[0].detach().float().numpy().astype(np.float16)  # (512, 4096)
+        if text not in t5_cache:
+            text_embed_pt = pipeline._get_t5_prompt_embeds(text, max_sequence_length=T5_SEQ_LEN)
+            t5_cache[text] = text_embed_pt[0].detach().float().numpy().astype(np.float16)
+    text_embed = t5_cache[text]  # (512, 4096)
 
     return (ep_id, text_embed, states[:T_ep], [f[:T_ep] for f in all_cam_frames])
 
 
-def _loader_worker(work_queue, out_queue, annotations, config, pipeline, t5_lock):
+def _loader_worker(work_queue, out_queue, annotations, config, pipeline, t5_lock, t5_cache):
     """Pull index entries from work_queue, load episodes, push results to out_queue."""
     while True:
         entry = work_queue.get()
         if entry is _WORK_DONE:
             break
-        out_queue.put(_load_one_episode(entry, annotations, config, pipeline, t5_lock))
+        out_queue.put(_load_one_episode(entry, annotations, config, pipeline, t5_lock, t5_cache))
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -390,8 +407,9 @@ def _write_split(
 
     n_workers      = config.prefetch_workers
     work_queue     = queue.Queue()
-    prefetch_queue = queue.Queue(maxsize=n_workers * 2)
+    prefetch_queue = queue.Queue(maxsize=2)
     t5_lock        = threading.Lock()
+    t5_cache: dict[str, np.ndarray] = {}
 
     for entry in index_slice:
         work_queue.put(entry)
@@ -401,7 +419,7 @@ def _write_split(
     workers = [
         threading.Thread(
             target=_loader_worker,
-            args=(work_queue, prefetch_queue, annotations, config, pipeline, t5_lock),
+            args=(work_queue, prefetch_queue, annotations, config, pipeline, t5_lock, t5_cache),
             daemon=True,
         )
         for _ in range(n_workers)
@@ -484,43 +502,59 @@ def run(config) -> None:
     print(f"Loaded {len(annotations)} language annotations", flush=True)
 
     # ── Slice index into train and val ────────────────────────────────────────
-    start = max(config.start_episode, 0)
+    # Snap to shard boundary so shard-N always holds the same episode range.
+    sps   = config.no_records_per_shard
+    start = (max(config.start_episode, 0) // sps) * sps
     tail  = episode_index[start:]
     if config.max_episodes > 0:
         tail = tail[: config.max_episodes]
 
-    val_frac    = max(0.0, min(1.0, config.val_fraction))
-    n_val       = round(len(tail) * val_frac)
-    n_train     = len(tail) - n_val
-    train_slice = tail[:n_train]
-    val_slice   = tail[n_train:]
-
-    # ── Split metadata ────────────────────────────────────────────────────────
+    # ── Global train/val split via split_metadata.json ───────────────────────
+    # The file covers the full dataset so the split is identical across all
+    # parallel jobs regardless of chunk boundaries.  Job 0 creates it
+    # atomically; other jobs just read it.
     os.makedirs(config.data_root, exist_ok=True)
     meta_out = os.path.join(config.data_root, "split_metadata.json")
-    with open(meta_out, "w") as f:
-        json.dump(
-            {
-                "train": [{"id": e["id"], "uuid": e["uuid"], "h5_path": e["h5_path"], "videos": e["videos"]} for e in train_slice],
-                "val":   [{"id": e["id"], "uuid": e["uuid"], "h5_path": e["h5_path"], "videos": e["videos"]} for e in val_slice],
-            },
-            f, indent=2,
-        )
-    print(f"Split metadata → {meta_out}  (train={len(train_slice)}, val={len(val_slice)})", flush=True)
+    if not os.path.exists(meta_out):
+        val_frac  = max(0.0, min(1.0, config.val_fraction))
+        n_val_g   = round(len(episode_index) * val_frac)
+        n_train_g = len(episode_index) - n_val_g
+        tmp = meta_out + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(
+                {
+                    "train": [{"id": e["id"], "uuid": e["uuid"], "h5_path": e["h5_path"], "videos": e["videos"]} for e in episode_index[:n_train_g]],
+                    "val":   [{"id": e["id"], "uuid": e["uuid"], "h5_path": e["h5_path"], "videos": e["videos"]} for e in episode_index[n_train_g:]],
+                },
+                f, indent=2,
+            )
+        os.rename(tmp, meta_out)  # atomic: last writer wins but all produce same content
+        print(f"Split metadata → {meta_out}  (train={n_train_g}, val={n_val_g})", flush=True)
 
-    # ── Action stats (train split only) ──────────────────────────────────────
+    with open(meta_out) as f:
+        meta = json.load(f)
+    train_ids = {e["id"] for e in meta["train"]}
+    n_train_global = len(train_ids)
+
+    train_slice = [e for e in tail if e["id"] in train_ids]
+    val_slice   = [e for e in tail if e["id"] not in train_ids]
+    print(f"This job: {len(train_slice)} train, {len(val_slice)} val episodes", flush=True)
+
+    # ── Action stats (full global train split) ───────────────────────────────
     stats_path = config.action_stats_path
     if stats_path and os.path.exists(stats_path):
         print(f"Loaded action stats from {stats_path}", flush=True)
     else:
-        p01, p99 = compute_action_stats(train_slice)
+        # Use all global train episodes so stats are not biased by chunk boundaries.
+        global_train = [e for e in episode_index if e["id"] in train_ids]
+        p01, p99 = compute_action_stats(global_train)
         stats_out = stats_path or os.path.join(config.data_root, "action_stats.json")
         os.makedirs(os.path.dirname(os.path.abspath(stats_out)), exist_ok=True)
         with open(stats_out, "w") as f:
             json.dump({"state_01": p01.tolist(), "state_99": p99.tolist()}, f, indent=2)
         print(f"Saved action stats → {stats_out}", flush=True)
 
-    if config.action_stats_only:
+    if config.setup_only or config.action_stats_only:
         return
 
     # ── Load pipeline (VAE + text encoder, no transformer) ────────────────────
@@ -529,17 +563,23 @@ def run(config) -> None:
     p_vae_encode = functools.partial(vae_encode, vae=pipeline.vae, vae_cache=pipeline.vae_cache)
 
     # ── Write splits ──────────────────────────────────────────────────────────
+    train_shard_start = start // config.no_records_per_shard
+    # Val episodes are the tail of the global index (id >= n_train_global), so
+    # val episodes written before this job = max(0, start - n_train_global).
+    val_eps_before  = max(0, start - n_train_global)
+    val_shard_start = val_eps_before // config.no_records_per_shard
+
     _write_split(
         "train", train_slice,
         os.path.join(config.data_root, "train"),
-        start // config.no_records_per_shard,
+        train_shard_start,
         p_vae_encode, annotations, config, pipeline,
     )
     if val_slice:
         _write_split(
             "val", val_slice,
             os.path.join(config.data_root, "val"),
-            0,
+            val_shard_start,
             p_vae_encode, annotations, config, pipeline,
         )
 
