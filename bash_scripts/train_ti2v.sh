@@ -112,10 +112,10 @@ python src/maxdiffusion/train_wan.py \
     ici_context_parallelism=4 \
     scan_layers=True \
     max_train_steps=1000 \
-    per_device_batch_size=1.0 \
+    per_device_batch_size=0.25 \
     height=720 \
     width=1280 \
-    num_frames=21 \
+    num_frames=81 \
     flash_min_seq_length=128 \
     hardware='tpu' 
 
