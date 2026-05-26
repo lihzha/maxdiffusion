@@ -124,8 +124,8 @@ class WanPipelineTI2V_2_2(WanPipeline):
 
     if oracle_latents is not None and n_priv > 0:
       frame_0 = oracle_latents[:, 0:1, :, :, :]
-      oracle_future = oracle_latents[:, 1:1 + n_priv, :, :, :]
-      noisy_gen = latents[:, 1:1 + n_priv, :, :, :]  # random noise, same shape as oracle_future
+      oracle_future = oracle_latents[:, 1:1 + n_priv, :, :, :]       # (B, n_priv, H, W, C)
+      noisy_gen = latents[:, 1:, :, :, :]                             # (B, num_latent_gen_frames, H, W, C)
       latents = jnp.concatenate([frame_0, oracle_future, noisy_gen], axis=1)
       clean_latent = jnp.concatenate([frame_0, oracle_future], axis=1)  # (B, 1+n_priv, H, W, C)
     
@@ -217,6 +217,10 @@ class WanPipelineTI2V_2_2(WanPipeline):
         num_privileged_frames = getattr(self.config, "num_privileged_frames", -1)
         n_available = oracle_latents.shape[1] - 1  # T' - 1 (all frames except frame 0)
         n_priv = n_available if num_privileged_frames < 0 else min(num_privileged_frames, n_available)
+        # Clip oracle frames to the generation length so the conditioning video
+        # length never exceeds what we are actually generating.
+        num_latent_gen_frames = num_frames // self.vae_scale_factor_temporal
+        n_priv = min(n_priv, num_latent_gen_frames)
 
     def _process_image_input(img_input, height, width, batch_size):
       if img_input is None:
@@ -266,10 +270,14 @@ class WanPipelineTI2V_2_2(WanPipeline):
 
     frame_positions = None
     if n_priv > 0:
-      # Oracle frames (positions 1..n_priv) and noisy gen frames (positions n_priv+1..2*n_priv)
-      # share the same temporal RoPE indices so the model sees the noisy frames as the same
-      # temporal slots as the oracle reference frames, not as a continuation.
-      frame_positions = tuple([0] + list(range(1, n_priv + 1)) + list(range(1, n_priv + 1)))
+      # Layout: [frame_0, oracle_1..n_priv, noisy_gen_1..num_latent_gen_frames].
+      # Oracle frames share temporal positions 1..n_priv with the first n_priv noisy
+      # gen frames.  Noisy gen frames beyond n_priv get positions n_priv+1..num_latent_gen_frames
+      # with no oracle counterpart (generated from motion prior alone).
+      num_latent_gen_frames = num_frames // self.vae_scale_factor_temporal
+      frame_positions = tuple(
+          [0] + list(range(1, n_priv + 1)) + list(range(1, num_latent_gen_frames + 1))
+      )
 
     p_run_inference = partial(
         run_inference_ti2v_2_2,
@@ -295,6 +303,14 @@ class WanPipelineTI2V_2_2(WanPipeline):
           negative_prompt_embeds=negative_prompt_embeds,
           scheduler_state=scheduler_state,
       )
+      if oracle_latents is not None:
+        gen_start = 1 + n_priv
+        n_gen = min(latents.shape[1] - gen_start, oracle_latents.shape[1] - gen_start)
+        if n_gen > 0:
+          diff = latents[:, gen_start:gen_start + n_gen] - oracle_latents[:, gen_start:gen_start + n_gen]
+          mse = float(jnp.mean(diff ** 2))
+          mae = float(jnp.mean(jnp.abs(diff)))
+          print(f"[conditioning_video] diffused vs GT latent (gen frames [{gen_start}:{gen_start+n_gen}]) — MSE: {mse:.6f}, MAE: {mae:.6f}")
       if n_priv > 0:
         # Strip clean oracle prefix; keep frame_0 + denoised gen frames
         latents = jnp.concatenate([latents[:, 0:1], latents[:, n_priv + 1:]], axis=1)

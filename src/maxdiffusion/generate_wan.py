@@ -153,6 +153,7 @@ def call_pipeline(config, pipeline, prompt, negative_prompt):
           use_cfg_cache=config.use_cfg_cache,
           use_sen_cache=config.use_sen_cache,
           conditioning_video=conditioning_video,
+          privileged=conditioning_video is not None and getattr(config, "num_privileged_frames", 0) != 0,
       )
     else:
       raise ValueError(f"Unsupported model_name for TI2V in config: {model_key}")

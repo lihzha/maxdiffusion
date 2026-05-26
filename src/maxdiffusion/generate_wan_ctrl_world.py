@@ -87,8 +87,12 @@ def _denoise_step(
     n_hist: int,
     scheduler: FlaxFlowMatchScheduler,
     scheduler_state,
-) -> jnp.ndarray:
-    """One Euler flow-matching step: model forward + scheduler update on future frames."""
+):
+    """One Euler flow-matching step: model forward + scheduler update on future frames.
+
+    Returns (updated_latents, pred_std) where pred_std is the std of the model's
+    velocity prediction on future frames — used to verify actions are driving output.
+    """
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
     b, _, F_lat, H_lat, W_lat = latents.shape
     t_batch = jnp.broadcast_to(timestep, (b,))
@@ -106,7 +110,7 @@ def _denoise_step(
     future_pred = model_pred[:, :, n_hist:]
     future_latents = latents[:, :, n_hist:]
     output = scheduler.step(scheduler_state, future_pred, timestep, future_latents)
-    return jnp.concatenate([clean_hist, output.prev_sample], axis=2)
+    return jnp.concatenate([clean_hist, output.prev_sample], axis=2), jnp.std(future_pred)
 
 
 # ── Action token encoding ─────────────────────────────────────────────────────
@@ -168,13 +172,19 @@ def run_denoising(
             n_hist=n_hist,
             scheduler=scheduler,
             scheduler_state=sched_state,
-        )
+        ),
     )
 
     timesteps_np = np.array(sched_state.timesteps)
     with mesh, nn_partitioning.axis_rules(logical_axis_rules):
-      for t in timesteps_np:
-          latents = p_step(params, latents=latents, timestep=jnp.array(t))
+      for step_i, t in enumerate(timesteps_np):
+          latents, pred_std = p_step(params, latents=latents, timestep=jnp.array(t))
+          if step_i == 0 or step_i == len(timesteps_np) - 1 or (step_i + 1) % 10 == 0:
+              max_logging.log(
+                  f"  denoise step {step_i + 1}/{len(timesteps_np)} "
+                  f"t={t:.1f}  future_pred_std={float(pred_std):.4f}  "
+                  f"future_lat_std={float(jnp.std(latents[:, :, n_hist:])):.4f}"
+              )
 
     return latents[:, :, n_hist:]   # (B, C, n_fut, H, W)
 
@@ -187,12 +197,16 @@ def _decode_latents(pipeline: WanPipelineTI2V_2_2, latents: jnp.ndarray) -> np.n
 
     The 3 cameras were encoded separately and stacked along H, so we split,
     decode each independently, then concatenate along H.
+
+    Latents are stored normalized ((raw - mean) / std) by the data preprocessing
+    script, so we denormalize before passing to the VAE decoder.
     """
     B, C, F, H3, W = latents.shape
     H = H3 // 3
     cam_videos = []
     for i in range(3):
         cam = latents[:, :, :, i * H:(i + 1) * H, :]        # (B, C, F, H, W)
+        cam = pipeline._denormalize_latents(cam)
         cam_videos.append(pipeline._decode_latents_to_video(cam))     # (B, F, H, W, 3)
     return np.concatenate(cam_videos, axis=2)                 # (B, F, H*3, W, 3)
 
@@ -204,17 +218,14 @@ def _save_comparison_video(
     fps: int = 8,
 ) -> None:
     """Write GT (top half) / predicted (bottom half) stacked MP4."""
-    def to_uint8(x):
-        return (np.clip(x, 0.0, 1.0) * 255).astype(np.uint8)
-
-    gt_u8 = to_uint8(gt_frames[0])     # (F, H, W, 3)  — H = 3 * h_cam
-    pred_u8 = to_uint8(pred_frames[0])
-    F, H, W, _ = gt_u8.shape
+    gt = np.clip(gt_frames[0], 0.0, 1.0)    # (F, H, W, 3) float32 in [0, 1]
+    pred = np.clip(pred_frames[0], 0.0, 1.0)
+    F, H, W, _ = gt.shape
     h = H // 3
     # Split 3 camera views stacked in H, then arrange them width-wise.
-    gt_wide   = np.concatenate(np.split(gt_u8,   3, axis=1), axis=2)  # (F, h, W*3, 3)
-    pred_wide = np.concatenate(np.split(pred_u8, 3, axis=1), axis=2)  # (F, h, W*3, 3)
-    combined  = np.concatenate([gt_wide, pred_wide], axis=1)           # (F, h*2, W*3, 3)
+    gt_wide   = np.concatenate(np.split(gt,   3, axis=1), axis=2)  # (F, h, W*3, 3)
+    pred_wide = np.concatenate(np.split(pred, 3, axis=1), axis=2)  # (F, h, W*3, 3)
+    combined  = np.concatenate([gt_wide, pred_wide], axis=1)        # (F, h*2, W*3, 3)
 
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     export_to_video(list(combined), path, fps=fps)
