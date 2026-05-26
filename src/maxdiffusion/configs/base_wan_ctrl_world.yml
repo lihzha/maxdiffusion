@@ -109,7 +109,7 @@ vae_logical_axis_rules: [
                           ['conv_out', 'vae_spatial'],
                           ['conv_in', 'vae_spatial'],
                         ]
-data_sharding: [['data', 'fsdp', 'context', 'tensor']]
+data_sharding: [['data', 'fsdp']]
 
 dcn_data_parallelism: 1
 dcn_fsdp_parallelism: -1
