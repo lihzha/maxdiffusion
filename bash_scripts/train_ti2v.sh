@@ -115,7 +115,7 @@ python src/maxdiffusion/train_wan.py \
     per_device_batch_size=0.5 \
     height=720 \
     width=1280 \
-    num_frames=81 \
+    num_frames=80 \
     flash_min_seq_length=128 \
     hardware='tpu' 
 
