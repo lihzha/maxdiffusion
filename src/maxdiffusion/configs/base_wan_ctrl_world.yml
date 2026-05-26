@@ -163,8 +163,8 @@ wan_action_encoder_hidden_dim: 1024
 # n_fut is determined per batch as min(traj_len in batch) - n_hist
 num_history_latent_frames: 1
 
-# Path to action_stats.json (state_01 / state_99 arrays, produced by the data script).
-action_stats_path: 'droid_wan_tfrecords_test/action_stats.json'
+# Path to stats.json (state_01 / state_99 arrays, produced by the data script).
+action_stats_path: 'droid_wan_tfrecords_test/stats.json'
 
 # CFG dropout probability on action tokens (zeroed for 5% of samples).
 ctrl_cfg_drop_prob: 0.05

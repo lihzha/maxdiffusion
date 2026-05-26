@@ -9,7 +9,7 @@ Usage:
       src/maxdiffusion/configs/base_wan_ctrl_world.yml \\
       checkpoint_dir=wan-ctrl-world-output/checkpoints \\
       eval_data_dir=droid_wan_tfrecords_test/val \\
-      action_stats_path=droid_wan_tfrecords_test/action_stats.json \\
+      action_stats_path=droid_wan_tfrecords_test/stats.json \\
       num_inference_steps=20 \\
       num_eval_videos=4 \\
       output_dir=inference_output
@@ -180,10 +180,14 @@ def run_denoising(
       for step_i, t in enumerate(timesteps_np):
           latents, pred_std = p_step(params, latents=latents, timestep=jnp.array(t))
           if step_i == 0 or step_i == len(timesteps_np) - 1 or (step_i + 1) % 10 == 0:
+              fut = latents[:, :, n_hist:]
+              # std across the time axis → how much frames differ from each other
+              temporal_std = float(jnp.std(fut, axis=2).mean())
               max_logging.log(
                   f"  denoise step {step_i + 1}/{len(timesteps_np)} "
                   f"t={t:.1f}  future_pred_std={float(pred_std):.4f}  "
-                  f"future_lat_std={float(jnp.std(latents[:, :, n_hist:])):.4f}"
+                  f"future_lat_std={float(jnp.std(fut)):.4f}  "
+                  f"temporal_std={temporal_std:.4f}"
               )
 
     return latents[:, :, n_hist:]   # (B, C, n_fut, H, W)
@@ -361,6 +365,15 @@ def run(argv: Sequence[str]) -> None:
         # Decode GT and predicted full sequences.
         gt_full = jnp.concatenate([clean_hist, gt_future], axis=2)
         pred_full = jnp.concatenate([clean_hist, pred_future], axis=2)
+
+        gt_temporal_std = float(jnp.std(gt_future, axis=2).mean())
+        pred_temporal_std = float(jnp.std(pred_future, axis=2).mean())
+        max_logging.log(
+            f"[wan_ctrl_world_infer] vid {vid_idx}: "
+            f"GT future temporal_std={gt_temporal_std:.4f}  "
+            f"pred future temporal_std={pred_temporal_std:.4f}"
+        )
+
         gt_video = _decode_latents(pipeline, gt_full.astype(jnp.float32))
         pred_video = _decode_latents(pipeline, pred_full.astype(jnp.float32))
 
