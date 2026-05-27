@@ -207,7 +207,7 @@ remat_policy: "FULL"
 names_which_can_be_saved: []
 names_which_can_be_offloaded: []
 
-checkpoint_every: 200
+checkpoint_every: 100
 checkpoint_dir: ""
 enable_single_replica_ckpt_restoring: False
 save_final_checkpoint: True
@@ -216,7 +216,7 @@ eval_every: 200
 eval_data_dir: ""
 eval_max_batches: 1
 
-enable_profiler: False
+enable_profiler: True
 skip_first_n_steps_for_profiler: 5
 profiler_steps: 10
 enable_jax_named_scopes: False
