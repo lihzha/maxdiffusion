@@ -111,7 +111,7 @@ python src/maxdiffusion/train_wan.py \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=4 \
     scan_layers=True \
-    max_train_steps=1000 \
+    max_train_steps=100 \
     per_device_batch_size=0.5 \
     height=720 \
     width=1280 \
