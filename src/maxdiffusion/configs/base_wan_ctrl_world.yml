@@ -207,7 +207,7 @@ remat_policy: "FULL"
 names_which_can_be_saved: []
 names_which_can_be_offloaded: []
 
-checkpoint_every: 200
+checkpoint_every: 100
 checkpoint_dir: ""
 enable_single_replica_ckpt_restoring: False
 save_final_checkpoint: True
