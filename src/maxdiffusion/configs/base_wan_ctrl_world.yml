@@ -109,15 +109,15 @@ vae_logical_axis_rules: [
                           ['conv_out', 'vae_spatial'],
                           ['conv_in', 'vae_spatial'],
                         ]
-data_sharding: [['data', 'fsdp']]
+data_sharding: [['data', 'fsdp', 'context', 'tensor']]
 
 dcn_data_parallelism: 1
 dcn_fsdp_parallelism: -1
 dcn_context_parallelism: 1
 dcn_tensor_parallelism: 1
 ici_data_parallelism: 1
-ici_fsdp_parallelism: 2
-ici_context_parallelism: 4
+ici_fsdp_parallelism: -1
+ici_context_parallelism: 1
 ici_tensor_parallelism: 1
 allow_split_physical_axes: False
 
@@ -182,7 +182,7 @@ max_train_steps: 10001
 num_train_epochs: 1
 seed: 0
 output_dir: '/scratch/gpfs/AM43/zz8976/maxdiffusion/wan-ctrl-world-output'
-per_device_batch_size: 0.5
+per_device_batch_size: 1.0
 global_batch_size: 0
 global_batch_size_to_train_on: 1
 global_batch_size_to_load: 1
@@ -216,7 +216,7 @@ eval_every: 200
 eval_data_dir: ""
 eval_max_batches: 1
 
-enable_profiler: True
+enable_profiler: False
 skip_first_n_steps_for_profiler: 5
 profiler_steps: 10
 enable_jax_named_scopes: False

@@ -49,7 +49,7 @@ python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py 
     no_records_per_shard=${NO_RECORDS_PER_SHARD} \
     max_frames=300 \
     max_episodes=${MAX_EP} \
-    start_episode=$((START + 7220)) \
+    start_episode=$((START + 7210)) \
     height=704 \
     width=1280 \
     hardware=gpu \
