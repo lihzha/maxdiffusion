@@ -98,9 +98,9 @@ python src/maxdiffusion/train_wan.py \
     output_dir=gs://v6_east1d/checkpoints/wan-ti2v \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
-    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/train \
-    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/val \
-    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_test/stats.json \
+    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/train \
+    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/val \
+    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=flash \
     weights_dtype=bfloat16 \
@@ -111,7 +111,7 @@ python src/maxdiffusion/train_wan.py \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=4 \
     scan_layers=True \
-    max_train_steps=100 \
+    max_train_steps=25000 \
     per_device_batch_size=0.5 \
     height=720 \
     width=1280 \
