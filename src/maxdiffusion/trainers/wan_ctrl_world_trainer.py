@@ -170,7 +170,7 @@ def _build_per_token_timestep(
 
 def _train_step(state: TrainState, data: dict, rng: jax.Array,
                 scheduler_state, scheduler, config) -> tuple:
-    _, noise_rng, timestep_rng, drop_rng, new_rng = jax.random.split(rng, 5)
+    _, noise_rng, timestep_rng, drop_rng, text_drop_rng, new_rng = jax.random.split(rng, 6)
 
     bsz = config.global_batch_size_to_train_on
     weights_dtype = _dtype(config.weights_dtype)
@@ -209,6 +209,8 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         # frame. The transformer's frame_level_cond cross-attention then lets
         # each latent frame's patches attend to its corresponding action token.
         text_pooled = text_tokens.mean(axis=1)                           # (B, 4096)
+        text_keep = (jax.random.uniform(text_drop_rng, (b, 1)) >= 0.5).astype(text_pooled.dtype)
+        text_pooled = text_pooled * text_keep
         action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
         action_tokens = _apply_cfg_dropout(drop_rng, action_tokens, config.ctrl_cfg_drop_prob)
 
