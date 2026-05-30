@@ -106,6 +106,14 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
+    ici_fsdp_parallelism=2 \
+    ici_data_parallelism=1 \
+    ici_tensor_parallelism=1 \
+    ici_context_parallelism=4 \
+    dcn_data_parallelism=4 \
+    dcn_fsdp_parallelism=1 \
+    dcn_tensor_parallelism=1 \
+    dcn_context_parallelism=1 \
     scan_layers=True \
     max_train_steps=200 \
     checkpoint_every=100 \
@@ -114,7 +122,7 @@ python src/maxdiffusion/train_wan.py \
     width=1280 \
     num_frames=80 \
     flash_min_seq_length=128 \
-    hardware='tpu' 
+    hardware='tpu'
 
 # --- DROID path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
@@ -145,4 +153,4 @@ python src/maxdiffusion/train_wan.py \
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-#tpu create v6 --name v6-8-01-catherine --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ac_wan_v6.sh" 
+#tpu create v6 --name v6-32-01-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ac_wan_v6.sh" 
