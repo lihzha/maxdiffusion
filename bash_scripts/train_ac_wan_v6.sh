@@ -106,13 +106,10 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
-    ici_fsdp_parallelism=2 \
-    ici_data_parallelism=1 \
-    ici_tensor_parallelism=1 \
-    ici_context_parallelism=4 \
     scan_layers=True \
-    max_train_steps=25000 \
-    per_device_batch_size=0.5 \
+    max_train_steps=200 \
+    checkpoint_every=100 \
+    per_device_batch_size=1.0 \
     height=720 \
     width=1280 \
     num_frames=80 \
