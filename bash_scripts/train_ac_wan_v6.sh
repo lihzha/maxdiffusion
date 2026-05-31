@@ -115,7 +115,7 @@ python src/maxdiffusion/train_wan.py \
     dcn_tensor_parallelism=1 \
     dcn_context_parallelism=1 \
     allow_split_physical_axes=True \
-    data_sharding=[['data']] \
+    "data_sharding=[['data']]" \
     scan_layers=True \
     max_train_steps=200 \
     checkpoint_every=100 \
