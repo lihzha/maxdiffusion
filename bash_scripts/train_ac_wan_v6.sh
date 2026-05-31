@@ -115,10 +115,11 @@ python src/maxdiffusion/train_wan.py \
     dcn_tensor_parallelism=1 \
     dcn_context_parallelism=1 \
     allow_split_physical_axes=True \
+    data_sharding=[['data']] \
     scan_layers=True \
     max_train_steps=200 \
     checkpoint_every=100 \
-    per_device_batch_size=1.0 \
+    per_device_batch_size=2.0 \
     height=720 \
     width=1280 \
     num_frames=80 \
