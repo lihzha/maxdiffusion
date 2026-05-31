@@ -104,7 +104,7 @@ ici_data_parallelism: 1
 ici_fsdp_parallelism: -1
 ici_context_parallelism: 1
 ici_tensor_parallelism: 1
-allow_split_physical_axes: True
+allow_split_physical_axes: False
 
 # Dataset.
 dataset_name: ''
