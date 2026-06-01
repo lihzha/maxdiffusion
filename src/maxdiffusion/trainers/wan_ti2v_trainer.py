@@ -14,13 +14,21 @@ WAN 2.2 Ti2V (Wan-AI/Wan2.2-TI2V-5B-Diffusers):
   * MSE loss is computed only on the future latent frames.
 
 TFRecord path (dataset_type="tfrecord"):
-    Pre-encoded records must contain:
-      latents              float32  (C, F_lat, H_lat, W_lat)  channels-first
-      encoder_hidden_states  float32  (512, 4096)
-    For eval, also:
-      timesteps            int64
+    TFRecords produced by wan_convert.sh (wan2.2_txt2vid_data_preprocessing.py).
+    Each record stores one full episode with:
+      latent_cam0/1/2  float16  (F_lat, C, H_lat, W_lat)  time-first per camera
+      text_embed       float16  (512, 4096)
+      traj_len         int64
+    Clips should be longer than window_size = 1 + num_frames // 4 latent frames
+    so that random temporal windowing samples different sub-clips each epoch.
+    During training one camera is picked at random per sample; cam0 (wrist) is
+    used for eval.
+    Eval samples timesteps uniformly (DROID records have no pre-sampled timesteps
+    field), so per-timestep loss bucketing is skipped — only mean eval loss is
+    logged.
 """
 
+import datetime
 import functools
 
 import jax
@@ -28,10 +36,14 @@ import jax.numpy as jnp
 import jaxopt
 import tensorflow as tf
 from flax import nnx
+from flax.linen import partitioning as nn_partitioning
+from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding, PartitionSpec as P
 
+from maxdiffusion import max_logging
 from maxdiffusion.checkpointing.wan_checkpointer_ti2v_2p2 import WanCheckpointerTI2V_2_2
 from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
+from maxdiffusion.train_utils import load_next_batch
 from maxdiffusion.trainers.base_wan_trainer import BaseWanTrainer
 
 
@@ -72,9 +84,8 @@ class WanTI2VTrainer(BaseWanTrainer):
         }
 
     def get_eval_data_shardings(self, mesh):
-        shardings = self.get_data_shardings(mesh)
-        shardings["timesteps"] = NamedSharding(mesh, P(*self.config.data_sharding))
-        return shardings
+        # No timesteps field — DROID records don't store pre-sampled timesteps.
+        return self.get_data_shardings(mesh)
 
     # ── Dataset loading ──────────────────────────────────────────────────────
 
@@ -98,43 +109,50 @@ class WanTI2VTrainer(BaseWanTrainer):
                 "cache_latents_text_encoder_outputs=True."
             )
 
+        # Schema from wan_convert.sh / wan2.2_txt2vid_data_preprocessing.py.
+        # Latents are time-first (F_lat, C, H_lat, W_lat) float16.
+        # text_embed is (512, 4096) float16.
         feature_description = {
-            "latents": tf.io.FixedLenFeature([], tf.string),
-            "encoder_hidden_states": tf.io.FixedLenFeature([], tf.string),
+            "latent_cam0": tf.io.FixedLenFeature([], tf.string),
+            "latent_cam1": tf.io.FixedLenFeature([], tf.string),
+            "latent_cam2": tf.io.FixedLenFeature([], tf.string),
+            "text_embed":  tf.io.FixedLenFeature([], tf.string),
+            "traj_len":    tf.io.FixedLenFeature([], tf.int64),
         }
-        if not is_training:
-            feature_description["timesteps"] = tf.io.FixedLenFeature([], tf.int64)
 
-        # WAN VAE temporal compression: 4 raw frames → 1 latent frame, plus 1 anchor.
-        # Matches wan_pipeline_ti2v_2p2: num_latent_frames = 1 + num_frames // 4.
+        # WAN VAE: 1 anchor + num_frames // 4 generated latent frames.
         window_size = 1 + config.num_frames // 4
 
-        def _random_window(latents):
-            """Randomly slice a window_size window along the temporal axis (dim 1).
-
-            TFRecords may store clips longer than window_size. Each training step
-            draws a fresh random start so the model sees different sub-clips each
-            epoch. Records shorter than window_size are not supported and will
-            produce incorrect shapes at batch time.
-            """
-            f_total = tf.shape(latents)[1]
-            max_start = f_total - window_size
-            start = tf.random.uniform((), minval=0, maxval=max_start + 1, dtype=tf.int32)
-            return latents[:, start : start + window_size, :, :]
-
         def prepare_sample_train(features):
-            latents = tf.io.parse_tensor(features["latents"], out_type=tf.float32)
-            encoder_hidden_states = tf.io.parse_tensor(features["encoder_hidden_states"], out_type=tf.float32)
-            latents = _random_window(latents)
-            return {"latents": latents, "encoder_hidden_states": encoder_hidden_states}
+            cam0 = tf.cast(tf.io.parse_tensor(features["latent_cam0"], out_type=tf.float16), tf.float32)
+            cam1 = tf.cast(tf.io.parse_tensor(features["latent_cam1"], out_type=tf.float16), tf.float32)
+            cam2 = tf.cast(tf.io.parse_tensor(features["latent_cam2"], out_type=tf.float16), tf.float32)
+            # Concat cameras along H (axis 2): (F_lat, C, H_lat*3, W_lat) — matches ctrl_world.
+            latent = tf.concat([cam0, cam1, cam2], axis=2)
+
+            # Random temporal window on axis 0 (time), then transpose to channels-first.
+            f_total = tf.shape(latent)[0]
+            max_start = tf.maximum(0, f_total - window_size)
+            start = tf.random.uniform((), 0, max_start + 1, dtype=tf.int32)
+            latent = latent[start : start + window_size]       # (window_size, C, H_lat*3, W_lat)
+            latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat*3, W_lat)
+
+            encoder_hidden_states = tf.cast(
+                tf.io.parse_tensor(features["text_embed"], out_type=tf.float16), tf.float32
+            )  # (512, 4096)
+            return {"latents": latent, "encoder_hidden_states": encoder_hidden_states}
 
         def prepare_sample_eval(features):
-            latents = tf.io.parse_tensor(features["latents"], out_type=tf.float32)
-            encoder_hidden_states = tf.io.parse_tensor(features["encoder_hidden_states"], out_type=tf.float32)
-            # Fixed window from the start for deterministic eval.
-            latents = latents[:, :window_size, :, :]
-            timesteps = features["timesteps"]
-            return {"latents": latents, "encoder_hidden_states": encoder_hidden_states, "timesteps": timesteps}
+            cam0 = tf.cast(tf.io.parse_tensor(features["latent_cam0"], out_type=tf.float16), tf.float32)
+            cam1 = tf.cast(tf.io.parse_tensor(features["latent_cam1"], out_type=tf.float16), tf.float32)
+            cam2 = tf.cast(tf.io.parse_tensor(features["latent_cam2"], out_type=tf.float16), tf.float32)
+            latent = tf.concat([cam0, cam1, cam2], axis=2)     # (F_lat, C, H_lat*3, W_lat)
+            latent = latent[:window_size]                      # (window_size, C, H_lat*3, W_lat)
+            latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat*3, W_lat)
+            encoder_hidden_states = tf.cast(
+                tf.io.parse_tensor(features["text_embed"], out_type=tf.float16), tf.float32
+            )  # (512, 4096)
+            return {"latents": latent, "encoder_hidden_states": encoder_hidden_states}
 
         return make_data_iterator(
             config,
@@ -176,6 +194,34 @@ class WanTI2VTrainer(BaseWanTrainer):
             out_shardings=(None, None),
         )
 
+    def eval(self, mesh, eval_rng_key, step, p_eval_step, state, scheduler_state, writer):
+        """Eval override: timesteps are sampled internally; no per-timestep bucketing."""
+        eval_data_iterator = self.load_dataset(mesh, is_training=False)
+        eval_rng = eval_rng_key
+        all_losses = []
+
+        while True:
+            try:
+                eval_start_time = datetime.datetime.now()
+                eval_batch = load_next_batch(eval_data_iterator, None, self.config)
+                with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
+                    metrics, eval_rng = p_eval_step(state, eval_batch, eval_rng, scheduler_state)
+                    metrics["scalar"]["learning/eval_loss"].block_until_ready()
+                losses = metrics["scalar"]["learning/eval_loss"]
+                gathered = multihost_utils.process_allgather(losses, tiled=True)
+                all_losses.extend(jax.device_get(gathered).flatten().tolist())
+                if jax.process_index() == 0:
+                    elapsed = (datetime.datetime.now() - eval_start_time).total_seconds()
+                    max_logging.log(f"Eval time: {elapsed:.2f} seconds.")
+            except StopIteration:
+                break
+
+        if all_losses and jax.process_index() == 0:
+            final_eval_loss = float(jnp.mean(jnp.array(all_losses)))
+            max_logging.log(f"Step {step}, Final Average Eval loss: {final_eval_loss:.4f}")
+            if writer:
+                writer.add_scalar("learning/eval_loss", final_eval_loss, step)
+
 
 # ── Training step ─────────────────────────────────────────────────────────────
 
@@ -189,7 +235,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
 
     def loss_fn(params):
         model = nnx.merge(state.graphdef, params, state.rest_of_state)
-        # latents: (B, C, F_lat, H_lat, W_lat) channels-first, as stored in TFRecords
+        # latents: (B, C, F_lat, H_lat, W_lat) channels-first
         latents = data["latents"].astype(config.weights_dtype)
         encoder_hidden_states = data["encoder_hidden_states"].astype(config.weights_dtype)
 
@@ -279,8 +325,8 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
         end = min(i + single_batch_size, bs)
         latents = data["latents"][i:end].astype(config.weights_dtype)
         encoder_hidden_states = data["encoder_hidden_states"][i:end].astype(config.weights_dtype)
-        timesteps = data["timesteps"][i:end].astype("int64")
-        _, new_rng = jax.random.split(rng, num=2)
+        _, t_rng, new_rng = jax.random.split(rng, 3)
+        timesteps = scheduler.sample_timesteps(t_rng, end - i)
         loss = loss_fn(state.params, latents, encoder_hidden_states, timesteps, new_rng)
         losses = losses.at[i:end].set(loss)
 
