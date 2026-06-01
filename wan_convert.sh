@@ -9,7 +9,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=150G
-#SBATCH --time=72:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=slurm_outputs/%x/out_%x_%A_%a.out
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=zz8976@princeton.edu
@@ -33,7 +33,8 @@ CHUNK=$(( ( (_RAW_CHUNK + NO_RECORDS_PER_SHARD - 1) / NO_RECORDS_PER_SHARD ) * N
 START=$(( SLURM_ARRAY_TASK_ID * CHUNK ))
 
 # Last job encodes everything from its start to end of dataset.
-MAX_EP=${CHUNK}
+# MAX_EP=${CHUNK}
+MAX_EP=2000
 if [ "${SLURM_ARRAY_TASK_ID}" = "$(( N_JOBS - 1 ))" ]; then
     MAX_EP=-1
 fi
@@ -48,7 +49,7 @@ python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py 
     no_records_per_shard=${NO_RECORDS_PER_SHARD} \
     max_frames=300 \
     max_episodes=${MAX_EP} \
-    start_episode=${START} \
+    start_episode=$((START + 7210)) \
     height=704 \
     width=1280 \
     hardware=gpu \
