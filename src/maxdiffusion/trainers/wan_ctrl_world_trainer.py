@@ -270,23 +270,24 @@ class WanCtrlWorldTrainer:
         from maxdiffusion.input_pipeline.robot.wan_ctrl_world_dataset import (
             WanCtrlWorldDroidDataset,
         )
+        from maxdiffusion.multihost_dataloading import MultiHostDataLoadIterator
         config = self.config
         split = "train" if is_training else "val"
-        # Derive fixed latent window from num_frames (1 anchor + (num_frames-1)//4 predicted).
         max_latent_frames = 1 + (config.num_frames - 1) // 4
+        per_host_batch = max(1, config.global_batch_size_to_load // jax.process_count())
         ds = WanCtrlWorldDroidDataset(
             data_dir=config.train_data_dir if is_training else config.eval_data_dir,
             stats_path=config.action_stats_path,
             n_hist=config.num_history_latent_frames,
             max_latent_frames=max_latent_frames,
             action_dim=config.action_dim,
-            batch_size=max(1, int(jax.local_device_count() * config.per_device_batch_size)),
+            batch_size=per_host_batch,
             split=split,
             seed=config.seed,
             shuffle=is_training,
             shard_for_training=jax.process_count() > 1,
         )
-        return iter(ds)
+        return MultiHostDataLoadIterator(ds.dataset, mesh)
 
     # ── Pipeline / model loading ───────────────────────────────────────────────
 
