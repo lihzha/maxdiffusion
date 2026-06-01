@@ -325,10 +325,10 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
         end = min(i + single_batch_size, bs)
         latents = data["latents"][i:end].astype(config.weights_dtype)
         encoder_hidden_states = data["encoder_hidden_states"][i:end].astype(config.weights_dtype)
-        _, t_rng, new_rng = jax.random.split(rng, 3)
+        rng, t_rng, noise_rng = jax.random.split(rng, 3)
         timesteps = scheduler.sample_timesteps(t_rng, end - i)
-        loss = loss_fn(state.params, latents, encoder_hidden_states, timesteps, new_rng)
+        loss = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
         losses = losses.at[i:end].set(loss)
 
     metrics = {"scalar": {"learning/eval_loss": losses}}
-    return metrics, new_rng
+    return metrics, rng
