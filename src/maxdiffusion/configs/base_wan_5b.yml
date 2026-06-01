@@ -30,6 +30,9 @@ log_period: 100
 pretrained_model_name_or_path: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers'
 model_name: wan2.2
 model_type: 'TI2V'
+# Frame 0 is the image-conditioning anchor (kept clean, t=0 in per-token timestep).
+# Matches the inference convention in wan_pipeline_ti2v_2p2.
+num_history_latent_frames: 1
 
 # Overrides the transformer from pretrained_model_name_or_path
 wan_transformer_pretrained_model_name_or_path: ''
