@@ -312,6 +312,10 @@ use_sen_cache: False
 # -1 = use all frames from the conditioning video as context.
 # >0 = use at most this many clean future frames prepended to the DiT input.
 num_privileged_frames: -1
+# Timestep offset applied to oracle frames during inference: oracle latents are noised
+# to t - oracle_noise_offset using the flow-matching forward process, and their
+# per-token timestep is set to max(0, t - oracle_noise_offset). -1 = clean (no noise).
+oracle_noise_offset: -1
 
 # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
 guidance_rescale: 0.0

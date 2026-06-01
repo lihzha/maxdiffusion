@@ -290,6 +290,7 @@ class WanPipelineTI2V_2_2(WanPipeline):
         has_last_image=last_image_tensor is not None and oracle_latents is None,
         n_priv=n_priv,
         frame_positions=frame_positions,
+        oracle_noise_offset=None if getattr(self.config, "oracle_noise_offset", -1) < 0 else getattr(self.config, "oracle_noise_offset", -1),
     )
 
     with self.mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
@@ -322,11 +323,15 @@ class WanPipelineTI2V_2_2(WanPipeline):
     return self._decode_latents_to_video(latents)
 
 
-def _build_per_token_timestep(latents: jnp.array, t, has_last_image: bool, n_priv: int = 0) -> jnp.array:
+def _build_per_token_timestep(
+    latents: jnp.array, t, has_last_image: bool, n_priv: int = 0, oracle_noise_offset: Optional[int] = None
+) -> jnp.array:
   """Build a per-token 2D timestep array for the WAN 2.2 Ti2V per-token conditioning scheme.
 
   Frame-0 token positions receive t=0 (clean); all other positions receive t.
-  If n_priv > 0, oracle frames 1..n_priv also receive t=0.
+  If n_priv > 0 and oracle_noise_offset is not None, oracle frames 1..n_priv receive
+  max(0, t - oracle_noise_offset), matching the noise level used in _restore_clean_frames.
+  If oracle_noise_offset is None, oracle frames receive t=0 (clean).
   If has_last_image, the last-frame token positions also receive t=0.
 
   latents shape: (B, num_latent_frames, latent_h, latent_w, C)  [BFHWC]
@@ -337,8 +342,9 @@ def _build_per_token_timestep(latents: jnp.array, t, has_last_image: bool, n_pri
   seq_len = num_latent_frames * tokens_per_frame
   timestep_2d = jnp.full((bsz, seq_len), t, dtype=jnp.int32)
   timestep_2d = timestep_2d.at[:, :tokens_per_frame].set(0)  # frame 0
+  t_priv = jnp.maximum(t - oracle_noise_offset, 0) if oracle_noise_offset is not None else 0
   for i in range(1, 1 + n_priv):  # oracle future frames
-    timestep_2d = timestep_2d.at[:, i * tokens_per_frame:(i + 1) * tokens_per_frame].set(0)
+    timestep_2d = timestep_2d.at[:, i * tokens_per_frame:(i + 1) * tokens_per_frame].set(t_priv)
   if has_last_image:
     timestep_2d = timestep_2d.at[:, -tokens_per_frame:].set(0)
   return timestep_2d
@@ -362,6 +368,7 @@ def run_inference_ti2v_2_2(
     has_last_image: bool = False,
     n_priv: int = 0,
     frame_positions: Optional[tuple] = None,
+    oracle_noise_offset: Optional[int] = None,
 ):
   """Denoising loop for WAN 2.2 TI2V using per-token timestep conditioning.
 
@@ -381,10 +388,23 @@ def run_inference_ti2v_2_2(
   do_cfg = guidance_scale > 1.0
   bsz = latents.shape[0]
 
-  def _restore_clean_frames(lat):
+  def _restore_clean_frames(lat, t):
     lat = lat.at[:, 0:1, :, :, :].set(clean_latent[:, 0:1, :, :, :])
+    t_val = int(t)
     for i in range(1, 1 + n_priv):
-      lat = lat.at[:, i:i + 1, :, :, :].set(clean_latent[:, i:i + 1, :, :, :])
+      if oracle_noise_offset is not None and t_val - oracle_noise_offset >= 0:
+        t_priv = t_val - oracle_noise_offset
+        t_norm = t_priv / scheduler.config.num_train_timesteps
+        # Match training: FlowMatchScheduler defaults (sigma_min=0.003/1.002, sigma_max=1.0)
+        sigma = (1.0 - t_norm) * (0.003 / 1.002) + t_norm * 1.0
+        noise = jax.random.normal(
+            jax.random.fold_in(jax.random.PRNGKey(t_val), i),
+            shape=clean_latent[:, i:i + 1, :, :, :].shape,
+        )
+        noised = (1.0 - sigma) * clean_latent[:, i:i + 1, :, :, :] + sigma * noise
+        lat = lat.at[:, i:i + 1, :, :, :].set(noised)
+      else:
+        lat = lat.at[:, i:i + 1, :, :, :].set(clean_latent[:, i:i + 1, :, :, :])
     if has_last_image:
       lat = lat.at[:, -1:, :, :, :].set(clean_latent[:, -1:, :, :, :])
     return lat
@@ -416,6 +436,7 @@ def run_inference_ti2v_2_2(
 
     for step in range(num_inference_steps):
       t = jnp.array(scheduler_state.timesteps, dtype=jnp.int32)[step]
+      latents = _restore_clean_frames(latents, t)
       t_float = float(timesteps_np[step]) / num_train_timesteps
 
       force_compute = (
@@ -423,7 +444,7 @@ def run_inference_ti2v_2_2(
       )
 
       if force_compute:
-        timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv)
+        timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv, oracle_noise_offset)
         latents_doubled = jnp.concatenate([latents, latents], axis=0)
         latent_model_input = jnp.transpose(latents_doubled, (0, 4, 1, 2, 3))
         timestep_doubled = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
@@ -446,7 +467,6 @@ def run_inference_ti2v_2_2(
         accum_dt = 0.0
         reuse_count = 0
         latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
-        latents = _restore_clean_frames(latents)
         continue
 
       dx_norm = float(jnp.sqrt(jnp.mean((latents - ref_latent) ** 2)))
@@ -460,7 +480,7 @@ def run_inference_ti2v_2_2(
         reuse_count += 1
         cache_count += 1
       else:
-        timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv)
+        timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv, oracle_noise_offset)
         latents_doubled = jnp.concatenate([latents, latents], axis=0)
         latent_model_input = jnp.transpose(latents_doubled, (0, 4, 1, 2, 3))
         timestep_doubled = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
@@ -484,7 +504,6 @@ def run_inference_ti2v_2_2(
         reuse_count = 0
 
       latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
-      latents = _restore_clean_frames(latents)
 
     print(
         f"[SenCache] Cached {cache_count}/{num_inference_steps} steps "
@@ -528,7 +547,8 @@ def run_inference_ti2v_2_2(
 
     for step in range(num_inference_steps):
       t = jnp.array(scheduler_state.timesteps, dtype=jnp.int32)[step]
-      timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv)
+      latents = _restore_clean_frames(latents, t)
+      timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv, oracle_noise_offset)
 
       if step_is_cache[step]:
         latent_model_input = jnp.transpose(latents, (0, 4, 1, 2, 3))
@@ -565,7 +585,6 @@ def run_inference_ti2v_2_2(
 
       noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
       latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
-      latents = _restore_clean_frames(latents)
     return latents
 
   # ── Basic path (no cache) ──
@@ -576,7 +595,8 @@ def run_inference_ti2v_2_2(
 
   for step in range(num_inference_steps):
     t = jnp.array(scheduler_state.timesteps, dtype=jnp.int32)[step]
-    timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv)
+    latents = _restore_clean_frames(latents, t)
+    timestep_2d = _build_per_token_timestep(latents, t, has_last_image, n_priv, oracle_noise_offset)
     latents_input = jnp.concatenate([latents, latents], axis=0) if do_cfg else latents
     latent_model_input = jnp.transpose(latents_input, (0, 4, 1, 2, 3))
     timestep_for_transformer = jnp.concatenate([timestep_2d, timestep_2d], axis=0) if do_cfg else timestep_2d
@@ -595,5 +615,4 @@ def run_inference_ti2v_2_2(
     )
     noise_pred = jnp.transpose(noise_pred, (0, 2, 3, 4, 1))
     latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
-    latents = _restore_clean_frames(latents)
   return latents
