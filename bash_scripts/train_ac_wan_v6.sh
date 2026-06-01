@@ -96,6 +96,7 @@ python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     run_name=test \
     output_dir=gs://v6_east1d/checkpoints/wan-ti2v \
+    jax_cache_dir=gs://v6_east1d/jax_cache/wan-ti2v \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/train \
@@ -106,12 +107,12 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
-    ici_data_parallelism=4 \
-    ici_fsdp_parallelism=2 \
+    ici_data_parallelism=1 \
+    ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=4 \
+    ici_context_parallelism=1 \
     dcn_data_parallelism=1 \
-    dcn_fsdp_parallelism=1 \
+    dcn_fsdp_parallelism=-1 \
     dcn_tensor_parallelism=1 \
     dcn_context_parallelism=1 \
     allow_split_physical_axes=True \
