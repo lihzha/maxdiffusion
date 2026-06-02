@@ -90,6 +90,7 @@ def _make_tfrecord_iterator(
     prepare_sample_fn,
     dataset_path,
     is_training: bool,
+    filter_fn=None,
 ):
   # set load_tfrecord_cached to True in config to use pre-processed tfrecord dataset.
   # pedagogical_examples/dataset_tf_cache_to_tfrecord.py to convert tf preprocessed dataset to tfrecord.
@@ -151,6 +152,8 @@ def _make_tfrecord_iterator(
       .map(_parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
       .map(used_prepare_sample, num_parallel_calls=AUTOTUNE)
   )
+  if filter_fn is not None:
+    ds = ds.filter(filter_fn)
   if is_training:
     ds = (
         ds.shuffle(global_batch_size * 10)
@@ -175,6 +178,7 @@ def make_tfrecord_iterator(
     feature_description,
     prepare_sample_fn,
     is_training,
+    filter_fn=None,
 ):
   """Iterator for TFRecord format. For Laion dataset,
   check out preparation script
@@ -193,4 +197,5 @@ def make_tfrecord_iterator(
       prepare_sample_fn,
       dataset_path,
       is_training,
+      filter_fn=filter_fn,
   )

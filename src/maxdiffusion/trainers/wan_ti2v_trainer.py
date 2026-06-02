@@ -154,6 +154,11 @@ class WanTI2VTrainer(BaseWanTrainer):
             )  # (512, 4096)
             return {"latents": latent, "encoder_hidden_states": encoder_hidden_states}
 
+        # Drop clips whose latent temporal dim is shorter than window_size.
+        # Latents are channels-first (C, F_lat, H, W) after prepare_sample.
+        def filter_short_clips(sample):
+            return tf.shape(sample["latents"])[1] >= window_size
+
         return make_data_iterator(
             config,
             jax.process_index(),
@@ -163,6 +168,7 @@ class WanTI2VTrainer(BaseWanTrainer):
             feature_description=feature_description,
             prepare_sample_fn=prepare_sample_train if is_training else prepare_sample_eval,
             is_training=is_training,
+            filter_fn=filter_short_clips,
         )
 
     # ── Train / eval steps ───────────────────────────────────────────────────

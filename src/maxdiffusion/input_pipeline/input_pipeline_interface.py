@@ -56,6 +56,7 @@ def make_data_iterator(
     prepare_sample_fn=None,
     is_training=True,
     pipeline=None,
+    filter_fn=None,
 ):
   """Make data iterator for SD1, 2, XL, dataset_types in (hf, tf, tfrecord, grain, synthetic)"""
 
@@ -111,6 +112,7 @@ def make_data_iterator(
         feature_description,
         prepare_sample_fn,
         is_training,
+        filter_fn=filter_fn,
     )
   elif config.dataset_type == "synthetic":
     return synthetic_data_iterator.make_synthetic_iterator(
