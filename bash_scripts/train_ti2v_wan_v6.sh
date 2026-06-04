@@ -125,7 +125,7 @@ python src/maxdiffusion/train_wan.py \
     allow_split_physical_axes=True \
     scan_layers=True \
     max_train_steps=1000 \
-    checkpoint_every=200 \
+    checkpoint_every=50 \
     per_device_batch_size=0.25 \
     height=704 \
     width=1280 \
