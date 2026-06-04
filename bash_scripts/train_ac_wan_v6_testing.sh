@@ -120,7 +120,7 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=200 \
     checkpoint_every=100 \
     per_device_batch_size=0.25 \
-    height=720 \
+    height=704 \
     width=1280 \
     num_frames=80 \
     flash_min_seq_length=128 \
