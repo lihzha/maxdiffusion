@@ -103,6 +103,7 @@ python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_5b.yml \
     run_name=ti2v_wan_droid \
     output_dir=gs://v6_east1d/checkpoints/wan-ti2v-finetune \
+    checkpoint_dir=gs://v6_east1d/checkpoints/wan-ti2v-finetune \
     jax_cache_dir=gs://v6_east1d/jax_cache/wan-ti2v-finetune \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
