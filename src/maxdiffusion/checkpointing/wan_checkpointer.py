@@ -36,7 +36,7 @@ class WanCheckpointer(ABC):
     self.checkpoint_type = checkpoint_type
     self.opt_state = None
 
-    checkpoint_dir = os.path.abspath(self.config.checkpoint_dir)
+    checkpoint_dir = self.config.checkpoint_dir if self.config.checkpoint_dir.startswith("gs://") else os.path.abspath(self.config.checkpoint_dir)
     self.checkpoint_manager: ocp.CheckpointManager = create_orbax_checkpoint_manager(
         checkpoint_dir,
         enable_checkpointing=True,
