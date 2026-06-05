@@ -124,8 +124,8 @@ python src/maxdiffusion/train_wan.py \
     width=832 \
     num_frames=80 \
     flash_min_seq_length=128 \
-    hardware='tpu' \
-    wandb_project='wan-ac-test'
+    hardware='tpu'
+    # wandb_project='wan-ac-test'
 
 # --- DROID path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \

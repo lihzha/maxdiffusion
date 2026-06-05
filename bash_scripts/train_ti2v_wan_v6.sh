@@ -133,8 +133,8 @@ python src/maxdiffusion/train_wan.py \
     num_frames=80 \
     num_history_latent_frames=1 \
     flash_min_seq_length=128 \
-    hardware='tpu' \
-    wandb_project='wan-ti2v-finetune-test'
+    hardware='tpu' 
+    # wandb_project='wan-ti2v-finetune-test'
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
