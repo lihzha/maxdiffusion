@@ -31,6 +31,8 @@ write_timing_metrics: True
 gcs_metrics: False
 save_config_to_gcs: False
 log_period: 100
+wandb_project: ''   # set to enable W&B logging (e.g. 'wan-ctrl-world')
+wandb_entity: ''    # W&B team/user; empty = personal account
 
 # WAN 2.2 Ti2V 5B: source of UNet/transformer weights. The action encoder is
 # always initialised from scratch (no pretrained action encoder assumed).

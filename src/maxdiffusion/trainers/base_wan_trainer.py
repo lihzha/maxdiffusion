@@ -303,6 +303,16 @@ class BaseWanTrainer(abc.ABC):
         writer_thread = threading.Thread(target=_tensorboard_writer_worker, args=(writer, self.config), daemon=True)
         writer_thread.start()
 
+        self._wandb_run = None
+        if jax.process_index() == 0 and getattr(self.config, "wandb_project", ""):
+            import wandb
+            self._wandb_run = wandb.init(
+                project=self.config.wandb_project,
+                entity=getattr(self.config, "wandb_entity", None) or None,
+                name=self.config.run_name or None,
+                settings=wandb.Settings(start_method="thread"),
+            )
+
         num_model_parameters = max_utils.calculate_num_params_from_pytree(state.params)
         max_utils.add_text_to_summary_writer("number_model_parameters", str(num_model_parameters), writer)
         max_utils.add_text_to_summary_writer("libtpu_init_args", os.environ.get("LIBTPU_INIT_ARGS", ""), writer)
@@ -374,6 +384,12 @@ class BaseWanTrainer(abc.ABC):
                     train_utils.write_metrics(
                         writer, local_metrics_file, running_gcs_metrics, train_metric, step, self.config
                     )
+                if self._wandb_run is not None and step % self.config.log_period == 0:
+                    self._wandb_run.log({
+                        "train/loss": float(jax.device_get(train_metric["scalar"]["learning/loss"])),
+                        "train/lr": float(train_metric["scalar"].get("learning/current_learning_rate", 0)),
+                        "train/steps_per_sec": 1.0 / train_metric["scalar"].get("perf/step_time_seconds", 1),
+                    }, step=step)
 
                 if self.config.eval_every > 0 and (step + 1) % self.config.eval_every == 0:
                     if self.config.enable_generate_video_for_eval:
@@ -395,6 +411,8 @@ class BaseWanTrainer(abc.ABC):
             writer_thread.join()
             if writer:
                 writer.flush()
+            if self._wandb_run is not None:
+                self._wandb_run.finish()
             if self.config.save_final_checkpoint:
                 max_logging.log(f"Saving final checkpoint for step {step}")
                 self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, state.params)

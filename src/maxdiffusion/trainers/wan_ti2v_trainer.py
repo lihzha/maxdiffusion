@@ -201,32 +201,26 @@ class WanTI2VTrainer(BaseWanTrainer):
         )
 
     def eval(self, mesh, eval_rng_key, step, p_eval_step, state, scheduler_state, writer):
-        """Eval override: timesteps are sampled internally; no per-timestep bucketing."""
-        eval_data_iterator = self.load_dataset(mesh, is_training=False)
+        """Eval on a single batch, advancing through the val set across calls."""
+        if not hasattr(self, "_eval_data_iterator"):
+            self._eval_data_iterator = self.load_dataset(mesh, is_training=False)
         eval_rng = eval_rng_key
-        all_losses = []
 
-        while True:
-            try:
-                eval_start_time = datetime.datetime.now()
-                eval_batch = load_next_batch(eval_data_iterator, None, self.config)
-                with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
-                    metrics, eval_rng = p_eval_step(state, eval_batch, eval_rng, scheduler_state)
-                    metrics["scalar"]["learning/eval_loss"].block_until_ready()
-                losses = metrics["scalar"]["learning/eval_loss"]
-                gathered = multihost_utils.process_allgather(losses, tiled=True)
-                all_losses.extend(jax.device_get(gathered).flatten().tolist())
-                if jax.process_index() == 0:
-                    elapsed = (datetime.datetime.now() - eval_start_time).total_seconds()
-                    max_logging.log(f"Eval time: {elapsed:.2f} seconds.")
-            except StopIteration:
-                break
+        eval_batch = load_next_batch(self._eval_data_iterator, None, self.config)
+        with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
+            metrics, eval_rng = p_eval_step(state, eval_batch, eval_rng, scheduler_state)
+            metrics["scalar"]["learning/eval_loss"].block_until_ready()
+        losses = metrics["scalar"]["learning/eval_loss"]
+        gathered = multihost_utils.process_allgather(losses, tiled=True)
+        all_losses = jax.device_get(gathered).flatten().tolist()
 
         if all_losses and jax.process_index() == 0:
             final_eval_loss = float(jnp.mean(jnp.array(all_losses)))
-            max_logging.log(f"Step {step}, Final Average Eval loss: {final_eval_loss:.4f}")
+            max_logging.log(f"Step {step}, Eval loss: {final_eval_loss:.4f}")
             if writer:
                 writer.add_scalar("learning/eval_loss", final_eval_loss, step)
+            if getattr(self, "_wandb_run", None) is not None:
+                self._wandb_run.log({"eval/loss": final_eval_loss}, step=step)
 
 
 # ── Training step ─────────────────────────────────────────────────────────────

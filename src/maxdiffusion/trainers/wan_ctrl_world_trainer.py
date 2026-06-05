@@ -467,6 +467,17 @@ class WanCtrlWorldTrainer:
             max_logging.log(f"  Max train steps: {config.max_train_steps}")
             max_logging.log(f"  Output dir: {config.output_dir}")
 
+        self._wandb_run = None
+        if jax.process_index() == 0 and getattr(config, "wandb_project", ""):
+            import wandb
+            self._wandb_run = wandb.init(
+                project=config.wandb_project,
+                entity=getattr(config, "wandb_entity", None) or None,
+                name=config.run_name or None,
+                settings=wandb.Settings(start_method="thread"),
+            )
+        wandb_run = self._wandb_run
+
         rng = jax.random.key(config.seed + 1)
         recent_loss: list[float] = []
         recent_grad: list[float] = []
@@ -498,6 +509,9 @@ class WanCtrlWorldTrainer:
                     f"loss={avg_loss:.4f} grad_norm={avg_grad:.3f} "
                     f"lr={lr:.2e} steps/s={sps:.2f}"
                 )
+                if wandb_run is not None:
+                    wandb_run.log({"train/loss": avg_loss, "train/grad_norm": avg_grad,
+                                   "train/lr": lr, "train/steps_per_sec": sps}, step=step + 1)
                 recent_loss.clear()
                 recent_grad.clear()
                 last_step_time = now
@@ -520,6 +534,8 @@ class WanCtrlWorldTrainer:
         if config.save_final_checkpoint:
             self._save_checkpoint(ckpt_mgr, config.max_train_steps, state)
         ckpt_mgr.wait_until_finished()
+        if wandb_run is not None:
+            wandb_run.finish()
 
     # ── Eval ──────────────────────────────────────────────────────────────────
 
@@ -561,10 +577,13 @@ class WanCtrlWorldTrainer:
             losses.append(float(loss))
 
         if losses and jax.process_index() == 0:
+            mean_loss = sum(losses) / len(losses)
             max_logging.log(
                 f"[wan_ctrl_world] eval step={step} batches={len(losses)} "
-                f"mean_loss={sum(losses)/len(losses):.4f}"
+                f"mean_loss={mean_loss:.4f}"
             )
+            if getattr(self, "_wandb_run", None) is not None:
+                self._wandb_run.log({"eval/loss": mean_loss}, step=step)
 
 
 def _eval_step(state: TrainState, data: dict, rng: jax.Array,
