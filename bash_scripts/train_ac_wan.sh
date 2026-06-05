@@ -1,0 +1,166 @@
+# --- 1. Activate the training env ---
+curl -LsSf https://astral.sh/uv/install.sh | sh
+git checkout origin/catherine-dev
+
+# Wait for unattended-upgrades to release the dpkg lock before running setup
+echo "Waiting for dpkg lock to be released..."
+while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+  sleep 5
+done
+echo "dpkg lock released, proceeding with setup."
+
+uv venv --python 3.12 ./maxdiffusion_venv --seed
+source ./maxdiffusion_venv/bin/activate
+bash setup.sh MODE=stable DEVICE=tpu
+
+# --- 2. Bucket mount ---
+export GCS_BUCKET=v6_east1d
+export GCS_MOUNT=/home/zheng/gcs-mount
+
+if ! command -v gcsfuse >/dev/null; then
+  export GCSFUSE_REPO=gcsfuse-$(lsb_release -c -s)
+  echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+  sudo apt-get update
+  sudo apt-get install -y gcsfuse
+fi
+
+mkdir -p "$GCS_MOUNT" /dev/shm/gcsfuse-cache
+if ! mountpoint -q "$GCS_MOUNT"; then
+  gcsfuse \
+    --implicit-dirs \
+    --file-cache-max-size-mb=-1 \
+    --cache-dir=/dev/shm/gcsfuse-cache \
+    "$GCS_BUCKET" "$GCS_MOUNT"
+fi
+
+# --- 3. TI2V model path ---
+export WAN_TI2V_MODEL_DIR="$GCS_MOUNT/wan/Wan2.2-TI2V-5B-Diffusers"
+
+source ./maxdiffusion_venv/bin/activate
+
+# --- 4. XLA flags ---
+export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
+--xla_tpu_megacore_fusion_allow_ags=false \
+--xla_enable_async_collective_permute=true \
+--xla_tpu_enable_ag_backward_pipelining=true \
+--xla_tpu_enable_data_parallel_all_reduce_opt=true \
+--xla_tpu_data_parallel_opt_different_sized_ops=true \
+--xla_tpu_enable_async_collective_fusion=true \
+--xla_tpu_enable_async_collective_fusion_multiple_steps=true \
+--xla_tpu_overlap_compute_collective_tc=true \
+--xla_enable_async_all_gather=true \
+--xla_tpu_scoped_vmem_limit_kib=65536 \
+--xla_tpu_enable_async_all_to_all=true \
+--xla_tpu_enable_all_experimental_scheduler_features=true \
+--xla_tpu_enable_scheduler_memory_pressure_tracking=true \
+--xla_tpu_host_transfer_overlap_limit=24 \
+--xla_tpu_aggressive_opt_barrier_removal=ENABLED \
+--xla_lhs_prioritize_async_depth_over_stall=ENABLED \
+--xla_should_allow_loop_variant_parameter_in_chain=ENABLED \
+--xla_should_add_loop_invariant_op_in_chain=ENABLED \
+--xla_max_concurrent_host_send_recv=100 \
+--xla_tpu_scheduler_percent_shared_memory_limit=100 \
+--xla_latency_hiding_scheduler_rerun=2 \
+--xla_tpu_use_minor_sharding_for_major_trivial_input=true \
+--xla_tpu_relayout_group_size_threshold_for_reduce_scatter=1 \
+--xla_tpu_assign_all_reduce_scatter_layout=true'
+
+# --- 5. Launch I2V training ---
+#
+# dataset_type options:
+#   synthetic  — no data needed; smoke-test that the train step compiles
+#   tfrecord   — pre-encoded latents/condition; set train_data_dir to TFRecord GCS path
+#   droid      — on-the-fly encoding from DROID TFDS records; set train_data_dir to TFDS parent dir
+#
+# Uncomment and set the right dataset_type / train_data_dir for your run.
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
+# python src/maxdiffusion/train_wan.py \
+#     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
+#     run_name=i2v-test-run-1 \
+#     output_dir=gs://v6_east1d/i2v-test-run-1 \
+#     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
+#     dataset_type=synthetic \
+#     attention=flash \
+#     weights_dtype=bfloat16 \
+#     activations_dtype=bfloat16 \
+#     remat_policy=FULL \
+#     ici_fsdp_parallelism=2 \
+#     ici_data_parallelism=1 \
+#     ici_tensor_parallelism=1 \
+#     ici_context_parallelism=4 \
+#     scan_layers=True \
+#     max_train_steps=1000 \
+#     per_device_batch_size=0.25 \
+#     height=720 \
+#     width=1280 \
+#     num_frames=81 \
+#     flash_min_seq_length=0
+
+# --- TFRecord path (uncomment to use) ---
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
+python src/maxdiffusion/train_wan.py \
+    src/maxdiffusion/configs/base_wan_ctrl_world.yml \
+    run_name=ac_wan_droid \
+    output_dir=gs://v6_east1d/checkpoints/wan-ac \
+    jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac \
+    pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
+    dataset_type=tfrecord \
+    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/train \
+    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/val \
+    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset/stats.json \
+    cache_latents_text_encoder_outputs=True \
+    attention=flash \
+    weights_dtype=bfloat16 \
+    activations_dtype=bfloat16 \
+    remat_policy=MATMUL_WITHOUT_BATCH \
+    ici_data_parallelism=2 \
+    ici_fsdp_parallelism=4 \
+    ici_tensor_parallelism=1 \
+    ici_context_parallelism=4 \
+    dcn_data_parallelism=1 \
+    dcn_fsdp_parallelism=1 \
+    dcn_tensor_parallelism=1 \
+    dcn_context_parallelism=1 \
+    allow_split_physical_axes=True \
+    scan_layers=True \
+    max_train_steps=100000 \
+    checkpoint_every=100 \
+    per_device_batch_size=0.25 \
+    height=480 \
+    width=832 \
+    num_frames=80 \
+    flash_min_seq_length=128 \
+    hardware='tpu'
+
+# --- DROID path (uncomment to use) ---
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
+# python src/maxdiffusion/train_wan.py \
+#     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
+#     run_name=i2v-droid-run-1 \
+#     output_dir=gs://v6_east1d/i2v-droid-run-1 \
+#     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
+#     dataset_type=droid \
+#     train_data_dir=gs://v6_east1d/OXE \
+#     droid_clip_stride=8 \
+#     attention=flash \
+#     weights_dtype=bfloat16 \
+#     activations_dtype=bfloat16 \
+#     remat_policy=FULL \
+#     ici_fsdp_parallelism=8 \
+#     ici_data_parallelism=1 \
+#     ici_tensor_parallelism=1 \
+#     ici_context_parallelism=1 \
+#     scan_layers=True \
+#     max_train_steps=1000 \
+#     per_device_batch_size=0.25 \
+#     height=480 \
+#     width=832 \
+#     num_frames=49 \
+#     flash_min_seq_length=0
+
+# --- 6. Unmount ---
+fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
+
+#tpu create v6 --name v6-32-01-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ac_wan.sh" 
