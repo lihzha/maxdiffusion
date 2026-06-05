@@ -99,9 +99,9 @@ python src/maxdiffusion/train_wan.py \
     jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac-test \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
-    train_data_dir=gs://v6_east1d/droid_wan_tfrecords_test/train \
-    eval_data_dir=gs://v6_east1d/droid_wan_tfrecords_test/val \
-    action_stats_path=gs://v6_east1d/droid_wan_tfrecords_test/stats.json \
+    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/train \
+    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/val \
+    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_test/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=flash \
     weights_dtype=bfloat16 \
