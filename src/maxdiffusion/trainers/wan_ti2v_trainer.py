@@ -318,7 +318,7 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
             loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
         return loss.reshape(loss.shape[0], -1).mean(axis=1)
 
-    bs = len(data["latents"])
+    bs = config.global_batch_size_to_train_on
     single_batch_size = config.global_batch_size_to_train_on
     losses = jnp.zeros(bs)
     for i in range(0, bs, single_batch_size):
