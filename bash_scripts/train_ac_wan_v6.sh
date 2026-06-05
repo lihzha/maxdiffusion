@@ -1,6 +1,14 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
 git checkout origin/catherine-dev
+
+# Wait for unattended-upgrades to release the dpkg lock before running setup
+echo "Waiting for dpkg lock to be released..."
+while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+  sleep 5
+done
+echo "dpkg lock released, proceeding with setup."
+
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
