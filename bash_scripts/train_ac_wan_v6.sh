@@ -95,8 +95,8 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     run_name=ac_wan_droid \
-    output_dir=gs://v6_east1d/checkpoints/wan-ti2v \
-    jax_cache_dir=gs://v6_east1d/jax_cache/wan-ti2v \
+    output_dir=gs://v6_east1d/checkpoints/wan-ac \
+    jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/train \
@@ -120,8 +120,8 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=100000 \
     checkpoint_every=100 \
     per_device_batch_size=0.25 \
-    height=720 \
-    width=1280 \
+    height=480 \
+    width=832 \
     num_frames=80 \
     flash_min_seq_length=128 \
     hardware='tpu'

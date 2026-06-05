@@ -107,10 +107,10 @@ python src/maxdiffusion/train_wan.py \
     jax_cache_dir=gs://v6_east1d/jax_cache/wan-ti2v-finetune \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
-    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/train \
-    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/val \
+    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/train \
+    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/val \
     cache_latents_text_encoder_outputs=True \
-    eval_every=200 \
+    eval_every=50 \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
@@ -128,8 +128,8 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=1000 \
     checkpoint_every=50 \
     per_device_batch_size=0.25 \
-    height=704 \
-    width=1280 \
+    height=480 \
+    width=832 \
     num_frames=80 \
     num_history_latent_frames=1 \
     flash_min_seq_length=128 \

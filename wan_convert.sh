@@ -44,8 +44,8 @@ python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py 
     pretrained_model_name_or_path=model/Wan2.2-TI2V-5B-Diffusers \
     raw_data_root=/n/fs/iromdata/droid_raw/1.0.1 \
     data_root=/n/fs/iromdata/droid_wan2.2_lowres \
-    video_index_path=/n/fs/iromdata/droid_wan2.2/video_index.json \
-    action_stats_path=/n/fs/iromdata/droid_wan2.2/stats.json \
+    video_index_path=/n/fs/iromdata/droid_wan2.2_lowres/video_index.json \
+    action_stats_path=/n/fs/iromdata/droid_wan2.2_lowres/stats.json \
     no_records_per_shard=${NO_RECORDS_PER_SHARD} \
     max_frames=300 \
     max_episodes=${MAX_EP} \
