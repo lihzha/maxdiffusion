@@ -50,7 +50,7 @@ from_pt: True
 weights_dtype: 'bfloat16'
 activations_dtype: 'bfloat16'
 precision: "DEFAULT"
-scan_layers: True
+scan_layers: False
 jit_initializers: True
 split_head_dim: True
 
