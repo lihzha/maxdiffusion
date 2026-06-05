@@ -9,12 +9,12 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=150G
-#SBATCH --time=60:00:00
+#SBATCH --time=36:00:00
 #SBATCH --output=slurm_outputs/%x/out_%x_%A_%a.out
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=zz8976@princeton.edu
 #SBATCH --exclude=neu301,neu306,neu309,neu312
-#SBATCH --array=0-7   # 8 parallel jobs; adjust N_JOBS below to match
+#SBATCH --array=0-15   # 8 parallel jobs; adjust N_JOBS below to match
 
 cd /n/fs/cat10301/projects/maxdiffusion
 source .venv/bin/activate
@@ -23,7 +23,7 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90
 
 # --- array job config ---
 TOTAL_EPISODES=73393
-N_JOBS=8
+N_JOBS=16
 NO_RECORDS_PER_SHARD=10
 # Round CHUNK up to a multiple of NO_RECORDS_PER_SHARD so that START values are
 # always shard-aligned — the Python script snaps start_episode to the shard
