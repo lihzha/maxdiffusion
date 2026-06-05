@@ -20,6 +20,7 @@ import os
 import pprint
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -43,12 +44,25 @@ from maxdiffusion.video_processor import VideoProcessor
 class TrainState(train_state.TrainState):
     graphdef: nnx.GraphDef
     rest_of_state: nnx.State
+    ema_params: Any = None  # EMA teacher params; None when self-distillation is disabled
 
 
 def _to_array(x):
     if not isinstance(x, jax.Array):
         x = jnp.asarray(x)
     return x
+
+
+def _distill_swap(state: TrainState, is_distill: bool) -> TrainState:
+    """Return state with params=teacher and ema_params=student for distillation checkpoints.
+
+    Swapping ensures the standard load path (which reads wan_state["params"]) loads
+    the teacher (EMA) for inference, while the student is preserved under ema_params
+    so training can be resumed correctly.
+    """
+    if not is_distill or state.ema_params is None:
+        return state
+    return state.replace(params=state.ema_params, ema_params=state.params)
 
 
 def generate_sample(config, pipeline, filename_prefix):
@@ -98,6 +112,12 @@ class BaseWanTrainer(abc.ABC):
 
     def post_training_steps(self, pipeline, params, train_states, msg=""):
         pass
+
+    def post_train_step(self, state, step: int):
+        """Hook called after every JIT train step. Override to inject per-step logic
+        (e.g. EMA updates) that should run on the host outside the JIT boundary.
+        Must return the (possibly updated) state."""
+        return state
 
     def create_scheduler(self):
         """Creates and initializes the Flow Match scheduler for training."""
@@ -189,11 +209,13 @@ class BaseWanTrainer(abc.ABC):
 
     def start_training(self):
         with nn_partitioning.axis_rules(self.config.logical_axis_rules):
-            pipeline, opt_state, step = self.checkpointer.load_checkpoint()
+            pipeline, opt_state, step, extra_state = self.checkpointer.load_checkpoint()
         restore_args = {}
         if opt_state and step:
             restore_args = {"opt_state": opt_state, "step": step}
             del opt_state
+        if extra_state.get("student_params") is not None:
+            restore_args["student_params"] = extra_state["student_params"]
         if self.config.enable_ssim:
             # Generate a sample before training to compare against generated sample after training.
             pretrained_video_path = generate_sample(self.config, pipeline, filename_prefix="pre-training-")
@@ -273,16 +295,39 @@ class BaseWanTrainer(abc.ABC):
         self, pipeline, optimizer, learning_rate_scheduler, train_data_iterator, restore_args: dict = {}
     ):
         mesh = pipeline.mesh
-        graphdef, params, rest_of_state = nnx.split(pipeline.transformer, nnx.Param, ...)
+        graphdef, loaded_params, rest_of_state = nnx.split(pipeline.transformer, nnx.Param, ...)
+
+        ema_decay = getattr(self.config, "ema_decay", 0.0)
+        distill = getattr(self.config, "distill", False)
+
+        # When resuming from a distillation checkpoint the pipeline was loaded with
+        # teacher weights (saved under "params" after the save-time swap).  The
+        # actual student weights are returned under "student_params" in restore_args.
+        student_params_from_ckpt = restore_args.pop("student_params", None)
+        if distill and ema_decay > 0.0 and student_params_from_ckpt is not None:
+            params = student_params_from_ckpt   # student → receives gradient updates
+            ema_params = loaded_params           # teacher → provides distillation targets
+        else:
+            params = loaded_params
+            ema_params = jax.tree_util.tree_map(lambda x: x, params) if ema_decay > 0.0 else None
+
+        # When distilling, always save the full TrainState so both student (params)
+        # and teacher (ema_params) are preserved.  Otherwise honour save_optimizer.
+        _save_full_state = distill and ema_params is not None
 
         with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
             state = TrainState.create(
-                apply_fn=graphdef.apply, params=params, tx=optimizer, graphdef=graphdef, rest_of_state=rest_of_state
+                apply_fn=graphdef.apply,
+                params=params,
+                tx=optimizer,
+                graphdef=graphdef,
+                rest_of_state=rest_of_state,
+                ema_params=ema_params,
             )
             if restore_args:
                 step = restore_args.get("step", 0)
                 max_logging.log(f"Restoring optimizer and resuming from step {step}")
-                state.replace(opt_state=restore_args.get("opt_state"), step=restore_args.get("step", 0))
+                state = state.replace(opt_state=restore_args.get("opt_state"), step=restore_args.get("step", 0))
                 del restore_args["opt_state"]
                 del optimizer
             state = jax.tree.map(_to_array, state)
@@ -367,6 +412,7 @@ class BaseWanTrainer(abc.ABC):
                     state, scheduler_state, train_metric, rng = p_train_step(
                         state, example_batch, rng, scheduler_state
                     )
+                    state = self.post_train_step(state, int(step))
                     train_metric["scalar"]["learning/loss"].block_until_ready()
                 last_step_completion = datetime.datetime.now()
 
@@ -393,7 +439,9 @@ class BaseWanTrainer(abc.ABC):
 
                 if self.config.eval_every > 0 and (step + 1) % self.config.eval_every == 0:
                     if self.config.enable_generate_video_for_eval:
-                        pipeline.transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+                        # Use teacher weights for inference video when distilling.
+                        inference_params = state.ema_params if _save_full_state else state.params
+                        pipeline.transformer = nnx.merge(state.graphdef, inference_params, state.rest_of_state)
                         inference_generate_video(self.config, pipeline, filename_prefix=f"{step + 1}-train_steps-")
                     # Re-create the iterator each time you start evaluation to reset it
                     # This assumes your data loading logic can be called to get a fresh iterator.
@@ -402,8 +450,8 @@ class BaseWanTrainer(abc.ABC):
                 example_batch = next_batch_future.result()
                 if step != 0 and self.config.checkpoint_every != -1 and step % self.config.checkpoint_every == 0:
                     max_logging.log(f"Saving checkpoint for step {step}")
-                    if self.config.save_optimizer:
-                        self.checkpointer.save_checkpoint(step, pipeline, state)
+                    if self.config.save_optimizer or _save_full_state:
+                        self.checkpointer.save_checkpoint(step, pipeline, _distill_swap(state, _save_full_state))
                     else:
                         self.checkpointer.save_checkpoint(step, pipeline, state.params)
 
@@ -415,8 +463,14 @@ class BaseWanTrainer(abc.ABC):
                 self._wandb_run.finish()
             if self.config.save_final_checkpoint:
                 max_logging.log(f"Saving final checkpoint for step {step}")
-                self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, state.params)
+                if _save_full_state:
+                    self.checkpointer.save_checkpoint(
+                        self.config.max_train_steps - 1, pipeline, _distill_swap(state, _save_full_state)
+                    )
+                else:
+                    self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, state.params)
                 self.checkpointer.checkpoint_manager.wait_until_finished()
-            # load new state for trained transformer
-            pipeline.transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+            # Load trained transformer — use teacher (EMA) when distilling.
+            final_params = state.ema_params if _save_full_state else state.params
+            pipeline.transformer = nnx.merge(state.graphdef, final_params, state.rest_of_state)
             return pipeline

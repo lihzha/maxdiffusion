@@ -74,6 +74,21 @@ class WanTI2VTrainer(BaseWanTrainer):
     def _get_checkpointer(self):
         return WanCheckpointerTI2V_2_2(config=self.config)
 
+    def post_train_step(self, state, step: int):
+        """EMA teacher update, run outside JIT so teacher_update_every is a free host check."""
+        ema_decay = getattr(self.config, "ema_decay", 0.0)
+        if ema_decay <= 0.0 or state.ema_params is None:
+            return state
+        teacher_update_every = getattr(self.config, "teacher_update_every", 1)
+        if step % teacher_update_every != 0:
+            return state
+        new_ema_params = jax.tree_util.tree_map(
+            lambda ema, p: ema_decay * ema + (1.0 - ema_decay) * p,
+            state.ema_params,
+            state.params,
+        )
+        return state.replace(ema_params=new_ema_params)
+
     # ── Data shardings ───────────────────────────────────────────────────────
 
     def get_data_shardings(self, mesh):
@@ -175,12 +190,16 @@ class WanTI2VTrainer(BaseWanTrainer):
 
     def get_train_step(self, pipeline, mesh, state_shardings, data_shardings):
         n_hist = getattr(self.config, "num_history_latent_frames", 1)
+        ema_decay = getattr(self.config, "ema_decay", 0.0)
+        distill = getattr(self.config, "distill", False)
         return jax.jit(
             functools.partial(
                 ti2v_train_step,
                 scheduler=pipeline.scheduler,
                 config=self.config,
                 n_hist=n_hist,
+                ema_decay=ema_decay,
+                distill=distill,
             ),
             in_shardings=(state_shardings, data_shardings, None, None),
             out_shardings=(state_shardings, None, None, None),
@@ -226,32 +245,77 @@ class WanTI2VTrainer(BaseWanTrainer):
 # ── Training step ─────────────────────────────────────────────────────────────
 
 
-def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist):
+def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist, ema_decay=0.0, distill=False):
     _, new_rng, timestep_rng, dropout_rng = jax.random.split(rng, num=4)
 
     for k, v in data.items():
         if hasattr(v, "shape"):
             data[k] = v[: config.global_batch_size_to_train_on]
 
+    # Compute noisy latents outside loss_fn so teacher and student share the same x_t.
+    # latents: (B, C, F_lat, H_lat, W_lat) channels-first
+    latents = data["latents"].astype(config.weights_dtype)
+    encoder_hidden_states = data["encoder_hidden_states"].astype(config.weights_dtype)
+
+    b, _, F_lat, H_lat, W_lat = latents.shape
+    timesteps = scheduler.sample_timesteps(timestep_rng, b)
+
+    # Noise only future frames; history frames stay clean.
+    future_latents = latents[:, :, n_hist:]
+    noise = jax.random.normal(new_rng, future_latents.shape, dtype=future_latents.dtype)
+    noisy_future, target_future, training_weight = scheduler.apply_flow_match(
+        noise, future_latents, timesteps
+    )
+    noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
+
+    # Per-token timestep for student: history → 0, future → t.
+    timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+
+    # ── Teacher forward pass (EMA model, oracle / privileged mode) ───────────
+    # Mirrors the oracle inference layout from wan_pipeline_ti2v_2p2:
+    #
+    #   teacher sequence: [hist_clean | oracle_future_clean | noisy_future (student x_t)]
+    #   per-token t:      [    0      |         0           |         t                 ]
+    #   frame positions:  [  0..n-1   |     n..n+F-1        |       n..n+F-1            ]
+    #                                        ↑ oracle and noisy gen share RoPE positions
+    #
+    # The oracle frames are prepended as clean context; the noisy gen frames
+    # (student's x_t) are the frames the teacher actually predicts.
+    # Teacher output for the noisy gen portion: teacher_pred[:, :, n_hist+F_future:]
+    if distill:
+        F_future = F_lat - n_hist
+        teacher_F_lat = n_hist + 2 * F_future  # hist + oracle + noisy_gen
+
+        # Latent sequence: hist_clean | oracle_future_clean | noisy_future_student
+        teacher_latents = jnp.concatenate(
+            [latents[:, :, :n_hist], future_latents, noisy_future], axis=2
+        )
+
+        # Per-token timestep: hist + oracle → t=0, noisy_gen → t.
+        # Reuse _build_per_token_timestep with n_clean = n_hist + F_future.
+        teacher_timestep_2d = _build_per_token_timestep(
+            timesteps, teacher_F_lat, H_lat, W_lat, n_hist + F_future
+        )
+
+        # Frame positions: oracle and noisy-gen frames share temporal RoPE slots.
+        teacher_frame_positions = tuple(
+            list(range(n_hist))
+            + list(range(n_hist, n_hist + F_future))   # oracle at n_hist..n_hist+F_future-1
+            + list(range(n_hist, n_hist + F_future))   # noisy gen at same positions
+        )
+
+        teacher_model = nnx.merge(state.graphdef, state.ema_params, state.rest_of_state)
+        with jax.named_scope("teacher_forward_pass"):
+            teacher_pred = teacher_model(
+                hidden_states=teacher_latents,
+                timestep=teacher_timestep_2d,
+                encoder_hidden_states=encoder_hidden_states,
+                deterministic=True,
+                frame_positions=teacher_frame_positions,
+            )
+
     def loss_fn(params):
         model = nnx.merge(state.graphdef, params, state.rest_of_state)
-        # latents: (B, C, F_lat, H_lat, W_lat) channels-first
-        latents = data["latents"].astype(config.weights_dtype)
-        encoder_hidden_states = data["encoder_hidden_states"].astype(config.weights_dtype)
-
-        b, _, F_lat, H_lat, W_lat = latents.shape
-        timesteps = scheduler.sample_timesteps(timestep_rng, b)
-
-        # Noise only future frames; history frames stay clean.
-        future_latents = latents[:, :, n_hist:]
-        noise = jax.random.normal(new_rng, future_latents.shape, dtype=future_latents.dtype)
-        noisy_future, target_future, training_weight = scheduler.apply_flow_match(
-            noise, future_latents, timesteps
-        )
-        noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
-
-        # Per-token timestep: history frame tokens → 0, future frame tokens → t.
-        timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
 
         with jax.named_scope("forward_pass"):
             model_pred = model(
@@ -263,11 +327,19 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             )
 
         with jax.named_scope("loss"):
-            diff = target_future - model_pred[:, :, n_hist:]
-            loss = diff ** 2
-            if not config.disable_training_weights:
-                loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
-            loss = jnp.mean(loss)
+            if distill:
+                # Distillation: student future predictions vs teacher noisy-gen predictions.
+                # teacher_pred[:, :, n_hist+F_future:] = last F_future frames = noisy gen.
+                target = jax.lax.stop_gradient(teacher_pred[:, :, n_hist + F_future:])
+                diff = target - model_pred[:, :, n_hist:]
+                loss = jnp.mean(diff ** 2)
+            else:
+                # Standard flow-matching loss against ground-truth velocity target.
+                diff = target_future - model_pred[:, :, n_hist:]
+                loss = diff ** 2
+                if not config.disable_training_weights:
+                    loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
+                loss = jnp.mean(loss)
 
         return loss
 

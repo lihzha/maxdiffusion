@@ -191,7 +191,7 @@ global_batch_size_to_load: 1
 
 warmup_steps_fraction: 0.05
 learning_rate_schedule_steps: -1
-save_optimizer: False
+save_optimizer: True
 
 adam_b1: 0.9
 adam_b2: 0.999

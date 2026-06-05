@@ -141,7 +141,9 @@ python src/maxdiffusion/train_wan.py \
     num_frames=80 \
     num_history_latent_frames=1 \
     flash_min_seq_length=128 \
-    hardware='tpu' 
+    hardware='tpu' \
+    ema_decay: 0.0 \
+    distill: false \
     # wandb_project='wan-ti2v-finetune-test'
 
 # --- 6. Unmount ---

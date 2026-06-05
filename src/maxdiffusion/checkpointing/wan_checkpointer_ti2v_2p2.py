@@ -62,19 +62,26 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
     pipeline = WanPipelineTI2V_2_2.from_pretrained(self.config)
     return pipeline
 
-  def load_checkpoint(self, step=None) -> Tuple[WanPipelineTI2V_2_2, Optional[dict], Optional[int]]:
+  def load_checkpoint(self, step=None) -> Tuple[WanPipelineTI2V_2_2, Optional[dict], Optional[int], dict]:
     restored_checkpoint, step = self.load_wan_configs_from_orbax(step)
     opt_state = None
+    extra_state = {}
     if restored_checkpoint:
       max_logging.log("Loading WAN TI2V pipeline from checkpoint")
       pipeline = WanPipelineTI2V_2_2.from_checkpoint(self.config, restored_checkpoint)
-      if "opt_state" in restored_checkpoint.wan_state.keys():
+      wan_state_keys = restored_checkpoint.wan_state.keys()
+      if "opt_state" in wan_state_keys:
         opt_state = restored_checkpoint.wan_state["opt_state"]
+      if "ema_params" in wan_state_keys:
+        # Distillation checkpoint: saved as params=teacher, ema_params=student.
+        # Return student so training_loop can restore gradient-update params correctly.
+        extra_state["student_params"] = restored_checkpoint.wan_state["ema_params"]
+        max_logging.log("Distillation checkpoint detected: restoring student params from ema_params field.")
     else:
       max_logging.log("No checkpoint found, loading default pipeline.")
       pipeline = self.load_diffusers_checkpoint()
 
-    return pipeline, opt_state, step
+    return pipeline, opt_state, step, extra_state
 
   def save_checkpoint(self, train_step, pipeline: WanPipelineTI2V_2_2, train_states: dict):
     """Saves the training state and model configurations."""

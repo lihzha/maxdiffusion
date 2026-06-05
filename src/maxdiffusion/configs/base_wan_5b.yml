@@ -36,6 +36,15 @@ model_type: 'TI2V'
 # Matches the inference convention in wan_pipeline_ti2v_2p2.
 num_history_latent_frames: 1
 
+# Self-distillation via EMA teacher with privileged (t=0) future conditioning.
+# ema_decay > 0  — maintain an EMA copy of the student weights (the teacher).
+# distill: true  — use distillation loss (requires ema_decay > 0).
+# distill: false — use standard flow-matching loss (EMA is still kept if ema_decay > 0).
+ema_decay: 0.0
+distill: false
+# Update the EMA teacher every N training steps. Default 1 = every step.
+teacher_update_every: 50
+
 # Overrides the transformer from pretrained_model_name_or_path
 wan_transformer_pretrained_model_name_or_path: ''
 
@@ -266,7 +275,7 @@ num_eval_samples: 1
 
 warmup_steps_fraction: 0.1
 learning_rate_schedule_steps: -1 # By default the length of the schedule is set to the number of steps.
-save_optimizer: False
+save_optimizer: True
 
 # However you may choose a longer schedule (learning_rate_schedule_steps > steps), in which case the training will end before
 # dropping fully down. Or you may choose a shorter schedule, where the unspecified steps will have a learning rate of 0.
