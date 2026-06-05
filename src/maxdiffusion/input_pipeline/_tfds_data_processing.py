@@ -129,8 +129,17 @@ def _make_tfrecord_iterator(
   filenames = tf.io.gfile.glob(os.path.join(dataset_path, "*"))
   ds = tf.data.TFRecordDataset(filenames, num_parallel_reads=AUTOTUNE)
 
+  used_prepare_sample = (
+      prepare_sample_fn if (make_cached_tfrecord_iterator or config.dataset_type == "tfrecord") else prepare_sample
+  )
+
   # --- PADDING LOGIC FOR EVALUATION ---
+  # Parse and filter first so the sample count reflects what will actually be used.
   if not is_training:
+    ds = ds.map(_parse_tfrecord_fn, num_parallel_calls=AUTOTUNE).map(used_prepare_sample, num_parallel_calls=AUTOTUNE)
+    if filter_fn is not None:
+      ds = ds.filter(filter_fn)
+
     num_eval_samples = 0
     for _ in ds:
       num_eval_samples += 1
@@ -138,32 +147,26 @@ def _make_tfrecord_iterator(
     remainder = num_eval_samples % global_batch_size
     if remainder != 0:
       num_to_pad = global_batch_size - remainder
-      # Create a dataset of padding samples from the beginning
       padding_ds = ds.take(num_to_pad)
-      # Add the padding samples to the end
       ds = ds.concatenate(padding_ds)
       max_logging.log(f"Padded evaluation dataset with {num_to_pad} samples.")
 
-  used_prepare_sample = (
-      prepare_sample_fn if (make_cached_tfrecord_iterator or config.dataset_type == "tfrecord") else prepare_sample
-  )
-  ds = (
-      ds.shard(num_shards=dataloading_host_count, index=dataloading_host_index)
-      .map(_parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
-      .map(used_prepare_sample, num_parallel_calls=AUTOTUNE)
-  )
-  if filter_fn is not None:
-    ds = ds.filter(filter_fn)
-  if is_training:
+    ds = ds.shard(num_shards=dataloading_host_count, index=dataloading_host_index)
+    ds = ds.batch(global_batch_size // dataloading_host_count, drop_remainder=True).prefetch(AUTOTUNE)
+  else:
+    ds = (
+        ds.shard(num_shards=dataloading_host_count, index=dataloading_host_index)
+        .map(_parse_tfrecord_fn, num_parallel_calls=AUTOTUNE)
+        .map(used_prepare_sample, num_parallel_calls=AUTOTUNE)
+    )
+    if filter_fn is not None:
+      ds = ds.filter(filter_fn)
     ds = (
         ds.shuffle(global_batch_size * 10)
         .batch(global_batch_size // dataloading_host_count, drop_remainder=True)
         .repeat(-1)
         .prefetch(AUTOTUNE)
     )
-  # For Evaluation
-  else:
-    ds = ds.batch(global_batch_size // dataloading_host_count, drop_remainder=False).prefetch(AUTOTUNE)
 
   iter = multihost_dataloading.MultiHostDataLoadIterator(ds, mesh)
   return iter
