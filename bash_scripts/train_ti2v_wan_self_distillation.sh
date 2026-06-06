@@ -142,8 +142,8 @@ python src/maxdiffusion/train_wan.py \
     num_history_latent_frames=1 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    ema_decay: 0.99 \
-    distill: True \
+    ema_decay=0.99 \
+    distill= True \
     # wandb_project='wan-ti2v-self-distillation'
 
 # --- 6. Unmount ---
