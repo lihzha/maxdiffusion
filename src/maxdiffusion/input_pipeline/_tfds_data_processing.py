@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import os
+import psutil
 import tensorflow as tf
 import tensorflow.experimental.numpy as tnp
 from datasets import load_dataset, load_from_disk
@@ -22,6 +23,17 @@ import jax
 from maxdiffusion import multihost_dataloading, max_logging
 
 AUTOTUNE = tf.data.AUTOTUNE
+
+
+def _tf_data_options() -> tf.data.Options:
+  opts = tf.data.Options()
+  opts.autotune.enabled = True
+  opts.experimental_optimization.apply_default_optimizations = True
+  opts.experimental_optimization.map_fusion = True
+  opts.experimental_optimization.parallel_batch = True
+  opts.experimental_warm_start = True
+  opts.experimental_threading.private_threadpool_size = int(max(16, psutil.cpu_count(logical=True)))
+  return opts
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -166,6 +178,7 @@ def _make_tfrecord_iterator(
         .batch(global_batch_size // dataloading_host_count, drop_remainder=True)
         .repeat(-1)
         .prefetch(AUTOTUNE)
+        .with_options(_tf_data_options())
     )
 
   iter = multihost_dataloading.MultiHostDataLoadIterator(ds, mesh)
