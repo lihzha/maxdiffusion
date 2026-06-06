@@ -107,9 +107,9 @@ python src/maxdiffusion/train_wan.py \
     jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
-    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/train \
-    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset/val \
-    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset/stats.json \
+    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/train \
+    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
+    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=flash \
     weights_dtype=bfloat16 \
