@@ -127,7 +127,7 @@ python src/maxdiffusion/train_wan.py \
     scan_layers=True \
     max_train_steps=100000 \
     checkpoint_every=100 \
-    per_device_batch_size=0.25 \
+    per_device_batch_size=0.5 \
     height=480 \
     width=832 \
     num_frames=80 \
@@ -163,4 +163,5 @@ python src/maxdiffusion/train_wan.py \
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-#tpu create v6 --name v6-32-01-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ac_wan.sh" 
+# tpu create v6 --name v6-32-01-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ac_wan.sh" 
+# tpu tmux v6-32-01-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ac_wan.sh' Enter
