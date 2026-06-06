@@ -106,7 +106,7 @@ python src/maxdiffusion/train_wan.py \
     output_dir=gs://v6_east1d/checkpoints/wan-ac-test \
     jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac-test \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
-    dataset_type=synthetic \
+    dataset_type=tfrecord \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/train \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_test/val \
     action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_test/stats.json \
