@@ -1,6 +1,5 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv pip install wandb
 git checkout origin/catherine-dev
 
 # Wait for unattended-upgrades to release the dpkg lock before running setup
@@ -12,6 +11,7 @@ echo "dpkg lock released, proceeding with setup."
 
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
+uv pip install wandb
 bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
