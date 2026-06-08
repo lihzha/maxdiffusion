@@ -204,7 +204,8 @@ class _HyperParameters:
     base_output_directory = raw_keys["output_dir"]
     if run_name:
       raw_keys["tensorboard_dir"] = os.path.join(base_output_directory, run_name, "tensorboard", "")
-      raw_keys["checkpoint_dir"] = os.path.join(base_output_directory, run_name, "checkpoints", "")
+      if not raw_keys.get("checkpoint_dir", ""):
+        raw_keys["checkpoint_dir"] = os.path.join(base_output_directory, run_name, "checkpoints", "")
       raw_keys["metrics_dir"] = os.path.join(base_output_directory, run_name, "metrics", "")
 
     max_utils.write_config_raw_keys_for_gcs(raw_keys)

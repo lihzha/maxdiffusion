@@ -314,7 +314,10 @@ def run(config, pipeline=None, filename_prefix="", commit_hash=None):
         checkpoint_loader = WanCheckpointer2_2(config=config)
     else:
       raise ValueError(f"Unsupported model_name for checkpointer: {model_key}")
-    pipeline, _, _, _ = checkpoint_loader.load_checkpoint()
+    checkpoint_step = getattr(config, "checkpoint_step", -1)
+    pipeline, _, _, _ = checkpoint_loader.load_checkpoint(
+        step=checkpoint_step if checkpoint_step > 0 else None
+    )
     load_time = time.perf_counter() - load_start
     max_logging.log(f"load_time: {load_time:.1f}s")
   else:
