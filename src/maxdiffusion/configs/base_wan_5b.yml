@@ -44,6 +44,11 @@ ema_decay: 0.0
 distill: false
 # Update the EMA teacher every N training steps. Default 1 = every step.
 teacher_update_every: 50
+# Number of Euler steps in the on-policy generation rollout (distill=true only).
+# The student denoises from T_max for k ~ Uniform[0, num_online_gen_steps) steps;
+# the stopping timestep becomes the training timestep t for that batch element.
+# -1 = use T_max (full rollout, i.e. num_train_timesteps - 1 steps).
+num_online_gen_steps: -1
 
 # Overrides the transformer from pretrained_model_name_or_path
 wan_transformer_pretrained_model_name_or_path: ''

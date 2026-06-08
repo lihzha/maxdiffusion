@@ -292,8 +292,9 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         F_future = F_lat - n_hist
 
         # ── Online generation: T_max → t rollout ─────────────────────────────
-        num_gen_steps = getattr(config, "num_online_gen_steps", 10)
         num_train_t = scheduler.config.num_train_timesteps
+        _cfg_gen_steps = config.num_online_gen_steps
+        num_gen_steps = (num_train_t - 1) if _cfg_gen_steps < 0 else _cfg_gen_steps
 
         # Discretized rollout schedule: T_max → 0 in num_gen_steps Euler steps,
         # spaced according to the scheduler's shift to concentrate steps at high noise.
