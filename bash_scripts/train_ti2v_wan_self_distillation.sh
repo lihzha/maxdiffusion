@@ -14,6 +14,8 @@ source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
+source ~/.zshrc
+: "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
 export GCS_BUCKET=v6_east1d
 export GCS_MOUNT=/home/zheng/gcs-mount
 
@@ -109,16 +111,15 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_5b.yml \
-    run_name=ti2v_wan_droid \
+    run_name=ti2v_wan_droid_self_distill \
     output_dir=gs://v6_east1d/checkpoints/wan-ti2v-finetune \
-    checkpoint_dir=gs://v6_east1d/checkpoints/wan-ti2v-finetune \
-    jax_cache_dir=gs://v6_east1d/jax_cache/wan-ti2v-finetune \
+    jax_cache_dir=gs://v6_east1d/jax_cache/wan-ti2v-finetune-self-distill \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/train \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     cache_latents_text_encoder_outputs=True \
-    eval_every=50 \
+    eval_every=100 \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
@@ -133,21 +134,22 @@ python src/maxdiffusion/train_wan.py \
     dcn_context_parallelism=1 \
     allow_split_physical_axes=True \
     scan_layers=True \
-    max_train_steps=1000 \
-    checkpoint_every=50 \
+    max_train_steps=10000 \
+    checkpoint_every=100 \
+    checkpoint_keep_period=1000 \
     per_device_batch_size=0.25 \
     height=480 \
     width=832 \
     num_frames=80 \
-    num_history_latent_frames=1 \
     flash_min_seq_length=128 \
+    num_privileged_frames=-1 \
     hardware='tpu' \
     ema_decay=0.99 \
-    distill= True \
-    # wandb_project='wan-ti2v-self-distillation'
+    distill=True \
+    wandb_project='wan-ti2v-self-distill'
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name v6-32-02-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh"
-# tpu tmux v6-32-02-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
+# tpu create v6 --name v6-32-03-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh"
+# tpu tmux v6-32-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
