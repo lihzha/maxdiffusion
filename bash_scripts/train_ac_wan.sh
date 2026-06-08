@@ -105,7 +105,6 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     run_name=ac_wan_droid \
-    output_dir=gs://v6_east1d/checkpoints/wan-ac \
     checkpoint_dir=gs://v6_east1d/checkpoints/wan-ac \
     jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
