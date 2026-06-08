@@ -168,3 +168,4 @@ fi
 
 # Install maxdiffusion
 uv pip install --no-deps -e .
+uv pip install wandb
