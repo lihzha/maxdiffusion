@@ -248,6 +248,8 @@ names_which_can_be_offloaded: []
 
 # checkpoint every number of samples, -1 means don't checkpoint.
 checkpoint_every: -1
+# Keep every Nth checkpoint permanently regardless of max_to_keep. -1 = disabled.
+checkpoint_keep_period: -1
 checkpoint_dir: ""
 # enables one replica to read the ckpt then broadcast to the rest
 enable_single_replica_ckpt_restoring: False

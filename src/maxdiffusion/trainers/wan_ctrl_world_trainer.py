@@ -312,10 +312,12 @@ class WanCtrlWorldTrainer:
 
     def _build_checkpoint_manager(self, ckpt_dir: str) -> ocp.CheckpointManager:
         os.makedirs(ckpt_dir, exist_ok=True)
+        keep_period = getattr(self.config, "checkpoint_keep_period", -1) or None
         options = ocp.CheckpointManagerOptions(
             create=True,
             max_to_keep=3,
             enable_async_checkpointing=True,
+            keep_period=keep_period,
         )
         return ocp.CheckpointManager(
             ckpt_dir,

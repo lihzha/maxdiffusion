@@ -50,6 +50,7 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
             create=True,
             max_to_keep=3,
             enable_async_checkpointing=True,
+            keep_period=getattr(config, "checkpoint_keep_period", -1) or None,
         ),
     )
 
