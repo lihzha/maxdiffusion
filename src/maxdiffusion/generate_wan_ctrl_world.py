@@ -279,7 +279,8 @@ def run(argv: Sequence[str]) -> None:
         },
         options=ocp.CheckpointManagerOptions(max_to_keep=3),
     )
-    latest = ckpt_mgr.latest_step()
+    checkpoint_step = getattr(config, "checkpoint_step", -1)
+    latest = checkpoint_step if checkpoint_step > 0 else ckpt_mgr.latest_step()
     if latest is None:
         raise ValueError(f"No checkpoint found in {ckpt_dir}")
 
