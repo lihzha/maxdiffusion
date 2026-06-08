@@ -14,6 +14,8 @@ source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
+source ~/.zshrc
+: "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
 export GCS_BUCKET=v6_east1d
 export GCS_MOUNT=/home/zheng/gcs-mount
 
@@ -104,6 +106,7 @@ python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     run_name=ac_wan_droid \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
+    checkpoint_dir=gs://v6_east1d/checkpoints/wan-ac \
     jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -127,6 +130,7 @@ python src/maxdiffusion/train_wan.py \
     scan_layers=True \
     max_train_steps=100000 \
     checkpoint_every=100 \
+    checkpoint_keep_period=1000 \
     per_device_batch_size=0.25 \
     height=480 \
     width=832 \
