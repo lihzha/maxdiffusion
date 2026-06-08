@@ -118,7 +118,7 @@ python src/maxdiffusion/train_wan.py \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/train \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     cache_latents_text_encoder_outputs=True \
-    eval_every=10 \
+    eval_every=100 \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
