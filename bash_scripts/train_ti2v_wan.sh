@@ -15,6 +15,7 @@ bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
 source ~/.zshrc
+: "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
 export GCS_BUCKET=v6_east1d
 export GCS_MOUNT=/home/zheng/gcs-mount
 
