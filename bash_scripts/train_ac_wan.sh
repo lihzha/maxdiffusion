@@ -1,5 +1,6 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
+uv pip install wandb
 git checkout origin/catherine-dev
 
 # Wait for unattended-upgrades to release the dpkg lock before running setup
@@ -130,7 +131,6 @@ python src/maxdiffusion/train_wan.py \
     scan_layers=True \
     max_train_steps=100000 \
     checkpoint_every=100 \
-    checkpoint_keep_period=1000 \
     per_device_batch_size=0.25 \
     height=480 \
     width=832 \

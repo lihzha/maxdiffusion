@@ -1,5 +1,6 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
+uv pip install wandb
 git checkout origin/catherine-dev
 
 # Wait for unattended-upgrades to release the dpkg lock before running setup
