@@ -14,6 +14,7 @@ source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
+source ~/.zshrc
 export GCS_BUCKET=v6_east1d
 export GCS_MOUNT=/home/zheng/gcs-mount
 
