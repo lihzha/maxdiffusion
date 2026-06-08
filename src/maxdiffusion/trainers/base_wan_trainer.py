@@ -331,16 +331,16 @@ class BaseWanTrainer(abc.ABC):
                 del restore_args["opt_state"]
                 del optimizer
             state = jax.tree.map(_to_array, state)
-            # In multi-host TPU setups jnp.asarray(0) places the step counter on
-            # CPU (the "host" default device).  with_sharding_constraint refuses to
-            # move a CPU array onto TPU sharding, so we explicitly replicate step
-            # across the mesh before computing the partition spec.
-            state = state.replace(
-                step=jax.device_put(
-                    jnp.asarray(state.step, dtype=jnp.int32),
-                    jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()),
-                )
-            )
+            # In multi-host TPU setups, jnp.asarray on Python ints (step,
+            # optimizer counts) defaults to CPU.  Move every CPU-resident array
+            # to a replicated TPU sharding before computing the partition spec,
+            # so with_sharding_constraint never sees a CPU→TPU device mismatch.
+            _replicated_tpu = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+            def _to_tpu_if_cpu(x):
+                if isinstance(x, jax.Array) and any(d.platform == "cpu" for d in x.devices()):
+                    return jax.device_put(x, _replicated_tpu)
+                return x
+            state = jax.tree.map(_to_tpu_if_cpu, state)
             state_spec = nnx.get_partition_spec(state)
             state = jax.lax.with_sharding_constraint(state, state_spec)
             state_shardings = nnx.get_named_sharding(state, mesh)
