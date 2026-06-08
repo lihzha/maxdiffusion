@@ -146,6 +146,7 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     ema_decay=0.99 \
     distill=True \
+    oracle_noise_offset=1 \
     wandb_project='wan-ti2v-self-distill'
 
 # --- 6. Unmount ---

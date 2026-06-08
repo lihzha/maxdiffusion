@@ -193,6 +193,7 @@ class WanTI2VTrainer(BaseWanTrainer):
         n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
         ema_decay = getattr(self.config, "ema_decay", 0.0)
         distill = getattr(self.config, "distill", False)
+        oracle_noise_offset = getattr(self.config, "oracle_noise_offset", -1)
         return jax.jit(
             functools.partial(
                 ti2v_train_step,
@@ -201,6 +202,7 @@ class WanTI2VTrainer(BaseWanTrainer):
                 n_hist=n_hist,
                 ema_decay=ema_decay,
                 distill=distill,
+                oracle_noise_offset=oracle_noise_offset,
             ),
             in_shardings=(state_shardings, data_shardings, None, None),
             out_shardings=(state_shardings, None, None, None),
@@ -246,8 +248,8 @@ class WanTI2VTrainer(BaseWanTrainer):
 # ── Training step ─────────────────────────────────────────────────────────────
 
 
-def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist, ema_decay=0.0, distill=False):
-    _, new_rng, timestep_rng, dropout_rng = jax.random.split(rng, num=4)
+def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist, ema_decay=0.0, distill=False, oracle_noise_offset=-1):
+    _, new_rng, timestep_rng, dropout_rng, oracle_rng = jax.random.split(rng, num=5)
 
     for k, v in data.items():
         if hasattr(v, "shape"):
@@ -275,27 +277,41 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
     # ── Teacher forward pass (EMA model, oracle / privileged mode) ───────────
     # Mirrors the oracle inference layout from wan_pipeline_ti2v_2p2:
     #
-    #   teacher sequence: [hist_clean | oracle_future_clean | noisy_future (student x_t)]
-    #   per-token t:      [    0      |         0           |         t                 ]
-    #   frame positions:  [  0..n-1   |     n..n+F-1        |       n..n+F-1            ]
+    #   teacher sequence: [hist_clean | oracle_future | noisy_future (student x_t)]
+    #   per-token t:      [    0      |   t_oracle    |         t                 ]
+    #   frame positions:  [  0..n-1   |  n..n+F-1     |       n..n+F-1            ]
     #                                        ↑ oracle and noisy gen share RoPE positions
     #
-    # The oracle frames are prepended as clean context; the noisy gen frames
-    # (student's x_t) are the frames the teacher actually predicts.
-    # Teacher output for the noisy gen portion: teacher_pred[:, :, n_hist+F_future:]
+    # oracle_noise_offset < 0 (default): oracle frames are clean (t_oracle = 0).
+    # oracle_noise_offset >= 0: oracle frames are noised to max(0, t - oracle_noise_offset).
     if distill:
         F_future = F_lat - n_hist
         teacher_F_lat = n_hist + 2 * F_future  # hist + oracle + noisy_gen
 
-        # Latent sequence: hist_clean | oracle_future_clean | noisy_future_student
+        # Oracle frames: clean or noised depending on oracle_noise_offset.
+        if oracle_noise_offset >= 0:
+            t_oracle = jnp.maximum(timesteps - oracle_noise_offset, 0)
+            oracle_noise = jax.random.normal(oracle_rng, future_latents.shape, dtype=future_latents.dtype)
+            oracle_frames = scheduler.apply_flow_match(oracle_noise, future_latents, t_oracle)[0]
+        else:
+            t_oracle = jnp.zeros_like(timesteps)
+            oracle_frames = future_latents
+
+        # Latent sequence: hist_clean | oracle_frames | noisy_future_student
         teacher_latents = jnp.concatenate(
-            [latents[:, :, :n_hist], future_latents, noisy_future], axis=2
+            [latents[:, :, :n_hist], oracle_frames, noisy_future], axis=2
         )
 
-        # Per-token timestep: hist + oracle → t=0, noisy_gen → t.
-        # Reuse _build_per_token_timestep with n_clean = n_hist + F_future.
-        teacher_timestep_2d = _build_per_token_timestep(
-            timesteps, teacher_F_lat, H_lat, W_lat, n_hist + F_future
+        # Per-token timestep: hist → 0, oracle → t_oracle, noisy_gen → t.
+        b = timesteps.shape[0]
+        tokens_per_frame = (H_lat // 2) * (W_lat // 2)
+        teacher_seq_len = teacher_F_lat * tokens_per_frame
+        n_hist_tok = n_hist * tokens_per_frame
+        n_oracle_tok = F_future * tokens_per_frame
+        teacher_timestep_2d = jnp.broadcast_to(timesteps[:, None], (b, teacher_seq_len))
+        teacher_timestep_2d = teacher_timestep_2d.at[:, :n_hist_tok].set(0)
+        teacher_timestep_2d = teacher_timestep_2d.at[:, n_hist_tok:n_hist_tok + n_oracle_tok].set(
+            jnp.broadcast_to(t_oracle[:, None], (b, n_oracle_tok))
         )
 
         # Frame positions: oracle and noisy-gen frames share temporal RoPE slots.
