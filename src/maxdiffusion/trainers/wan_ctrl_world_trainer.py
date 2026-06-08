@@ -266,7 +266,7 @@ class WanCtrlWorldTrainer:
 
     # ── Dataset ───────────────────────────────────────────────────────────────
 
-    def _load_dataset(self, mesh, is_training: bool):
+    def _load_dataset(self, mesh, is_training: bool, seed: int = None):
         from maxdiffusion.input_pipeline.robot.wan_ctrl_world_dataset import (
             WanCtrlWorldDroidDataset,
         )
@@ -283,7 +283,7 @@ class WanCtrlWorldTrainer:
             action_dim=config.action_dim,
             batch_size=per_host_batch,
             split=split,
-            seed=config.seed,
+            seed=seed if seed is not None else config.seed,
             shuffle=is_training,
             shard_for_training=jax.process_count() > 1,
         )
@@ -453,8 +453,8 @@ class WanCtrlWorldTrainer:
         if start_step:
             max_logging.log(f"[wan_ctrl_world] resumed at step {start_step}")
 
-        # 8. Data iterator
-        train_iter = self._load_dataset(mesh, is_training=True)
+        # 8. Data iterator — offset seed by start_step so resume sees a fresh shuffle order.
+        train_iter = self._load_dataset(mesh, is_training=True, seed=config.seed + start_step)
 
         # 9. Compile train step
         p_train_step = jax.jit(

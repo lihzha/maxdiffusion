@@ -57,6 +57,7 @@ def make_data_iterator(
     is_training=True,
     pipeline=None,
     filter_fn=None,
+    seed=None,
 ):
   """Make data iterator for SD1, 2, XL, dataset_types in (hf, tf, tfrecord, grain, synthetic)"""
 
@@ -113,6 +114,7 @@ def make_data_iterator(
         prepare_sample_fn,
         is_training,
         filter_fn=filter_fn,
+        seed=seed,
     )
   elif config.dataset_type == "synthetic":
     return synthetic_data_iterator.make_synthetic_iterator(
@@ -125,7 +127,7 @@ def make_data_iterator(
   elif config.dataset_type == "droid":
     return _make_droid_video_iterator(config, mesh, global_batch_size)
   elif config.dataset_type == "ctrl_world":
-    return _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training=is_training)
+    return _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training=is_training, seed=seed)
   else:
     assert False, f"Unknown dataset_type {config.dataset_type}, dataset_type must be in (tf, tfrecord, hf, grain, synthetic, droid, ctrl_world)"
 
@@ -161,7 +163,7 @@ def _make_droid_video_iterator(config, mesh, global_batch_size):
   return train_iter
 
 
-def _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training: bool):
+def _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training: bool, seed=None):
   """TFRecord iterator for action-conditioned SVD (Ctrl-World) training.
 
   Yields per-window dicts with pre-encoded latents, normalised actions, and
@@ -189,7 +191,7 @@ def _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training: bool
       text_embed_dim=config.text_embed_dim,
       batch_size=per_host_batch,
       split="train" if is_training else "val",
-      seed=config.seed,
+      seed=seed if seed is not None else config.seed,
       down_sample=config.ctrl_world_down_sample,
       max_skip=config.ctrl_world_max_skip,
       max_skip_his=config.ctrl_world_max_skip_his,

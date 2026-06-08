@@ -401,6 +401,11 @@ class BaseWanTrainer(abc.ABC):
         if restore_args.get("step", 0):
             max_logging.log(f"Resuming training from step {step}")
         start_step = restore_args.get("step", 0)
+        if start_step > 0:
+            train_data_iterator = self.load_dataset(
+                pipeline.mesh, pipeline=pipeline, is_training=True,
+                seed=self.config.seed + start_step,
+            )
         per_device_tflops, _, _ = BaseWanTrainer.calculate_tflops(pipeline)
         scheduler_state = pipeline.scheduler_state
         example_batch = load_next_batch(train_data_iterator, None, self.config)

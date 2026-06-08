@@ -104,7 +104,7 @@ class WanTI2VTrainer(BaseWanTrainer):
 
     # ── Dataset loading ──────────────────────────────────────────────────────
 
-    def load_dataset(self, mesh, pipeline=None, is_training=True):
+    def load_dataset(self, mesh, pipeline=None, is_training=True, seed=None):
         config = self.config
 
         if config.dataset_type == "synthetic":
@@ -184,6 +184,7 @@ class WanTI2VTrainer(BaseWanTrainer):
             prepare_sample_fn=prepare_sample_train if is_training else prepare_sample_eval,
             is_training=is_training,
             filter_fn=filter_short_clips,
+            seed=seed,
         )
 
     # ── Train / eval steps ───────────────────────────────────────────────────
