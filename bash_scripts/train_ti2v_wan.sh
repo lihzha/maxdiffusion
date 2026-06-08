@@ -11,7 +11,6 @@ echo "dpkg lock released, proceeding with setup."
 
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
-uv pip install wandb
 bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
