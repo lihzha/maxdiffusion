@@ -118,7 +118,7 @@ python src/maxdiffusion/train_wan.py \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/train \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     cache_latents_text_encoder_outputs=True \
-    eval_every=50 \
+    eval_every=10 \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
@@ -145,7 +145,7 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     ema_decay=0.0 \
     distill=False \
-    # wandb_project='wan-ti2v-finetune-test'
+    wandb_project='wan-ti2v-finetune'
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
