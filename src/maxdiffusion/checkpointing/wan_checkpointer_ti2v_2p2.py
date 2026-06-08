@@ -15,25 +15,52 @@ limitations under the License.
 """
 
 import json
+import os
 from typing import Optional, Tuple
 import jax
+from etils import epath
 from maxdiffusion.checkpointing.checkpointing_utils import add_sharding_to_struct, get_cpu_mesh_and_sharding
 from maxdiffusion.checkpointing.wan_checkpointer import WanCheckpointer
 import orbax.checkpoint as ocp
+from orbax.checkpoint.checkpoint_manager import CheckpointManager, CheckpointManagerOptions
 from .. import max_logging
 from ..pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 
 
+def _log(msg: str):
+  if jax.process_index() == 0:
+    max_logging.log(msg)
+
+
 class WanCheckpointerTI2V_2_2(WanCheckpointer):
+
+  def __init__(self, config):
+    self.config = config
+    self.opt_state = None
+
+    checkpoint_dir = config.checkpoint_dir if config.checkpoint_dir.startswith("gs://") else os.path.abspath(config.checkpoint_dir)
+    self.checkpoint_manager: CheckpointManager = CheckpointManager(
+        epath.Path(checkpoint_dir),
+        item_names=("wan_config", "wan_state"),
+        item_handlers={
+            "wan_config": ocp.JsonCheckpointHandler(),
+            "wan_state": ocp.StandardCheckpointHandler(),
+        },
+        options=CheckpointManagerOptions(
+            create=True,
+            max_to_keep=3,
+            enable_async_checkpointing=True,
+        ),
+    )
 
   def load_wan_configs_from_orbax(self, step: Optional[int]) -> Tuple[Optional[dict], Optional[int]]:
     if step is None:
       step = self.checkpoint_manager.latest_step()
-      max_logging.log(f"Latest WAN checkpoint step: {step}")
+      _log(f"Latest WAN checkpoint step: {step}")
       if step is None:
-        max_logging.log("No WAN checkpoint found.")
+        _log("No WAN checkpoint found.")
         return None, None
-    max_logging.log(f"Loading WAN checkpoint from step {step}")
+    _log(f"Loading WAN checkpoint from step {step}")
 
     mesh, replicated_sharding = get_cpu_mesh_and_sharding()
     metadatas = self.checkpoint_manager.item_metadata(step)
@@ -44,7 +71,7 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
     with mesh:
       abstract_train_state_with_sharding = jax.tree_util.tree_map(add_sharding_to_struct, state, target_shardings)
 
-    max_logging.log("Restoring WAN TI2V 2.2 checkpoint")
+    _log("Restoring WAN TI2V 2.2 checkpoint")
     restored_checkpoint = self.checkpoint_manager.restore(
         step=step,
         args=ocp.args.Composite(
@@ -52,10 +79,10 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
             wan_state=ocp.args.StandardRestore(abstract_train_state_with_sharding),
         ),
     )
-    max_logging.log(f"restored checkpoint {restored_checkpoint.keys()}")
-    max_logging.log(f"restored checkpoint wan_state {restored_checkpoint.wan_state.keys()}")
-    max_logging.log(f"optimizer found in checkpoint {'opt_state' in restored_checkpoint.wan_state.keys()}")
-    max_logging.log(f"optimizer state saved in attribute self.opt_state {self.opt_state}")
+    _log(f"restored checkpoint {restored_checkpoint.keys()}")
+    _log(f"restored checkpoint wan_state {restored_checkpoint.wan_state.keys()}")
+    _log(f"optimizer found in checkpoint {'opt_state' in restored_checkpoint.wan_state.keys()}")
+    _log(f"optimizer state saved in attribute self.opt_state {self.opt_state}")
     return restored_checkpoint, step
 
   def load_diffusers_checkpoint(self):
@@ -67,18 +94,16 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
     opt_state = None
     extra_state = {}
     if restored_checkpoint:
-      max_logging.log("Loading WAN TI2V pipeline from checkpoint")
+      _log("Loading WAN TI2V pipeline from checkpoint")
       pipeline = WanPipelineTI2V_2_2.from_checkpoint(self.config, restored_checkpoint)
       wan_state_keys = restored_checkpoint.wan_state.keys()
       if "opt_state" in wan_state_keys:
         opt_state = restored_checkpoint.wan_state["opt_state"]
       if "ema_params" in wan_state_keys:
-        # Distillation checkpoint: saved as params=teacher, ema_params=student.
-        # Return student so training_loop can restore gradient-update params correctly.
         extra_state["student_params"] = restored_checkpoint.wan_state["ema_params"]
-        max_logging.log("Distillation checkpoint detected: restoring student params from ema_params field.")
+        _log("Distillation checkpoint detected: restoring student params from ema_params field.")
     else:
-      max_logging.log("No checkpoint found, loading default pipeline.")
+      _log("No checkpoint found, loading default pipeline.")
       pipeline = self.load_diffusers_checkpoint()
 
     return pipeline, opt_state, step, extra_state
@@ -89,11 +114,11 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
     def config_to_json(model_or_config):
       return json.loads(model_or_config.to_json_string())
 
-    max_logging.log(f"Saving checkpoint for step {train_step}")
+    _log(f"Saving checkpoint for step {train_step}")
     items = {
         "wan_config": ocp.args.JsonSave(config_to_json(pipeline.transformer)),
         "wan_state": ocp.args.StandardSave(train_states),
     }
 
     self.checkpoint_manager.save(train_step, args=ocp.args.Composite(**items))
-    max_logging.log(f"Checkpoint for step {train_step} saved.")
+    _log(f"Checkpoint for step {train_step} saved.")
