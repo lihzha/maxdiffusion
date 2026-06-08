@@ -249,7 +249,7 @@ class WanTI2VTrainer(BaseWanTrainer):
 
 
 def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist, ema_decay=0.0, distill=False, oracle_noise_offset=-1):
-    _, new_rng, timestep_rng, dropout_rng, oracle_rng = jax.random.split(rng, num=5)
+    _, new_rng, timestep_rng, dropout_rng, oracle_rng, gen_rng, gen_noise_rng = jax.random.split(rng, num=7)
 
     for k, v in data.items():
         if hasattr(v, "shape"):
@@ -277,18 +277,82 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
     # ── Teacher forward pass (EMA model, oracle / privileged mode) ───────────
     # Mirrors the oracle inference layout from wan_pipeline_ti2v_2p2:
     #
-    #   teacher sequence: [hist_clean | oracle_future | noisy_future (student x_t)]
-    #   per-token t:      [    0      |   t_oracle    |         t                 ]
-    #   frame positions:  [  0..n-1   |  n..n+F-1     |       n..n+F-1            ]
+    #   teacher sequence: [hist_clean | oracle_future | noisy_gen (student x_t)]
+    #   per-token t:      [    0      |   t_oracle    |         t               ]
+    #   frame positions:  [  0..n-1   |  n..n+F-1     |       n..n+F-1          ]
     #                                        ↑ oracle and noisy gen share RoPE positions
     #
     # oracle_noise_offset < 0 (default): oracle frames are clean (t_oracle = 0).
     # oracle_noise_offset >= 0: oracle frames are noised to max(0, t - oracle_noise_offset).
+    #
+    # Online generation: noisy_gen comes from running the student for T_max - t
+    # denoising steps starting from pure noise. This is on-policy: the student
+    # trains on latents from its own denoising trajectory.
     if distill:
         F_future = F_lat - n_hist
+
+        # ── Online generation: T_max → t rollout ─────────────────────────────
+        num_gen_steps = getattr(config, "num_online_gen_steps", 10)
+        num_train_t = scheduler.config.num_train_timesteps
+
+        # Discretized rollout schedule: T_max → 0 in num_gen_steps Euler steps,
+        # spaced according to the scheduler's shift to concentrate steps at high noise.
+        t_uniform = jnp.linspace(1.0, 0.0, num_gen_steps + 1)
+        shift = scheduler.config.shift
+        t_shifted = (t_uniform * shift) / (1.0 + (shift - 1.0) * t_uniform)
+        rollout_ts = (t_shifted * (num_train_t - 1)).astype(jnp.int32)
+
+        # Per-element: sample how many steps to take; the stopping timestep becomes
+        # the training timestep t for that element.
+        k_steps = jax.random.randint(gen_rng, (b,), 0, num_gen_steps)
+        timesteps = rollout_ts[k_steps + 1]  # override training timesteps
+
+        def _sigma(t_int):
+            t_n = t_int.astype(jnp.float32) / num_train_t
+            return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
+
+        gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
+
+        def rollout_body(step_idx, lat):
+            t_from = rollout_ts[step_idx]
+            t_to   = rollout_ts[step_idx + 1]
+            sig_from = _sigma(t_from)
+            sig_to   = _sigma(t_to)
+
+            roll_input = jnp.concatenate([latents[:, :, :n_hist], lat], axis=2)
+            roll_ts_2d = _build_per_token_timestep(
+                jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
+            )
+            roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+            with jax.named_scope("online_gen_rollout_step"):
+                v_pred = roll_model(
+                    hidden_states=roll_input,
+                    timestep=roll_ts_2d,
+                    encoder_hidden_states=encoder_hidden_states,
+                    deterministic=True,
+                )
+            v_future = v_pred[:, :, n_hist:]
+
+            # Euler step: x_{t_to} = x_{t_from} + (σ_{t_to} - σ_{t_from}) * v
+            new_lat = lat + (sig_to - sig_from) * v_future
+
+            # Per-element: only commit this step if step_idx < k_steps[i].
+            should_update = (step_idx < k_steps)[:, None, None, None, None]
+            return jnp.where(should_update, new_lat, lat)
+
+        gen_t = jax.lax.fori_loop(0, num_gen_steps, rollout_body, gen_init)
+
+        # Recompute per-token timestep from the rollout-derived timesteps.
+        timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+
+        # Student and teacher both operate on gen_t (on-policy latent at t).
+        noisy_future = gen_t
+        noisy_latents = jnp.concatenate([latents[:, :, :n_hist], gen_t], axis=2)
+
+        # ── Teacher setup ─────────────────────────────────────────────────────
         teacher_F_lat = n_hist + 2 * F_future  # hist + oracle + noisy_gen
 
-        # Oracle frames: clean or noised depending on oracle_noise_offset.
+        # Oracle frames: GT latents, clean or noised depending on oracle_noise_offset.
         if oracle_noise_offset >= 0:
             t_oracle = jnp.maximum(timesteps - oracle_noise_offset, 0)
             oracle_noise = jax.random.normal(oracle_rng, future_latents.shape, dtype=future_latents.dtype)
@@ -297,13 +361,12 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             t_oracle = jnp.zeros_like(timesteps)
             oracle_frames = future_latents
 
-        # Latent sequence: hist_clean | oracle_frames | noisy_future_student
+        # Latent sequence: hist_clean | oracle_frames | gen_t
         teacher_latents = jnp.concatenate(
             [latents[:, :, :n_hist], oracle_frames, noisy_future], axis=2
         )
 
         # Per-token timestep: hist → 0, oracle → t_oracle, noisy_gen → t.
-        b = timesteps.shape[0]
         tokens_per_frame = (H_lat // 2) * (W_lat // 2)
         teacher_seq_len = teacher_F_lat * tokens_per_frame
         n_hist_tok = n_hist * tokens_per_frame
