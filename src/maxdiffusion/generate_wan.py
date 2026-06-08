@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Sequence
+from typing import Sequence, Optional, Tuple
 import jax
 import jax.numpy as jnp
 import numpy as np
 import time
 import os
 import subprocess
+import glob
 from maxdiffusion.checkpointing.wan_checkpointer_2_1 import WanCheckpointer2_1
 from maxdiffusion.checkpointing.wan_checkpointer_2_2 import WanCheckpointer2_2
 from maxdiffusion.checkpointing.wan_checkpointer_i2v_2p1 import WanCheckpointerI2V_2_1
@@ -88,6 +89,52 @@ def get_git_commit_hash():
 jax.config.update("jax_use_shardy_partitioner", True)
 
 
+def load_val_sample_latents(val_data_dir: str, window_size: int, sample_index: int = 0) -> Tuple[jnp.ndarray, jnp.ndarray]:
+  """Load one sample from val TFRecords and return (oracle_latents, text_embed).
+
+  Reads TFRecords formatted identically to training data (latent_cam0/1/2 + text_embed).
+  Cameras are stacked on H.  Returns:
+    oracle_latents: (1, window_size, H_lat*3, W_lat, C_z) channels-last, float32, normalized.
+    text_embed:     (1, 512, 4096) float32.
+  """
+  import tensorflow as tf
+
+  pattern = os.path.join(val_data_dir, "*.tfrecord*")
+  files = sorted(glob.glob(pattern))
+  if not files:
+    raise FileNotFoundError(f"No .tfrecord files found in {val_data_dir}")
+
+  feature_description = {
+      "latent_cam0": tf.io.FixedLenFeature([], tf.string),
+      "latent_cam1": tf.io.FixedLenFeature([], tf.string),
+      "latent_cam2": tf.io.FixedLenFeature([], tf.string),
+      "text_embed":  tf.io.FixedLenFeature([], tf.string),
+      "traj_len":    tf.io.FixedLenFeature([], tf.int64),
+  }
+
+  ds = tf.data.TFRecordDataset(files).map(
+      lambda x: tf.io.parse_single_example(x, feature_description)
+  ).skip(sample_index).take(1)
+
+  for raw in ds:
+    cam0 = tf.cast(tf.io.parse_tensor(raw["latent_cam0"], out_type=tf.float16), tf.float32).numpy()
+    cam1 = tf.cast(tf.io.parse_tensor(raw["latent_cam1"], out_type=tf.float16), tf.float32).numpy()
+    cam2 = tf.cast(tf.io.parse_tensor(raw["latent_cam2"], out_type=tf.float16), tf.float32).numpy()
+    text = tf.cast(tf.io.parse_tensor(raw["text_embed"],  out_type=tf.float16), tf.float32).numpy()
+
+  # Latents are (F_lat, C, H_lat, W_lat); stack cameras on H.
+  latent = np.concatenate([cam0, cam1, cam2], axis=2)   # (F_lat, C, H_lat*3, W_lat)
+  f_total = latent.shape[0]
+  start = max(0, f_total - window_size)
+  latent = latent[start : start + window_size]           # (window_size, C, H_lat*3, W_lat)
+
+  # Transpose to channels-last and add batch dim: (1, window_size, H_lat*3, W_lat, C)
+  latent = latent.transpose(0, 2, 3, 1)                 # (window_size, H_lat*3, W_lat, C)
+  oracle_latents = jnp.array(latent[None])              # (1, window_size, H_lat*3, W_lat, C)
+  text_embed = jnp.array(text[None])                    # (1, 512, 4096)
+  return oracle_latents, text_embed
+
+
 def call_pipeline(config, pipeline, prompt, negative_prompt):
   model_key = config.model_name
   model_type = config.model_type
@@ -125,6 +172,32 @@ def call_pipeline(config, pipeline, prompt, negative_prompt):
     else:
       raise ValueError(f"Unsupported model_name for I2V in config: {model_key}")
   elif model_type == "TI2V":
+    val_data_dir = getattr(config, "val_data_dir", "")
+    if val_data_dir:
+      window_size = 1 + config.num_frames // 4
+      sample_index = getattr(config, "val_sample_index", 0)
+      oracle_latents, text_embed = load_val_sample_latents(val_data_dir, window_size, sample_index)
+      # oracle_latents: (1, F, H_lat, W_lat, C) — derive pixel dims from latent spatial shape.
+      vae_spatial = pipeline.vae_scale_factor_spatial
+      latent_h = int(oracle_latents.shape[2])
+      latent_w = int(oracle_latents.shape[3])
+      if model_key == WAN2_2:
+        return pipeline(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            height=latent_h * vae_spatial,
+            width=latent_w * vae_spatial,
+            num_frames=config.num_frames,
+            num_inference_steps=config.num_inference_steps,
+            guidance_scale=config.guidance_scale,
+            use_cfg_cache=config.use_cfg_cache,
+            use_sen_cache=config.use_sen_cache,
+            prompt_embeds=text_embed,
+            preencoded_oracle_latents=oracle_latents,
+        )
+      else:
+        raise ValueError(f"Unsupported model_name for TI2V val inference: {model_key}")
+
     image = load_image(config.image_url)
     conditioning_video = None
     if hasattr(config, "conditioning_video") and config.conditioning_video:
@@ -241,7 +314,7 @@ def run(config, pipeline=None, filename_prefix="", commit_hash=None):
         checkpoint_loader = WanCheckpointer2_2(config=config)
     else:
       raise ValueError(f"Unsupported model_name for checkpointer: {model_key}")
-    pipeline, _, _ = checkpoint_loader.load_checkpoint()
+    pipeline, _, _, _ = checkpoint_loader.load_checkpoint()
     load_time = time.perf_counter() - load_start
     max_logging.log(f"load_time: {load_time:.1f}s")
   else:

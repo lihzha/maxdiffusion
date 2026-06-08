@@ -319,10 +319,11 @@ class WanCtrlWorldTrainer:
         )
         return ocp.CheckpointManager(
             ckpt_dir,
-            item_names=("params", "step"),
+            item_names=("params", "opt_state", "step"),
             item_handlers={
-                "params": ocp.StandardCheckpointHandler(),
-                "step":   ocp.JsonCheckpointHandler(),
+                "params":    ocp.StandardCheckpointHandler(),
+                "opt_state": ocp.StandardCheckpointHandler(),
+                "step":      ocp.JsonCheckpointHandler(),
             },
             options=options,
         )
@@ -334,6 +335,7 @@ class WanCtrlWorldTrainer:
             step,
             args=ocp.args.Composite(
                 params=ocp.args.StandardSave(state.params),
+                opt_state=ocp.args.StandardSave(state.opt_state),
                 step=ocp.args.JsonSave({"step": int(step)}),
             ),
         )
@@ -351,10 +353,11 @@ class WanCtrlWorldTrainer:
             latest,
             args=ocp.args.Composite(
                 params=ocp.args.StandardRestore(state.params),
+                opt_state=ocp.args.StandardRestore(state.opt_state),
                 step=ocp.args.JsonRestore(),
             ),
         )
-        new_state = state.replace(params=restored["params"])
+        new_state = state.replace(params=restored["params"], opt_state=restored["opt_state"])
         return new_state, int(restored["step"]["step"])
 
     # ── Optimiser ─────────────────────────────────────────────────────────────

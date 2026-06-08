@@ -189,7 +189,7 @@ class WanTI2VTrainer(BaseWanTrainer):
     # ── Train / eval steps ───────────────────────────────────────────────────
 
     def get_train_step(self, pipeline, mesh, state_shardings, data_shardings):
-        n_hist = getattr(self.config, "num_history_latent_frames", 1)
+        n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
         ema_decay = getattr(self.config, "ema_decay", 0.0)
         distill = getattr(self.config, "distill", False)
         return jax.jit(
@@ -207,7 +207,7 @@ class WanTI2VTrainer(BaseWanTrainer):
         )
 
     def get_eval_step(self, pipeline, mesh, state_shardings, eval_data_shardings):
-        n_hist = getattr(self.config, "num_history_latent_frames", 1)
+        n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
         return jax.jit(
             functools.partial(
                 ti2v_eval_step,

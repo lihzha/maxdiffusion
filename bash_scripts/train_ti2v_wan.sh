@@ -139,8 +139,8 @@ python src/maxdiffusion/train_wan.py \
     height=480 \
     width=832 \
     num_frames=80 \
-    num_history_latent_frames=1 \
     flash_min_seq_length=128 \
+    num_privileged_frames=0 \
     hardware='tpu' \
     ema_decay=0.0 \
     distill=False \

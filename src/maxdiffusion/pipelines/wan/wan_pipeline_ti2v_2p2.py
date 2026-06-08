@@ -128,7 +128,11 @@ class WanPipelineTI2V_2_2(WanPipeline):
       noisy_gen = latents[:, 1:, :, :, :]                             # (B, num_latent_gen_frames, H, W, C)
       latents = jnp.concatenate([frame_0, oracle_future, noisy_gen], axis=1)
       clean_latent = jnp.concatenate([frame_0, oracle_future], axis=1)  # (B, 1+n_priv, H, W, C)
-    
+    elif oracle_latents is not None:
+      # n_priv == 0 but pre-encoded latents provided: use oracle frame 0 as anchor.
+      frame_0 = oracle_latents[:, 0:1, :, :, :]
+      latents = latents.at[:, 0:1, :, :, :].set(frame_0)
+      clean_latent = frame_0                                           # (B, 1, H, W, C)
     else:
       total_pixel_frames = 1 + num_frames
       if hasattr(image, "detach"):
@@ -173,11 +177,12 @@ class WanPipelineTI2V_2_2(WanPipeline):
       use_sen_cache: bool = False,
       conditioning_video: Optional[jax.Array] = None,
       privileged: bool = False,
+      preencoded_oracle_latents: Optional[jax.Array] = None,
   ):
     if use_cfg_cache and use_sen_cache:
       raise ValueError("use_cfg_cache and use_sen_cache are mutually exclusive. Enable only one.")
-    if conditioning_video is None and image is None:
-      raise ValueError("Provide either 'image' or 'conditioning_video'.")
+    if conditioning_video is None and image is None and preencoded_oracle_latents is None:
+      raise ValueError("Provide either 'image', 'conditioning_video', or 'preencoded_oracle_latents'.")
 
     height = height or self.config.height
     width = width or self.config.width
@@ -209,18 +214,21 @@ class WanPipelineTI2V_2_2(WanPipeline):
     # Encode conditioning_video when provided. oracle_latents: [B, T', H', W', C_z].
     oracle_latents = None
     n_priv = 0
-    if conditioning_video is not None:
+    if preencoded_oracle_latents is not None:
+      oracle_latents = preencoded_oracle_latents.astype(prompt_embeds.dtype)
+      privileged = True
+    elif conditioning_video is not None:
       oracle_latents = self._encode_video_to_i2v_latents(
           conditioning_video, prompt_embeds.dtype, total_pixel_frames=1 + num_frames
       )
-      if privileged:
-        num_privileged_frames = getattr(self.config, "num_privileged_frames", -1)
-        n_available = oracle_latents.shape[1] - 1  # T' - 1 (all frames except frame 0)
-        n_priv = n_available if num_privileged_frames < 0 else min(num_privileged_frames, n_available)
-        # Clip oracle frames to the generation length so the conditioning video
-        # length never exceeds what we are actually generating.
-        num_latent_gen_frames = num_frames // self.vae_scale_factor_temporal
-        n_priv = min(n_priv, num_latent_gen_frames)
+    if oracle_latents is not None and privileged:
+      num_privileged_frames = getattr(self.config, "num_privileged_frames", -1)
+      n_available = oracle_latents.shape[1] - 1  # T' - 1 (all frames except frame 0)
+      n_priv = n_available if num_privileged_frames < 0 else min(num_privileged_frames, n_available)
+      # Clip oracle frames to the generation length so the conditioning video
+      # length never exceeds what we are actually generating.
+      num_latent_gen_frames = num_frames // self.vae_scale_factor_temporal
+      n_priv = min(n_priv, num_latent_gen_frames)
 
     def _process_image_input(img_input, height, width, batch_size):
       if img_input is None:

@@ -32,9 +32,9 @@ wandb_entity: ''    # W&B team/user; empty = personal account
 pretrained_model_name_or_path: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers'
 model_name: wan2.2
 model_type: 'TI2V'
-# Frame 0 is the image-conditioning anchor (kept clean, t=0 in per-token timestep).
-# Matches the inference convention in wan_pipeline_ti2v_2p2.
-num_history_latent_frames: 1
+# num_privileged_frames clean frames of future context (beyond the frame-0 anchor).
+# Training: n_hist = num_privileged_frames + 1 (frame 0 is always clean).
+# Inference: same value controls how many oracle future frames are prepended.
 
 # Self-distillation via EMA teacher with privileged (t=0) future conditioning.
 # ema_decay > 0  — maintain an EMA copy of the student weights (the teacher).
@@ -240,7 +240,7 @@ enable_data_shuffling: True
 # layers will have gradient checkpoint, but not the backward with respect to the parameters.
 # OFFLOAD_MATMUL_WITHOUT_BATCH - same as MATMUL_WITHOUT_BATCH but offload instead of recomputing.
 # CUSTOM - set names to offload and save.
-remat_policy: "NONE"
+remat_policy: "MATMUL_WITHOUT_BATCH"
 # For CUSTOM policy set below, current annotations are for: attn_output, query_proj, key_proj, value_proj
 # xq_out, xk_out, ffn_activation
 names_which_can_be_saved: []
@@ -314,7 +314,12 @@ flow_shift: 3.0
 # Input image URL for TI2V conditioning (first frame anchor)
 image_url: "model/Wan2.2-TI2V-5B-Diffusers/examples/i2v_input.JPG"
 # Path to conditioning video for privileged future-frame conditioning. Empty string disables it.
-conditioning_video: "test_droid_inference_2.mp4" #"test_droid_inference.mp4"
+conditioning_video: "" #"test_droid_inference.mp4"
+# Directory containing val TFRecords (same format as training: latent_cam0/1/2 + text_embed).
+# When set, bypasses image_url/conditioning_video and loads pre-encoded latents directly.
+val_data_dir: ""
+# Which sample index to use from the val dataset (0-indexed).
+val_sample_index: 0
 
 # Diffusion CFG cache (FasterCache-style)
 use_cfg_cache: False
