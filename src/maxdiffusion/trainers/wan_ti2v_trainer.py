@@ -306,7 +306,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         # Per-sample: sample how many steps to take; the stopping timestep becomes
         # the training timestep t for that element.
         k_steps = jax.random.randint(gen_rng, (b,), 0, num_gen_steps)
-        timesteps = rollout_ts[k_steps + 1]  # override training timesteps
+        timesteps = rollout_ts[k_steps]  # override training timesteps
 
         def _sigma(t_int):
             t_n = t_int.astype(jnp.float32) / num_train_t
