@@ -331,21 +331,23 @@ class BaseWanTrainer(abc.ABC):
                 del restore_args["opt_state"]
                 del optimizer
             state = jax.tree.map(_to_array, state)
-            # In multi-host TPU setups, jnp.asarray on Python ints (step,
-            # optimizer counts) defaults to CPU.  Move every CPU-resident array
-            # to a replicated TPU sharding before computing the partition spec,
-            # so with_sharding_constraint never sees a CPU→TPU device mismatch.
-            _replicated_tpu = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-            def _to_tpu_if_cpu(x):
-                if isinstance(x, jax.Array) and any(d.platform == "cpu" for d in x.devices()):
-                    # Checkpoint arrays land on a per-host CPU mesh (one device per host,
-                    # device IDs spaced by 2048).  Direct device_put across platform/host
-                    # boundaries is unsupported, so extract the local shard as numpy first
-                    # (safe: checkpoint uses replicated sharding, all hosts hold same data).
-                    import numpy as np
-                    return jax.device_put(np.asarray(x.addressable_data(0)), _replicated_tpu)
-                return x
-            state = jax.tree.map(_to_tpu_if_cpu, state)
+            # Compute target shardings from the state structure. This works on CPU
+            # arrays since it only inspects shapes/dtypes, not values or devices.
+            _state_spec = nnx.get_partition_spec(state)
+            _state_shardings = nnx.get_named_sharding(state, mesh)
+            def _to_tpu_if_cpu(x, target_sharding):
+                if not (isinstance(x, jax.Array) and any(d.platform == "cpu" for d in x.devices())):
+                    return x
+                # Checkpoint arrays are loaded replicated onto per-host CPUs — each
+                # host holds the full tensor. Use make_array_from_callback so each
+                # device receives exactly its intended shard, avoiding a full replicate
+                # of large optimizer moments across all 32 devices.
+                import numpy as np
+                full = np.asarray(x.addressable_data(0))
+                return jax.make_array_from_callback(
+                    x.shape, target_sharding, lambda idx: full[idx]
+                )
+            state = jax.tree.map(_to_tpu_if_cpu, state, _state_shardings)
             state_spec = nnx.get_partition_spec(state)
             state = jax.lax.with_sharding_constraint(state, state_spec)
             state_shardings = nnx.get_named_sharding(state, mesh)
