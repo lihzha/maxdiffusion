@@ -326,11 +326,18 @@ class BaseWanTrainer(abc.ABC):
             ema_params = loaded_params           # teacher → provides distillation targets
         else:
             params = loaded_params
-            # jnp.copy ensures ema_params has distinct buffer objects from params.
-            # Using identity (lambda x: x) causes the two leaves to share the same
-            # jax.Array objects, which triggers a "donate buffer twice" error when
-            # p_train_step donates the flattened state.
-            ema_params = jax.tree_util.tree_map(jnp.copy, params) if ema_decay > 0.0 else None
+            if ema_decay > 0.0:
+                # Must copy inside jax.jit so the result has the correct GLOBAL array
+                # shape on multi-host setups.  jnp.copy called outside jit materialises
+                # only the local per-host shard, giving shard shape (e.g. [16, dim])
+                # instead of the global shape (e.g. [256, dim]), which causes
+                # dot_general shape mismatches on the first train step and corrupt
+                # shapes in saved checkpoints.  jit also ensures new buffer objects so
+                # p_train_step can donate state without the "donate same buffer twice"
+                # error that a plain identity copy (lambda x: x) would trigger.
+                ema_params = jax.jit(lambda p: jax.tree_util.tree_map(jnp.copy, p))(params)
+            else:
+                ema_params = None
 
         # When distilling, always save the full TrainState so both student (params)
         # and teacher (ema_params) are preserved.  Otherwise honour save_optimizer.

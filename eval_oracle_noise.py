@@ -177,7 +177,7 @@ def main():
     pipeline, _, _ = checkpoint_loader.load_checkpoint()
     print("[eval] Model loaded.")
 
-    video_paths = sorted(glob.glob("test_videos/*.mp4"))
+    video_paths = sorted(glob.glob("test_videos_resized/*.mp4"))
     if not video_paths:
         raise FileNotFoundError("No .mp4 files found in test_videos/")
     print(f"[eval] Found {len(video_paths)} videos: {[os.path.basename(p) for p in video_paths]}")
