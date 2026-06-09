@@ -364,26 +364,23 @@ class BaseWanTrainer(abc.ABC):
                 if not isinstance(x, jax.Array):
                     return x
                 on_cpu = any(d.platform == "cpu" for d in x.devices())
-                # Orbax falls back to process_allgather when device_put_replicated fails,
-                # which produces a fully-replicated TPU array (PartitionSpec()).  If the
-                # target sharding is not replicated, with_sharding_constraint would need
-                # both old (full-size replicated) and new (sharded) copies in HBM
-                # simultaneously, causing OOM.  Detect and reshard here instead.
-                is_replicated_tpu = (
-                    not on_cpu
-                    and hasattr(x, "sharding")
+                if on_cpu:
+                    full = np.asarray(x.addressable_data(0))
+                    return jax.make_array_from_callback(x.shape, target_sharding, lambda idx: full[idx])
+                # Also reshard any TPU array whose spec doesn't match the target.
+                # PartitionSpec() and PartitionSpec(None,...,None) compare unequal in
+                # Python despite being semantically equivalent, so checking for exact
+                # equality with PartitionSpec() is not sufficient.
+                needs_reshard = (
+                    hasattr(x, "sharding")
                     and isinstance(x.sharding, jax.sharding.NamedSharding)
-                    and x.sharding.spec == jax.sharding.PartitionSpec()
-                    and hasattr(target_sharding, "spec")
-                    and target_sharding.spec != jax.sharding.PartitionSpec()
+                    and isinstance(target_sharding, jax.sharding.NamedSharding)
+                    and x.sharding.spec != target_sharding.spec
                 )
-                if not (on_cpu or is_replicated_tpu):
+                if not needs_reshard:
                     return x
-                import numpy as np
                 full = np.asarray(x.addressable_data(0))
-                return jax.make_array_from_callback(
-                    x.shape, target_sharding, lambda idx: full[idx]
-                )
+                return jax.make_array_from_callback(x.shape, target_sharding, lambda idx: full[idx])
             state = jax.tree.map(_to_tpu_if_cpu, state, _state_shardings)
             # Arrays are already at target sharding via make_array_from_callback above;
             # with_sharding_constraint is redundant and OOMs on nearly-full HBM.
