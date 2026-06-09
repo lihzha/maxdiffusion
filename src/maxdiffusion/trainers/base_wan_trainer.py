@@ -53,6 +53,28 @@ def _to_array(x):
     return x
 
 
+def _cast_to_structure(target, source):
+    """Recursively fill target's named-tuple structure with values from source dicts.
+
+    Orbax restores optax optimizer states as nested plain dicts because named-tuple
+    type information is lost via item_metadata.  Walk the freshly-initialised
+    opt_state (target) and pull leaf values from the restored dict (source),
+    rebuilding all named tuples along the way.
+    """
+    if hasattr(target, "_fields") and isinstance(source, dict):
+        return type(target)(**{
+            f: _cast_to_structure(getattr(target, f), source[f])
+            for f in target._fields
+            if f in source
+        })
+    elif isinstance(target, (list, tuple)) and isinstance(source, (list, tuple)):
+        return type(target)(_cast_to_structure(t, s) for t, s in zip(target, source))
+    elif isinstance(target, dict) and isinstance(source, dict):
+        return {k: _cast_to_structure(target[k], source[k]) for k in target if k in source}
+    else:
+        return source
+
+
 def _distill_swap(state: TrainState, is_distill: bool) -> TrainState:
     """Return state with params=teacher and ema_params=student for distillation checkpoints.
 
@@ -327,7 +349,10 @@ class BaseWanTrainer(abc.ABC):
             if restore_args:
                 step = restore_args.get("step", 0)
                 max_logging.log(f"Restoring optimizer and resuming from step {step}")
-                state = state.replace(opt_state=restore_args.get("opt_state"), step=restore_args.get("step", 0))
+                restored_opt = restore_args.get("opt_state")
+                if restored_opt is not None:
+                    restored_opt = _cast_to_structure(state.opt_state, restored_opt)
+                state = state.replace(opt_state=restored_opt, step=step)
                 del restore_args["opt_state"]
                 del optimizer
             state = jax.tree.map(_to_array, state)
