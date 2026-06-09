@@ -338,7 +338,12 @@ class BaseWanTrainer(abc.ABC):
             _replicated_tpu = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
             def _to_tpu_if_cpu(x):
                 if isinstance(x, jax.Array) and any(d.platform == "cpu" for d in x.devices()):
-                    return jax.device_put(x, _replicated_tpu)
+                    # Checkpoint arrays land on a per-host CPU mesh (one device per host,
+                    # device IDs spaced by 2048).  Direct device_put across platform/host
+                    # boundaries is unsupported, so extract the local shard as numpy first
+                    # (safe: checkpoint uses replicated sharding, all hosts hold same data).
+                    import numpy as np
+                    return jax.device_put(np.asarray(x.addressable_data(0)), _replicated_tpu)
                 return x
             state = jax.tree.map(_to_tpu_if_cpu, state)
             state_spec = nnx.get_partition_spec(state)
