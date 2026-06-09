@@ -325,7 +325,6 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
                 jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
             )
             roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
-            roll_model.scan_layers = False  # nnx.scan can't handle JitTracers from outer scope inside fori_loop
             with jax.named_scope("online_gen_rollout_step"):
                 v_pred = roll_model(
                     hidden_states=roll_input,

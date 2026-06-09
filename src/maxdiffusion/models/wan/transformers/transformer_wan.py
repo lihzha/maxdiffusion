@@ -687,9 +687,18 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
 
     def _run_all_blocks(h):
       if self.scan_layers:
+        # Use jax.lax.scan directly over split block state instead of nnx.scan.
+        # nnx.scan rejects parameters that come from an outer JAX trace level,
+        # which breaks when the model is called from inside jax.lax.fori_loop
+        # (e.g. the on-policy distillation rollout).  Slicing a JitTracer array
+        # inside jax.lax.scan produces scan-level tracers, so nnx.merge inside
+        # the body sees Variables at the correct level.  The generated XLA is
+        # identical to the nnx.scan path.
+        graphdef_blocks, blocks_state = nnx.split(self.blocks)
 
-        def scan_fn(carry, block):
+        def scan_fn(carry, block_state):
           hidden_states_carry, rngs_carry = carry
+          block = nnx.merge(graphdef_blocks, block_state)
           hidden_states = block(
               hidden_states_carry,
               encoder_hidden_states,
@@ -707,12 +716,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
             scan_fn, self.names_which_can_be_saved, self.names_which_can_be_offloaded, prevent_cse=not self.scan_layers
         )
         initial_carry = (h, rngs)
-        final_carry, _ = nnx.scan(
-            rematted_block_forward,
-            length=self.num_layers,
-            in_axes=(nnx.Carry, 0),
-            out_axes=(nnx.Carry, 0),
-        )(initial_carry, self.blocks)
+        final_carry, _ = jax.lax.scan(rematted_block_forward, initial_carry, blocks_state)
 
         h_out, _ = final_carry
       else:
