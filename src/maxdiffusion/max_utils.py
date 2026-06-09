@@ -319,6 +319,13 @@ def device_put_replicated(x, sharding):
   Although the name indicates replication, this function can be used
   to also shard an array based on sharding.
   """
+  # For multi-host distributed arrays (e.g. loaded from checkpoint onto a per-host
+  # CPU mesh), x[index] inside make_array_from_callback doesn't work because the
+  # array spans multiple processes.  Extract the local shard first — safe since
+  # checkpoint loading uses replicated sharding so all hosts hold the same data.
+  if isinstance(x, jax.Array) and len(x.devices()) > 1:
+    import numpy as np
+    x = np.asarray(x.addressable_data(0))
   return jax.make_array_from_callback(x.shape, sharding, lambda index: x[index])
 
 

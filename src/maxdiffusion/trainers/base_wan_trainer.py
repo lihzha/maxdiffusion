@@ -336,12 +336,24 @@ class BaseWanTrainer(abc.ABC):
             _state_spec = nnx.get_partition_spec(state)
             _state_shardings = nnx.get_named_sharding(state, mesh)
             def _to_tpu_if_cpu(x, target_sharding):
-                if not (isinstance(x, jax.Array) and any(d.platform == "cpu" for d in x.devices())):
+                if not isinstance(x, jax.Array):
                     return x
-                # Checkpoint arrays are loaded replicated onto per-host CPUs — each
-                # host holds the full tensor. Use make_array_from_callback so each
-                # device receives exactly its intended shard, avoiding a full replicate
-                # of large optimizer moments across all 32 devices.
+                on_cpu = any(d.platform == "cpu" for d in x.devices())
+                # Orbax falls back to process_allgather when device_put_replicated fails,
+                # which produces a fully-replicated TPU array (PartitionSpec()).  If the
+                # target sharding is not replicated, with_sharding_constraint would need
+                # both old (full-size replicated) and new (sharded) copies in HBM
+                # simultaneously, causing OOM.  Detect and reshard here instead.
+                is_replicated_tpu = (
+                    not on_cpu
+                    and hasattr(x, "sharding")
+                    and isinstance(x.sharding, jax.sharding.NamedSharding)
+                    and x.sharding.spec == jax.sharding.PartitionSpec()
+                    and hasattr(target_sharding, "spec")
+                    and target_sharding.spec != jax.sharding.PartitionSpec()
+                )
+                if not (on_cpu or is_replicated_tpu):
+                    return x
                 import numpy as np
                 full = np.asarray(x.addressable_data(0))
                 return jax.make_array_from_callback(
