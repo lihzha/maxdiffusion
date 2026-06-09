@@ -16,6 +16,7 @@ limitations under the License.
 
 import os
 import psutil
+import numpy as np
 import tensorflow as tf
 import tensorflow.experimental.numpy as tnp
 from datasets import load_dataset, load_from_disk
@@ -140,6 +141,8 @@ def _make_tfrecord_iterator(
     return {"pixel_values": moments, "input_ids": clip_embeddings}
 
   filenames = tf.io.gfile.glob(os.path.join(dataset_path, "*"))
+  if is_training and seed is not None:
+    filenames = np.random.default_rng(seed).permutation(filenames).tolist()
   ds = tf.data.TFRecordDataset(filenames, num_parallel_reads=AUTOTUNE)
 
   used_prepare_sample = (
