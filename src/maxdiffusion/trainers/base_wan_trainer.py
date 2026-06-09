@@ -332,10 +332,22 @@ class BaseWanTrainer(abc.ABC):
                 del restore_args["opt_state"]
                 del optimizer
             state = jax.tree.map(_to_array, state)
-            # Compute target shardings from the state structure. This works on CPU
-            # arrays since it only inspects shapes/dtypes, not values or devices.
             _state_spec = nnx.get_partition_spec(state)
             _state_shardings = nnx.get_named_sharding(state, mesh)
+            # nnx.get_partition_spec returns P() for arrays without logical-axis
+            # annotations (optax mu/nu, ema_params copies). For arrays already on
+            # TPU with a NamedSharding, use their actual sharding as the target so
+            # that state_shardings is correct for p_train_step compilation and
+            # _to_tpu_if_cpu does not try to reshard them. CPU arrays (from a
+            # checkpoint restore) keep the annotation-derived target sharding.
+            def _use_actual_for_tpu(x, computed):
+                if not isinstance(x, jax.Array):
+                    return computed
+                if any(d.platform == "cpu" for d in x.devices()):
+                    return computed
+                actual = getattr(x, "sharding", None)
+                return actual if isinstance(actual, jax.sharding.NamedSharding) else computed
+            _state_shardings = jax.tree.map(_use_actual_for_tpu, state, _state_shardings)
             def _to_tpu_if_cpu(x, target_sharding):
                 if not isinstance(x, jax.Array):
                     return x
@@ -343,23 +355,19 @@ class BaseWanTrainer(abc.ABC):
                 if on_cpu:
                     full = np.asarray(x.addressable_data(0))
                     return jax.make_array_from_callback(x.shape, target_sharding, lambda idx: full[idx])
-                # Also reshard any TPU array whose spec doesn't match the target.
+                # Only reshard replicated TPU arrays. addressable_data(0) equals the
+                # full tensor for replicated arrays but only a local shard for sharded
+                # arrays, so make_array_from_callback is unsafe on sharded arrays.
                 # PartitionSpec() and PartitionSpec(None,...,None) compare unequal in
-                # Python despite being semantically equivalent, so checking for exact
-                # equality with PartitionSpec() is not sufficient.
-                needs_reshard = (
-                    hasattr(x, "sharding")
-                    and isinstance(x.sharding, jax.sharding.NamedSharding)
-                    and isinstance(target_sharding, jax.sharding.NamedSharding)
-                    and x.sharding.spec != target_sharding.spec
-                )
-                if not needs_reshard:
+                # Python despite being semantically identical; test with all() instead.
+                spec = getattr(getattr(x, "sharding", None), "spec", None)
+                is_replicated = spec is not None and all(dim is None for dim in spec)
+                target_spec = getattr(target_sharding, "spec", None)
+                if not (is_replicated and target_spec is not None and target_spec != spec):
                     return x
                 full = np.asarray(x.addressable_data(0))
                 return jax.make_array_from_callback(x.shape, target_sharding, lambda idx: full[idx])
             state = jax.tree.map(_to_tpu_if_cpu, state, _state_shardings)
-            # Arrays are already at target sharding via make_array_from_callback above;
-            # with_sharding_constraint is redundant and OOMs on nearly-full HBM.
             state_shardings = _state_shardings
             if jax.process_index() == 0 and restore_args:
                 state_spec = nnx.get_partition_spec(state)
