@@ -326,7 +326,11 @@ class BaseWanTrainer(abc.ABC):
             ema_params = loaded_params           # teacher → provides distillation targets
         else:
             params = loaded_params
-            ema_params = jax.tree_util.tree_map(lambda x: x, params) if ema_decay > 0.0 else None
+            # jnp.copy ensures ema_params has distinct buffer objects from params.
+            # Using identity (lambda x: x) causes the two leaves to share the same
+            # jax.Array objects, which triggers a "donate buffer twice" error when
+            # p_train_step donates the flattened state.
+            ema_params = jax.tree_util.tree_map(jnp.copy, params) if ema_decay > 0.0 else None
 
         # When distilling, always save the full TrainState so both student (params)
         # and teacher (ema_params) are preserved.  Otherwise honour save_optimizer.
