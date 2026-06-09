@@ -317,6 +317,10 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         def rollout_body(step_idx, lat):
             t_from = rollout_ts[step_idx]
             t_to   = rollout_ts[step_idx + 1]
+            jax.debug.print(
+                "[distill rollout] step {step}/{total}  t_from={t_from}  t_to={t_to}",
+                step=step_idx, total=num_gen_steps, t_from=t_from, t_to=t_to,
+            )
             sig_from = _sigma(t_from)
             sig_to   = _sigma(t_to)
 
