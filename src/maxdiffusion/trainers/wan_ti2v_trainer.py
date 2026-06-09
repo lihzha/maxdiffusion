@@ -315,12 +315,12 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
         max_k = jnp.max(k_steps)
 
-        def rollout_cond(state):
-            step_idx, _ = state
+        def rollout_cond(carry):
+            step_idx, _ = carry
             return step_idx < max_k
 
-        def rollout_body(state):
-            step_idx, lat = state
+        def rollout_body(carry):
+            step_idx, lat = carry
             t_from = rollout_ts[step_idx]
             t_to   = rollout_ts[step_idx + 1]
             jax.debug.print(
@@ -351,7 +351,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
 
             # Per-element: only commit this step if step_idx < k_steps[i].
             should_update = (step_idx < k_steps)[:, None, None, None, None]
-            return step_idx + 1, jnp.where(should_update, new_lat, lat)
+            return (step_idx + 1, jnp.where(should_update, new_lat, lat))
 
         _, gen_t = jax.lax.while_loop(rollout_cond, rollout_body, (0, gen_init))
 
