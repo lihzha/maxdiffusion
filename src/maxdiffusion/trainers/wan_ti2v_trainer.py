@@ -294,7 +294,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         # ── Online generation: T_max → t rollout ─────────────────────────────
         num_train_t = scheduler.config.num_train_timesteps
         _cfg_gen_steps = config.num_online_gen_steps
-        num_gen_steps = (num_train_t - 1) if _cfg_gen_steps < 0 else _cfg_gen_steps
+        num_gen_steps = config.num_inference_steps if _cfg_gen_steps < 0 else _cfg_gen_steps
 
         # Discretized rollout schedule: T_max → 0 in num_gen_steps Euler steps,
         # spaced according to the scheduler's shift to concentrate steps at high noise.
@@ -303,7 +303,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         t_shifted = (t_uniform * shift) / (1.0 + (shift - 1.0) * t_uniform)
         rollout_ts = (t_shifted * (num_train_t - 1)).astype(jnp.int32)
 
-        # Per-element: sample how many steps to take; the stopping timestep becomes
+        # Per-sample: sample how many steps to take; the stopping timestep becomes
         # the training timestep t for that element.
         k_steps = jax.random.randint(gen_rng, (b,), 0, num_gen_steps)
         timesteps = rollout_ts[k_steps + 1]  # override training timesteps
@@ -313,8 +313,14 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
 
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
+        max_k = jnp.max(k_steps)
 
-        def rollout_body(step_idx, lat):
+        def rollout_cond(state):
+            step_idx, _ = state
+            return step_idx < max_k
+
+        def rollout_body(state):
+            step_idx, lat = state
             t_from = rollout_ts[step_idx]
             t_to   = rollout_ts[step_idx + 1]
             jax.debug.print(
@@ -345,9 +351,9 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
 
             # Per-element: only commit this step if step_idx < k_steps[i].
             should_update = (step_idx < k_steps)[:, None, None, None, None]
-            return jnp.where(should_update, new_lat, lat)
+            return step_idx + 1, jnp.where(should_update, new_lat, lat)
 
-        gen_t = jax.lax.fori_loop(0, num_gen_steps, rollout_body, gen_init)
+        _, gen_t = jax.lax.while_loop(rollout_cond, rollout_body, (0, gen_init))
 
         # Recompute per-token timestep from the rollout-derived timesteps.
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
