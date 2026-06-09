@@ -13,13 +13,13 @@ export GCS_BUCKET=v6_east1d
 export GCS_MOUNT=/home/zheng/gcs-mount
 
 if ! command -v gcsfuse >/dev/null; then
-  export GCSFUSE_REPO=gcsfuse-$(lsb_release -c -s)
+  DISTRO=$(lsb_release -cs 2>/dev/null)
+  [ -z "$DISTRO" ] && DISTRO=$(. /etc/os-release && echo "$VERSION_CODENAME")
+  export GCSFUSE_REPO="gcsfuse-${DISTRO}"
   echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-  echo "Waiting for dpkg lock to be released..."
-  while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
-  sudo apt-get update
-  sudo apt-get install -y gcsfuse
+  sudo apt-get -o DPkg::Lock::Timeout=-1 update
+  sudo apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse
 fi
 
 mkdir -p "$GCS_MOUNT" /dev/shm/gcsfuse-cache

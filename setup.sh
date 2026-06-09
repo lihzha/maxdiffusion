@@ -73,12 +73,14 @@ echo "--------------------------------------------------"
 (sudo bash || bash) <<'EOF'
 mkdir -p /etc/needrestart/conf.d
 echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/99-noninteractive.conf
-apt update && \
-apt install -y numactl lsb-release gnupg curl net-tools iproute2 procps lsof git ethtool && \
-export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s`
+apt-get -o DPkg::Lock::Timeout=-1 update && \
+apt-get -o DPkg::Lock::Timeout=-1 install -y numactl lsb-release gnupg curl net-tools iproute2 procps lsof git ethtool && \
+DISTRO=$(lsb_release -cs 2>/dev/null)
+[ -z "$DISTRO" ] && DISTRO=$(. /etc/os-release && echo "$VERSION_CODENAME")
+export GCSFUSE_REPO="gcsfuse-${DISTRO}"
 echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
 curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-apt update -y && apt -y install gcsfuse
+apt-get -o DPkg::Lock::Timeout=-1 update -y && apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse
 rm -rf /var/lib/apt/lists/*
 EOF
 
