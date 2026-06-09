@@ -66,6 +66,22 @@ def _distill_swap(state: TrainState, is_distill: bool) -> TrainState:
     return state.replace(params=state.ema_params, ema_params=state.params)
 
 
+def _state_to_save_dict(state: TrainState, is_distill: bool) -> dict:
+    """Build a plain dict of serializable fields for checkpointing.
+
+    Only array-bearing fields are included; non-serializable TrainState fields
+    (apply_fn, tx, graphdef) are excluded so PyTreeSave doesn't choke on them.
+    The params/ema_params swap for distillation is applied here.
+    """
+    s = _distill_swap(state, is_distill)
+    d = {"params": s.params, "step": s.step}
+    if s.opt_state is not None:
+        d["opt_state"] = s.opt_state
+    if s.ema_params is not None:
+        d["ema_params"] = s.ema_params
+    return d
+
+
 def generate_sample(config, pipeline, filename_prefix):
     """
     Generates a video to validate training did not corrupt the model
@@ -212,7 +228,7 @@ class BaseWanTrainer(abc.ABC):
         with nn_partitioning.axis_rules(self.config.logical_axis_rules):
             pipeline, opt_state, step, extra_state = self.checkpointer.load_checkpoint()
         restore_args = {}
-        if opt_state and step:
+        if opt_state is not None and step is not None:
             restore_args = {"opt_state": opt_state, "step": step}
             del opt_state
         if extra_state.get("student_params") is not None:
@@ -375,8 +391,6 @@ class BaseWanTrainer(abc.ABC):
                 pretty_string = pprint.pformat(state_spec.opt_state, indent=4, width=60)
                 max_logging.log(pretty_string)
                 max_logging.log("------------------------------------------------")
-        if self.config.hardware != "gpu":
-            max_utils.delete_pytree(params)
         data_shardings = self.get_data_shardings(mesh)
         eval_data_shardings = self.get_eval_data_shardings(mesh)
 
@@ -492,9 +506,9 @@ class BaseWanTrainer(abc.ABC):
                 if step != 0 and self.config.checkpoint_every != -1 and step % self.config.checkpoint_every == 0:
                     max_logging.log(f"Saving checkpoint for step {step}")
                     if self.config.save_optimizer or _save_full_state:
-                        self.checkpointer.save_checkpoint(step, pipeline, _distill_swap(state, _save_full_state))
+                        self.checkpointer.save_checkpoint(step, pipeline, _state_to_save_dict(state, _save_full_state))
                     else:
-                        self.checkpointer.save_checkpoint(step, pipeline, state.params)
+                        self.checkpointer.save_checkpoint(step, pipeline, {"params": state.params})
 
             _metrics_queue.put(None)
             writer_thread.join()
@@ -506,10 +520,10 @@ class BaseWanTrainer(abc.ABC):
                 max_logging.log(f"Saving final checkpoint for step {step}")
                 if _save_full_state:
                     self.checkpointer.save_checkpoint(
-                        self.config.max_train_steps - 1, pipeline, _distill_swap(state, _save_full_state)
+                        self.config.max_train_steps - 1, pipeline, _state_to_save_dict(state, _save_full_state)
                     )
                 else:
-                    self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, state.params)
+                    self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, {"params": state.params})
                 self.checkpointer.checkpoint_manager.wait_until_finished()
             # Load trained transformer — use teacher (EMA) when distilling.
             final_params = state.ema_params if _save_full_state else state.params
