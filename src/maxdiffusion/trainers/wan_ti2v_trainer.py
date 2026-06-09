@@ -335,7 +335,9 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             v_future = v_pred[:, :, n_hist:]
 
             # Euler step: x_{t_to} = x_{t_from} + (σ_{t_to} - σ_{t_from}) * v
-            new_lat = lat + (sig_to - sig_from) * v_future
+            # Cast back to lat.dtype: _sigma computes in float32, which would
+            # otherwise promote new_lat and break fori_loop's carry type check.
+            new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
 
             # Per-element: only commit this step if step_idx < k_steps[i].
             should_update = (step_idx < k_steps)[:, None, None, None, None]

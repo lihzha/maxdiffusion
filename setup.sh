@@ -133,6 +133,9 @@ if [[ "$MODE" == "stable" || ! -v MODE ]]; then
       echo "Installing stable jax, jaxlib, libtpu for tpu"
       uv pip install 'jax[tpu]>0.4' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
     fi
+    # jax[tpu] from the Google releases index bundles an older libtpu; Pallas
+    # requires libtpu built within the last month, so pin to the latest release.
+    uv pip install 'libtpu==0.0.41'
   elif [[ $DEVICE == "gpu" ]]; then
       echo "Installing stable jax, jaxlib for NVIDIA gpu"
     if [[ -n "$JAX_VERSION" ]]; then
