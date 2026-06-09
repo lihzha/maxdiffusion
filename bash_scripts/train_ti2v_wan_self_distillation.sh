@@ -2,13 +2,6 @@
 curl -LsSf https://astral.sh/uv/install.sh | sh
 git checkout origin/catherine-dev
 
-# Wait for unattended-upgrades to release the dpkg lock before running setup
-echo "Waiting for dpkg lock to be released..."
-while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-  sleep 5
-done
-echo "dpkg lock released, proceeding with setup."
-
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
@@ -23,6 +16,8 @@ if ! command -v gcsfuse >/dev/null; then
   export GCSFUSE_REPO=gcsfuse-$(lsb_release -c -s)
   echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+  echo "Waiting for dpkg lock to be released..."
+  while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
   sudo apt-get update
   sudo apt-get install -y gcsfuse
 fi
