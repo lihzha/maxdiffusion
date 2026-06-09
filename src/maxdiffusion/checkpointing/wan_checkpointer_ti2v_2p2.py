@@ -44,7 +44,7 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
         item_names=("wan_config", "wan_state"),
         item_handlers={
             "wan_config": ocp.JsonCheckpointHandler(),
-            "wan_state": ocp.StandardCheckpointHandler(),
+            "wan_state": ocp.PyTreeCheckpointHandler(),
         },
         options=CheckpointManagerOptions(
             create=True,
@@ -61,29 +61,26 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
       if step is None:
         _log("No WAN checkpoint found.")
         return None, None
-    _log(f"Loading WAN checkpoint from step {step}")
+    _log(f"Loading WAN TI2V 2.2 checkpoint from step {step}")
 
     mesh, replicated_sharding = get_cpu_mesh_and_sharding()
     metadatas = self.checkpoint_manager.item_metadata(step)
-    state = metadatas.wan_state
+    state_metadata = metadatas.wan_state
 
-    target_shardings = jax.tree_util.tree_map(lambda x: replicated_sharding, state)
-
+    target_shardings = jax.tree_util.tree_map(lambda _: replicated_sharding, state_metadata)
     with mesh:
-      abstract_train_state_with_sharding = jax.tree_util.tree_map(add_sharding_to_struct, state, target_shardings)
+      abstract_state = jax.tree_util.tree_map(add_sharding_to_struct, state_metadata, target_shardings)
 
-    _log("Restoring WAN TI2V 2.2 checkpoint")
     restored_checkpoint = self.checkpoint_manager.restore(
         step=step,
         args=ocp.args.Composite(
             wan_config=ocp.args.JsonRestore(),
-            wan_state=ocp.args.StandardRestore(abstract_train_state_with_sharding),
+            wan_state=ocp.args.PyTreeRestore(item=abstract_state),
         ),
     )
-    _log(f"restored checkpoint {restored_checkpoint.keys()}")
-    _log(f"restored checkpoint wan_state {restored_checkpoint.wan_state.keys()}")
-    _log(f"optimizer found in checkpoint {'opt_state' in restored_checkpoint.wan_state.keys()}")
-    _log(f"optimizer state saved in attribute self.opt_state {self.opt_state}")
+    _log(f"Restored checkpoint keys: {list(restored_checkpoint.keys())}")
+    _log(f"wan_state keys: {list(restored_checkpoint.wan_state.keys())}")
+    _log(f"optimizer found: {'opt_state' in restored_checkpoint.wan_state}")
     return restored_checkpoint, step
 
   def load_diffusers_checkpoint(self):
@@ -111,15 +108,12 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
 
   def save_checkpoint(self, train_step, pipeline: WanPipelineTI2V_2_2, train_states: dict):
     """Saves the training state and model configurations."""
-
-    def config_to_json(model_or_config):
-      return json.loads(model_or_config.to_json_string())
-
     _log(f"Saving checkpoint for step {train_step}")
-    items = {
-        "wan_config": ocp.args.JsonSave(config_to_json(pipeline.transformer)),
-        "wan_state": ocp.args.StandardSave(train_states),
-    }
-
-    self.checkpoint_manager.save(train_step, args=ocp.args.Composite(**items))
+    self.checkpoint_manager.save(
+        train_step,
+        args=ocp.args.Composite(
+            wan_config=ocp.args.JsonSave(json.loads(pipeline.transformer.to_json_string())),
+            wan_state=ocp.args.PyTreeSave(train_states),
+        ),
+    )
     _log(f"Checkpoint for step {train_step} saved.")
