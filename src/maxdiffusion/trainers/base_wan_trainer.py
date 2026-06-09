@@ -360,10 +360,11 @@ class BaseWanTrainer(abc.ABC):
                     x.shape, target_sharding, lambda idx: full[idx]
                 )
             state = jax.tree.map(_to_tpu_if_cpu, state, _state_shardings)
-            state_spec = nnx.get_partition_spec(state)
-            state = jax.lax.with_sharding_constraint(state, state_spec)
-            state_shardings = nnx.get_named_sharding(state, mesh)
+            # Arrays are already at target sharding via make_array_from_callback above;
+            # with_sharding_constraint is redundant and OOMs on nearly-full HBM.
+            state_shardings = _state_shardings
             if jax.process_index() == 0 and restore_args:
+                state_spec = nnx.get_partition_spec(state)
                 max_logging.log("--- Optimizer State Sharding Spec (opt_state) ---")
                 pretty_string = pprint.pformat(state_spec.opt_state, indent=4, width=60)
                 max_logging.log(pretty_string)
