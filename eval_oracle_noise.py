@@ -174,7 +174,7 @@ def main():
     # Load model once
     print("[eval] Loading model...")
     checkpoint_loader = WanCheckpointerTI2V_2_2(config=config)
-    pipeline, _, _ = checkpoint_loader.load_checkpoint()
+    pipeline, _, _, _ = checkpoint_loader.load_checkpoint()
     print("[eval] Model loaded.")
 
     video_paths = sorted(glob.glob("test_videos_resized/*.mp4"))

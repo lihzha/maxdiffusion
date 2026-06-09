@@ -82,11 +82,15 @@ class WanTI2VTrainer(BaseWanTrainer):
         teacher_update_every = getattr(self.config, "teacher_update_every", 1)
         if step % teacher_update_every != 0:
             return state
-        new_ema_params = jax.tree_util.tree_map(
-            lambda ema, p: ema_decay * ema + (1.0 - ema_decay) * p,
-            state.ema_params,
-            state.params,
-        )
+        # Arithmetic on globally-sharded multi-host arrays outside jax.jit operates
+        # only on the local per-host shard and returns a local-shard-shaped result
+        # (e.g. [16, dim] instead of global [256, dim]).  Wrapping in jax.jit ensures
+        # the EMA update runs as a distributed op and produces the correct global shape.
+        new_ema_params = jax.jit(
+            lambda ema, p: jax.tree_util.tree_map(
+                lambda e, q: ema_decay * e + (1.0 - ema_decay) * q, ema, p
+            )
+        )(state.ema_params, state.params)
         return state.replace(ema_params=new_ema_params)
 
     # ── Data shardings ───────────────────────────────────────────────────────
