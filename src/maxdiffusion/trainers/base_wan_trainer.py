@@ -66,25 +66,6 @@ def _distill_swap(state: TrainState, is_distill: bool) -> TrainState:
     return state.replace(params=state.ema_params, ema_params=state.params)
 
 
-def _log_param_shapes(params, tag: str = "SHAPE"):
-    """Log shapes of params leaves on process 0 to diagnose multi-host shape corruption."""
-    if jax.process_index() != 0:
-        return
-    for path, leaf in jax.tree_util.tree_leaves_with_path(params):
-        if not isinstance(leaf, jax.Array):
-            continue
-        path_str = "/".join(str(k) for k in path)
-        # Log any kernel/bias whose first dim is in the suspicious range [16, 256],
-        # or any leaf with "linear_1" in its path, to catch the [16,dim] shard-shape bug.
-        should_log = (
-            ("kernel" in path_str or "linear_1" in path_str)
-            and len(leaf.shape) >= 1
-            and leaf.shape[0] in (16, 256)
-        )
-        if should_log:
-            max_logging.log(f"[{tag}] {path_str}: global_shape={leaf.shape} sharding={getattr(leaf, 'sharding', None)}")
-
-
 def _state_to_save_dict(state: TrainState, is_distill: bool) -> dict:
     """Build a plain dict of serializable fields for checkpointing.
 
@@ -93,7 +74,6 @@ def _state_to_save_dict(state: TrainState, is_distill: bool) -> dict:
     The params/ema_params swap for distillation is applied here.
     """
     s = _distill_swap(state, is_distill)
-    _log_param_shapes(s.params, tag="PRE_SAVE")
     d = {"params": s.params, "step": s.step}
     if s.opt_state is not None:
         d["opt_state"] = s.opt_state
@@ -333,7 +313,6 @@ class BaseWanTrainer(abc.ABC):
     ):
         mesh = pipeline.mesh
         graphdef, loaded_params, rest_of_state = nnx.split(pipeline.transformer, nnx.Param, ...)
-        _log_param_shapes(loaded_params, tag="POST_SPLIT")
 
         ema_decay = getattr(self.config, "ema_decay", 0.0)
         distill = getattr(self.config, "distill", False)
@@ -436,7 +415,6 @@ class BaseWanTrainer(abc.ABC):
                 full = np.asarray(x.addressable_data(0))
                 return jax.make_array_from_callback(x.shape, target_sharding, lambda idx: full[idx])
             state = jax.tree.map(_to_tpu_if_cpu, state, _state_shardings)
-            _log_param_shapes(state.params, tag="POST_TPU_PLACE")
             state_shardings = _state_shardings
             if jax.process_index() == 0 and restore_args:
                 state_spec = nnx.get_partition_spec(state)
@@ -474,7 +452,6 @@ class BaseWanTrainer(abc.ABC):
             )
             max_logging.log(f"  Total optimization steps = {self.config.max_train_steps}")
 
-        _log_param_shapes(state.params, tag="PRE_TRAIN_STEP0")
         p_train_step = self.get_train_step(pipeline, mesh, state_shardings, data_shardings)
         p_eval_step = self.get_eval_step(pipeline, mesh, state_shardings, eval_data_shardings)
 
@@ -562,7 +539,6 @@ class BaseWanTrainer(abc.ABC):
                     if self.config.save_optimizer or _save_full_state:
                         self.checkpointer.save_checkpoint(step, pipeline, _state_to_save_dict(state, _save_full_state))
                     else:
-                        _log_param_shapes(state.params, tag="PRE_SAVE")
                         self.checkpointer.save_checkpoint(step, pipeline, {"params": state.params})
 
             _metrics_queue.put(None)
@@ -578,7 +554,6 @@ class BaseWanTrainer(abc.ABC):
                         self.config.max_train_steps - 1, pipeline, _state_to_save_dict(state, _save_full_state)
                     )
                 else:
-                    _log_param_shapes(state.params, tag="PRE_SAVE")
                     self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, {"params": state.params})
                 self.checkpointer.checkpoint_manager.wait_until_finished()
             # Load trained transformer — use teacher (EMA) when distilling.
