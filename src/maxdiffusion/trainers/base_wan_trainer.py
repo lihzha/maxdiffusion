@@ -376,7 +376,14 @@ class BaseWanTrainer(abc.ABC):
             if restore_args:
                 step = restore_args.get("step", 0)
                 max_logging.log(f"Restoring optimizer and resuming from step {step}")
-                state = state.replace(opt_state=restore_args.get("opt_state"), step=step)
+                loaded_opt_state = restore_args.get("opt_state")
+                # orbax PyTreeRestore deserialises optax NamedTuples (ScaleByAdamState,
+                # etc.) as plain dicts, so attributes like .mu/.nu are missing.  Fix by
+                # grafting the loaded leaf values onto the correctly-typed structure
+                # produced by a fresh optimizer.init() call.
+                fresh_opt_state = optimizer.init(state.params)
+                opt_state = jax.tree_util.tree_map(lambda _, x: x, fresh_opt_state, loaded_opt_state)
+                state = state.replace(opt_state=opt_state, step=step)
                 del restore_args["opt_state"]
                 del optimizer
             state = jax.tree.map(_to_array, state)
