@@ -74,7 +74,14 @@ def _log_param_shapes(params, tag: str = "SHAPE"):
         if not isinstance(leaf, jax.Array):
             continue
         path_str = "/".join(str(k) for k in path)
-        if "condition_embedder" in path_str and "kernel" in path_str:
+        # Log any kernel/bias whose first dim is in the suspicious range [16, 256],
+        # or any leaf with "linear_1" in its path, to catch the [16,dim] shard-shape bug.
+        should_log = (
+            ("kernel" in path_str or "linear_1" in path_str)
+            and len(leaf.shape) >= 1
+            and leaf.shape[0] in (16, 256)
+        )
+        if should_log:
             max_logging.log(f"[{tag}] {path_str}: global_shape={leaf.shape} sharding={getattr(leaf, 'sharding', None)}")
 
 

@@ -187,9 +187,15 @@ def create_sharded_logical_transformer(
         pass
 
     sharding = logical_state_sharding[path].value
-    is_key_param = jax.process_index() == 0 and "condition_embedder" in str(path) and "kernel" in str(path)
-    if is_key_param:
-      max_logging.log(f"[PRE_PUT] {path}: val.shape={getattr(val, 'shape', type(val))} sharding={sharding}")
+    val_shape = getattr(val, 'shape', None)
+    is_suspicious = (
+        jax.process_index() == 0
+        and ("kernel" in str(path) or "linear_1" in str(path))
+        and val_shape is not None and len(val_shape) >= 1
+        and val_shape[0] in (16, 256)
+    )
+    if is_suspicious:
+      max_logging.log(f"[PRE_PUT] {path}: val.shape={val_shape} sharding={sharding}")
     try:
       state[path].value = device_put_replicated(val, sharding)
     except Exception as e:
@@ -200,10 +206,10 @@ def create_sharded_logical_transformer(
       del val_on_host
   if jax.process_index() == 0:
     for path, var in state.items():
-      path_str = str(path)
-      if "condition_embedder" in path_str and "kernel" in path_str:
-        raw = var._raw_value
-        max_logging.log(f"[POST_LOAD] {path}: shape={getattr(raw, 'shape', '?')} sharding={getattr(raw, 'sharding', None)}")
+      raw = var._raw_value
+      raw_shape = getattr(raw, 'shape', None)
+      if raw_shape is not None and len(raw_shape) >= 1 and raw_shape[0] in (16, 256):
+        max_logging.log(f"[POST_LOAD] {path}: shape={raw_shape} sharding={getattr(raw, 'sharding', None)}")
   state = nnx.from_flat_state(state)
 
   wan_transformer = nnx.merge(graphdef, state, rest_of_state)
