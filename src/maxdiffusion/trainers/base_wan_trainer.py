@@ -326,6 +326,7 @@ class BaseWanTrainer(abc.ABC):
     ):
         mesh = pipeline.mesh
         graphdef, loaded_params, rest_of_state = nnx.split(pipeline.transformer, nnx.Param, ...)
+        _log_param_shapes(loaded_params, tag="POST_SPLIT")
 
         ema_decay = getattr(self.config, "ema_decay", 0.0)
         distill = getattr(self.config, "distill", False)
@@ -408,6 +409,7 @@ class BaseWanTrainer(abc.ABC):
                 full = np.asarray(x.addressable_data(0))
                 return jax.make_array_from_callback(x.shape, target_sharding, lambda idx: full[idx])
             state = jax.tree.map(_to_tpu_if_cpu, state, _state_shardings)
+            _log_param_shapes(state.params, tag="POST_TPU_PLACE")
             state_shardings = _state_shardings
             if jax.process_index() == 0 and restore_args:
                 state_spec = nnx.get_partition_spec(state)
