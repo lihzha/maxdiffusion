@@ -533,6 +533,7 @@ class BaseWanTrainer(abc.ABC):
                     if self.config.save_optimizer or _save_full_state:
                         self.checkpointer.save_checkpoint(step, pipeline, _state_to_save_dict(state, _save_full_state))
                     else:
+                        _log_param_shapes(state.params, tag="PRE_SAVE")
                         self.checkpointer.save_checkpoint(step, pipeline, {"params": state.params})
 
             _metrics_queue.put(None)
@@ -548,6 +549,7 @@ class BaseWanTrainer(abc.ABC):
                         self.config.max_train_steps - 1, pipeline, _state_to_save_dict(state, _save_full_state)
                     )
                 else:
+                    _log_param_shapes(state.params, tag="PRE_SAVE")
                     self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, {"params": state.params})
                 self.checkpointer.checkpoint_manager.wait_until_finished()
             # Load trained transformer — use teacher (EMA) when distilling.
