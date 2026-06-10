@@ -313,10 +313,12 @@ class WanPipelineTI2V_2_2(WanPipeline):
           scheduler_state=scheduler_state,
       )
       if oracle_latents is not None:
-        gen_start = 1 + n_priv
-        n_gen = min(latents.shape[1] - gen_start, oracle_latents.shape[1] - gen_start)
+        gen_start = 1 + n_priv  # index of first gen frame in unstripped latents
+        # Gen frames share temporal positions 1..n_total_latent with oracle frames.
+        # GT is at oracle_latents[:, 1:] regardless of n_priv.
+        n_gen = min(latents.shape[1] - gen_start, oracle_latents.shape[1] - 1)
         if n_gen > 0:
-          diff = latents[:, gen_start:gen_start + n_gen] - oracle_latents[:, gen_start:gen_start + n_gen]
+          diff = latents[:, gen_start:gen_start + n_gen] - oracle_latents[:, 1:1 + n_gen]
           mse = float(jnp.mean(diff ** 2))
           mae = float(jnp.mean(jnp.abs(diff)))
           print(f"[conditioning_video] diffused vs GT latent (gen frames [{gen_start}:{gen_start+n_gen}]) — MSE: {mse:.6f}, MAE: {mae:.6f}")

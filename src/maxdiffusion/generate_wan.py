@@ -178,43 +178,16 @@ def iter_val_latents(val_data_dir: str, window_size: int):
     yield oracle_latents, text_embed, idx
 
 
-def run_val_eval(config, pipeline) -> Tuple[float, float]:
-  """Run inference on every val sample and compute MSE/MAE vs oracle future latents.
-
-  Compares predicted latents to ground-truth future latents in denormalized (raw VAE)
-  space, skipping the anchor frame (frame 0) which is given to the model as context.
-  Returns (avg_mse, avg_mae) over all samples.
-  """
+def run_val_eval(config, pipeline) -> None:
+  """Run inference on every val sample; MSE/MAE vs GT is logged by the pipeline in normalized space."""
   from maxdiffusion.common_types import WAN2_2
 
   val_data_dir = config.val_data_dir
   n_total_latent = config.num_frames // pipeline.vae_scale_factor_temporal
-
-  # Cap n_priv the same way the pipeline does: min(config_value, n_total_latent).
-  # Negative means "use all available" which equals n_total_latent here.
-  n_priv_config = getattr(config, "num_privileged_frames", 0)
-  n_priv = n_total_latent if n_priv_config < 0 else min(n_priv_config, n_total_latent)
-
-  # n_total_latent: purely generated frames — does NOT include privileged oracle frames.
-  # Sequence layout: [anchor | oracle_1..n_priv | gen_1..n_total_latent]
-  # Temporal positions: [0    | 1..n_priv       | n_priv+1..n_priv+n_total_latent]
-  window_size = 1 + n_priv + n_total_latent        
-
-  # oracle_start: index into oracle window where the purely-generated region begins.
-  oracle_start = 1 + n_priv
-  # pred_start: index into predicted (post-strip) where the purely-generated region begins.
-  # After stripping, predicted layout is [frame_0 | gen_1..n_total_latent]; gen_1..n_priv
-  # share temporal positions 1..n_priv with oracle context, so skip them too.
-  pred_start = 1 + n_priv
-
-  # VAE stats for converting normalized oracle latents to raw latent space.
-  lat_mean = np.array(pipeline.vae.latents_mean).reshape(1, -1, 1, 1, 1)  # (1, C, 1, 1, 1)
-  lat_std = np.array(pipeline.vae.latents_std).reshape(1, -1, 1, 1, 1)    # (1, C, 1, 1, 1)
+  window_size = 1 + n_total_latent
 
   vae_spatial = pipeline.vae_scale_factor_spatial
   negative_prompt = [config.negative_prompt] * config.global_batch_size_to_train_on
-
-  mse_list, mae_list = [], []
 
   for oracle_latents, text_embed, idx in iter_val_latents(val_data_dir, window_size):
     latent_h = int(oracle_latents.shape[2])
@@ -227,7 +200,7 @@ def run_val_eval(config, pipeline) -> Tuple[float, float]:
 
     model_key = config.model_name
     if model_key == WAN2_2:
-      predicted = pipeline(
+      pipeline(
           prompt=[""] * config.global_batch_size_to_train_on,
           negative_prompt=negative_prompt,
           height=height,
@@ -246,46 +219,6 @@ def run_val_eval(config, pipeline) -> Tuple[float, float]:
 
     elapsed = time.perf_counter() - t0
     max_logging.log(f"Val sample {idx}: inference done in {elapsed:.1f}s")
-
-    # predicted: (B, C, 1+n_total_latent, H_lat*3, W_lat) channels-first, denormalized.
-    # Pipeline strips oracle context frames before returning:
-    #   [frame_0 | n_priv+1...n_total_latent]  (1+n_total_latent frames)
-    #   oracle_latents: (1, 1+n_total_latent, H_lat*3, W_lat, C) channels-last, normalized.
-    #   Layout: [oracle_0 | oracle_1..n_priv (context) | n_priv+1..n_priv+n_total_latent (GT)]
-    oracle_cf = np.array(oracle_latents).transpose(0, 4, 1, 2, 3)  # (1, C, 1+n_total_latent, H, W)
-    oracle_raw = oracle_cf * lat_std + lat_mean                     # (1, C, 1+n_total_latent, H, W)
-
-    # Compare only the purely-generated region at temporal positions n_priv+1..n_priv+n_total_latent.
-    pred_future = np.array(predicted)[:, :, pred_start:]   # (B, C, n_total_latent, H, W)
-    oracle_future = oracle_raw[:, :, oracle_start:]         # (1, C, n_total_latent, H, W)
-
-    n_compare = min(pred_future.shape[2], oracle_future.shape[2])
-    if n_compare == 0:
-      max_logging.log(f"Val sample {idx}: no future frames to compare, skipping.")
-      continue
-
-    diff = pred_future[:, :, :n_compare] - oracle_future[:, :, :n_compare]
-    mse = float(np.mean(diff ** 2))
-    mae = float(np.mean(np.abs(diff)))
-    mse_list.append(mse)
-    mae_list.append(mae)
-    max_logging.log(f"Val sample {idx}: MSE={mse:.6f}  MAE={mae:.6f}")
-
-  if not mse_list:
-    max_logging.log("Val eval: no samples processed.")
-    return 0.0, 0.0
-
-  avg_mse = float(np.mean(mse_list))
-  avg_mae = float(np.mean(mae_list))
-  max_logging.log(
-      f"\n{'=' * 50}\n"
-      f"  VAL METRICS ({len(mse_list)} samples)\n"
-      f"{'=' * 50}\n"
-      f"  MSE: {avg_mse:.6f}\n"
-      f"  MAE: {avg_mae:.6f}\n"
-      f"{'=' * 50}"
-  )
-  return avg_mse, avg_mae
 
 
 def call_pipeline(config, pipeline, prompt, negative_prompt):
@@ -523,10 +456,7 @@ def run(config, pipeline=None, filename_prefix="", commit_hash=None):
     max_logging.log(f"number of devices: {jax.device_count()}")
     max_logging.log(f"per_device_batch_size: {config.per_device_batch_size}")
     max_logging.log("============================================================")
-    avg_mse, avg_mae = run_val_eval(config, pipeline)
-    if writer and jax.process_index() == 0:
-      writer.add_scalar("val/mse", avg_mse, global_step=0)
-      writer.add_scalar("val/mae", avg_mae, global_step=0)
+    run_val_eval(config, pipeline)
     return []
 
   s0 = time.perf_counter()
