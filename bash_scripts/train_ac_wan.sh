@@ -101,7 +101,6 @@ python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     run_name=ac_wan_droid_2 \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
-    jax_cache_dir=gs://v6_east1d/jax_cache/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/train \
