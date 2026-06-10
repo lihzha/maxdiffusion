@@ -319,19 +319,17 @@ def device_put_replicated(x, sharding):
   Although the name indicates replication, this function can be used
   to also shard an array based on sharding.
   """
-  # For multi-host distributed arrays (e.g. loaded from checkpoint onto a per-host
-  # CPU mesh), x[index] inside make_array_from_callback doesn't work because the
-  # array spans multiple processes.  Extract the local shard first — safe since
-  # checkpoint loading uses replicated sharding so all hosts hold the same data.
   if isinstance(x, jax.Array) and len(x.devices()) > 1:
-    import numpy as np
     shard = x.addressable_data(0)
-    if jax.process_index() == 0 and shard.shape != x.shape:
-      from maxdiffusion import max_logging  # pylint: disable=import-outside-toplevel
-      max_logging.log(
-          f"[DEVICE_PUT] multi-device JAX array: global_shape={x.shape} "
-          f"shard0_shape={shard.shape} ndevices={len(x.devices())} sharding={getattr(x, 'sharding', None)}"
-      )
+    if shard.shape != x.shape:
+      # Already a non-trivially sharded array (e.g. a globally-sharded TPU array
+      # that entered this function via cast_with_exclusion or similar).  Using
+      # addressable_data(0) as the new global shape would corrupt it — use
+      # jax.device_put to re-shard without losing the global shape.
+      return jax.device_put(x, sharding)
+    # Replicated multi-device array (CPU checkpoint load): every host holds the
+    # full data, so shard0 == global shape.  Extract to numpy so
+    # make_array_from_callback works correctly in multi-host.
     x = np.asarray(shard)
   return jax.make_array_from_callback(x.shape, sharding, lambda index: x[index])
 
