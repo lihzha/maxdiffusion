@@ -66,6 +66,18 @@ def _distill_swap(state: TrainState, is_distill: bool) -> TrainState:
     return state.replace(params=state.ema_params, ema_params=state.params)
 
 
+def _log_param_shapes(params, tag: str = "SHAPE"):
+    """Log shapes of params leaves on process 0 to diagnose multi-host shape corruption."""
+    if jax.process_index() != 0:
+        return
+    for path, leaf in jax.tree_util.tree_leaves_with_path(params):
+        if not isinstance(leaf, jax.Array):
+            continue
+        path_str = "/".join(str(k) for k in path)
+        if "condition_embedder" in path_str and "kernel" in path_str:
+            max_logging.log(f"[{tag}] {path_str}: global_shape={leaf.shape} sharding={getattr(leaf, 'sharding', None)}")
+
+
 def _state_to_save_dict(state: TrainState, is_distill: bool) -> dict:
     """Build a plain dict of serializable fields for checkpointing.
 
@@ -74,6 +86,7 @@ def _state_to_save_dict(state: TrainState, is_distill: bool) -> dict:
     The params/ema_params swap for distillation is applied here.
     """
     s = _distill_swap(state, is_distill)
+    _log_param_shapes(s.params, tag="PRE_SAVE")
     d = {"params": s.params, "step": s.step}
     if s.opt_state is not None:
         d["opt_state"] = s.opt_state
@@ -432,6 +445,7 @@ class BaseWanTrainer(abc.ABC):
             )
             max_logging.log(f"  Total optimization steps = {self.config.max_train_steps}")
 
+        _log_param_shapes(state.params, tag="PRE_TRAIN_STEP0")
         p_train_step = self.get_train_step(pipeline, mesh, state_shardings, data_shardings)
         p_eval_step = self.get_eval_step(pipeline, mesh, state_shardings, eval_data_shardings)
 

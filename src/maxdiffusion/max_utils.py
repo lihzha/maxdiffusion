@@ -325,7 +325,14 @@ def device_put_replicated(x, sharding):
   # checkpoint loading uses replicated sharding so all hosts hold the same data.
   if isinstance(x, jax.Array) and len(x.devices()) > 1:
     import numpy as np
-    x = np.asarray(x.addressable_data(0))
+    shard = x.addressable_data(0)
+    if jax.process_index() == 0 and shard.shape != x.shape:
+      from maxdiffusion import max_logging  # pylint: disable=import-outside-toplevel
+      max_logging.log(
+          f"[DEVICE_PUT] multi-device JAX array: global_shape={x.shape} "
+          f"shard0_shape={shard.shape} ndevices={len(x.devices())} sharding={getattr(x, 'sharding', None)}"
+      )
+    x = np.asarray(shard)
   return jax.make_array_from_callback(x.shape, sharding, lambda index: x[index])
 
 
