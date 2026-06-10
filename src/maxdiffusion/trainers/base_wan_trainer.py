@@ -377,12 +377,25 @@ class BaseWanTrainer(abc.ABC):
                 step = restore_args.get("step", 0)
                 max_logging.log(f"Restoring optimizer and resuming from step {step}")
                 loaded_opt_state = restore_args.get("opt_state")
-                # orbax PyTreeRestore deserialises optax NamedTuples (ScaleByAdamState,
-                # etc.) as plain dicts, so attributes like .mu/.nu are missing.  Fix by
-                # grafting the loaded leaf values onto the correctly-typed structure
-                # produced by a fresh optimizer.init() call.
+                # orbax PyTreeRestore loses optax type information: NamedTuples
+                # (ScaleByAdamState etc.) become plain dicts and tuples become lists,
+                # so tree_map with the fresh state as template raises "Expected tuple,
+                # got list".  Instead: extract leaves from both trees independently
+                # (order is the same — both JAX and orbax traverse dicts
+                # alphabetically) then unflatten using the fresh treedef to restore
+                # the correct NamedTuple types.
                 fresh_opt_state = optimizer.init(state.params)
-                opt_state = jax.tree_util.tree_map(lambda _, x: x, fresh_opt_state, loaded_opt_state)
+                fresh_leaves, fresh_treedef = jax.tree_util.tree_flatten(fresh_opt_state)
+                loaded_leaves = jax.tree_util.tree_leaves(loaded_opt_state)
+                if len(fresh_leaves) == len(loaded_leaves):
+                    opt_state = jax.tree_util.tree_unflatten(fresh_treedef, loaded_leaves)
+                else:
+                    max_logging.log(
+                        f"WARNING: opt_state leaf count mismatch "
+                        f"(fresh={len(fresh_leaves)}, loaded={len(loaded_leaves)}), "
+                        f"starting from fresh optimizer state at step {step}."
+                    )
+                    opt_state = fresh_opt_state
                 state = state.replace(opt_state=opt_state, step=step)
                 del restore_args["opt_state"]
                 del optimizer
