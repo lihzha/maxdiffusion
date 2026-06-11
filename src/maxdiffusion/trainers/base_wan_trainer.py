@@ -379,22 +379,35 @@ class BaseWanTrainer(abc.ABC):
                 # orbax PyTreeRestore loses optax type information: NamedTuples
                 # (ScaleByAdamState etc.) become plain dicts and tuples become lists,
                 # so tree_map with the fresh state as template raises "Expected tuple,
-                # got list".  Instead: extract leaves from both trees independently
-                # (order is the same — both JAX and orbax traverse dicts
-                # alphabetically) then unflatten using the fresh treedef to restore
-                # the correct NamedTuple types.
-                fresh_opt_state = optimizer.init(state.params)
-                fresh_leaves, fresh_treedef = jax.tree_util.tree_flatten(fresh_opt_state)
+                # got list".  Extract leaves from both independently (same alphabetical
+                # order) then unflatten with the fresh treedef to restore correct types.
+                # Use state.opt_state (already created by TrainState.create above with
+                # correctly-sharded TPU arrays) rather than calling optimizer.init again,
+                # which would materialise a duplicate f32 optimizer state on TPU.
+                fresh_leaves, fresh_treedef = jax.tree_util.tree_flatten(state.opt_state)
                 loaded_leaves = jax.tree_util.tree_leaves(loaded_opt_state)
                 if len(fresh_leaves) == len(loaded_leaves):
-                    opt_state = jax.tree_util.tree_unflatten(fresh_treedef, loaded_leaves)
+                    # Place each CPU-resident loaded leaf onto TPU using the sharding of
+                    # the corresponding fresh leaf so optimizer state is not P()-replicated.
+                    def _place_opt(loaded, fresh):
+                        if (isinstance(loaded, jax.Array)
+                                and any(d.platform == "cpu" for d in loaded.devices())
+                                and isinstance(fresh, jax.Array)
+                                and hasattr(fresh, "sharding")):
+                            full = np.asarray(loaded.addressable_data(0))
+                            return jax.make_array_from_callback(
+                                loaded.shape, fresh.sharding, lambda idx: full[idx]
+                            )
+                        return loaded
+                    placed = [_place_opt(l, f) for l, f in zip(loaded_leaves, fresh_leaves)]
+                    opt_state = jax.tree_util.tree_unflatten(fresh_treedef, placed)
                 else:
                     max_logging.log(
                         f"WARNING: opt_state leaf count mismatch "
                         f"(fresh={len(fresh_leaves)}, loaded={len(loaded_leaves)}), "
                         f"starting from fresh optimizer state at step {step}."
                     )
-                    opt_state = fresh_opt_state
+                    opt_state = state.opt_state
                 state = state.replace(opt_state=opt_state, step=step)
                 del restore_args["opt_state"]
                 del optimizer

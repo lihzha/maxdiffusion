@@ -46,12 +46,12 @@ from maxdiffusion.utils import export_to_video
 #                            ignored in TFRecord mode (always forced True by preencoded_oracle_latents)
 CONFIGS = [
     ("no_gt",     0,  -1, False),
-    # ("clean",    -1,  -1, True),
-    # ("offset=0",  -1,  0,  True),
-    # ("offset=1",  -1,  1,  True),
-    # ("offset=10", -1,  10, True),
-    # ("offset=30", -1,  30, True),
-    # ("offset=50", -1,  50, True),
+    ("clean",    -1,  -1, True),
+    ("offset=0",  -1,  0,  True),
+    ("offset=1",  -1,  1,  True),
+    ("offset=10", -1,  10, True),
+    ("offset=30", -1,  30, True),
+    ("offset=50", -1,  50, True),
 ]
 
 MSE_RE = re.compile(r"MSE:\s*([\d.eE+\-]+)")
@@ -206,7 +206,7 @@ def run_inference_tfrecord(pipeline, config, oracle_latents, text_embed, label, 
         pipeline._decode_latents_to_video(latents[:, :, :, i * h:(i + 1) * h, :])
         for i in range(3)
     ]  # each: (B, T, H_pix, W_pix, C)
-    stacked = np.concatenate([v[0] for v in cam_videos], axis=2)  # (T, H_pix, W_pix*3, C)
+    stacked = np.concatenate([v[0] for v in cam_videos], axis=1)  # (T, H_pix, W_pix*3, C)
 
     safe_label = label.replace("=", "").replace(" ", "_")
     video_path = os.path.join(out_dir, f"sample{sample_idx:03d}__{safe_label}.mp4")
