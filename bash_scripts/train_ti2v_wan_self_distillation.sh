@@ -139,6 +139,7 @@ python src/maxdiffusion/train_wan.py \
     num_privileged_frames=-1 \
     hardware='tpu' \
     ema_decay=0.99 \
+    teacher_update_every: 50 \
     distill=True \
     oracle_noise_offset=-1 \
     wandb_project='wan-ti2v-self-distill-clean'
