@@ -275,10 +275,13 @@ def main():
 
     print("[eval] Loading model...")
     checkpoint_loader = WanCheckpointerTI2V_2_2(config=config)
-    pipeline, _, _, _ = checkpoint_loader.load_checkpoint()
+    checkpoint_step = getattr(config, "checkpoint_step", -1)
+    pipeline, _, _, _ = checkpoint_loader.load_checkpoint(
+        step=checkpoint_step if checkpoint_step > 0 else None
+    )
     print("[eval] Model loaded.")
 
-    out_dir = os.path.join(getattr(config, "output_dir", "./outputs"), "oracle_noise_eval")
+    out_dir = os.path.join(getattr(config, "output_dir", "./outputs"), getattr(config, "run_name", "oracle_noise_eval"))
     os.makedirs(out_dir, exist_ok=True)
 
     # ── Video eval ────────────────────────────────────────────────────────────

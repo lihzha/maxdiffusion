@@ -322,8 +322,16 @@ class BaseWanTrainer(abc.ABC):
         # actual student weights are returned under "student_params" in restore_args.
         student_params_from_ckpt = restore_args.pop("student_params", None)
         if distill and ema_decay > 0.0 and student_params_from_ckpt is not None:
-            params = student_params_from_ckpt   # student → receives gradient updates
-            ema_params = loaded_params           # teacher → provides distillation targets
+            ema_params = loaded_params           # teacher → provides distillation targets (already on TPU)
+            # student_params come from the CPU checkpoint restore.  _to_tpu_if_cpu falls
+            # back to nnx.get_partition_spec for CPU arrays, which returns P() for plain
+            # array fields (no logical-axis annotations), causing every device to hold a
+            # full replica of the model and triggering HBM OOM on reload.  Explicitly
+            # shard to match the teacher's tensor-parallel layout instead.
+            params = jax.device_put(
+                student_params_from_ckpt,
+                jax.tree_util.tree_map(lambda x: x.sharding, ema_params),
+            )
         else:
             params = loaded_params
             if ema_decay > 0.0:
