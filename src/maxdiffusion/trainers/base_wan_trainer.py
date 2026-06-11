@@ -335,13 +335,16 @@ class BaseWanTrainer(abc.ABC):
             # Use make_array_from_callback (same as _to_tpu_if_cpu) instead of
             # device_put: the latter fails on multi-controller JAX when CPU and TPU
             # have different device-set IDs.
-            ema_leaves, _ = jax.tree_util.tree_flatten(ema_params)
-            student_leaves, student_treedef = jax.tree_util.tree_flatten(student_params_from_ckpt)
+            ema_leaves, ema_treedef = jax.tree_util.tree_flatten(ema_params)
+            student_leaves, _ = jax.tree_util.tree_flatten(student_params_from_ckpt)
             def _place_like(s, e):
                 full = np.asarray(s.addressable_data(0))
                 return jax.make_array_from_callback(s.shape, e.sharding, lambda idx: full[idx])
+            # Unflatten with ema_treedef (nnx.State), not the orbax dict treedef, so
+            # state.params and state.ema_params share the same pytree type.  tree_map
+            # in post_train_step's EMA update requires matching node types.
             params = jax.tree_util.tree_unflatten(
-                student_treedef,
+                ema_treedef,
                 [_place_like(s, e) for s, e in zip(student_leaves, ema_leaves)],
             )
         else:

@@ -86,11 +86,16 @@ class WanTI2VTrainer(BaseWanTrainer):
         # only on the local per-host shard and returns a local-shard-shaped result
         # (e.g. [16, dim] instead of global [256, dim]).  Wrapping in jax.jit ensures
         # the EMA update runs as a distributed op and produces the correct global shape.
-        new_ema_params = jax.jit(
-            lambda ema, p: jax.tree_util.tree_map(
-                lambda e, q: ema_decay * e + (1.0 - ema_decay) * q, ema, p
-            )
-        )(state.ema_params, state.params)
+        # state.ema_params (nnx.State) and state.params may have different pytree
+        # container types after p_train_step (e.g. nnx.State vs dict).  Flatten
+        # both independently — same leaf order — and rebuild under ema's treedef.
+        def _ema_update(ema, p):
+            ema_leaves, ema_treedef = jax.tree_util.tree_flatten(ema)
+            p_leaves = jax.tree_util.tree_leaves(p)
+            new_leaves = [ema_decay * e + (1.0 - ema_decay) * q
+                          for e, q in zip(ema_leaves, p_leaves)]
+            return jax.tree_util.tree_unflatten(ema_treedef, new_leaves)
+        new_ema_params = jax.jit(_ema_update)(state.ema_params, state.params)
         return state.replace(ema_params=new_ema_params)
 
     # ── Data shardings ───────────────────────────────────────────────────────
