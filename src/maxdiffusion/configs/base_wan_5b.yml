@@ -211,6 +211,9 @@ allow_split_physical_axes: False
 dataset_name: 'diffusers/pokemon-gpt4-captions'
 train_split: 'train'
 dataset_type: 'tfrecord'
+# When True, each training sample uses one randomly-chosen camera view instead of
+# concatenating all three along H.  Eval always uses cam0 (wrist).
+single_camera: False
 cache_latents_text_encoder_outputs: True
 # cache_latents_text_encoder_outputs only apply to dataset_type="tf",
 # only apply to small dataset that fits in memory

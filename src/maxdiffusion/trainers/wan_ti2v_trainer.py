@@ -147,19 +147,25 @@ class WanTI2VTrainer(BaseWanTrainer):
         # WAN VAE: 1 anchor + num_frames // 4 generated latent frames.
         window_size = 1 + config.num_frames // 4
 
+        single_camera = getattr(config, "single_camera", False)
+
         def prepare_sample_train(features):
             cam0 = tf.cast(tf.io.parse_tensor(features["latent_cam0"], out_type=tf.float16), tf.float32)
             cam1 = tf.cast(tf.io.parse_tensor(features["latent_cam1"], out_type=tf.float16), tf.float32)
             cam2 = tf.cast(tf.io.parse_tensor(features["latent_cam2"], out_type=tf.float16), tf.float32)
-            # Concat cameras along H (axis 2): (F_lat, C, H_lat*3, W_lat) — matches ctrl_world.
-            latent = tf.concat([cam0, cam1, cam2], axis=2)
+            if single_camera:
+                cam_idx = tf.random.uniform((), 0, 3, dtype=tf.int32)
+                latent = tf.switch_case(cam_idx, [lambda: cam0, lambda: cam1, lambda: cam2])
+            else:
+                # Concat cameras along H (axis 2): (F_lat, C, H_lat*3, W_lat) — matches ctrl_world.
+                latent = tf.concat([cam0, cam1, cam2], axis=2)
 
             # Random temporal window on axis 0 (time), then transpose to channels-first.
             f_total = tf.shape(latent)[0]
             max_start = tf.maximum(0, f_total - window_size)
             start = tf.random.uniform((), 0, max_start + 1, dtype=tf.int32)
-            latent = latent[start : start + window_size]       # (window_size, C, H_lat*3, W_lat)
-            latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat*3, W_lat)
+            latent = latent[start : start + window_size]
+            latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat[*3], W_lat)
 
             encoder_hidden_states = tf.cast(
                 tf.io.parse_tensor(features["text_embed"], out_type=tf.float16), tf.float32
@@ -170,9 +176,12 @@ class WanTI2VTrainer(BaseWanTrainer):
             cam0 = tf.cast(tf.io.parse_tensor(features["latent_cam0"], out_type=tf.float16), tf.float32)
             cam1 = tf.cast(tf.io.parse_tensor(features["latent_cam1"], out_type=tf.float16), tf.float32)
             cam2 = tf.cast(tf.io.parse_tensor(features["latent_cam2"], out_type=tf.float16), tf.float32)
-            latent = tf.concat([cam0, cam1, cam2], axis=2)     # (F_lat, C, H_lat*3, W_lat)
-            latent = latent[:window_size]                      # (window_size, C, H_lat*3, W_lat)
-            latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat*3, W_lat)
+            if single_camera:
+                latent = cam0  # use cam0 (wrist) for eval, consistent with existing convention
+            else:
+                latent = tf.concat([cam0, cam1, cam2], axis=2)     # (F_lat, C, H_lat*3, W_lat)
+            latent = latent[:window_size]
+            latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat[*3], W_lat)
             encoder_hidden_states = tf.cast(
                 tf.io.parse_tensor(features["text_embed"], out_type=tf.float16), tf.float32
             )  # (512, 4096)

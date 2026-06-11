@@ -106,7 +106,7 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_5b.yml \
-    run_name=ti2v_wan_droid \
+    run_name=ti2v_wan_droid_single_view \
     output_dir=gs://v6_east1d/checkpoints/wan-ti2v-finetune \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -128,8 +128,8 @@ python src/maxdiffusion/train_wan.py \
     dcn_context_parallelism=1 \
     allow_split_physical_axes=True \
     scan_layers=True \
-    max_train_steps=10000 \
-    checkpoint_every=50 \
+    max_train_steps=10001 \
+    checkpoint_every=100 \
     checkpoint_keep_period=1000 \
     per_device_batch_size=0.25 \
     height=480 \
@@ -140,7 +140,8 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     ema_decay=0.0 \
     distill=False \
-    wandb_project='wan-ti2v-finetune'
+    wandb_project='wan-ti2v-finetune_single_view' \
+    single_camera=True
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
