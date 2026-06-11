@@ -328,9 +328,15 @@ class BaseWanTrainer(abc.ABC):
             # array fields (no logical-axis annotations), causing every device to hold a
             # full replica of the model and triggering HBM OOM on reload.  Explicitly
             # shard to match the teacher's tensor-parallel layout instead.
-            params = jax.device_put(
-                student_params_from_ckpt,
-                jax.tree_util.tree_map(lambda x: x.sharding, ema_params),
+            # ema_params is nnx.State; student_params_from_ckpt is a plain dict (orbax
+            # restore loses container types), so tree structures differ.  Flatten both
+            # independently — leaf ordering is the same (both traverse dicts
+            # alphabetically) — then unflatten back into the student's dict structure.
+            ema_leaves, _ = jax.tree_util.tree_flatten(ema_params)
+            student_leaves, student_treedef = jax.tree_util.tree_flatten(student_params_from_ckpt)
+            params = jax.tree_util.tree_unflatten(
+                student_treedef,
+                [jax.device_put(s, e.sharding) for s, e in zip(student_leaves, ema_leaves)],
             )
         else:
             params = loaded_params
