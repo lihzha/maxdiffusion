@@ -267,16 +267,22 @@ def load_state_if_possible(
 
 
 def get_cpu_mesh_and_sharding() -> Tuple[Mesh, NamedSharding]:
-  """Creates a JAX mesh using CPU devices and a fully replicated sharding.
+  """Creates a JAX mesh and replicated sharding for checkpoint restoration.
 
-  This is useful for checkpointing when the full model state needs to be
-  loaded onto a single device or when restoring on a different topology.
+  On multi-host runs (TPU pods) each process holds only a shard of the global
+  array, so we load onto CPU — which is fully replicated — to obtain the
+  complete global array before re-sharding.  On single-host runs (GPU/single
+  TPU) the CPU sharding is rejected by newer orbax versions, so we use the
+  actual compute device instead.
 
   Returns:
-    A tuple containing the CPU mesh and the replicated NamedSharding.
+    A tuple containing the mesh and the replicated NamedSharding.
   """
-  cpu_devices = np.array(jax.devices(backend="cpu"))
-  mesh = Mesh(cpu_devices, axis_names=("data",))
+  if jax.process_count() > 1:
+    devices = np.array(jax.devices(backend="cpu"))
+  else:
+    devices = np.array(jax.devices())
+  mesh = Mesh(devices.reshape(-1), axis_names=("data",))
   replicated_sharding = NamedSharding(mesh, P())
   return mesh, replicated_sharding
 

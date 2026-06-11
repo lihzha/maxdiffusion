@@ -19,7 +19,7 @@ import os
 from typing import Optional, Tuple
 import jax
 from etils import epath
-from maxdiffusion.checkpointing.checkpointing_utils import add_sharding_to_struct, get_cpu_mesh_and_sharding
+from maxdiffusion.checkpointing.checkpointing_utils import get_cpu_mesh_and_sharding
 from maxdiffusion.checkpointing.wan_checkpointer import WanCheckpointer
 import orbax.checkpoint as ocp
 from orbax.checkpoint.checkpoint_manager import CheckpointManager, CheckpointManagerOptions
@@ -63,19 +63,23 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
         return None, None
     _log(f"Loading WAN TI2V 2.2 checkpoint from step {step}")
 
-    mesh, replicated_sharding = get_cpu_mesh_and_sharding()
+    _, replicated_sharding = get_cpu_mesh_and_sharding()
     metadatas = self.checkpoint_manager.item_metadata(step)
     state_metadata = metadatas.wan_state
 
-    target_shardings = jax.tree_util.tree_map(lambda _: replicated_sharding, state_metadata)
-    with mesh:
-      abstract_state = jax.tree_util.tree_map(add_sharding_to_struct, state_metadata, target_shardings)
+    # Pass explicit ArrayRestoreArgs for every leaf so orbax uses our sharding
+    # instead of the TPU-specific _sharding files saved with the checkpoint
+    # (those partition specs are invalid / resolve to None on GPU).
+    restore_args = jax.tree_util.tree_map(
+        lambda _: ocp.ArrayRestoreArgs(sharding=replicated_sharding),
+        state_metadata,
+    )
 
     restored_checkpoint = self.checkpoint_manager.restore(
         step=step,
         args=ocp.args.Composite(
             wan_config=ocp.args.JsonRestore(),
-            wan_state=ocp.args.PyTreeRestore(item=abstract_state),
+            wan_state=ocp.args.PyTreeRestore(restore_args=restore_args),
         ),
     )
     _log(f"Restored checkpoint keys: {list(restored_checkpoint.keys())}")
