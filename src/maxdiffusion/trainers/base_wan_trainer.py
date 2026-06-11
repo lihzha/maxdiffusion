@@ -332,11 +332,17 @@ class BaseWanTrainer(abc.ABC):
             # restore loses container types), so tree structures differ.  Flatten both
             # independently — leaf ordering is the same (both traverse dicts
             # alphabetically) — then unflatten back into the student's dict structure.
+            # Use make_array_from_callback (same as _to_tpu_if_cpu) instead of
+            # device_put: the latter fails on multi-controller JAX when CPU and TPU
+            # have different device-set IDs.
             ema_leaves, _ = jax.tree_util.tree_flatten(ema_params)
             student_leaves, student_treedef = jax.tree_util.tree_flatten(student_params_from_ckpt)
+            def _place_like(s, e):
+                full = np.asarray(s.addressable_data(0))
+                return jax.make_array_from_callback(s.shape, e.sharding, lambda idx: full[idx])
             params = jax.tree_util.tree_unflatten(
                 student_treedef,
-                [jax.device_put(s, e.sharding) for s, e in zip(student_leaves, ema_leaves)],
+                [_place_like(s, e) for s, e in zip(student_leaves, ema_leaves)],
             )
         else:
             params = loaded_params

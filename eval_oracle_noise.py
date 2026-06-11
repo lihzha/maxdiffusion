@@ -46,12 +46,12 @@ from maxdiffusion.utils import export_to_video
 #                            ignored in TFRecord mode (always forced True by preencoded_oracle_latents)
 CONFIGS = [
     ("no_gt",     0,  -1, False),
-    ("clean",    -1,  -1, True),
-    ("offset=0",  -1,  0,  True),
-    ("offset=1",  -1,  1,  True),
-    ("offset=10", -1,  10, True),
-    ("offset=30", -1,  30, True),
-    ("offset=50", -1,  50, True),
+    # ("clean",    -1,  -1, True),
+    # ("offset=0",  -1,  0,  True),
+    # ("offset=1",  -1,  1,  True),
+    # ("offset=10", -1,  10, True),
+    # ("offset=30", -1,  30, True),
+    # ("offset=50", -1,  50, True),
 ]
 
 MSE_RE = re.compile(r"MSE:\s*([\d.eE+\-]+)")
