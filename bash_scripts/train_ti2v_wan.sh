@@ -128,7 +128,7 @@ python src/maxdiffusion/train_wan.py \
     dcn_context_parallelism=1 \
     allow_split_physical_axes=True \
     scan_layers=True \
-    max_train_steps=10001 \
+    max_train_steps=11000 \
     checkpoint_every=100 \
     checkpoint_keep_period=1000 \
     per_device_batch_size=0.25 \
