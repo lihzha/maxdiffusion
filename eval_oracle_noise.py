@@ -91,13 +91,14 @@ def load_video_as_pipeline_input(video_path, height, width):
     return image, conditioning_video
 
 
-def iter_val_latents(val_data_dir: str, window_size: int):
+def iter_val_latents(val_data_dir: str, window_size: int, single_camera: bool = False):
     """Yield (oracle_latents, text_embed, sample_idx) for every TFRecord in val_data_dir.
 
-    Stacks cameras on H exactly as training does (cam0/cam1/cam2 on axis 2).
+    When single_camera=False, stacks cam0/cam1/cam2 on H (axis 2) as training does.
+    When single_camera=True, uses only cam0 (wrist), matching training eval convention.
     Takes the first `window_size` latent frames, matching training eval.
 
-    oracle_latents: (1, window_size, H_lat*3, W_lat, C_z) channels-last, float32, normalized.
+    oracle_latents: (1, window_size, H_lat[*3], W_lat, C_z) channels-last, float32, normalized.
     text_embed:     (1, 512, 4096) float32.
     """
     import tensorflow as tf
@@ -119,14 +120,18 @@ def iter_val_latents(val_data_dir: str, window_size: int):
 
     for idx, raw in enumerate(ds):
         cam0 = tf.cast(tf.io.parse_tensor(raw["latent_cam0"], out_type=tf.float16), tf.float32).numpy()
-        cam1 = tf.cast(tf.io.parse_tensor(raw["latent_cam1"], out_type=tf.float16), tf.float32).numpy()
-        cam2 = tf.cast(tf.io.parse_tensor(raw["latent_cam2"], out_type=tf.float16), tf.float32).numpy()
         text = tf.cast(tf.io.parse_tensor(raw["text_embed"],  out_type=tf.float16), tf.float32).numpy()
 
-        latent = np.concatenate([cam0, cam1, cam2], axis=2)  # (F_lat, C, H*3, W)
+        if single_camera:
+            latent = cam0                                         # (F_lat, C, H, W)
+        else:
+            cam1 = tf.cast(tf.io.parse_tensor(raw["latent_cam1"], out_type=tf.float16), tf.float32).numpy()
+            cam2 = tf.cast(tf.io.parse_tensor(raw["latent_cam2"], out_type=tf.float16), tf.float32).numpy()
+            latent = np.concatenate([cam0, cam1, cam2], axis=2)  # (F_lat, C, H*3, W)
+
         latent = latent[:window_size]                         # first window, matches training eval
-        latent = latent.transpose(0, 2, 3, 1)                # (F_lat, H*3, W, C)
-        oracle_latents = jnp.array(latent[None])              # (1, F_lat, H*3, W, C)
+        latent = latent.transpose(0, 2, 3, 1)                # (F_lat, H[*3], W, C)
+        oracle_latents = jnp.array(latent[None])              # (1, F_lat, H[*3], W, C)
         text_embed = jnp.array(text[None])                    # (1, 512, 4096)
 
         yield oracle_latents, text_embed, idx
@@ -166,7 +171,7 @@ def run_inference_video(pipeline, config, image, conditioning_video, privileged,
     return _parse_mse_mae(output)
 
 
-def run_inference_tfrecord(pipeline, config, oracle_latents, text_embed, label, sample_idx, out_dir):
+def run_inference_tfrecord(pipeline, config, oracle_latents, text_embed, label, sample_idx, out_dir, single_camera: bool = False):
     """Run pipeline with preencoded oracle latents from a TFRecord; return (mse, mae).
 
     In TFRecord mode `privileged` is always forced True by the pipeline (because
@@ -199,18 +204,22 @@ def run_inference_tfrecord(pipeline, config, oracle_latents, text_embed, label, 
     output = buf.getvalue()
     print(output, end="")
 
-    # latents: (B, C, T, H_lat*3, W_lat) denormalized channels-first.
-    # Decode each camera separately then stack horizontally → (T, H_pix, W_pix*3, C).
-    h = latents.shape[3] // 3
-    cam_videos = [
-        pipeline._decode_latents_to_video(latents[:, :, :, i * h:(i + 1) * h, :])
-        for i in range(3)
-    ]  # each: (B, T, H_pix, W_pix, C)
-    stacked = np.concatenate([v[0] for v in cam_videos], axis=1)  # (T, H_pix, W_pix*3, C)
-
     safe_label = label.replace("=", "").replace(" ", "_")
     video_path = os.path.join(out_dir, f"sample{sample_idx:03d}__{safe_label}.mp4")
-    export_to_video(stacked, video_path, fps=getattr(config, "fps", 16))
+
+    if single_camera:
+        # latents: (B, C, T, H_lat, W_lat) — decode directly as one camera.
+        decoded = pipeline._decode_latents_to_video(latents)  # (B, T, H_pix, W_pix, C)
+        export_to_video(decoded[0], video_path, fps=getattr(config, "fps", 16))
+    else:
+        # latents: (B, C, T, H_lat*3, W_lat) — decode each camera then stack horizontally.
+        h = latents.shape[3] // 3
+        cam_videos = [
+            pipeline._decode_latents_to_video(latents[:, :, :, i * h:(i + 1) * h, :])
+            for i in range(3)
+        ]  # each: (B, T, H_pix, W_pix, C)
+        stacked = np.concatenate([v[0] for v in cam_videos], axis=1)  # (T, H_pix, W_pix*3, C)
+        export_to_video(stacked, video_path, fps=getattr(config, "fps", 16))
 
     return _parse_mse_mae(output)
 
@@ -317,14 +326,15 @@ def main():
 
     # ── TFRecord val eval ─────────────────────────────────────────────────────
     val_data_dir = getattr(config, "val_data_dir", "")
+    single_camera = getattr(config, "single_camera", False)
     if val_data_dir:
         window_size = 1 + config.num_frames // pipeline.vae_scale_factor_temporal
-        print(f"\n[eval] TFRecord val eval: {val_data_dir}  window_size={window_size}")
+        print(f"\n[eval] TFRecord val eval: {val_data_dir}  window_size={window_size}  single_camera={single_camera}")
         tfrecord_out_dir = os.path.join(out_dir, "tfrecord")
         os.makedirs(tfrecord_out_dir, exist_ok=True)
         tfrecord_results = defaultdict(list)
 
-        for oracle_latents, text_embed, idx in iter_val_latents(val_data_dir, window_size):
+        for oracle_latents, text_embed, idx in iter_val_latents(val_data_dir, window_size, single_camera=single_camera):
             print(f"\n[eval] ── TFRecord sample {idx} ──")
             for label, num_priv, offset, _ in CONFIGS:
                 print(f"[eval]   config={label}")
@@ -332,7 +342,8 @@ def main():
                 pyconfig._config.keys["oracle_noise_offset"] = offset
 
                 mse, mae = run_inference_tfrecord(
-                    pipeline, config, oracle_latents, text_embed, label, idx, tfrecord_out_dir
+                    pipeline, config, oracle_latents, text_embed, label, idx, tfrecord_out_dir,
+                    single_camera=single_camera,
                 )
                 tfrecord_results[label].append((mse, mae))
                 print(f"[eval]   → MSE={mse}, MAE={mae}")
