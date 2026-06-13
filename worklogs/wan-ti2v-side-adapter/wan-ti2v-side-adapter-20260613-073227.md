@@ -376,3 +376,23 @@ Next:
 - Let the active cleanup finish before the wrapper stages batch 356-371.
 - Complete all 704 train shards, upload `summary.json`, validate representative GCS shards including the final partial shard, and delete a1001 staging data.
 - If the existing v6-64 is unavailable, use `tpu watch v6 -n 64` to provision a new v6 slice for the smoke and full adapter-only training run.
+
+## 2026-06-13T21:13:16Z - train conversion progress checkpoint
+
+Goal:
+- Record the current train conversion progress after additional a1001 batches and confirm the storage guard remains intact.
+
+Result:
+- status: in_progress
+- metrics/artifacts: GCS train shard count reached `404/704`; completed train shards are contiguous through `train-00403-of-00704.tfrecord`.
+- metrics/artifacts: a1001 batches 356-371, 372-387, and 388-403 converted successfully on Slurm jobs `29048798`, `29049354`, and `29049802`, then uploaded to `gs://v6_east1d/datasets/droid_wan_side_adapter/train`.
+- metrics/artifacts: Batch 372-387 and 388-403 each staged `32768` source files, about `7.4G` of cache, and uploaded all 16 TFRecord shards before cleanup.
+- metrics/artifacts: Lustre remained around `24T` free, still well above the user's 2T free-space guard.
+
+Analysis:
+- The a1001 streaming conversion remains correct: batches continue to finish with contiguous GCS shard coverage and no duplicate/missing shard evidence.
+- Runtime is dominated by source staging and cleanup of many small files; conversion itself remains short and low-memory.
+
+Next:
+- Continue monitoring the active orchestrator from batch 404 onward until all 704 train shards exist in GCS.
+- After final upload, write the train summary, validate representative shards including the final partial shard, and delete remaining a1001 temporary data before launching TPU training.
