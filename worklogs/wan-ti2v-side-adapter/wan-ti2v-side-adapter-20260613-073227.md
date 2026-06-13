@@ -354,3 +354,25 @@ Analysis:
 Next:
 - Continue monitoring from batch 340-355 onward until all 704 train shards are in `gs://v6_east1d`.
 - After final upload, write the train summary, validate representative shards, and delete remaining a1001 temporary data.
+
+## 2026-06-13T19:25:00Z - train conversion progress and v6 launch permission
+
+Goal:
+- Record the current a1001 conversion state and the updated user instruction for the TPU launch stage.
+
+Result:
+- status: in_progress
+- metrics/artifacts: GCS train shard count reached `356/704`; completed train shards are contiguous through `train-00355-of-00704.tfrecord`.
+- metrics/artifacts: a1001 batch 340-355 converted successfully on Slurm job `29048355`, exit `0:0`, elapsed `00:03:31`, MaxRSS `1218248K`.
+- metrics/artifacts: All 16 shards from batch 340-355 reached final local size around `453M`, uploaded to `gs://v6_east1d/datasets/droid_wan_side_adapter/train`, and cleanup is in progress.
+- metrics/artifacts: Lustre remains around `24T` free, well above the user's 2T free-space guard.
+- key evidence: GCS shard count returned `356`; `sacct -j 29048355` showed `COMPLETED|0:0`.
+
+Analysis:
+- The conversion data path is still correct and storage-safe. The remaining cost is Lustre metadata cleanup after each batch.
+- The user explicitly said no additional confirmation is needed for subsequent steps once the current work is finished, and authorized using `tpu watch` to create new TPU v6 slices.
+
+Next:
+- Let the active cleanup finish before the wrapper stages batch 356-371.
+- Complete all 704 train shards, upload `summary.json`, validate representative GCS shards including the final partial shard, and delete a1001 staging data.
+- If the existing v6-64 is unavailable, use `tpu watch v6 -n 64` to provision a new v6 slice for the smoke and full adapter-only training run.
