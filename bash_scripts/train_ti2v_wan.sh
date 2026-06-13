@@ -130,7 +130,7 @@ python src/maxdiffusion/train_wan.py \
     scan_layers=True \
     max_train_steps=100100 \
     checkpoint_every=100 \
-    checkpoint_keep_period=1000 \
+    checkpoint_keep_period=10000 \
     per_device_batch_size=0.25 \
     height=480 \
     width=832 \
