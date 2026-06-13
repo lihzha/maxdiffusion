@@ -197,7 +197,23 @@ def _iter_manifest_names(path: Path) -> Iterable[str]:
             yield item["name"]
 
 
-def _list_cache_names(cache_root: Path) -> list[str]:
+def _valid_cache_dir(cache_root: Path, name: str) -> bool:
+    p = cache_root / name
+    return p.is_dir() and (p / "z_I0.pt").exists() and (p / "z_video.pt").exists() and (p / "actions.npy").exists()
+
+
+def _list_cache_names(cache_root: Path, limit: int = 0, unsorted_listing: bool = False) -> list[str]:
+    if unsorted_listing or limit > 0:
+        names = []
+        with os.scandir(cache_root) as it:
+            for entry in it:
+                if not entry.is_dir():
+                    continue
+                if _valid_cache_dir(cache_root, entry.name):
+                    names.append(entry.name)
+                    if limit > 0 and len(names) >= limit:
+                        break
+        return names
     return sorted(
         p.name
         for p in cache_root.iterdir()
@@ -207,15 +223,27 @@ def _list_cache_names(cache_root: Path) -> list[str]:
 
 def _select_names(args) -> list[str]:
     if args.manifest_jsonl:
-        names = list(_iter_manifest_names(Path(args.manifest_jsonl)))
+        names = []
+        for idx, name in enumerate(_iter_manifest_names(Path(args.manifest_jsonl))):
+            if idx < args.start_index:
+                continue
+            if args.end_index is not None and idx >= args.end_index:
+                break
+            names.append(name)
+            if args.max_examples > 0 and len(names) >= args.max_examples:
+                break
     else:
-        names = _list_cache_names(Path(args.cache_root))
-    if args.start_index:
-        names = names[args.start_index :]
-    if args.end_index is not None:
-        names = names[: max(0, args.end_index - args.start_index)]
-    if args.max_examples > 0:
-        names = names[: args.max_examples]
+        listing_limit = 0
+        can_limit_listing = args.start_index == 0 and args.end_index is None and args.max_examples > 0
+        if can_limit_listing:
+            listing_limit = args.max_examples
+        names = _list_cache_names(Path(args.cache_root), limit=listing_limit, unsorted_listing=args.unsorted_listing)
+        if args.start_index:
+            names = names[args.start_index :]
+        if args.end_index is not None:
+            names = names[: max(0, args.end_index - args.start_index)]
+        if args.max_examples > 0:
+            names = names[: args.max_examples]
     return names
 
 
@@ -410,6 +438,11 @@ def parse_args():
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--unsorted-listing",
+        action="store_true",
+        help="Do not sort cache directories when no manifest is supplied. Useful for smoke tests and full one-pass conversion.",
+    )
     parser.add_argument("--summary-path", default="")
     return parser.parse_args()
 
