@@ -7,13 +7,18 @@ Input cache window directory:
   <cache_root>/<name>/meta.json
 
 Output TFRecord fields:
-  z_i0    float16 serialized tensor [48, 1, 12, 20]
-  z_video float16 serialized tensor [48, 9, 12, 20]
-  actions float32 serialized tensor [32, 7]
+  z_i0    raw float16 bytes [48, 1, 12, 20]
+  z_video raw float16 bytes [48, 9, 12, 20]
+  actions raw float32 bytes [32, 7]
 
 The script is deliberately conservative: it estimates output size before
 writing, refuses to exceed --max-output-gb, and can check local free space when
 writing to /lustre temporary locations.
+
+It intentionally does not import TensorFlow. Della's existing Wan2.2 venv has
+Torch/NumPy but not TensorFlow, and installing TensorFlow on a nearly-full GPFS
+just to write TFRecords is unnecessary. The writer below emits standard
+TFRecord framing around standard tf.train.Example protobuf bytes.
 """
 
 from __future__ import annotations
@@ -23,13 +28,14 @@ import json
 import math
 import os
 import shutil
+import struct
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-import tensorflow as tf
 import torch
 
 
@@ -38,12 +44,99 @@ EXPECTED_Z_VIDEO_SHAPE = (48, 9, 12, 20)
 EXPECTED_ACTIONS_SHAPE = (32, 7)
 
 
-def _bytes_feature(value: bytes) -> tf.train.Feature:
-    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+_CRC32C_TABLE: list[int] | None = None
 
 
-def _int64_feature(value: int) -> tf.train.Feature:
-    return tf.train.Feature(int64_list=tf.train.Int64List(value=[int(value)]))
+def _crc32c_table() -> list[int]:
+    global _CRC32C_TABLE
+    if _CRC32C_TABLE is None:
+        table = []
+        for i in range(256):
+            crc = i
+            for _ in range(8):
+                if crc & 1:
+                    crc = (crc >> 1) ^ 0x82F63B78
+                else:
+                    crc >>= 1
+            table.append(crc & 0xFFFFFFFF)
+        _CRC32C_TABLE = table
+    return _CRC32C_TABLE
+
+
+def _crc32c(data: bytes) -> int:
+    crc = 0xFFFFFFFF
+    table = _crc32c_table()
+    for byte in data:
+        crc = table[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+    return (~crc) & 0xFFFFFFFF
+
+
+def _masked_crc32c(data: bytes) -> int:
+    crc = _crc32c(data)
+    return (((crc >> 15) | (crc << 17)) + 0xA282EAD8) & 0xFFFFFFFF
+
+
+def _varint(value: int) -> bytes:
+    out = bytearray()
+    while value > 0x7F:
+        out.append((value & 0x7F) | 0x80)
+        value >>= 7
+    out.append(value)
+    return bytes(out)
+
+
+def _field_key(field_number: int, wire_type: int) -> bytes:
+    return _varint((field_number << 3) | wire_type)
+
+
+def _len_field(field_number: int, payload: bytes) -> bytes:
+    return _field_key(field_number, 2) + _varint(len(payload)) + payload
+
+
+def _varint_field(field_number: int, value: int) -> bytes:
+    return _field_key(field_number, 0) + _varint(value)
+
+
+def _bytes_feature(value: bytes) -> bytes:
+    bytes_list = _len_field(1, value)
+    return _len_field(1, bytes_list)
+
+
+def _int64_feature(value: int) -> bytes:
+    int64_list = _varint_field(1, int(value))
+    return _len_field(3, int64_list)
+
+
+def _example_proto(features: dict[str, bytes]) -> bytes:
+    feature_entries = []
+    for name, feature in sorted(features.items()):
+        entry = _len_field(1, name.encode("utf-8")) + _len_field(2, feature)
+        feature_entries.append(_len_field(1, entry))
+    features_msg = b"".join(feature_entries)
+    return _len_field(1, features_msg)
+
+
+class _TFRecordWriter:
+    def __init__(self, path: str):
+        self.path = path
+        self._f = open(path, "wb")
+
+    def write(self, data: bytes):
+        length = struct.pack("<Q", len(data))
+        self._f.write(length)
+        self._f.write(struct.pack("<I", _masked_crc32c(length)))
+        self._f.write(data)
+        self._f.write(struct.pack("<I", _masked_crc32c(data)))
+
+    def close(self):
+        self._f.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
 
 
 def _torch_load_tensor(path: Path) -> np.ndarray:
@@ -86,12 +179,12 @@ def _make_example(cache_root: Path, name: str, ordinal: int) -> bytes:
     features = {
         "name": _bytes_feature(name.encode("utf-8")),
         "ordinal": _int64_feature(ordinal),
-        "z_i0": _bytes_feature(tf.io.serialize_tensor(tf.convert_to_tensor(z_i0)).numpy()),
-        "z_video": _bytes_feature(tf.io.serialize_tensor(tf.convert_to_tensor(z_video)).numpy()),
-        "actions": _bytes_feature(tf.io.serialize_tensor(tf.convert_to_tensor(actions)).numpy()),
+        "z_i0": _bytes_feature(np.ascontiguousarray(z_i0).tobytes()),
+        "z_video": _bytes_feature(np.ascontiguousarray(z_video).tobytes()),
+        "actions": _bytes_feature(np.ascontiguousarray(actions).tobytes()),
         "meta_json": _bytes_feature(meta_bytes),
     }
-    return tf.train.Example(features=tf.train.Features(feature=features)).SerializeToString()
+    return _example_proto(features)
 
 
 def _iter_manifest_names(path: Path) -> Iterable[str]:
@@ -138,25 +231,37 @@ def _estimate_bytes(cache_root: Path, names: list[str], estimate_samples: int) -
     return bytes_per_sample, bytes_per_sample * len(names)
 
 
-def _check_local_storage(args, estimated_output_bytes: int):
-    if args.output_dir.startswith("gs://") or not args.local_storage_root:
+def _local_write_target(args) -> str:
+    if args.local_staging_dir:
+        return args.local_staging_dir
+    if not args.output_dir.startswith("gs://"):
+        return args.output_dir
+    return ""
+
+
+def _check_local_storage(args, estimated_output_bytes: int, bytes_per_sample: int, selected_count: int):
+    target = _local_write_target(args)
+    if not target or not args.local_storage_root:
         return
     root = Path(args.local_storage_root)
     if not root.exists():
         raise FileNotFoundError(f"--local-storage-root does not exist: {root}")
-    output_path = Path(args.output_dir).resolve()
+    output_path = Path(target).resolve()
     root_path = root.resolve()
     try:
         output_path.relative_to(root_path)
     except ValueError:
         return
+    required_write_bytes = estimated_output_bytes
+    if args.output_dir.startswith("gs://") and args.delete_local_after_upload:
+        required_write_bytes = bytes_per_sample * min(args.shard_size, selected_count)
     usage = shutil.disk_usage(root_path)
-    free_after = usage.free - estimated_output_bytes
+    free_after = usage.free - required_write_bytes
     required = int(args.min_free_tb * (1024**4))
     if free_after < required:
         raise RuntimeError(
             f"Refusing local write under {root_path}: estimated output "
-            f"{estimated_output_bytes / 1e9:.2f} GB would leave "
+            f"{required_write_bytes / 1e9:.2f} GB would leave "
             f"{free_after / (1024**4):.2f} TiB free, below required "
             f"{args.min_free_tb:.2f} TiB."
         )
@@ -170,6 +275,35 @@ def _maybe_upload_and_delete(local_path: str, output_dir: str, delete_local: boo
     if delete_local:
         os.remove(local_path)
     return dest
+
+
+def _exists(path: str) -> bool:
+    if not path.startswith("gs://"):
+        return os.path.exists(path)
+    return subprocess.run(["gsutil", "-q", "stat", path], check=False).returncode == 0
+
+
+def _makedirs(path: str):
+    if path and not path.startswith("gs://"):
+        os.makedirs(path, exist_ok=True)
+
+
+def _write_json(path: str, value: dict):
+    payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    if path.startswith("gs://"):
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
+            f.write(payload)
+            tmp = f.name
+        try:
+            subprocess.run(["gsutil", "cp", tmp, path], check=True)
+        finally:
+            os.remove(tmp)
+    else:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(payload)
 
 
 def convert(args) -> dict:
@@ -187,7 +321,7 @@ def convert(args) -> dict:
             f"Refusing conversion: estimated output {estimated_gb:.2f} GB exceeds "
             f"--max-output-gb={args.max_output_gb:.2f}. Use a smaller manifest/chunk or raise the cap deliberately."
         )
-    _check_local_storage(args, estimated_output_bytes)
+    _check_local_storage(args, estimated_output_bytes, bytes_per_sample, len(names))
 
     summary = {
         "cache_root": str(cache_root),
@@ -212,11 +346,13 @@ def convert(args) -> dict:
         return summary
 
     output_dir = args.output_dir.rstrip("/")
-    direct_gcs = output_dir.startswith("gs://") and not args.local_staging_dir
-    writer_output_dir = output_dir if direct_gcs else args.local_staging_dir or output_dir
-    tf.io.gfile.makedirs(writer_output_dir)
-    if output_dir.startswith("gs://") and not direct_gcs:
-        tf.io.gfile.makedirs(output_dir)
+    if output_dir.startswith("gs://") and not args.local_staging_dir:
+        raise ValueError(
+            "Pure-Python TFRecord writing requires --local-staging-dir for gs:// output. "
+            "Use --delete-local-after-upload to keep only one shard staged locally."
+        )
+    writer_output_dir = args.local_staging_dir or output_dir
+    _makedirs(writer_output_dir)
 
     num_shards = int(math.ceil(len(names) / args.shard_size))
     started = time.time()
@@ -225,12 +361,12 @@ def convert(args) -> dict:
         shard_name = f"{args.shard_prefix}-{args.shard_offset + shard_idx:05d}-of-{args.shard_offset + num_shards:05d}.tfrecord"
         shard_path = writer_output_dir.rstrip("/") + "/" + shard_name
         final_path = output_dir.rstrip("/") + "/" + shard_name
-        if args.skip_existing and tf.io.gfile.exists(final_path):
+        if args.skip_existing and _exists(final_path):
             print(f"[skip] {final_path}")
             summary["written_shards"].append({"path": final_path, "examples": 0, "skipped": True})
             continue
         written = 0
-        with tf.io.TFRecordWriter(shard_path) as writer:
+        with _TFRecordWriter(shard_path) as writer:
             for local_idx, name in enumerate(shard_names):
                 ordinal = args.start_index + shard_idx * args.shard_size + local_idx
                 try:
@@ -240,7 +376,7 @@ def convert(args) -> dict:
                     if args.fail_fast:
                         raise
                     summary["failures"].append({"name": name, "error": repr(exc)})
-        if output_dir.startswith("gs://") and not direct_gcs:
+        if output_dir.startswith("gs://"):
             final_path = _maybe_upload_and_delete(shard_path, output_dir, args.delete_local_after_upload)
         summary["written_examples"] += written
         summary["written_shards"].append({"path": final_path, "examples": written, "skipped": False})
@@ -282,13 +418,7 @@ def main():
     args = parse_args()
     summary = convert(args)
     if args.summary_path:
-        summary_path = args.summary_path
-        parent = os.path.dirname(summary_path)
-        if parent:
-            tf.io.gfile.makedirs(parent)
-        with tf.io.gfile.GFile(summary_path, "w") as f:
-            json.dump(summary, f, indent=2, sort_keys=True)
-            f.write("\n")
+        _write_json(args.summary_path, summary)
 
 
 if __name__ == "__main__":

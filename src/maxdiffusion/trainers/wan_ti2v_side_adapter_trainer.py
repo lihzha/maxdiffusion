@@ -285,12 +285,12 @@ class WanTI2VSideAdapterTrainer:
         action_dim = int(config.action_dim)
 
         def prepare_sample(features):
-            z_i0 = tf.cast(tf.io.parse_tensor(features["z_i0"], out_type=tf.float16), tf.float32)
-            z_video = tf.cast(tf.io.parse_tensor(features["z_video"], out_type=tf.float16), tf.float32)
-            actions = tf.cast(tf.io.parse_tensor(features["actions"], out_type=tf.float32), tf.float32)
-            z_i0.set_shape([c, 1, h, w])
-            z_video.set_shape([c, f, h, w])
-            actions.set_shape([action_len, action_dim])
+            z_i0 = tf.reshape(tf.io.decode_raw(features["z_i0"], tf.float16), [c, 1, h, w])
+            z_video = tf.reshape(tf.io.decode_raw(features["z_video"], tf.float16), [c, f, h, w])
+            actions = tf.reshape(tf.io.decode_raw(features["actions"], tf.float32), [action_len, action_dim])
+            z_i0 = tf.cast(z_i0, tf.float32)
+            z_video = tf.cast(z_video, tf.float32)
+            actions = tf.cast(actions, tf.float32)
             return {"z_i0": z_i0, "z_video": z_video, "actions": actions}
 
         return make_data_iterator(
