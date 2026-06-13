@@ -152,6 +152,8 @@ side_adapter_sampling_steps: 25
 side_adapter_noise_mode: 'fresh'
 side_adapter_guide_scale: 5.0
 flow_shift: 5.0
+flow_sigma_min: 0.0
+flow_sigma_max: 1.0
 
 # Training loop.
 learning_rate: 5.e-5

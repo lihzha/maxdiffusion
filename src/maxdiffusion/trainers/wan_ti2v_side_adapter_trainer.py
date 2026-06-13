@@ -205,7 +205,12 @@ class WanTI2VSideAdapterTrainer:
         self.config = config
 
     def _create_scheduler(self):
-        scheduler = FlaxFlowMatchScheduler(dtype=jnp.float32, shift=self.config.flow_shift)
+        scheduler = FlaxFlowMatchScheduler(
+            dtype=jnp.float32,
+            shift=self.config.flow_shift,
+            sigma_min=getattr(self.config, "flow_sigma_min", 0.0),
+            sigma_max=getattr(self.config, "flow_sigma_max", 1.0),
+        )
         state = scheduler.create_state()
         state = scheduler.set_timesteps(
             state,

@@ -168,3 +168,48 @@ Analysis:
 
 Next:
 - Commit and push the exact implementation, then run remote smoke validation before any full conversion or v6 launch.
+
+## 2026-06-13T07:56:00Z - v4 setup and sigma schedule correction
+
+Goal:
+- Validate the new side-adapter model path in a TPU environment before dataset conversion or final v6 launch.
+
+Hypothesis:
+- A tiny WAN/adapter forward on v4 is enough to catch NNX graph, mesh, per-token timestep, and shape errors without loading the full 5B checkpoint.
+
+Change:
+- Ran `bash_scripts/setup.sh MODE=stable DEVICE=tpu` on `v4-4-01-interactive` after checking out `origin/codex/wan-ti2v-side-adapter-20260613-073227`.
+- Fixed `build_rollout_sigmas()` to match the PyTorch WAN reference schedule: `linspace(sigma_max, sigma_min, N+1)[:-1]`, then append terminal zero.
+- Added explicit `flow_sigma_min: 0.0` and `flow_sigma_max: 1.0` to the side-adapter config, and passed those values into `FlaxFlowMatchScheduler`.
+
+Version Control:
+- agent_id: wan-ti2v-side-adapter-20260613-073227
+- worktree: /home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227
+- worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
+- branch: codex/wan-ti2v-side-adapter-20260613-073227
+- base_commit: 2d6f8e0d54697661df33d3e1a32e7e0e9b994d97
+- implementation_commit: 8743a7b7a6643a0d5c062e07d7240a4c7252ed3f
+- push/pull: branch already pushed before this correction; correction pending commit/push
+- changed_files: src/maxdiffusion/models/wan/side_adapter_wan.py, src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py, src/maxdiffusion/configs/base_wan_5b_side_adapter.yml, worklog
+- remote_commit/status: v4 checkout initially at 12e974edd63746ff936ac48bb0659cc21b7dc884
+
+Command / Job:
+- command: `gcloud alpha compute tpus tpu-vm ssh v4-4-01-interactive --project=mae-irom-lab-guided-data --zone=us-central2-b --worker=0 --command='... bash bash_scripts/setup.sh MODE=stable DEVICE=tpu'`
+- command: `python3 -m py_compile src/maxdiffusion/models/wan/side_adapter_wan.py src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py src/maxdiffusion/data_preprocessing/wan_side_adapter_droid_cache_to_tfrecord.py src/maxdiffusion/train_wan.py`
+- command: `python3 - <<'PY' ... assert cfg['flow_sigma_min'] == 0.0 ... PY`
+- job_id: n/a
+- run_dir: /home/lzha/maxdiffusion on v4-4-01-interactive worker 0
+- logs: terminal output in current Codex session
+- artifacts: TPU venv at `/home/lzha/maxdiffusion/.venv`
+
+Result:
+- status: partial
+- metrics/artifacts: v4 setup completed. Tiny forward smoke passed before the sigma correction; rerun after push is still pending.
+- key evidence: Forward smoke printed `SMOKE_OK` with output shape `(1, 4, 3, 4, 4)`. The sigma correction changes the test schedule for `N=4, shift=5` from `[1.0, 0.9091, 0.7143, 0.0, 0.0]` to the WAN-reference convention.
+
+Analysis:
+- The initial failed smoke attempts were harness errors: first missing mesh context, then a context length not divisible by the test mesh context axis.
+- The sigma mismatch was a real implementation issue and was fixed before advancing.
+
+Next:
+- Commit and push the sigma correction, pull it to the v4 checkout, rerun the TPU forward smoke, then validate TFRecord conversion on a tiny cached sample.

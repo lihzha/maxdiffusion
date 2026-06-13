@@ -505,7 +505,7 @@ def build_rollout_sigmas(num_inference_steps: int, shift: float, sigma_min: floa
     """Build the N+1 descending sigma grid used by the side-adapter rollout loss."""
     if num_inference_steps < 1:
         raise ValueError("num_inference_steps must be positive")
-    sigmas = jnp.linspace(sigma_max, sigma_min, num_inference_steps, dtype=jnp.float32)
+    sigmas = jnp.linspace(sigma_max, sigma_min, num_inference_steps + 1, dtype=jnp.float32)[:-1]
     sigmas = shift * sigmas / (1.0 + (shift - 1.0) * sigmas)
     return jnp.concatenate([sigmas, jnp.zeros((1,), dtype=jnp.float32)], axis=0)
 
