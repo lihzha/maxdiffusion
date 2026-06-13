@@ -287,8 +287,8 @@ Version Control:
 - worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
 - branch: codex/wan-ti2v-side-adapter-20260613-073227
 - base_commit: d50ac01
-- implementation_commit: pending
-- push/pull: pending local commit/push; local script will be used for resume
+- implementation_commit: 44104be
+- push/pull: pushed to origin/codex/wan-ti2v-side-adapter-20260613-073227; local script was used for resume
 - changed_files: bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh, worklog
 - remote_commit/status: a1001 converter repo unchanged; this patch affects the local orchestrator only
 
@@ -316,3 +316,21 @@ Analysis:
 Next:
 - Commit and push the hardening patch.
 - Resume local a1001 orchestrator with `START_SHARD=196 END_SHARD=703`.
+
+## 2026-06-13T15:57:00Z - train conversion progress checkpoint
+
+Goal:
+- Record current train conversion progress after the a1001 resume hardening patch was exercised successfully.
+
+Result:
+- status: in_progress
+- metrics/artifacts: GCS train shard count reached `308/704`; completed train shards are contiguous through `train-00307-of-00704.tfrecord`.
+- metrics/artifacts: The resumed local orchestrator `/tmp/wan_a1001_remaining_196_703.log` successfully completed and cleaned batches 196-211, 212-227, 228-243, 244-259, 260-275, 276-291, and 292-307.
+- metrics/artifacts: a1001 staging repeatedly returned to `40M` after cleanup and Lustre remained around `25T` free.
+
+Analysis:
+- The `remote_bash()` cleanup patch is validated by multiple post-upload cleanup cycles.
+- Continue the current single-stream conversion; Della remains read-only and v6 remains occupied by an unrelated ego-lap training process.
+
+Next:
+- Continue monitoring from batch 308-323 until all 704 train shards are in `gs://v6_east1d`.
