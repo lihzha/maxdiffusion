@@ -222,9 +222,17 @@ gsutil cp "${summary}" "${DEST}/summary.json"
 rm -f "${summary}"
 
 actual_count=$(gsutil ls "${DEST}/${SPLIT}-*.tfrecord" | wc -l | tr -d ' ')
-if (( actual_count != TOTAL_SHARDS )); then
-  echo "Expected ${TOTAL_SHARDS} GCS shards, found ${actual_count}" >&2
-  exit 6
+if (( START_SHARD == 0 && END_SHARD == TOTAL_SHARDS - 1 )); then
+  if (( actual_count != TOTAL_SHARDS )); then
+    echo "Expected ${TOTAL_SHARDS} GCS shards, found ${actual_count}" >&2
+    exit 6
+  fi
+else
+  expected_range_count=$((END_SHARD - START_SHARD + 1))
+  if (( actual_count < expected_range_count )); then
+    echo "Expected at least ${expected_range_count} GCS shards for partial range, found ${actual_count}" >&2
+    exit 6
+  fi
 fi
 
 echo "completed ${SPLIT}: ${actual_count} shards at ${DEST}"
