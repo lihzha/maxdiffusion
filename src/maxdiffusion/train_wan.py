@@ -36,6 +36,9 @@ def train(config):
   elif config.model_type == "AC_TI2V":
     from maxdiffusion.trainers.wan_ctrl_world_trainer import WanCtrlWorldTrainer
     trainer = WanCtrlWorldTrainer(config)
+  elif config.model_type == "SIDE_ADAPTER_TI2V":
+    from maxdiffusion.trainers.wan_ti2v_side_adapter_trainer import WanTI2VSideAdapterTrainer
+    trainer = WanTI2VSideAdapterTrainer(config)
   else:
     from maxdiffusion.trainers.wan_trainer import WanTrainer
     trainer = WanTrainer(config)
