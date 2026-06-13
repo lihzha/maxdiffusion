@@ -184,7 +184,7 @@ upload_one() {
 }
 
 cleanup_batch() {
-  remote "set -euo pipefail; rm -rf '${A1001_BASE}/cache_chunk'/* '${A1001_BASE}/tfrecord_stage'/*; du -sh '${A1001_BASE}'; df -h '${A1001_BASE}'"
+  remote "set -euo pipefail; rm -rf '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; mkdir -p '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; du -sh '${A1001_BASE}'; df -h '${A1001_BASE}'"
 }
 
 batch_start=${START_SHARD}
