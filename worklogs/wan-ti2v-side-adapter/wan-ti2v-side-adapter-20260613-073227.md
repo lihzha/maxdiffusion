@@ -334,3 +334,23 @@ Analysis:
 
 Next:
 - Continue monitoring from batch 308-323 until all 704 train shards are in `gs://v6_east1d`.
+
+## 2026-06-13T18:48:00Z - train conversion progress checkpoint
+
+Goal:
+- Record current train conversion progress and storage behavior after additional a1001 streaming batches.
+
+Result:
+- status: in_progress
+- metrics/artifacts: GCS train shard count reached `340/704`; completed train shards are contiguous through `train-00339-of-00704.tfrecord`.
+- metrics/artifacts: a1001 batches 308-323 and 324-339 converted successfully on Slurm (`29047467`, `29047912`), uploaded to `gs://v6_east1d/datasets/droid_wan_side_adapter/train`, and entered cleanup.
+- metrics/artifacts: Conversion jobs completed with exit `0:0`, per-worker write rates around 18-22 examples/s, and MaxRSS around 1.2G.
+- metrics/artifacts: Lustre remained around `25T` free; each 16-shard batch staged about `7.4G` of source cache plus about `7.2G` of TFRecords before upload cleanup.
+
+Analysis:
+- The data path remains correct and storage-safe, but Lustre metadata operations are slower than conversion for these many-small-file batches. Staging, post-stage `find`/`du`, and cleanup are the dominant delays.
+- The active orchestrator script should not be edited while it is running. If it fails at a safe boundary, a follow-up patch should replace recursive post-stage diagnostics with a cheaper top-level sanity check and consider tar extraction options that reduce metadata writes.
+
+Next:
+- Continue monitoring from batch 340-355 onward until all 704 train shards are in `gs://v6_east1d`.
+- After final upload, write the train summary, validate representative shards, and delete remaining a1001 temporary data.
