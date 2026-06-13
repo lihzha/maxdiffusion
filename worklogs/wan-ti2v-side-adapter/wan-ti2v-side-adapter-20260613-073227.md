@@ -15,7 +15,7 @@ Version Control:
 - worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
 - branch: codex/wan-ti2v-side-adapter-20260613-073227
 - base_commit: 2d6f8e0d54697661df33d3e1a32e7e0e9b994d97
-- implementation_commit: pending
+- implementation_commit: 8743a7b7a6643a0d5c062e07d7240a4c7252ed3f
 - push/pull: n/a
 - changed_files: worklog only
 - remote_commit/status: n/a
@@ -56,7 +56,7 @@ Version Control:
 - worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
 - branch: codex/wan-ti2v-side-adapter-20260613-073227
 - base_commit: 2d6f8e0d54697661df33d3e1a32e7e0e9b994d97
-- implementation_commit: pending
+- implementation_commit: 8743a7b7a6643a0d5c062e07d7240a4c7252ed3f
 - push/pull: n/a
 - changed_files: src/maxdiffusion/models/wan/side_adapter_wan.py, worklog
 - remote_commit/status: n/a
@@ -98,7 +98,7 @@ Version Control:
 - worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
 - branch: codex/wan-ti2v-side-adapter-20260613-073227
 - base_commit: 2d6f8e0d54697661df33d3e1a32e7e0e9b994d97
-- implementation_commit: pending
+- implementation_commit: 8743a7b7a6643a0d5c062e07d7240a4c7252ed3f
 - push/pull: n/a
 - changed_files: src/maxdiffusion/models/wan/side_adapter_wan.py, src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py, src/maxdiffusion/train_wan.py, src/maxdiffusion/configs/base_wan_5b_side_adapter.yml, worklog
 - remote_commit/status: n/a
@@ -143,7 +143,7 @@ Version Control:
 - worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
 - branch: codex/wan-ti2v-side-adapter-20260613-073227
 - base_commit: 2d6f8e0d54697661df33d3e1a32e7e0e9b994d97
-- implementation_commit: pending
+- implementation_commit: 8743a7b7a6643a0d5c062e07d7240a4c7252ed3f
 - push/pull: n/a
 - changed_files: src/maxdiffusion/models/wan/side_adapter_wan.py, src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py, src/maxdiffusion/data_preprocessing/wan_side_adapter_droid_cache_to_tfrecord.py, src/maxdiffusion/configs/base_wan_5b_side_adapter.yml, src/maxdiffusion/train_wan.py, bash_scripts/train_wan_side_adapter.sh, worklog
 - remote_commit/status: n/a
