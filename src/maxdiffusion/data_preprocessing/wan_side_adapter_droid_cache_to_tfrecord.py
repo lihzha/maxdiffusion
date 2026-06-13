@@ -383,10 +383,11 @@ def convert(args) -> dict:
     _makedirs(writer_output_dir)
 
     num_shards = int(math.ceil(len(names) / args.shard_size))
+    total_shards = args.total_shards if args.total_shards > 0 else args.shard_offset + num_shards
     started = time.time()
     for shard_idx in range(num_shards):
         shard_names = names[shard_idx * args.shard_size : (shard_idx + 1) * args.shard_size]
-        shard_name = f"{args.shard_prefix}-{args.shard_offset + shard_idx:05d}-of-{args.shard_offset + num_shards:05d}.tfrecord"
+        shard_name = f"{args.shard_prefix}-{args.shard_offset + shard_idx:05d}-of-{total_shards:05d}.tfrecord"
         shard_path = writer_output_dir.rstrip("/") + "/" + shard_name
         final_path = output_dir.rstrip("/") + "/" + shard_name
         if args.skip_existing and _exists(final_path):
@@ -427,6 +428,7 @@ def parse_args():
     parser.add_argument("--delete-local-after-upload", action="store_true")
     parser.add_argument("--shard-prefix", default="shard")
     parser.add_argument("--shard-offset", type=int, default=0)
+    parser.add_argument("--total-shards", type=int, default=0)
     parser.add_argument("--shard-size", type=int, default=512)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--end-index", type=int, default=None)
