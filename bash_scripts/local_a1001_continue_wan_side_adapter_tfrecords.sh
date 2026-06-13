@@ -177,7 +177,7 @@ upload_one() {
   fi
   local token
   token=$(gcloud auth print-access-token)
-  printf '%s\n' "${token}" | remote "set -euo pipefail; read -r TOKEN; test -s '${A1001_BASE}/tfrecord_stage/${shard_name}'; curl -fS --retry 5 --retry-delay 10 -X PUT -H \"Authorization: Bearer \${TOKEN}\" -H 'Content-Type: application/octet-stream' --upload-file '${A1001_BASE}/tfrecord_stage/${shard_name}' '${url}'"
+  printf '%s\n' "${token}" | remote "set -euo pipefail; read -r TOKEN; test -s '${A1001_BASE}/tfrecord_stage/${shard_name}'; curl -fsS --retry 5 --retry-delay 10 -X PUT -H \"Authorization: Bearer \${TOKEN}\" -H 'Content-Type: application/octet-stream' --upload-file '${A1001_BASE}/tfrecord_stage/${shard_name}' '${url}'"
   gsutil -q stat "${gcs_path}"
   remote "rm -f '${A1001_BASE}/tfrecord_stage/${shard_name}' '${A1001_BASE}/tfrecord_stage/summary-train-$(printf "%05d" "${shard}").json'"
   echo "[uploaded] ${gcs_path}"
