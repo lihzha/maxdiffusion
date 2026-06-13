@@ -267,3 +267,52 @@ Next:
 - Write and upload the train `summary.json`, validate representative shards including the final partial shard, and remove a1001 staging data.
 - Inspect `v6-64-01-lihan` worker processes before using the READY TPU resource; do not interrupt unrelated jobs without user approval.
 - Pull the final branch on all v6 workers, run a short v6 smoke train, then scale batch size on v6e-64 for adapter-only training.
+
+## 2026-06-13T13:21:24Z - a1001 resume hardening after cleanup-shell failure
+
+Goal:
+- Recover safely from a local orchestrator exit after uploading train shards 180-195, without duplicating or losing GCS shards.
+
+Hypothesis:
+- The data conversion/upload path succeeded because GCS contains contiguous train shards through 00195. The exit code 127 happened after upload, likely in the remote cleanup command running through a1001's default shell, so forcing cleanup commands through `bash -c` should remove that fragility.
+
+Change:
+- Added a `remote_bash()` helper to `bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`.
+- Switched the stage-start cleanup and post-upload cleanup calls to `remote_bash()`.
+- Manually cleaned `/lustre/fsw/portfolios/nvr/users/lzha/wan_side_adapter_a1001/cache_chunk` and `tfrecord_stage` before resume.
+
+Version Control:
+- agent_id: wan-ti2v-side-adapter-20260613-073227
+- worktree: /home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227
+- worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
+- branch: codex/wan-ti2v-side-adapter-20260613-073227
+- base_commit: d50ac01
+- implementation_commit: pending
+- push/pull: pending local commit/push; local script will be used for resume
+- changed_files: bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh, worklog
+- remote_commit/status: a1001 converter repo unchanged; this patch affects the local orchestrator only
+
+Command / Job:
+- command: `bash -n bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`
+- command: `cmd='set -euo pipefail; echo remote_bash_ok'; ssh a1001 "bash -c $(printf '%q' "$cmd")"`
+- command: v4 TensorFlow readback of `gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00163-of-00704.tfrecord`
+- command: manual a1001 cleanup via `bash -c 'set -euo pipefail; rm -rf ...; mkdir -p ...; du -sh ...; df -h ...'`
+- job_id: a1001 batch 180-195 was `29039615`
+- run_dir: a1001 `/lustre/fsw/portfolios/nvr/users/lzha/wan_side_adapter_a1001`
+- logs: `/tmp/wan_a1001_remaining_116_703.log`
+- artifacts: `gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00180-of-00704.tfrecord` through `train-00195-of-00704.tfrecord`
+
+Result:
+- status: passed
+- metrics/artifacts: GCS train shard count reached 196; tail shards are contiguous through 00195.
+- metrics/artifacts: v4 TFRecordDataset parsed train shard 00163 with 2048 records and byte lengths `z_i0=23040`, `z_video=207360`, `actions=896`.
+- metrics/artifacts: manual cleanup returned staging to 40M and Lustre remained at 25T free.
+- key evidence: `remote_bash_ok` probe succeeded; `bash -n` exit code 0.
+
+Analysis:
+- The correct resume point is shard 196. Because upload completed before the orchestrator exit, resuming from 196 avoids duplicate GCS objects and avoids reusing stale staging.
+- The current conversion remains storage-safe; the only issue was shell robustness around cleanup on a1001.
+
+Next:
+- Commit and push the hardening patch.
+- Resume local a1001 orchestrator with `START_SHARD=196 END_SHARD=703`.

@@ -49,6 +49,11 @@ remote() {
   ssh "${A1001_HOST}" "$@"
 }
 
+remote_bash() {
+  local cmd=$1
+  ssh "${A1001_HOST}" "bash -c $(printf '%q' "${cmd}")"
+}
+
 gcs_object_url() {
   local gcs_path=$1
   local without_scheme=${gcs_path#gs://}
@@ -86,7 +91,7 @@ stage_source_batch() {
   local batch_end=$2
   local file_list=$3
   make_file_list "${batch_start}" "${batch_end}" "${file_list}"
-  remote "set -euo pipefail; rm -rf '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; mkdir -p '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage' '${A1001_BASE}/logs'"
+  remote_bash "set -euo pipefail; rm -rf '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; mkdir -p '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage' '${A1001_BASE}/logs'"
   ssh "${DELLA_HOST}" "cd '${DELLA_CACHE_ROOT}' && tar -cf - -T -" < "${file_list}" \
     | remote "tar -xf - -C '${A1001_BASE}/cache_chunk'"
   remote "set -euo pipefail; find '${A1001_BASE}/cache_chunk' -name z_video.pt | wc -l; du -sh '${A1001_BASE}/cache_chunk'; df -h '${A1001_BASE}'"
@@ -184,7 +189,7 @@ upload_one() {
 }
 
 cleanup_batch() {
-  remote "set -euo pipefail; rm -rf '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; mkdir -p '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; du -sh '${A1001_BASE}'; df -h '${A1001_BASE}'"
+  remote_bash "set -euo pipefail; rm -rf '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; mkdir -p '${A1001_BASE}/cache_chunk' '${A1001_BASE}/tfrecord_stage'; du -sh '${A1001_BASE}'; df -h '${A1001_BASE}'"
 }
 
 batch_start=${START_SHARD}
