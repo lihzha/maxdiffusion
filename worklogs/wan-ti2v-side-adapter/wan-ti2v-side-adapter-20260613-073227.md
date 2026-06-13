@@ -213,3 +213,57 @@ Analysis:
 
 Next:
 - Commit and push the sigma correction, pull it to the v4 checkout, rerun the TPU forward smoke, then validate TFRecord conversion on a tiny cached sample.
+
+## 2026-06-13T11:26:44Z - implementation validation and dataset conversion pivot
+
+Goal:
+- Record the completed implementation validation and the current safe path for full DROID TFRecord conversion.
+
+Hypothesis:
+- The correct stage ordering is model/trainer validation first, then small real TFRecord readback, then full val conversion, then bounded train conversion to GCS with temporary storage cleanup after each batch.
+
+Change:
+- Pushed implementation branch through commit `dc5dc3f` with the side-adapter model, frozen-backbone trainer, config, TPU wrapper, pure-Python TFRecord converter, Della wrapper, and a1001 streaming converter.
+- Validated the side-adapter path on a v4 TPU with the corrected WAN sigma schedule.
+- Converted and validated the full val split to `gs://v6_east1d/datasets/droid_wan_side_adapter/val`.
+- Started full train conversion to `gs://v6_east1d/datasets/droid_wan_side_adapter/train`; pivoted from Della staging to a1001 streaming after Della GPFS filled.
+
+Version Control:
+- agent_id: wan-ti2v-side-adapter-20260613-073227
+- worktree: /home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227
+- worklog: worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md
+- branch: codex/wan-ti2v-side-adapter-20260613-073227
+- base_commit: 2d6f8e0d54697661df33d3e1a32e7e0e9b994d97
+- implementation_commit: dc5dc3f
+- push/pull: pushed to origin/codex/wan-ti2v-side-adapter-20260613-073227; a1001 repo uses the pushed converter; v6 workers need a final pull before training launch
+- changed_files: side-adapter model/trainer/config/wrappers/converter plus this worklog
+- remote_commit/status: a1001 repo at dc5dc3f for conversion; v6 worker check/pull still pending before final training
+
+Command / Job:
+- command: `python3 -m py_compile src/maxdiffusion/models/wan/side_adapter_wan.py src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py src/maxdiffusion/data_preprocessing/wan_side_adapter_droid_cache_to_tfrecord.py src/maxdiffusion/train_wan.py`
+- command: `bash -n bash_scripts/train_wan_side_adapter.sh bash_scripts/della_convert_wan_side_adapter_droid.sh bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`
+- command: `bash_scripts/setup.sh MODE=stable DEVICE=tpu` on v4, followed by tiny Wan side-adapter forward smoke and pure TFRecord round-trip
+- command: Della val conversion job `9617958`
+- command: local a1001 orchestrator `START_SHARD=116 END_SHARD=703 BATCH_SHARDS=16 CONCURRENCY=8 UPLOAD_CONCURRENCY=4 bash bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`
+- job_id: Della val `9617958`; Della failed train continuation `9618891`; a1001 train batches include `29037532` and `29037885`
+- run_dir: a1001 `/lustre/fsw/portfolios/nvr/users/lzha/wan_side_adapter_a1001`
+- logs: local `/tmp/wan_a1001_remaining_116_703.log`; a1001 `/lustre/fsw/portfolios/nvr/users/lzha/wan_side_adapter_a1001/logs`
+- artifacts: val and train TFRecords under `gs://v6_east1d/datasets/droid_wan_side_adapter`
+
+Result:
+- status: in_progress
+- metrics/artifacts: v4 tiny forward smoke passed with output shape `(1, 4, 3, 4, 4)`, adapter params `10626`, first-frame pinning OK, and sigma schedule `[1.0, 0.9375, 0.833333, 0.625, 0.0]`.
+- metrics/artifacts: val split converted to 8 shards; GCS readback parsed shard 0 with 2048 records and shard 7 with 300 records; feature byte lengths match `z_i0`, `z_video`, and `actions` schema.
+- metrics/artifacts: train split has 704 expected shards for 1,440,554 examples; Della produced shards 00000-00095 before GPFS became full; a1001 streaming conversion uploaded through shard 00147 and advanced to batch 148-163.
+- key evidence: `gsutil ls gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-*.tfrecord | wc -l` returned `148`; a1001 storage remained at 26T free after cleanup, and Della `/scratch/gpfs` showed only 160M free, so Della remains read-only.
+
+Analysis:
+- The model implementation is validated enough to justify dataset conversion and target TPU smoke, but the full 5B training path still needs a small v6 run before batch-size scaling.
+- Della cannot safely stage train outputs because the filesystem is full. The active a1001 pipeline streams source files from Della to Lustre, converts on CPU Slurm, uploads directly to GCS with short-lived local OAuth tokens, and deletes the batch cache/output before proceeding.
+- Cleanup on Lustre is slower than conversion for some batches because each batch contains many small source files. It is still the correct storage-safe behavior; temporary occupancy is about 13G per 16-shard batch, far below the 2T free-space guard.
+
+Next:
+- Continue monitoring the a1001 train conversion until all 704 train shards exist in GCS.
+- Write and upload the train `summary.json`, validate representative shards including the final partial shard, and remove a1001 staging data.
+- Inspect `v6-64-01-lihan` worker processes before using the READY TPU resource; do not interrupt unrelated jobs without user approval.
+- Pull the final branch on all v6 workers, run a short v6 smoke train, then scale batch size on v6e-64 for adapter-only training.
