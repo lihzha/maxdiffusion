@@ -1093,3 +1093,52 @@ Analysis:
 
 Next:
 - Keep the watcher attached through provisioning, setup, launch, and first metric validation.
+
+## 2026-06-14T15:40:00Z - restart2 first metric
+
+Goal:
+- Verify restart2 training after fresh v6e-64 allocation and setup.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart2-20260614-151300`
+- primary_worker_log: worker8 `~/maxdiffusion/logs/tpu_20260614-152324.log`
+- wandb_run: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/r9kxcubu`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Training launched on commit `4acb4b9c7fc3976a08ef0ef2863babb59d8cd1dd`.
+- metrics/artifacts: Resolved config is `global_batch_size_to_load=64`, `global_batch_size_to_train_on=15`, `per_device_batch_size=0.234375`, `eval_every=1000`, `eval_max_batches=1`, and `checkpoint_every=1000`.
+- metrics/artifacts: First train metric logged at step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`.
+- metrics/artifacts: No checkpoint is expected until step `1000`.
+
+Analysis:
+- Restart2 is past setup/model-load/first JIT and reproduces the expected deterministic step-20 metric. No NaNs, OOMs, tracebacks, or TPU maintenance warnings are visible.
+
+Next:
+- Continue monitoring warmup metrics and TPU health toward step `1000`.
+
+## 2026-06-14T15:51:00Z - restart2 warmup through step 60
+
+Goal:
+- Confirm restart2 reproduces the healthy early warmup curve after the first metric.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart2-20260614-151300`
+- primary_worker_log: worker8 `~/maxdiffusion/logs/tpu_20260614-152324.log`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Train logs:
+  - step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`
+  - step `40/10000`: `loss=1.478320`, `grad_norm=389378.840`, `lr=3.90e-06`, `steps/s=0.068`
+  - step `60/10000`: `loss=1.130664`, `grad_norm=3744.459`, `lr=5.90e-06`, `steps/s=0.069`
+- metrics/artifacts: No checkpoint is expected until step `1000`.
+
+Analysis:
+- Restart2 matches the earlier deterministic trace through step `60`; the step-40 gradient spike is transient and recovers by step `60`.
+- No NaNs, OOMs, tracebacks, or TPU maintenance warnings are visible.
+
+Next:
+- Continue monitoring through step `80`, then reduce cadence while watching for step `1000` checkpoint/eval.
