@@ -798,3 +798,42 @@ Analysis:
 
 Next:
 - Reacquire or recreate a v6e-64 slice with `tpu watch`, using `bash_scripts/setup.sh` for environment setup, then run a storage-light `gbs14` probe.
+
+## 2026-06-14T13:43:00Z - v6e-64 max-batch selection
+
+Goal:
+- Finish the last useful storage-light batch probes and select the full-run batch size.
+
+Change:
+- Added optional `EVAL_MAX_BATCHES` forwarding to `bash_scripts/train_wan_side_adapter.sh` so the full run can keep validation small, close to the previous Wan2.2 `MAX_VAL_SAMPLES=8` behavior.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `296263642b8fe01a94efde9987d32f00e51d5bab`
+- implementation_commit: pending
+- changed_files: `bash_scripts/train_wan_side_adapter.sh`, worklog
+- validation: `bash -n bash_scripts/train_wan_side_adapter.sh`
+
+Command / Job:
+- tpu_name: `v6-64-02-lzha`
+- accelerator: `v6e-64`
+- gbs14_run: `wan-side-adapter-v6e64-probe-gbs14-20260614-115500`
+- gbs15_run: `wan-side-adapter-v6e64-probe-gbs15-20260614-132700`
+- probe_template: `WANDB_DISABLED=true RUN_NAME=<run> MAX_TRAIN_STEPS=2 CHECKPOINT_EVERY=0 SAVE_FINAL_CHECKPOINT=False EVAL_EVERY=0 LOG_PERIOD=1 PER_DEVICE_BATCH_SIZE=<gbs/64> bash bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: passed
+- metrics/artifacts: `gbs14` (`PER_DEVICE_BATCH_SIZE=0.21875`) completed two train steps: `step 1/2 loss=3.453125 grad_norm=318.013`, `step 2/2 loss=1.617188 grad_norm=1164.384`.
+- metrics/artifacts: `gbs15` (`PER_DEVICE_BATCH_SIZE=0.234375`) completed two train steps: `step 1/2 loss=3.453125 grad_norm=410.899`, `step 2/2 loss=1.593750 grad_norm=3072.043`.
+- metrics/artifacts: `gbs16` remains the first failing batch, with prior `CompileTimeHbmOom` using `31.42G` of `31.25G` HBM.
+- metrics/artifacts: Storage-light probes used `SAVE_FINAL_CHECKPOINT=False` and did not write checkpoint payloads.
+- metrics/artifacts: After gbs15 cleanup, all workers reported no `tpu` tmux session and no side-adapter training processes.
+
+Analysis:
+- Global batch `15` is the largest validated v6e-64 batch for this implementation and dataset. It is close to the memory boundary, but it compiles and completes real optimizer steps.
+- The full run should use `PER_DEVICE_BATCH_SIZE=0.234375`, `MAX_TRAIN_STEPS=10000`, `CHECKPOINT_EVERY=1000`, `EVAL_EVERY=1000`, `LOG_PERIOD=20`, `SAVE_FINAL_CHECKPOINT=True`, and `EVAL_MAX_BATCHES=1`.
+
+Next:
+- Commit and push the wrapper/worklog update, then launch the full 10k-step frozen-backbone side-adapter run on the ready v6e-64 slice.
