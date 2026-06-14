@@ -473,7 +473,7 @@ Version Control:
 - worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
 - branch: `codex/wan-ti2v-side-adapter-20260613-073227`
 - base_commit: `eb5829585410cdbfb4c207da77fb29885793e353`
-- implementation_commit: pending
+- implementation_commit: `c62bc460f4c65bc8acd2e8926925e07ae3305c36`
 - changed_files: `bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`, `worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md`
 
 Command / Job:
@@ -495,3 +495,36 @@ Analysis:
 Next:
 - Let the manual cleanup of batch 644-659 finish, then resume the patched orchestrator from shard 660 through 703.
 - After all shards are present, upload the train summary, validate representative shards including final shard 703, delete remaining a1001 staging data, and proceed to TPU v6 training.
+
+## 2026-06-14T08:54:55Z - train TFRecord conversion complete
+
+Goal:
+- Finish the full DROID train TFRecord conversion and validate the GCS dataset before TPU training.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `c62bc460f4c65bc8acd2e8926925e07ae3305c36`
+- changed_files: worklog only
+
+Command / Job:
+- command: `START_SHARD=660 END_SHARD=703 BATCH_SHARDS=16 CONCURRENCY=8 UPLOAD_CONCURRENCY=4 bash bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`
+- job_ids: `29058797` for shards 660-675, `29059376` for shards 676-691, `29059808` for shards 692-703
+- logs: `/tmp/wan_a1001_remaining_660_703.log`
+- artifacts: `gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00000-of-00704.tfrecord` through `train-00703-of-00704.tfrecord`, plus `gs://v6_east1d/datasets/droid_wan_side_adapter/train/summary.json`
+
+Result:
+- status: passed
+- metrics/artifacts: GCS train shard count is `704/704`; shard indices are contiguous `0..703`.
+- metrics/artifacts: Final shard `train-00703-of-00704.tfrecord` contains `810` records with ordinals `1439744..1440553`.
+- metrics/artifacts: Pure Python TFRecord/protobuf validation passed for shards `0, 163, 307, 339, 371, 499, 611, 659, 675, 691, 703`.
+- metrics/artifacts: Validated byte lengths per record: `z_i0=23040`, `z_video=207360`, `actions=896`; full shards contained `2048` records.
+- metrics/artifacts: a1001 temp root returned to `41M`; Lustre remained around `22T` free.
+
+Analysis:
+- The train dataset is now in the expected MaxDiffusion-compatible TFRecord format under `gs://v6_east1d`, with representative parsing evidence including the final partial shard.
+- The a1001 conversion path stayed within the storage guardrail by holding only one batch of source cache and TFRecords at a time.
+
+Next:
+- Prepare TPU v6 training: update/pull the pushed branch on a v6-64 slice, run a short smoke training job, inspect logs/loss/checkpoints, then scale batch size for the full adapter-only run.
