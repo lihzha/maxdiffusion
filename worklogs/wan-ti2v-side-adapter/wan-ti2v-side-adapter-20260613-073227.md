@@ -1188,3 +1188,26 @@ Analysis:
 
 Next:
 - Continue lower-frequency monitoring toward checkpoint/eval step `1000`; expected time from step `100` is roughly 3.5-4 hours at the current throughput if the TPU remains healthy.
+
+## 2026-06-14T16:27:00Z - restart2 preempted before first checkpoint
+
+Goal:
+- Determine whether restart2 survived long enough to write a durable checkpoint.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart2-20260614-151300`
+- tpu_name: `v6-64-02-lzha`
+
+Result:
+- status: preempted
+- metrics/artifacts: TPU health changed to `UNHEALTHY_MAINTENANCE` at `2026-06-14T16:25:55Z`, then `gcloud compute tpus tpu-vm describe` reported `state: PREEMPTED`.
+- metrics/artifacts: Latest durable train metric was step `180/10000`: `loss=0.546191`, `grad_norm=6198.543`, `lr=1.79e-05`, `steps/s=0.068`.
+- metrics/artifacts: Restart2 GCS run prefix contains no checkpoint because the configured first checkpoint was step `1000`.
+- metrics/artifacts: A representative adapter-only smoke checkpoint is `1.04 GiB`; with Orbax `max_to_keep=3`, checkpointing every `100` steps should remain storage-safe.
+
+Analysis:
+- This is the third maintenance/preemption before the step-1000 checkpoint target. Training behavior was valid before preemption, but no progress is durable under the current checkpoint cadence.
+- To make progress under current v6 maintenance churn without changing the model, data, optimizer, batch size, eval cadence, or training objective, restart3 should use `CHECKPOINT_EVERY=100` and keep `EVAL_EVERY=1000`. This writes only adapter params/optimizer/step and keeps at most three recent checkpoints, so it should not materially threaten storage.
+
+Next:
+- Relaunch as restart3 with the same gbs15 recipe, `EVAL_EVERY=1000`, `EVAL_MAX_BATCHES=1`, and `CHECKPOINT_EVERY=100`.
