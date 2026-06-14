@@ -1351,3 +1351,28 @@ Analysis:
 
 Next:
 - Continue monitoring through steps `60`, `80`, and especially the step-`100` adapter checkpoint.
+
+## 2026-06-14T18:16:25Z - restart3 first durable checkpoint
+
+Goal:
+- Verify the checkpoint-100 restart cadence produces a usable adapter checkpoint before another possible v6 maintenance event.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- primary_worker: worker `13`
+- primary_log: `~/maxdiffusion/logs/tpu_20260614-173628.log`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000/checkpoints`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Step `60/10000`: `loss=1.130664`, `grad_norm=3744.459`, `lr=5.90e-06`, `steps/s=0.069`.
+- metrics/artifacts: Step `80/10000`: `loss=0.612598`, `grad_norm=749.494`, `lr=7.90e-06`, `steps/s=0.069`.
+- metrics/artifacts: Step `100/10000`: `loss=0.432422`, `grad_norm=453.071`, `lr=9.90e-06`, `steps/s=0.068`.
+- metrics/artifacts: Orbax finalized `checkpoints/100` at `2026-06-14T18:12:42Z`; `gsutil du -sh` reports `1.01 GiB` for the run checkpoint directory.
+
+Analysis:
+- The run now has durable adapter-only progress. The checkpoint size matches the storage expectation from smoke testing, so checkpointing every `100` steps is safe under the current `max_to_keep=3` policy.
+
+Next:
+- Continue monitoring post-checkpoint training, verify the run advances past step `100`, and watch for TPU maintenance/preemption or abnormal loss/gradient behavior.
