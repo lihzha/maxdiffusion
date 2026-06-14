@@ -837,3 +837,42 @@ Analysis:
 
 Next:
 - Commit and push the wrapper/worklog update, then launch the full 10k-step frozen-backbone side-adapter run on the ready v6e-64 slice.
+
+## 2026-06-14T13:50:00Z - full v6e-64 gbs15 launch
+
+Goal:
+- Launch the full frozen-backbone Wan2.2 TI2V 5B side-adapter training run on v6e-64 using the largest validated batch size.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `36edeb1884222e0580e3f95cdc16455e0f195c37`
+- push/pull: pushed to origin; TPU workers fast-forwarded from `2962636` to `36edeb1`
+- changed_files: worklog
+- remote_commit/status: worker logs report `COMMIT=36edeb1884222e0580e3f95cdc16455e0f195c37`
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-20260614-134500`
+- tpu_name: `v6-64-02-lzha`
+- accelerator: `v6e-64`
+- launch_command: `tpu watch v6 --force -n 64 --setup-cmd "git fetch origin && git checkout codex/wan-ti2v-side-adapter-20260613-073227 && git pull origin codex/wan-ti2v-side-adapter-20260613-073227" codex/wan-ti2v-side-adapter-20260613-073227 WANDB_PROJECT=maxdiffusion-wan-side-adapter RUN_NAME=wan-side-adapter-v6e64-full-gbs15-20260614-134500 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=1000 SAVE_FINAL_CHECKPOINT=True EVAL_EVERY=1000 EVAL_MAX_BATCHES=1 LOG_PERIOD=20 PER_DEVICE_BATCH_SIZE=0.234375 bash bash_scripts/train_wan_side_adapter.sh`
+- output_base: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs15-20260614-134500/checkpoints`
+- primary_worker_log: worker5 `~/maxdiffusion/logs/tpu_20260614-134038.log`
+- wandb_project: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter`
+- wandb_run: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/omt2ym2z`
+
+Result:
+- status: running
+- metrics/artifacts: Launch completed at `2026-06-14 06:40:51` local time.
+- metrics/artifacts: Worker logs verify `global_batch_size_to_train_on=15`, `per_device_batch_size=0.234375`, `max_train_steps=10000`, `checkpoint_every=1000`, `eval_every=1000`, `eval_max_batches=1`, and `wandb_project=maxdiffusion-wan-side-adapter`.
+- metrics/artifacts: Worker5 is JAX process 0 and W&B initialized online as run id `omt2ym2z`.
+- metrics/artifacts: No train metric yet because full run uses `LOG_PERIOD=20`; first expected loss line is step 20.
+
+Analysis:
+- The full run matches the previous Wan2.2 DROID side-adapter recipe: fresh noise, 25-step rollout, lr `5e-5`, 500-step warmup via `warmup_steps_fraction=0.05`, 10k steps, checkpoint/eval every 1000, and frozen backbone with trainable side adapter only.
+- `tpu create --force` could not be used for background recovery because the helper rejects suffix `lzha`; this is an irom-tool validation mismatch with the existing TPU name. Manual monitoring/relaunch remains required.
+
+Next:
+- Monitor worker5/process 0 until the first step-20 train metric appears or a failure/preemption occurs; also keep checking TPU health because no background watcher owns recovery for this run.
