@@ -1071,3 +1071,25 @@ Analysis:
 
 Next:
 - Relaunch the same validated gbs15 full run as `restart2` on a fresh v6e-64 slice.
+
+## 2026-06-14T15:14:00Z - full run restart2 queued
+
+Goal:
+- Relaunch after restart1 preempted before the first checkpoint.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart2-20260614-151300`
+- tpu_name: `v6-64-02-lzha`
+- command: `tpu watch v6 --force -n 64 ... PER_DEVICE_BATCH_SIZE=0.234375 LOG_PERIOD=20 CHECKPOINT_EVERY=1000 EVAL_EVERY=1000 EVAL_MAX_BATCHES=1 bash bash_scripts/train_wan_side_adapter.sh`
+- local_watcher_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs15-restart2-20260614-151300.log`
+
+Result:
+- status: queued
+- metrics/artifacts: The watcher deleted the preempted TPU and stale queued resource, then submitted a fresh queued resource at `2026-06-14T15:13:44Z`.
+- metrics/artifacts: Latest observed queued-resource state is `WAITING_FOR_RESOURCES`; TPU node is `NOT_FOUND` until allocation.
+
+Analysis:
+- Relaunch is blocked only on v6e-64 capacity. No code/config changes were made for restart2.
+
+Next:
+- Keep the watcher attached through provisioning, setup, launch, and first metric validation.
