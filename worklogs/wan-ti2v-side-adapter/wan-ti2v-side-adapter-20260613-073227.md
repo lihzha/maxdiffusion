@@ -976,3 +976,54 @@ Analysis:
 
 Next:
 - Continue monitoring warmup metrics and TPU health, with first critical artifact validation at checkpoint/eval step `1000`.
+
+## 2026-06-14T14:58:00Z - restart1 warmup through step 60
+
+Goal:
+- Confirm that restart1 reproduces the healthy early loss/gradient trend after the first visible metric.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart1-20260614-142200`
+- primary_worker_log: worker5 `~/maxdiffusion/logs/tpu_20260614-143107.log`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Train logs:
+  - step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`
+  - step `40/10000`: `loss=1.478320`, `grad_norm=389378.840`, `lr=3.90e-06`, `steps/s=0.068`
+  - step `60/10000`: `loss=1.130664`, `grad_norm=3744.459`, `lr=5.90e-06`, `steps/s=0.069`
+- metrics/artifacts: No checkpoint is expected until step `1000`; GCS currently has only the run prefix.
+
+Analysis:
+- The warmup trajectory exactly reproduces the previous full-run trace through step `60`. The step-40 grad-norm spike is transient and has recovered by step `60`.
+- No NaNs, OOMs, tracebacks, or TPU maintenance warnings are visible.
+
+Next:
+- Continue monitoring through step `80` and then toward checkpoint/eval step `1000`.
+
+## 2026-06-14T15:03:00Z - restart1 passes previous preemption point
+
+Goal:
+- Check whether restart1 reaches the last metric from the previous preempted run while TPU health remains good.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart1-20260614-142200`
+- primary_worker_log: worker5 `~/maxdiffusion/logs/tpu_20260614-143107.log`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Train logs:
+  - step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`
+  - step `40/10000`: `loss=1.478320`, `grad_norm=389378.840`, `lr=3.90e-06`, `steps/s=0.068`
+  - step `60/10000`: `loss=1.130664`, `grad_norm=3744.459`, `lr=5.90e-06`, `steps/s=0.069`
+  - step `80/10000`: `loss=0.612598`, `grad_norm=749.494`, `lr=7.90e-06`, `steps/s=0.068`
+- metrics/artifacts: No checkpoint is expected until step `1000`.
+
+Analysis:
+- Restart1 has reached the previous run's last durable metric while retaining `HEALTHY` TPU status. The earlier `UNHEALTHY_MAINTENANCE` condition has not recurred.
+- Loss and grad-norm behavior match the known-good preemption-interrupted trajectory.
+
+Next:
+- Continue lower-frequency monitoring toward step `1000`, where eval and the first adapter checkpoint should be written and inspected.
