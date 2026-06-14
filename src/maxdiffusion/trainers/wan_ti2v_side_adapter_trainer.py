@@ -151,7 +151,10 @@ def _rollout_loss(
             v = v_cond
         return apply_first_frame_pin(z + (sigmas[i + 1] - sigmas[i]).astype(z.dtype) * v, z_i0)
 
-    z = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), _rollout_body, z)
+    # Reverse-mode through lax.fori_loop otherwise stores per-step residuals
+    # for the whole denoising rollout. Rematerializing the outer step body
+    # matches the PyTorch reference's checkpointed differentiable sampling loop.
+    z = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), jax.checkpoint(_rollout_body), z)
 
     diff = z - z_video
     loss = jnp.mean(diff**2)

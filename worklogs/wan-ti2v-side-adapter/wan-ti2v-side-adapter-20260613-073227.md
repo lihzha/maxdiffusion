@@ -1463,3 +1463,46 @@ Analysis:
 
 Next:
 - Commit/push the mesh and CFG fixes, run storage-light v6e-64 probes starting at global batch `256`, and only relaunch full training after the corrected implementation compiles and completes real optimizer steps.
+
+## 2026-06-14T19:15:36Z - corrected FSDP batch-256 compile failure
+
+Goal:
+- Test whether the corrected v6e-64 FSDP mesh can compile and run a storage-light global batch `256` side-adapter probe.
+
+Hypothesis:
+- With FSDP enabled across the v6e-64 mesh, global batch `256` should be the first serious target. If it still fails, the failure should identify a remaining memory bug rather than the previous all-context mesh bug.
+
+Change:
+- Launched a two-step probe from commit `bd7202eaab070d729f4b90905f900df4751615a6`, which contains the FSDP mesh fix and CFG stop-gradient fix.
+- Used `PER_DEVICE_BATCH_SIZE=4`, `MAX_TRAIN_STEPS=2`, `CHECKPOINT_EVERY=0`, `SAVE_FINAL_CHECKPOINT=False`, `EVAL_EVERY=0`, and `WANDB_DISABLED=true` to avoid checkpoint or W&B storage while probing.
+- Added a local follow-up patch that rematerializes the outer 25-step rollout loop with `jax.checkpoint(_rollout_body)`.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `bd7202eaab070d729f4b90905f900df4751615a6`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, worklog
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-probe-gbs256-fsdp-20260614-190700`
+- tpu_name: `v6-64-02-lzha`
+- tpu_type: `v6e-64`
+- launch: `tpu watch v6 --force -n 64 ... PER_DEVICE_BATCH_SIZE=4 MAX_TRAIN_STEPS=2 CHECKPOINT_EVERY=0 SAVE_FINAL_CHECKPOINT=False EVAL_EVERY=0 WANDB_DISABLED=true bash bash_scripts/train_wan_side_adapter.sh`
+- log: `~/maxdiffusion/logs/tpu_20260614-190725.log`
+
+Result:
+- status: failed
+- metrics/artifacts: Worker log confirms remote `HEAD=bd7202e`, `global_batch_size_to_train_on=256`, `per_device_batch_size=4.0`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_fsdp_parallelism=-1`, and `dcn_context_parallelism=1`.
+- metrics/artifacts: Adapter/backbone split remained correct at `239.5M` trainable adapter params and `5.00B` frozen transformer params.
+- key evidence: Compile failed with `CompileTimeHbmOom`: `Used 144.33G of 31.25G hbm`, exceeded by `113.08G`.
+- key evidence: Largest allocations included repeated `f32[25,4,540,3072]` tensors, showing reverse-mode was retaining per-denoising-step residuals across the full rollout.
+- cleanup: No active training processes remained on the workers after the failure check.
+
+Analysis:
+- FSDP is now wired correctly; the corrected config reached the intended batch-256 logical shape and the mesh values are no longer the old all-context values.
+- The remaining batch-256 failure points at outer rollout activation retention. That is distinct from model-weight sharding and should be addressed by rematerializing the 25-step rollout body, matching the PyTorch reference's checkpointed differentiable sampling loop.
+
+Next:
+- Commit/push the rollout rematerialization patch, relaunch the storage-light batch-256 probe from that exact commit, and verify it reaches real optimizer steps before considering larger batch sizes or full training.
