@@ -1167,3 +1167,24 @@ Analysis:
 
 Next:
 - Continue lower-frequency monitoring toward checkpoint/eval step `1000`, with quick health checks for another maintenance event.
+
+## 2026-06-14T16:00:00Z - restart2 reaches step 100
+
+Goal:
+- Verify restart2 advances beyond both previous preempted traces while TPU health remains good.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart2-20260614-151300`
+- primary_worker_log: worker8 `~/maxdiffusion/logs/tpu_20260614-152324.log`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Latest train metric at step `100/10000`: `loss=0.432422`, `grad_norm=453.071`, `lr=9.90e-06`, `steps/s=0.069`.
+- metrics/artifacts: No checkpoint is expected until step `1000`.
+
+Analysis:
+- Restart2 has advanced beyond the last durable metrics from both earlier full-run attempts. Loss continues downward and grad norm remains settled after the step-40 spike.
+
+Next:
+- Continue lower-frequency monitoring toward checkpoint/eval step `1000`; expected time from step `100` is roughly 3.5-4 hours at the current throughput if the TPU remains healthy.
