@@ -559,3 +559,34 @@ Analysis:
 
 Next:
 - Monitor `tpu watch` until allocation/setup/launch completes, then inspect worker logs for device count, dataset paths, loss, gradients, and checkpoint artifacts.
+
+## 2026-06-14T09:44:39Z - v6e-64 smoke backend fix
+
+Goal:
+- Diagnose the first v6e-64 smoke failure and prepare a corrected relaunch on the same TPU slice.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `6d381756389d871b89859c2c2ae14d8a14cd7226`
+- changed_files: `bash_scripts/train_wan_side_adapter.sh`, worklog
+
+Command / Job:
+- tpu_name: `v6-64-02-lzha`
+- failed_run_name: `wan-side-adapter-v6e64-smoke-bs1-20260614-085810`
+- worker0_log: `~/maxdiffusion/logs/tpu_20260614-093043.log`
+- validation: `bash -n bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: fix_ready
+- metrics/artifacts: The smoke reached `WanPipelineTI2V_2_2.from_pretrained` and failed before the first batch with `RuntimeError: Unknown backend cpu. Available backends are ['tpu']`.
+- metrics/artifacts: The traceback entered `load_wan_vae(..., "cpu")`, which calls `jax.devices("cpu")`.
+- metrics/artifacts: Updated the launcher default from `JAX_PLATFORMS=tpu` to `JAX_PLATFORMS=tpu,cpu` so the TPU backend remains primary while the Wan loader can access CPU devices for VAE/model setup.
+
+Analysis:
+- This was a launch environment issue, not a dataset or side-adapter implementation failure. The training wrapper hid the CPU backend, while the upstream Wan pipeline expects CPU device access during model construction.
+- The v6e-64 TPU slice remains `READY` and can be reused for the corrected smoke after the stale watcher is stopped and the branch is pushed.
+
+Next:
+- Commit and push the launch fix, stop the stale `tpu watch` process, then relaunch the short smoke on `v6-64-02-lzha` and inspect worker logs for model load, dataset iteration, train metrics, and checkpoint output.

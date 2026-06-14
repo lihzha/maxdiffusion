@@ -17,7 +17,7 @@ elif [ -f "maxdiffusion_venv/bin/activate" ]; then
 fi
 
 export PYTHONUNBUFFERED=1
-export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu,cpu}"
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}"
