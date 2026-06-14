@@ -51,7 +51,7 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_enable_async_collective_f
 RUN_NAME="${RUN_NAME:-wan-side-adapter-smoke}"
 TRAIN_DATA_DIR="${TRAIN_DATA_DIR:-gs://v6_east1d/datasets/droid_wan_side_adapter/train}"
 EVAL_DATA_DIR="${EVAL_DATA_DIR:-gs://v6_east1d/datasets/droid_wan_side_adapter/val}"
-OUTPUT_DIR="${OUTPUT_DIR:-gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/${RUN_NAME}}"
+OUTPUT_DIR="${OUTPUT_DIR:-gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter}"
 MODEL_DIR="${MODEL_DIR:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}"
 
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-10}"
@@ -83,6 +83,7 @@ python src/maxdiffusion/train_wan.py \
   train_data_dir="${TRAIN_DATA_DIR}" \
   eval_data_dir="${EVAL_DATA_DIR}" \
   output_dir="${OUTPUT_DIR}" \
+  base_output_directory="${OUTPUT_DIR}" \
   max_train_steps="${MAX_TRAIN_STEPS}" \
   checkpoint_every="${CHECKPOINT_EVERY}" \
   eval_every="${EVAL_EVERY}" \

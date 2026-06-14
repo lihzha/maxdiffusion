@@ -590,3 +590,36 @@ Analysis:
 
 Next:
 - Commit and push the launch fix, stop the stale `tpu watch` process, then relaunch the short smoke on `v6-64-02-lzha` and inspect worker logs for model load, dataset iteration, train metrics, and checkpoint output.
+
+## 2026-06-14T10:04:23Z - v6e-64 smoke config upload fix
+
+Goal:
+- Diagnose the corrected smoke relaunch and fix the next multihost startup failure.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `51dd25d3bb30659c99a5a8af2d9e3648e5c3fa6e`
+- changed_files: `bash_scripts/train_wan_side_adapter.sh`, `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml`, worklog
+
+Command / Job:
+- failed_run_name: `wan-side-adapter-v6e64-smoke-bs1-20260614-095800`
+- tpu_name: `v6-64-02-lzha`
+- worker0_log: `~/maxdiffusion/logs/tpu_20260614-095608.log`
+- worker15_log: `~/maxdiffusion/logs/tpu_20260614-095608.log`
+- validation: `bash -n bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: fix_ready
+- metrics/artifacts: The smoke passed the previous blockers: it found all `64` TPU devices and successfully loaded the Wan VAE on `cpu:0`.
+- metrics/artifacts: Worker15 crashed first while writing `config.yml` before multihost initialization completed, attempting to use a nonexistent bucket named `wan-side-adapter-v6e64-smoke-bs1-20260614-095800`.
+- metrics/artifacts: Worker0 and other workers then aborted in the JAX distributed shutdown barrier, with stack traces around `_compute_null_context`; this was secondary to the early worker15 config-upload failure.
+- metrics/artifacts: Verified all 16 workers had zero stale `python -`, `train_wan.py`, or `tmux` processes after cleanup.
+
+Analysis:
+- `pyconfig.initialize()` calls `write_config_raw_keys_for_gcs()` before `ensure_machinelearning_job_runs()` initializes multihost JAX, so `jax.process_index()` is not a reliable multiworker guard at that point. Most Wan configs avoid this path with `save_config_to_gcs: False`; the side-adapter config should do the same.
+- The wrapper also incorrectly defaulted `output_dir` to include `RUN_NAME`, while `pyconfig` appends `run_name` to `output_dir` for checkpoint, metrics, and tensorboard paths. The default now points at the base run directory and passes `base_output_directory` explicitly.
+
+Next:
+- Commit and push the config/output-dir fix, relaunch the 3-step smoke on the same v6e-64 slice, and inspect logs until it reaches dataset iteration, train steps, and checkpoint output or exposes the next implementation bug.
