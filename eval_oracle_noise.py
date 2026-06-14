@@ -120,13 +120,14 @@ def iter_val_latents(val_data_dir: str, window_size: int, single_camera: bool = 
 
     for idx, raw in enumerate(ds):
         cam0 = tf.cast(tf.io.parse_tensor(raw["latent_cam0"], out_type=tf.float16), tf.float32).numpy()
-        text = tf.cast(tf.io.parse_tensor(raw["text_embed"],  out_type=tf.float16), tf.float32).numpy()
+        cam1 = tf.cast(tf.io.parse_tensor(raw["latent_cam1"], out_type=tf.float16), tf.float32).numpy()
+        cam2 = tf.cast(tf.io.parse_tensor(raw["latent_cam2"], out_type=tf.float16), tf.float32).numpy()
 
+        text = tf.cast(tf.io.parse_tensor(raw["text_embed"],  out_type=tf.float16), tf.float32).numpy()
+        
         if single_camera:
-            latent = cam0                                         # (F_lat, C, H, W)
+            latent = [cam0, cam1, cam2][np.random.randint(3)]    # (F_lat, C, H, W)
         else:
-            cam1 = tf.cast(tf.io.parse_tensor(raw["latent_cam1"], out_type=tf.float16), tf.float32).numpy()
-            cam2 = tf.cast(tf.io.parse_tensor(raw["latent_cam2"], out_type=tf.float16), tf.float32).numpy()
             latent = np.concatenate([cam0, cam1, cam2], axis=2)  # (F_lat, C, H*3, W)
 
         latent = latent[:window_size]                         # first window, matches training eval
