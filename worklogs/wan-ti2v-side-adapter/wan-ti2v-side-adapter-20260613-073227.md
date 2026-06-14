@@ -1027,3 +1027,47 @@ Analysis:
 
 Next:
 - Continue lower-frequency monitoring toward step `1000`, where eval and the first adapter checkpoint should be written and inspected.
+
+## 2026-06-14T15:05:00Z - restart1 maintenance warning
+
+Goal:
+- Track TPU health after restart1 passed the previous run's last durable metric.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart1-20260614-142200`
+- primary_worker_log: worker5 `~/maxdiffusion/logs/tpu_20260614-143107.log`
+
+Result:
+- status: running_with_maintenance_warning
+- metrics/artifacts: At `2026-06-14T15:05:23Z`, the TPU was still `READY`, but health reported `UNHEALTHY_MAINTENANCE`.
+- metrics/artifacts: Worker5 process remained alive; latest train metric was still step `80/10000`.
+- metrics/artifacts: No checkpoint has been written because the run has not reached step `1000`.
+
+Analysis:
+- This is an infrastructure maintenance signal, not a training-code failure. It matches the warning pattern that preceded the earlier preemption.
+
+Next:
+- Tighten monitoring. If the TPU preempts before step `1000`, relaunch a fresh run from scratch because no checkpoint exists yet.
+
+## 2026-06-14T15:11:00Z - restart1 preempted before first checkpoint
+
+Goal:
+- Determine whether the maintenance warning resolved or terminated restart1.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart1-20260614-142200`
+- tpu_name: `v6-64-02-lzha`
+
+Result:
+- status: preempted
+- metrics/artifacts: At `2026-06-14T15:09:21Z`, SSH reported terminal TPU state `PREEMPTED`.
+- metrics/artifacts: At `2026-06-14T15:10:56Z`, `gcloud compute tpus tpu-vm describe` reported `state: PREEMPTED`.
+- metrics/artifacts: Restart1 reached step `80/10000`; no checkpoint was written because the first checkpoint/eval is scheduled at step `1000`.
+- metrics/artifacts: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs15-restart1-20260614-142200/` contains only the run prefix.
+
+Analysis:
+- This is a second infrastructure maintenance/preemption event before step `1000`, not a training-code failure. The loss curve was healthy through the last durable metric.
+- With no checkpoint available, the next run must start from step `0`.
+
+Next:
+- Relaunch the same validated gbs15 full run as `restart2` on a fresh v6e-64 slice.
