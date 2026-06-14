@@ -528,3 +528,34 @@ Analysis:
 
 Next:
 - Prepare TPU v6 training: update/pull the pushed branch on a v6-64 slice, run a short smoke training job, inspect logs/loss/checkpoints, then scale batch size for the full adapter-only run.
+
+## 2026-06-14T08:58:10Z - v6e-64 smoke launch
+
+Goal:
+- Queue an isolated v6e-64 TPU slice for a short Wan2.2 TI2V 5B side-adapter training smoke.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `5f5343bcc7673eab67faf5a868504083aba693e9`
+
+Command / Job:
+- tpu_name: `v6-64-02-lzha`
+- accelerator: `v6e-64`
+- setup: `git fetch origin && git checkout codex/wan-ti2v-side-adapter-20260613-073227 && git pull origin codex/wan-ti2v-side-adapter-20260613-073227 && cd ~ && bash maxdiffusion/bash_scripts/setup.sh MODE=stable DEVICE=tpu`
+- command: `WANDB_DISABLED=true RUN_NAME=wan-side-adapter-v6e64-smoke-bs1-20260614-085810 MAX_TRAIN_STEPS=3 CHECKPOINT_EVERY=3 EVAL_EVERY=0 LOG_PERIOD=1 PER_DEVICE_BATCH_SIZE=0.015625 bash bash_scripts/train_wan_side_adapter.sh`
+- train_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- val_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- output_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-smoke-bs1-20260614-085810`
+
+Result:
+- status: launched
+- metrics/artifacts: pending allocation/setup/worker log inspection.
+
+Analysis:
+- Existing `v6-64-01-lihan` is healthy but already running a Python training process, so this task should use a separate queued v6e-64 slice.
+- Smoke uses `per_device_batch_size=0.015625`, giving global train batch size 1 on 64 devices, before scaling toward the reference DDP global batch size.
+
+Next:
+- Monitor `tpu watch` until allocation/setup/launch completes, then inspect worker logs for device count, dataset paths, loss, gradients, and checkpoint artifacts.
