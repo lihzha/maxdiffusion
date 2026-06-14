@@ -1654,3 +1654,30 @@ Analysis:
 
 Next:
 - Commit and push the audit fixes, then run a storage-light global batch `512` v6e-64 probe with checkpointing and final save disabled.
+
+## 2026-06-14T22:08:13Z - launch v6e-64 global batch 512 recipe-fixed probe
+
+Goal:
+- Prove whether the corrected side-adapter training stack fits and runs at global batch `512` on a v6e-64 TPU slice.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `83c1a9ce54e7e2f8906205e68f145dfea68d79e0`
+- push/pull: pushed to `origin/codex/wan-ti2v-side-adapter-20260613-073227`
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-probe-gbs512-recipefix-20260614-220813`
+- tpu_name: `v6-64-05-lzha`
+- accelerator: `v6e-64`
+- command: `tpu watch v6 -n 64 --setup-cmd "... bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" 83c1a9ce54e7e2f8906205e68f145dfea68d79e0 RUN_NAME=wan-side-adapter-v6e64-probe-gbs512-recipefix-20260614-220813 WANDB_DISABLED=true PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=2 CHECKPOINT_EVERY=0 SAVE_FINAL_CHECKPOINT=False EVAL_EVERY=0 LOG_PERIOD=1 bash bash_scripts/train_wan_side_adapter.sh`
+- local_log: `logs/tpu_watch_wan-side-adapter-v6e64-probe-gbs512-recipefix-20260614-220813.log`
+- expected artifacts: worker logs only; checkpointing and final save intentionally disabled for the storage-light fit probe.
+
+Acceptance Criteria:
+- Worker log confirms commit `83c1a9ce54e7e2f8906205e68f145dfea68d79e0`, v6e-64 with 64 devices, per-device batch `8`, total/global batch `512`, FSDP `-1`, context parallelism `1`, adapter-only trainable params, and frozen WAN params.
+- Training reaches at least one completed optimizer step without OOM, `RESOURCE_EXHAUSTED`, NaN, data parse failure, or pre-step TPU maintenance interruption.
+
+Result:
+- status: pending launch
