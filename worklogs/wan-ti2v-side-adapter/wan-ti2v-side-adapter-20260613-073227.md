@@ -1681,3 +1681,62 @@ Acceptance Criteria:
 
 Result:
 - status: pending launch
+
+## 2026-06-14T22:15:49Z - relaunch batch 512 after setup cwd failure
+
+Goal:
+- Relaunch the same global batch `512` v6e-64 fit probe after a setup-command path failure.
+
+Result:
+- status: first launch failed before training
+- key evidence: `tpu watch` cloned `maxdiffusion` on all workers, then ran the setup command from `$HOME`; every worker failed with `bash: bash_scripts/setup.sh: No such file or directory` and `Setup failed (rc=127)`.
+
+Analysis:
+- This is a launcher current-working-directory issue, not a model/data/batch-size result. No training process started and no checkpoints were written.
+
+Next:
+- Stop the local watcher and relaunch against the existing `READY` TPU with setup command `cd maxdiffusion && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu`.
+
+## 2026-06-14T22:17:26Z - relaunch batch 512 with absolute setup path
+
+Goal:
+- Run the recipe-fixed global batch `512` v6e-64 fit probe after setup-command cwd failures.
+
+Change:
+- Relaunched on the same task-owned v6e-64 slice with setup invoked from `$HOME` via `bash maxdiffusion/bash_scripts/setup.sh MODE=stable DEVICE=tpu`, avoiding the setup script's internal `cd maxdiffusion` conflict.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- local_head_at_record: `db24b7d5934f0e868a775e94af36141c5e01b4bd`
+- remote_training_commit: `83c1a9ce54e7e2f8906205e68f145dfea68d79e0`
+- push/pull: training commit was already pushed and checked out detached on TPU workers
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-probe-gbs512-recipefix-abssetup-20260614-221726`
+- tpu_name: `v6-64-05-lzha`
+- queued_resource: `v6-64-05-lzha-qr`
+- accelerator: `v6e-64`
+- remote_log: `/home/lzha/maxdiffusion/logs/tpu_20260614-222052.log`
+- archived_log: `/home/lzha/code/shared_artifacts/wan-ti2v-side-adapter/wan-side-adapter-v6e64-probe-gbs512-recipefix-abssetup-20260614-221726/worker14_tpu_20260614-222052.log`
+- command: `python src/maxdiffusion/train_wan.py src/maxdiffusion/configs/base_wan_5b_side_adapter.yml run_name=wan-side-adapter-v6e64-probe-gbs512-recipefix-abssetup-20260614-221726 pretrained_model_name_or_path=Wan-AI/Wan2.2-TI2V-5B-Diffusers train_data_dir=gs://v6_east1d/datasets/droid_wan_side_adapter/train eval_data_dir=gs://v6_east1d/datasets/droid_wan_side_adapter/val output_dir=gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter base_output_directory=gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter max_train_steps=2 checkpoint_every=0 eval_every=0 log_period=1 save_final_checkpoint=False per_device_batch_size=8 global_batch_size_to_train_on=512 global_batch_size_to_load=512 hardware=tpu`
+
+Result:
+- status: passed
+- metrics/artifacts: Worker 14 confirmed `HEAD=83c1a9c`, `Found 64 devices`, `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `per_device_batch_size=8.0`, and `total_train_batch_size=512.0`.
+- metrics/artifacts: Parallelism config was `mesh_axes=['data', 'fsdp', 'context', 'tensor']`, `data_sharding=(('data', 'fsdp', 'context', 'tensor'),)`, `ici_data_parallelism=1`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `ici_tensor_parallelism=1`, `dcn_data_parallelism=1`, `dcn_fsdp_parallelism=-1`, `dcn_context_parallelism=1`, and `dcn_tensor_parallelism=1`.
+- metrics/artifacts: Adapter/backbone split remained `239.5M` trainable adapter params and `5.00B` frozen transformer params.
+- metrics/artifacts: Step `1/2`: `loss=3.250000`, `grad_norm=3877746688.000`, `lr=5.00e-05`, `steps/s=0.003`.
+- metrics/artifacts: Step `2/2`: `loss=2.687500`, `grad_norm=590872576.000`, `lr=5.00e-05`, `steps/s=0.003`.
+- metrics/artifacts: No `Traceback`, `RESOURCE_EXHAUSTED`, OOM, or NaN was found in the archived worker-14 train log. The CUDA init warning is expected backend probing noise on TPU.
+- storage: GCS run root contained only empty placeholder directories because checkpointing and final save were disabled for this storage-light fit probe.
+- cleanup: All 16 TPU workers reported no remaining `train_wan`/Python process after completion. Deleted TPU node `v6-64-05-lzha`; deleted queued resource `v6-64-05-lzha-qr`; both verify as `NOT_FOUND`.
+
+Analysis:
+- Global batch `512` fits and completes optimizer updates on a v6e-64 slice with the recipe-fixed side-adapter implementation.
+- The current parallelism is FSDP-only across ICI/DCN with no context or tensor parallelism: FSDP axes are auto-sized by `-1`, while `data`, `context`, and `tensor` are all size `1` in the config. Data batches are sharded over the full `('data', 'fsdp', 'context', 'tensor')` mesh.
+- The storage-light probe produced no checkpoint artifacts by design; the archived log is the durable evidence for this fit test.
+
+Next:
+- Use these settings for the next full training launch unless a larger-batch probe is needed: `per_device_batch_size=8`, `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_fsdp_parallelism=-1`, `dcn_context_parallelism=1`.
