@@ -1299,3 +1299,31 @@ Analysis:
 
 Next:
 - Monitor the fresh queued resource, verify setup/training launch when allocated, then confirm step-100 checkpoint creation.
+
+## 2026-06-14T17:49:16Z - restart3 launched on v6e-64
+
+Goal:
+- Verify the fresh restart3 queued resource allocates a healthy `v6e-64` and launches the checkpoint-100 training recipe.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- tpu_name: `v6-64-02-lzha`
+- tpu_type: `v6e-64`
+- launch: `tpu watch v6 --force -n 64 ... CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=1 PER_DEVICE_BATCH_SIZE=0.234375 bash bash_scripts/train_wan_side_adapter.sh`
+- primary_worker: worker `13`
+- primary_log: `~/maxdiffusion/logs/tpu_20260614-173628.log`
+- wandb: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/gz8jzz7h`
+
+Result:
+- status: running
+- metrics/artifacts: The fresh QR allocated a `READY/HEALTHY` `v6e-64`; setup completed on all 16 workers and `tpu watch` launched training successfully at local `10:36:40`.
+- metrics/artifacts: Remote commit is `7ee947725f0d527f8bfb5a946b7cab4278a67af5`.
+- metrics/artifacts: The resolved config uses `checkpoint_every=100`, `eval_every=1000`, `eval_max_batches=1`, `global_batch_size_to_load=64`, `global_batch_size_to_train_on=15`, and `per_device_batch_size=0.234375`.
+- metrics/artifacts: Primary log confirms `trainable adapter params: 239.5M` and `frozen transformer params: 5.00B`.
+- metrics/artifacts: W&B run `gz8jzz7h` is online. No train step or checkpoint has been written yet.
+
+Analysis:
+- The TPU allocation/setup path is now healthy, and the v6 run is using the intended adapter-only frozen-backbone training setup. The run is still in startup/JIT/data path before the first metric.
+
+Next:
+- Monitor for the first logged train metric and then for the step-100 adapter checkpoint in GCS.
