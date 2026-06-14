@@ -1232,3 +1232,47 @@ Analysis:
 
 Next:
 - Monitor queue/provisioning, verify training launch/config, and confirm checkpoint creation at step `100`.
+
+## 2026-06-14T17:01:44Z - restart3 stale provisioning cleanup
+
+Goal:
+- Determine whether the restart3 queued resource progressed after the initial provisioning stall.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- tpu_name: `v6-64-02-lzha`
+- queued_resource: `v6-64-02-lzha-qr`
+- local_watcher_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000.log`
+
+Result:
+- status: stalled
+- metrics/artifacts: The queued resource remained in `PROVISIONING` from `2026-06-14T16:32:24Z` through `2026-06-14T17:01:00Z`.
+- metrics/artifacts: `gcloud compute tpus tpu-vm describe v6-64-02-lzha` still reported `NOT_FOUND`; no TPU workers or training logs exist for this attempt.
+- metrics/artifacts: The local watcher process was still polling the stale QR.
+
+Analysis:
+- This is a TPU allocation/provisioning stall before setup or training launch. It does not provide any new evidence about the model, data, optimizer, or checkpoint cadence.
+
+Next:
+- Stop only the restart3 watcher, delete the stale queued resource, and requeue the same checkpoint-100 recipe under a fresh run name.
+
+## 2026-06-14T17:05:00Z - restart3 watcher reattached
+
+Goal:
+- Avoid launching a duplicate `v6e-64` slice while the existing queued resource is still owned by GCP.
+
+Command / Job:
+- queued_resource: `v6-64-02-lzha-qr`
+- attempted cleanup: `gcloud compute tpus queued-resources delete v6-64-02-lzha-qr --quiet`
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+
+Result:
+- status: waiting
+- metrics/artifacts: The delete operation failed with `DeleteQueuedResource is not supported when state is PROVISIONING`.
+- metrics/artifacts: The stale QR is still `PROVISIONING`; `v6-64-02-lzha` still has no node.
+
+Analysis:
+- Since GCP will not cancel the QR in this state, queuing a second `v6e-64` request could produce two live slices if both eventually allocate. Reattaching the watcher to the existing QR is safer.
+
+Next:
+- Restart `tpu watch` on the same QR/run name, continue monitoring, and delete or use the resource as soon as it transitions.
