@@ -1376,3 +1376,31 @@ Analysis:
 
 Next:
 - Continue monitoring post-checkpoint training, verify the run advances past step `100`, and watch for TPU maintenance/preemption or abnormal loss/gradient behavior.
+
+## 2026-06-14T18:41:44Z - restart3 maintenance after checkpoint 200
+
+Goal:
+- Verify the run has durable progress before handling another v6 maintenance event.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- primary_worker: worker `13`
+- primary_log: `~/maxdiffusion/logs/tpu_20260614-173628.log`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000/checkpoints`
+
+Result:
+- status: maintenance
+- metrics/artifacts: Step `120/10000`: `loss=0.295703`, `grad_norm=24.024`, `lr=1.19e-05`, `steps/s=0.067`.
+- metrics/artifacts: Step `140/10000`: `loss=0.265234`, `grad_norm=12.836`, `lr=1.39e-05`, `steps/s=0.068`.
+- metrics/artifacts: Step `160/10000`: `loss=0.254932`, `grad_norm=11.610`, `lr=1.59e-05`, `steps/s=0.067`.
+- metrics/artifacts: Step `180/10000`: `loss=0.546191`, `grad_norm=6198.543`, `lr=1.79e-05`, `steps/s=0.069`.
+- metrics/artifacts: Step `200/10000`: `loss=0.472656`, `grad_norm=2298.336`, `lr=1.99e-05`, `steps/s=0.068`.
+- metrics/artifacts: Orbax finalized checkpoint `200` at `2026-06-14T18:37:15Z`; GCS contains checkpoints `100/` and `200/`, total `2.02 GiB`.
+- metrics/artifacts: TPU changed to `READY` / `UNHEALTHY_MAINTENANCE`; SSH to worker `13` began returning `Connection refused`.
+
+Analysis:
+- Restart3 solved the prior no-durable-progress issue: maintenance happened again, but checkpoint `200` is finalized and small enough for the storage budget.
+- The next launch should reuse the same run name/checkpoint prefix so it restores from step `200`; using a new run name would start from scratch unless explicit restore wiring is added.
+
+Next:
+- Relaunch the same run name through `tpu watch --force`, verify restore from checkpoint `200`, and continue monitoring to the next checkpoint.
