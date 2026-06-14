@@ -1327,3 +1327,27 @@ Analysis:
 
 Next:
 - Monitor for the first logged train metric and then for the step-100 adapter checkpoint in GCS.
+
+## 2026-06-14T17:58:04Z - restart3 first metrics
+
+Goal:
+- Confirm the v6 restart3 run is actually training and reproduces the expected early curve.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- primary_worker: worker `13`
+- primary_log: `~/maxdiffusion/logs/tpu_20260614-173628.log`
+- wandb: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/gz8jzz7h`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`.
+- metrics/artifacts: Step `40/10000`: `loss=1.478320`, `grad_norm=389378.840`, `lr=3.90e-06`, `steps/s=0.068`.
+- metrics/artifacts: No checkpoint is expected until step `100` with the restart3 cadence.
+
+Analysis:
+- The first metrics exactly match the earlier deterministic healthy runs. The step-40 gradient spike is the same transient spike already observed and recovered from in prior attempts.
+
+Next:
+- Continue monitoring through steps `60`, `80`, and especially the step-`100` adapter checkpoint.
