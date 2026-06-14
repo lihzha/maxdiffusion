@@ -82,6 +82,10 @@ def _to_target_if_cpu(state, target_shardings):
     return jax.tree.map(_place, state, target_shardings)
 
 
+def _replicated_sharding_tree(tree, sharding):
+    return jax.tree.map(lambda _: sharding, tree)
+
+
 def _rollout_loss(
     params,
     state: TrainState,
@@ -368,11 +372,17 @@ class WanTI2VSideAdapterTrainer:
 
     def _shard_state(self, mesh, state: TrainState) -> tuple[TrainState, Any]:
         with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
-            state_spec = nnx.get_partition_spec(state)
             state_shardings = nnx.get_named_sharding(state, mesh)
             state_shardings = _apply_actual_sharding_for_tpu(state, state_shardings)
+            replicated = NamedSharding(mesh, P())
+            # Adapter parameters are small and include action-length axes; the WAN
+            # transformer logical rules would otherwise shard them over context.
+            state_shardings = state_shardings.replace(
+                params=_replicated_sharding_tree(state.params, replicated),
+                opt_state=_replicated_sharding_tree(state.opt_state, replicated),
+            )
             state = _to_target_if_cpu(state, state_shardings)
-            state = jax.lax.with_sharding_constraint(state, state_spec)
+            state = jax.device_put(state, state_shardings)
         return state, state_shardings
 
     def _data_shardings(self, mesh) -> dict:

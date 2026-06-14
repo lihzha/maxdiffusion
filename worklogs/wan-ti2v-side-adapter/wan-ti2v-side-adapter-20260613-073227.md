@@ -623,3 +623,34 @@ Analysis:
 
 Next:
 - Commit and push the config/output-dir fix, relaunch the 3-step smoke on the same v6e-64 slice, and inspect logs until it reaches dataset iteration, train steps, and checkpoint output or exposes the next implementation bug.
+
+## 2026-06-14T10:12:17Z - side-adapter state sharding fix
+
+Goal:
+- Diagnose the next smoke failure after the config/output fix and correct adapter parameter sharding.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `ba3416d062f9e2c2dd27b061d96d71d1f83a5a31`
+- changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, worklog
+
+Command / Job:
+- failed_run_name: `wan-side-adapter-v6e64-smoke-bs1-20260614-100700`
+- tpu_name: `v6-64-02-lzha`
+- worker0_log: `~/maxdiffusion/logs/tpu_20260614-100625.log`
+- validation: `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`
+
+Result:
+- status: fix_ready
+- metrics/artifacts: The smoke passed config initialization, found all `64` TPU devices, loaded the VAE on CPU, and loaded the transformer far enough to create training state.
+- metrics/artifacts: It failed in `_shard_state()` with `IndivisibleError`: a leaf with shape `(7, 512)` was assigned a sharding that partitions axis 0 over the 64-way `context` mesh.
+- metrics/artifacts: Verified all 16 TPU workers had zero stale smoke/probe processes after the failed run.
+
+Analysis:
+- The side-adapter module used standard WAN logical axis annotations such as `embed`, `mlp`, and `heads`. Those rules are appropriate for the large frozen transformer, but not for small adapter/action parameters such as action-length embeddings.
+- The trainer now keeps the frozen transformer on its actual TPU sharding, but overrides the trainable adapter `params` and optimizer `opt_state` to replicated `NamedSharding(mesh, P())`.
+
+Next:
+- Commit and push the sharding fix, relaunch the short smoke, and inspect for dataset iteration, train metrics, and checkpoint output.
