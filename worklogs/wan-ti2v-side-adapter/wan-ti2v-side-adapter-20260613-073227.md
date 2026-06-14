@@ -1427,3 +1427,39 @@ Analysis:
 
 Next:
 - Wait for the replacement v6e-64, verify restore from checkpoint `200`, and confirm training resumes past step `200`.
+
+## 2026-06-14T19:06:00Z - audit low batch-size ceiling
+
+Goal:
+- Explain why the v6e-64 side-adapter run only fit global batch `15` and correct the implementation before any further full training launch.
+
+Change:
+- Stopped/abandoned the failed post-restore `gbs15` path after it restored checkpoint `200` but failed the first resumed `jit__train_step`.
+- Changed the side-adapter TPU mesh defaults from context-parallel to FSDP-parallel: `dcn_fsdp_parallelism=-1`, `dcn_context_parallelism=1`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`.
+- Matched `../Wan2.2` CFG semantics by stopping gradients through the unconditional branch and its latent input.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `3d5b99536b25a022335575c18e5fda097f2fb0a8`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml`, `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, worklog
+
+Command / Job:
+- failed_resume_run: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- failed_wandb: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/ikvx89sc`
+- failed_log: `~/maxdiffusion/logs/tpu_20260614-185447.log`
+
+Result:
+- status: failed as implemented
+- metrics/artifacts: The resumed run restored adapter checkpoint `200` successfully, then failed with `RESOURCE_EXHAUSTED: RuntimeProgramAllocationFailure`, trying to reserve `29.33G` with `29.30G` reservable.
+- key evidence: Worker log showed `ici_fsdp_parallelism=1`, `ici_context_parallelism=-1`, so the v6e-64 mesh was all context-parallel. Logical batch axes map to `data/fsdp`, both size `1`, meaning the model path was not using the intended batch/FSDP sharding.
+- key evidence: The JAX rollout let gradients flow through `v_uncond`; the PyTorch `../Wan2.2` trainer computes that branch under `torch.no_grad()` with detached `z`.
+
+Analysis:
+- User was right to challenge the batch-size result. The previous probes did not establish a meaningful maximum batch size because the side-adapter config was not using the FSDP mesh expected for TPU training.
+- The current implementation also over-retained the 25-step CFG graph relative to the PyTorch reference, increasing memory and changing the gradient path.
+
+Next:
+- Commit/push the mesh and CFG fixes, run storage-light v6e-64 probes starting at global batch `256`, and only relaunch full training after the corrected implementation compiles and completes real optimizer steps.

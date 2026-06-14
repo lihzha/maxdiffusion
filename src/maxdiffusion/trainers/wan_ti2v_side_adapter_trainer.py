@@ -137,12 +137,15 @@ def _rollout_loss(
             rngs=nnx.Rngs(dropout=dropout_rng),
         )
         if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
+            # Match ../Wan2.2: the unconditional CFG branch is frozen and run
+            # without gradient through either the branch or its latent input.
             v_uncond = transformer(
-                hidden_states=z,
+                hidden_states=jax.lax.stop_gradient(z),
                 timestep=timestep_2d,
                 encoder_hidden_states=null_context,
                 deterministic=True,
             )
+            v_uncond = jax.lax.stop_gradient(v_uncond)
             v = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
         else:
             v = v_cond
