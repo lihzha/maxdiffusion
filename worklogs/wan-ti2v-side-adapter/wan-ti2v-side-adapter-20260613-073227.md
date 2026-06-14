@@ -949,3 +949,30 @@ Analysis:
 
 Next:
 - Requeue/recreate v6e-64 with `tpu watch`, run setup through the repo wrapper path as needed, and relaunch full training from scratch.
+
+## 2026-06-14T14:48:00Z - full run restart1 first metric
+
+Goal:
+- Verify that the fresh restart after preemption is training with the intended gbs15 recipe.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart1-20260614-142200`
+- tpu_name: `v6-64-02-lzha`
+- tpu_type: `v6e-64`
+- primary_worker_log: worker5 `~/maxdiffusion/logs/tpu_20260614-143107.log`
+- wandb_run: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/wmv8j3iy`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: All 16 worker processes are alive on commit `049727d7ed4135de0ca606007f6e99f370a6f842`.
+- metrics/artifacts: Resolved config is `global_batch_size_to_load=64`, `global_batch_size_to_train_on=15`, `per_device_batch_size=0.234375`, `eval_every=1000`, `eval_max_batches=1`, and `checkpoint_every=1000`.
+- metrics/artifacts: First train metric logged at step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`.
+- metrics/artifacts: No checkpoint is expected until step `1000`; GCS currently has only the run prefix.
+
+Analysis:
+- Restart1 is past setup/model load/first JIT and is executing real training. The step-20 metric exactly matches the previous preempted full run, which is expected for the same seed and fresh-from-step-0 launch.
+- There are no NaNs, OOMs, tracebacks, or TPU health warnings in the current logs.
+
+Next:
+- Continue monitoring warmup metrics and TPU health, with first critical artifact validation at checkpoint/eval step `1000`.
