@@ -1404,3 +1404,26 @@ Analysis:
 
 Next:
 - Relaunch the same run name through `tpu watch --force`, verify restore from checkpoint `200`, and continue monitoring to the next checkpoint.
+
+## 2026-06-14T18:44:43Z - restart3 requeued from checkpoint 200
+
+Goal:
+- Recover from the v6 maintenance/preemption after preserving checkpoint `200`.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- tpu_name: `v6-64-02-lzha`
+- queued_resource: `v6-64-02-lzha-qr`
+- launch: `tpu watch v6 --force -n 64 ... RUN_NAME=wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000 ...`
+
+Result:
+- status: queued
+- metrics/artifacts: The TPU transitioned to `PREEMPTED` after reporting `UNHEALTHY_MAINTENANCE`.
+- metrics/artifacts: The watcher deleted the preempted node and stale active queued resource.
+- metrics/artifacts: A fresh `v6-64-02-lzha-qr` was submitted and is `WAITING_FOR_RESOURCES`.
+
+Analysis:
+- Reusing the same run name is intentional so the next launch uses the same checkpoint prefix and restores from step `200`.
+
+Next:
+- Wait for the replacement v6e-64, verify restore from checkpoint `200`, and confirm training resumes past step `200`.
