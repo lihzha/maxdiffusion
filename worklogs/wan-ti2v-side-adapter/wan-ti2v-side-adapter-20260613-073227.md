@@ -727,3 +727,39 @@ Analysis:
 
 Next:
 - Stop only the `wan-side-adapter-v6e64-smoke-bs1-20260614-101400` train processes, commit and push the loop patch, then relaunch a 3-step smoke on `v6-64-02-lzha`.
+
+## 2026-06-14T11:02:38Z - loop smoke passed and probe checkpoint guard
+
+Goal:
+- Validate the loop-form rollout on v6e-64 and prepare storage-light batch-size probes.
+
+Change:
+- Added `SAVE_FINAL_CHECKPOINT` to `bash_scripts/train_wan_side_adapter.sh` so probe runs can disable final checkpoint writes while full training keeps checkpointing enabled.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `29384d5297072da2fd222aa23561b63ee8282144`
+- changed_files: `bash_scripts/train_wan_side_adapter.sh`, worklog
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-smoke-bs1-loop-20260614-104600`
+- tpu_name: `v6-64-02-lzha`
+- worker15_log: `~/maxdiffusion/logs/tpu_20260614-104702.log`
+- command: `WANDB_DISABLED=true RUN_NAME=wan-side-adapter-v6e64-smoke-bs1-loop-20260614-104600 MAX_TRAIN_STEPS=3 CHECKPOINT_EVERY=3 EVAL_EVERY=0 LOG_PERIOD=1 PER_DEVICE_BATCH_SIZE=0.015625 bash bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: passed
+- metrics/artifacts: The run used commit `29384d5297072da2fd222aa23561b63ee8282144` on all workers.
+- metrics/artifacts: Worker15 was JAX `process=0` and logged `step 1/3 loss=2.578125 grad_norm=512.890`, `step 2/3 loss=4.781250 grad_norm=172.694`, and `step 3/3 loss=2.906250 grad_norm=142.403`.
+- metrics/artifacts: Checkpoint step `3` finalized at `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-smoke-bs1-loop-20260614-104600/checkpoints/3`.
+- metrics/artifacts: GCS contains `params`, `opt_state`, and `step` checkpoint trees with per-process array metadata and `commit_success.txt`.
+- metrics/artifacts: A strict post-run check found zero remaining `train_wan.py`, `python`, or side-adapter launcher wrapper processes on all 16 workers.
+
+Analysis:
+- The XLA loop patch fixed the compile-pressure issue. The loop smoke completed the full 25-step side-adapter sampling path with nonzero gradients and a finalized multihost checkpoint.
+- Batch probing should now start with no final checkpoint saves to keep GCS usage controlled, then re-enable checkpointing for the selected full run.
+
+Next:
+- Commit and push the probe checkpoint guard, then run storage-light batch-size probes on the same v6e-64 slice.
