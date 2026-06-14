@@ -1506,3 +1506,114 @@ Analysis:
 
 Next:
 - Commit/push the rollout rematerialization patch, relaunch the storage-light batch-256 probe from that exact commit, and verify it reaches real optimizer steps before considering larger batch sizes or full training.
+
+## 2026-06-14T19:29:41Z - remat FSDP batch-256 probe passed
+
+Goal:
+- Verify global batch `256` fits with the corrected FSDP mesh and rollout rematerialization.
+
+Hypothesis:
+- The previous corrected-FSDP OOM was caused by retained 25-step rollout residuals. Rematerializing the outer rollout body should allow global batch `256` to compile and execute real optimizer steps.
+
+Change:
+- Committed and pushed rollout rematerialization in `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `30347d4c934e00b718200ed0888808706d24fc9a`
+- push/pull: pushed to origin; `tpu watch` pulled the commit on all workers
+- changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, worklog
+- remote_commit/status: worker 0 reported `HEAD=30347d4c934e00b718200ed0888808706d24fc9a` and a clean branch status
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-probe-gbs256-fsdp-remat-20260614-191642`
+- tpu_name: `v6-64-02-lzha`
+- tpu_type: `v6e-64`
+- command: `PER_DEVICE_BATCH_SIZE=4 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=256 GLOBAL_BATCH_SIZE_TO_LOAD=256 MAX_TRAIN_STEPS=2 CHECKPOINT_EVERY=0 SAVE_FINAL_CHECKPOINT=False EVAL_EVERY=0 WANDB_DISABLED=true bash bash_scripts/train_wan_side_adapter.sh`
+- log: `~/maxdiffusion/logs/tpu_20260614-191720.log`
+
+Result:
+- status: passed
+- metrics/artifacts: Config confirmed `global_batch_size_to_train_on=256`, `global_batch_size_to_load=256`, `per_device_batch_size=4.0`, `total_train_batch_size=256.0`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_fsdp_parallelism=-1`, and `dcn_context_parallelism=1`.
+- metrics/artifacts: Adapter/backbone split remained `239.5M` trainable adapter params and `5.00B` frozen transformer params.
+- metrics/artifacts: Step `1/2`: `loss=3.296875`, `grad_norm=10573147136.000`, `lr=5.00e-05`, `steps/s=0.004`.
+- metrics/artifacts: Step `2/2`: `loss=3.390625`, `grad_norm=90701496.000`, `lr=5.00e-05`, `steps/s=0.004`.
+- cleanup: Checkpointing and final checkpoint saving were disabled; all workers had no remaining training process after completion; TPU remained `READY/HEALTHY`.
+
+Analysis:
+- User's expected lower bound is now satisfied: global batch `256` does fit on v6e-64 when FSDP and rollout rematerialization are both correct.
+- The earlier batch ceiling was not a hardware limit. It was the combination of all-context mesh configuration and retained rollout residuals.
+- Throughput is slow at this tiny two-step probe because it includes first compile and short-run overhead; a longer run is needed to estimate steady-state speed.
+
+Next:
+- Probe larger global batches with the same storage-light settings, starting at global batch `512`, to find the largest fitting batch before launching full training.
+
+## 2026-06-14T19:36:00Z - batch-512 probe interrupted by maintenance
+
+Goal:
+- Test whether global batch `512` fits with corrected FSDP and rollout rematerialization.
+
+Change:
+- Launched a one-step storage-light global batch `512` probe with `PER_DEVICE_BATCH_SIZE=8`, `GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512`, `GLOBAL_BATCH_SIZE_TO_LOAD=512`, `MAX_TRAIN_STEPS=1`, `CHECKPOINT_EVERY=0`, `SAVE_FINAL_CHECKPOINT=False`, `EVAL_EVERY=0`, and `WANDB_DISABLED=true`.
+- First attempted `tpu watch --force`; it reported successful handoff but produced no remote trainer log or active process.
+- Relaunched directly on all 16 workers with explicit `nohup` and per-worker log path `logs/tpu_direct_wan-side-adapter-v6e64-probe-gbs512-direct-20260614-193200.log`.
+
+Version Control:
+- implementation_commit: `30347d4c934e00b718200ed0888808706d24fc9a`
+- remote_commit/status: all direct-launch workers printed `head=30347d4c934e00b718200ed0888808706d24fc9a`
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-probe-gbs512-direct-20260614-193200`
+- tpu_name: `v6-64-02-lzha`
+- tpu_type: `v6e-64`
+- command: `PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=1 CHECKPOINT_EVERY=0 SAVE_FINAL_CHECKPOINT=False EVAL_EVERY=0 WANDB_DISABLED=true bash bash_scripts/train_wan_side_adapter.sh`
+- log: `~/maxdiffusion/logs/tpu_direct_wan-side-adapter-v6e64-probe-gbs512-direct-20260614-193200.log`
+
+Result:
+- status: interrupted
+- metrics/artifacts: Worker 0 confirmed `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `per_device_batch_size=8.0`, `total_train_batch_size=512.0`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_fsdp_parallelism=-1`, and `dcn_context_parallelism=1`.
+- metrics/artifacts: Adapter/backbone split remained `239.5M` trainable adapter params and `5.00B` frozen transformer params.
+- metrics/artifacts: Before a train step or compile OOM was logged, the TPU reported maintenance and then became `PREEMPTED`; subsequent SSH failed with `This TPU has terminal state "PREEMPTED"`.
+
+Analysis:
+- This does not establish whether batch `512` fits. The interruption happened during the first-step window and was caused by v6 maintenance/preemption, not a logged XLA or runtime memory failure.
+
+Next:
+- Requeue a fresh `v6e-64` through `tpu watch --force` and retry the global batch `512` probe from the same commit.
+
+## 2026-06-14T20:43:40Z - batch-size audit cleanup
+
+Goal:
+- Finish the Wan v6 cleanup after the global batch `512` retry was blocked by v6 maintenance/provisioning instability.
+
+Change:
+- Stopped the local `tpu watch` retry for `v6-64-04-lzha` after it remained in provisioning without starting a trainer.
+- Polled the queued resource until it moved out of `PROVISIONING`, then deleted it when the API allowed deletion.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `30347d4c934e00b718200ed0888808706d24fc9a`
+- changed_files: worklog only
+
+Command / Job:
+- cleanup_target: `v6-64-04-lzha`
+- queued_resource: `v6-64-04-lzha-qr`
+- cleanup: `gcloud alpha compute tpus queued-resources delete v6-64-04-lzha-qr --zone us-east1-d --project mae-irom-lab-guided-data --quiet`
+
+Result:
+- status: cleaned
+- metrics/artifacts: `v6-64-04-lzha` node is `NOT_FOUND`.
+- metrics/artifacts: `v6-64-04-lzha-qr` queued resource is `NOT_FOUND`.
+- metrics/artifacts: No local Wan `tpu watch` processes remain; the only observed local watcher was unrelated `ego-lap` work on `v6-64-01-lihan`.
+
+Analysis:
+- The corrected implementation uses the FSDP mesh settings needed for v6e-64: `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_fsdp_parallelism=-1`, and `dcn_context_parallelism=1`.
+- The global batch `256` probe is the current confirmed fitting point. It compiled and completed two optimizer steps with checkpointing disabled, so it did not consume GCS storage.
+- Global batch `512` remains inconclusive. The direct launch confirmed the intended config and parameter split, but v6 maintenance/preemption happened before a train step or memory failure could be logged.
+
+Next:
+- Use global batch `256` for the next full training launch if we need to proceed immediately, or retry storage-light probes above `256` when v6 provisioning is stable enough to establish the true maximum fitting batch.
