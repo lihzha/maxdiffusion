@@ -927,3 +927,25 @@ Analysis:
 
 Next:
 - Tighten monitoring cadence until health recovers, preemption occurs, or the first checkpoint is reached.
+
+## 2026-06-14T14:21:00Z - full run preempted before first checkpoint
+
+Goal:
+- Determine whether the maintenance warning resolved or preempted the active full run.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-20260614-134500`
+- tpu_name: `v6-64-02-lzha`
+
+Result:
+- status: preempted
+- metrics/artifacts: At `2026-06-14T14:20:25Z`, `gcloud compute tpus tpu-vm describe` reported `state: PREEMPTED`.
+- metrics/artifacts: SSH failed with `This TPU has terminal state "PREEMPTED", so it cannot be used anymore.`
+- metrics/artifacts: No checkpoint was written because the run had not reached step `1000`. Last durable train logs were through step `80`.
+
+Analysis:
+- The preemption followed the prior `UNHEALTHY_MAINTENANCE` warning. This is an infrastructure interruption, not a training-code failure.
+- Since there is no checkpoint to restore, the correct continuation is a fresh full run with the same validated gbs15 settings and a new run name/W&B run.
+
+Next:
+- Requeue/recreate v6e-64 with `tpu watch`, run setup through the repo wrapper path as needed, and relaunch full training from scratch.
