@@ -160,12 +160,20 @@ wait_for_job() {
     sleep 60
   done
   local states
-  states=$(remote "sacct -j '${job_id}' --format=State -P -n | sed '/^$/d' | sort -u | tr '\n' ' '")
-  echo "job ${job_id} states: ${states}"
-  if [[ "${states}" != *COMPLETED* ]] || [[ "${states}" == *FAILED* ]] || [[ "${states}" == *CANCELLED* ]] || [[ "${states}" == *TIMEOUT* ]] || [[ "${states}" == *OUT_OF_MEMORY* ]]; then
-    remote "sacct -j '${job_id}' --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS -P"
-    return 4
-  fi
+  for _ in $(seq 1 20); do
+    states=$(remote "sacct -j '${job_id}' --format=State -P -n | sed '/^$/d' | sort -u | tr '\n' ' '")
+    echo "job ${job_id} states: ${states}"
+    if [[ "${states}" == *FAILED* ]] || [[ "${states}" == *CANCELLED* ]] || [[ "${states}" == *TIMEOUT* ]] || [[ "${states}" == *OUT_OF_MEMORY* ]]; then
+      remote "sacct -j '${job_id}' --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS -P"
+      return 4
+    fi
+    if [[ "${states}" == *COMPLETED* ]] && [[ "${states}" != *RUNNING* ]] && [[ "${states}" != *PENDING* ]] && [[ "${states}" != *COMPLETING* ]] && [[ "${states}" != *CONFIGURING* ]]; then
+      return 0
+    fi
+    sleep 15
+  done
+  remote "sacct -j '${job_id}' --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS -P"
+  return 4
 }
 
 upload_one() {

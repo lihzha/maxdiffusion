@@ -459,3 +459,39 @@ Analysis:
 Next:
 - Continue monitoring the active a1001 orchestrator until all `704/704` shards are present in GCS.
 - Then upload the train summary, validate representative shards including the final partial shard, clean a1001 staging, and launch TPU v6 smoke/full training.
+
+## 2026-06-14T07:05:18Z - train conversion sacct race recovery
+
+Goal:
+- Recover the a1001 train conversion after the local orchestrator exited during batch 644-659.
+
+Change:
+- Hardened `bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh` so `wait_for_job` waits for terminal `sacct` states after a job disappears from `squeue`, instead of failing on a transient `RUNNING` report.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `eb5829585410cdbfb4c207da77fb29885793e353`
+- implementation_commit: pending
+- changed_files: `bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`, `worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md`
+
+Command / Job:
+- command: manual upload of staged shards 644-659 using the existing local-token/remote-curl path; resume planned with `START_SHARD=660 END_SHARD=703`
+- job_id: `29057788`
+- logs: `/tmp/wan_a1001_remaining_196_703.log`
+- artifacts: `gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00644-of-00704.tfrecord` through `train-00659-of-00704.tfrecord`
+
+Result:
+- status: in_progress
+- metrics/artifacts: Slurm job `29057788` completed cleanly with exit `0:0` and produced all 16 staged TFRecords.
+- metrics/artifacts: Manual upload moved shards 644-659 to GCS; GCS train shard count reached `660/704`.
+- metrics/artifacts: a1001 Lustre remains around `22T` free, above the requested 2T guardrail.
+
+Analysis:
+- The failure was in orchestration, not conversion. `sacct` briefly reported `RUNNING` after `squeue` no longer showed the job; the job completed normally shortly afterward.
+- Resuming from shard 660 avoids recomputing or reuploading the already-valid 644-659 batch.
+
+Next:
+- Let the manual cleanup of batch 644-659 finish, then resume the patched orchestrator from shard 660 through 703.
+- After all shards are present, upload the train summary, validate representative shards including final shard 703, delete remaining a1001 staging data, and proceed to TPU v6 training.
