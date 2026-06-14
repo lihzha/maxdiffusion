@@ -1211,3 +1211,24 @@ Analysis:
 
 Next:
 - Relaunch as restart3 with the same gbs15 recipe, `EVAL_EVERY=1000`, `EVAL_MAX_BATCHES=1`, and `CHECKPOINT_EVERY=100`.
+
+## 2026-06-14T16:32:00Z - restart3 queued with checkpoint interval 100
+
+Goal:
+- Relaunch with earlier adapter checkpointing so preemptions after step `100` leave durable progress.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- tpu_name: `v6-64-02-lzha`
+- command: `tpu watch v6 --force -n 64 ... CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=1 PER_DEVICE_BATCH_SIZE=0.234375 bash bash_scripts/train_wan_side_adapter.sh`
+- local_watcher_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000.log`
+
+Result:
+- status: queued
+- metrics/artifacts: The watcher deleted the preempted restart2 TPU and suspended queued resource, then submitted a fresh queued resource at `2026-06-14T16:32:24Z`.
+
+Analysis:
+- Only durability cadence changed. Training objective, batch size, optimizer/lr, data, eval cadence, and adapter-only frozen-backbone setup are unchanged.
+
+Next:
+- Monitor queue/provisioning, verify training launch/config, and confirm checkpoint creation at step `100`.
