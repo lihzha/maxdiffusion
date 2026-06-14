@@ -438,3 +438,24 @@ Analysis:
 Next:
 - Continue monitoring the active a1001 orchestrator through the remaining train shards.
 - After final upload, write the train summary, validate representative shards including final shard `703`, clean a1001 staging, and proceed to TPU v6 smoke/full training without asking for another confirmation.
+
+## 2026-06-14T05:04:15Z - train conversion progress checkpoint
+
+Goal:
+- Record train conversion progress after passing 600 verified train shards in GCS.
+
+Result:
+- status: in_progress
+- metrics/artifacts: GCS train shard count reached `612/704`; completed train shards are contiguous through `train-00611-of-00704.tfrecord`.
+- metrics/artifacts: a1001 batches 548-563, 564-579, 580-595, and 596-611 completed successfully and uploaded all expected TFRecord shards.
+- metrics/artifacts: Slurm jobs `29055104`, `29055514`, `29055994`, and `29056335` completed cleanly for these batches.
+- metrics/artifacts: Conversion write rates remained around 18-23 examples/s per shard writer; GCS upload coverage stayed contiguous after every batch.
+- metrics/artifacts: Lustre free space remains around `23T`, still well above the requested 2T free-space guard.
+
+Analysis:
+- The staged data and TFRecord conversion path remain correct; the strongest evidence remains contiguous GCS shard coverage through shard 611.
+- Remaining work is six train batches: 612-627, 628-643, 644-659, 660-675, 676-691, and 692-703.
+
+Next:
+- Continue monitoring the active a1001 orchestrator until all `704/704` shards are present in GCS.
+- Then upload the train summary, validate representative shards including the final partial shard, clean a1001 staging, and launch TPU v6 smoke/full training.
