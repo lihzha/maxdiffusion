@@ -140,7 +140,7 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     ema_decay=0.0 \
     distill=False \
-    wandb_project='wan-ti2v-finetune_single_view' \
+    wandb_project='wan-ti2v-finetune_multi_view' \
     single_camera=False
 
 # --- 6. Unmount ---
