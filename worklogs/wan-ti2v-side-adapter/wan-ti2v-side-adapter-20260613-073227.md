@@ -876,3 +876,27 @@ Analysis:
 
 Next:
 - Monitor worker5/process 0 until the first step-20 train metric appears or a failure/preemption occurs; also keep checking TPU health because no background watcher owns recovery for this run.
+
+## 2026-06-14T14:00:00Z - full run first metric
+
+Goal:
+- Verify that the full 10k-step gbs15 run is genuinely training, not just launched.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-20260614-134500`
+- primary_worker_log: worker5 `~/maxdiffusion/logs/tpu_20260614-134038.log`
+- wandb_run: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/omt2ym2z`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Worker5 process `22227` is alive; elapsed `18:22` at `2026-06-14T13:59:01Z`.
+- metrics/artifacts: First train metric logged at step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`.
+- metrics/artifacts: No checkpoint is expected until step `1000`; GCS currently has only the base prefix.
+
+Analysis:
+- The low LR is expected during the 500-step warmup (`warmup_steps_fraction=0.05` over 10k steps).
+- The run is now past compile/startup and advancing real training steps. No NaNs, OOMs, tracebacks, or TPU health failures are visible.
+
+Next:
+- Continue monitoring through additional train logs and the first checkpoint/eval at step `1000`.
