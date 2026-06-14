@@ -175,7 +175,7 @@ save_optimizer: True
 adam_b1: 0.9
 adam_b2: 0.999
 adam_eps: 1.e-8
-adam_weight_decay: 0.0
+adam_weight_decay: 1.e-2
 opt_enable_grad_clipping: False
 max_grad_value: 1.0
 opt_enable_grad_global_norm_clipping: True

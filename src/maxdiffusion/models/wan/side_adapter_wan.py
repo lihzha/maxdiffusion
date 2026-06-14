@@ -199,7 +199,7 @@ class NNXActionTokenEncoder(nnx.Module):
             weights_dtype=weights_dtype,
             precision=precision,
         )
-        self.out_norm = FP32LayerNorm(rngs=rngs, dim=hidden_dim, eps=1e-6, elementwise_affine=True)
+        self.out_norm = FP32LayerNorm(rngs=rngs, dim=hidden_dim, eps=1e-5, elementwise_affine=True)
         self.out_1 = nnx.Linear(
             in_features=hidden_dim,
             out_features=hidden_dim,
@@ -258,8 +258,8 @@ class NNXActionSideAdapter(nnx.Module):
         precision: jax.lax.Precision = None,
     ):
         self.dtype = dtype
-        self.norm_x = FP32LayerNorm(rngs=rngs, dim=dim, eps=1e-6, elementwise_affine=True)
-        self.norm_action = FP32LayerNorm(rngs=rngs, dim=action_token_dim, eps=1e-6, elementwise_affine=True)
+        self.norm_x = FP32LayerNorm(rngs=rngs, dim=dim, eps=1e-5, elementwise_affine=True)
+        self.norm_action = FP32LayerNorm(rngs=rngs, dim=action_token_dim, eps=1e-5, elementwise_affine=True)
         self.x_proj = nnx.Linear(
             in_features=dim,
             out_features=hidden_dim,
@@ -291,7 +291,7 @@ class NNXActionSideAdapter(nnx.Module):
             weights_dtype=weights_dtype,
             precision=precision,
         )
-        self.ffn_norm = FP32LayerNorm(rngs=rngs, dim=hidden_dim, eps=1e-6, elementwise_affine=True)
+        self.ffn_norm = FP32LayerNorm(rngs=rngs, dim=hidden_dim, eps=1e-5, elementwise_affine=True)
         self.ffn_1 = nnx.Linear(
             in_features=hidden_dim,
             out_features=4 * hidden_dim,

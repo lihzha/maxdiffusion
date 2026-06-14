@@ -1617,3 +1617,40 @@ Analysis:
 
 Next:
 - Use global batch `256` for the next full training launch if we need to proceed immediately, or retry storage-light probes above `256` when v6 provisioning is stable enough to establish the true maximum fitting batch.
+
+## 2026-06-14T22:05:52Z - side-adapter parity audit and recipe fixes
+
+Goal:
+- Re-audit the MaxDiffusion side-adapter implementation against `../Wan2.2` before retrying global batch `512`.
+
+Change:
+- Changed side-adapter `FP32LayerNorm` eps from `1e-6` to `1e-5` to match PyTorch `nn.LayerNorm` defaults in `models/action_conditioned_wan.py`.
+- Changed `adam_weight_decay` from `0.0` to `1.e-2` to match the PyTorch DROID distributed script default.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `3b126904f27b93456d63262c88af66801f3ca376`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/models/wan/side_adapter_wan.py`, `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml`, worklog
+
+Validation:
+- `python3 -m py_compile src/maxdiffusion/models/wan/side_adapter_wan.py src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py src/maxdiffusion/data_preprocessing/wan_side_adapter_droid_cache_to_tfrecord.py src/maxdiffusion/train_wan.py`
+- `bash -n bash_scripts/train_wan_side_adapter.sh bash_scripts/della_convert_wan_side_adapter_droid.sh bash_scripts/local_a1001_continue_wan_side_adapter_tfrecords.sh`
+- Static config checks confirmed `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_fsdp_parallelism=-1`, `dcn_context_parallelism=1`, and v6 GCS train/val roots.
+
+Result:
+- status: patch pending commit
+- model parity: action delta encoding, action token pooling, side residual addition after selected blocks, zero-initialized residual output, CFG stop-gradient through unconditional branch, shifted sigma grid, per-token frame-0 timestep zeroing, and first-frame pinning match the PyTorch side-adapter rollout.
+- parameter ownership: the train state optimizer `params` tree contains only adapter params. Frozen WAN transformer params are stored separately as `transformer_params` and are not an argument to `nnx.value_and_grad`; checkpoint saves only adapter params and optimizer state.
+- sharding: v6 mesh config is FSDP-dominant. Frozen transformer weights are loaded with logical partition specs onto the mesh via `create_sharded_logical_transformer` and `device_put_replicated(..., sharding)`. Adapter params/optimizer state are intentionally `P()` replicated because the adapter is small and has action-length axes that should not inherit WAN context sharding.
+- data parity: source Della cache sample `ep6434_v0_s00048` has `z_I0`/`z_video` dtype `torch.float16` and `actions` dtype `float32`; GCS TFRecord train shard `443` record `508` for ordinal `907772` has identical byte counts and matching min/max/std for `z_i0`, `z_video`, and `actions`.
+- dataset completeness: train summary reports `1,440,554` examples across `704` shards; val summary reports `14,636` examples across `8` shards.
+
+Analysis:
+- The implementation structure is aligned with the original PyTorch side-adapter code. The two mismatches found were recipe-level numeric defaults, not shape or data-loader failures.
+- The next global batch `512` probe should run from the patched commit so the memory test reflects the corrected recipe.
+
+Next:
+- Commit and push the audit fixes, then run a storage-light global batch `512` v6e-64 probe with checkpointing and final save disabled.
