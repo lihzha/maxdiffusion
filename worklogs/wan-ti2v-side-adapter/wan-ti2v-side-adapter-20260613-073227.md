@@ -900,3 +900,30 @@ Analysis:
 
 Next:
 - Continue monitoring through additional train logs and the first checkpoint/eval at step `1000`.
+
+## 2026-06-14T14:15:00Z - full run warmup metrics and maintenance warning
+
+Goal:
+- Inspect early full-run loss/gradient trend and TPU health after the first metric.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-20260614-134500`
+- primary_worker_log: worker5 `~/maxdiffusion/logs/tpu_20260614-134038.log`
+
+Result:
+- status: running_with_maintenance_warning
+- metrics/artifacts: TPU state is still `READY`, but health reports `UNHEALTHY_MAINTENANCE`.
+- metrics/artifacts: Worker5 process `22227` is alive; elapsed `34:07` at `2026-06-14T14:14:46Z`.
+- metrics/artifacts: Train logs:
+  - step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`
+  - step `40/10000`: `loss=1.478320`, `grad_norm=389378.840`, `lr=3.90e-06`, `steps/s=0.069`
+  - step `60/10000`: `loss=1.130664`, `grad_norm=3744.459`, `lr=5.90e-06`, `steps/s=0.069`
+  - step `80/10000`: `loss=0.612598`, `grad_norm=749.494`, `lr=7.90e-06`, `steps/s=0.069`
+- metrics/artifacts: No checkpoint yet; first checkpoint/eval remains scheduled for step `1000`.
+
+Analysis:
+- The loss is decreasing during warmup and no NaNs/OOMs/tracebacks are visible. Step `40` has a large grad-norm spike, but subsequent grad norms recover and training continues.
+- `UNHEALTHY_MAINTENANCE` means the spot slice may be reclaimed before the step-1000 checkpoint. If that happens before a checkpoint, relaunch from scratch on the next v6e-64 allocation.
+
+Next:
+- Tighten monitoring cadence until health recovers, preemption occurs, or the first checkpoint is reached.
