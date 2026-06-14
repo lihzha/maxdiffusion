@@ -1142,3 +1142,28 @@ Analysis:
 
 Next:
 - Continue monitoring through step `80`, then reduce cadence while watching for step `1000` checkpoint/eval.
+
+## 2026-06-14T15:56:00Z - restart2 passes previous preemption point
+
+Goal:
+- Confirm restart2 reaches step `80` while TPU health remains stable.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart2-20260614-151300`
+- primary_worker_log: worker8 `~/maxdiffusion/logs/tpu_20260614-152324.log`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Train logs:
+  - step `20/10000`: `loss=2.838281`, `grad_norm=6681.592`, `lr=1.90e-06`, `steps/s=0.025`
+  - step `40/10000`: `loss=1.478320`, `grad_norm=389378.840`, `lr=3.90e-06`, `steps/s=0.068`
+  - step `60/10000`: `loss=1.130664`, `grad_norm=3744.459`, `lr=5.90e-06`, `steps/s=0.069`
+  - step `80/10000`: `loss=0.612598`, `grad_norm=749.494`, `lr=7.90e-06`, `steps/s=0.069`
+- metrics/artifacts: No checkpoint is expected until step `1000`.
+
+Analysis:
+- Restart2 has passed restart1's last durable metric without the maintenance warning recurring. Training behavior still matches the deterministic warmup trace.
+
+Next:
+- Continue lower-frequency monitoring toward checkpoint/eval step `1000`, with quick health checks for another maintenance event.
