@@ -1276,3 +1276,26 @@ Analysis:
 
 Next:
 - Restart `tpu watch` on the same QR/run name, continue monitoring, and delete or use the resource as soon as it transitions.
+
+## 2026-06-14T17:08:45Z - restart3 QR recreated
+
+Goal:
+- Recover from the stale restart3 provisioning attempt without leaving an orphaned TPU request.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000`
+- tpu_name: `v6-64-02-lzha`
+- queued_resource: `v6-64-02-lzha-qr`
+- local_watcher_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs15-restart3-ckpt100-20260614-163000.log`
+
+Result:
+- status: queued
+- metrics/artifacts: The stuck QR transitioned to `SUSPENDING, SERVICE`, then `FAILED`.
+- metrics/artifacts: The watcher deleted the failed QR successfully and submitted a fresh `v6-64-02-lzha-qr` at local `10:08`.
+- metrics/artifacts: No TPU node or training log existed before recreation, so no training progress was lost.
+
+Analysis:
+- The previous restart3 attempt failed inside TPU provisioning before setup. The watcher recovery path worked once GCP moved the QR to a deletable state.
+
+Next:
+- Monitor the fresh queued resource, verify setup/training launch when allocated, then confirm step-100 checkpoint creation.
