@@ -654,3 +654,76 @@ Analysis:
 
 Next:
 - Commit and push the sharding fix, relaunch the short smoke, and inspect for dataset iteration, train metrics, and checkpoint output.
+
+## 2026-06-14T10:32:26Z - v6e-64 smoke first-step monitor
+
+Goal:
+- Monitor the corrected 3-step smoke after the adapter train-state sharding fix.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `0a2301adb613b6352beeb830cb1e9e9d85aaedff`
+- changed_files: worklog
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-smoke-bs1-20260614-101400`
+- tpu_name: `v6-64-02-lzha`
+- accelerator: `v6e-64`
+- command: `WANDB_DISABLED=true RUN_NAME=wan-side-adapter-v6e64-smoke-bs1-20260614-101400 MAX_TRAIN_STEPS=3 CHECKPOINT_EVERY=3 EVAL_EVERY=0 LOG_PERIOD=1 PER_DEVICE_BATCH_SIZE=0.015625 bash bash_scripts/train_wan_side_adapter.sh`
+- train_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- val_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-smoke-bs1-20260614-101400/checkpoints`
+- primary_log: worker15 `~/maxdiffusion/logs/tpu_20260614-101416.log`
+
+Result:
+- status: running
+- metrics/artifacts: All 16 workers are alive in `train_wan.py` with no traceback or resource-exhausted error.
+- metrics/artifacts: The run passed model load, state creation, adapter-state replication, and Orbax checkpoint-manager creation.
+- metrics/artifacts: Worker/process mapping is shuffled; worker15 is JAX `process=0` and has logged `***** Running WAN TI2V side-adapter training *****`.
+- metrics/artifacts: No `step`, loss, or checkpoint has been logged yet. GCS currently contains only the run/checkpoints prefix.
+
+Analysis:
+- Worker thread sampling shows active `xla_tpu_thread` and `llvm-worker-*` threads, consistent with first-batch/first-step JIT compilation rather than a crashed process.
+- The config log reports `global_batch_size_to_load=64` while the wrapper passes `global_batch_size_to_load=1`; this is expected from `pyconfig.calculate_global_batch_sizes()` for fractional per-device batches, which loads one example per device and trains on `global_batch_size_to_train_on=1`.
+
+Next:
+- Keep polling worker15 and GCS until the smoke emits train metrics/checkpoint output or fails with a new runtime error.
+
+## 2026-06-14T10:43:12Z - v6e-64 smoke compile pressure fix
+
+Goal:
+- Avoid an oversized first-step compile while preserving the 25-step side-adapter rollout semantics.
+
+Hypothesis:
+- The Python `for` loop over `side_adapter_sampling_steps=25` is being unrolled inside the jitted train step, causing the compiler to trace a very large graph with repeated 5B-transformer calls.
+
+Change:
+- Replaced the Python-unrolled rollout in `_rollout_loss()` with `jax.lax.fori_loop`, keeping the same timestep, guidance, first-frame pinning, and update equations.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `0a2301adb613b6352beeb830cb1e9e9d85aaedff`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, worklog
+- validation: `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`
+
+Command / Job:
+- affected_run_name: `wan-side-adapter-v6e64-smoke-bs1-20260614-101400`
+- worker15_log: `~/maxdiffusion/logs/tpu_20260614-101416.log`
+
+Result:
+- status: fix_ready
+- metrics/artifacts: At `2026-06-14T10:43:12Z`, the smoke had spent about 29 minutes after `***** Running WAN TI2V side-adapter training *****` with no step/loss/checkpoint log.
+- metrics/artifacts: Worker15 process RSS reached about `305 GB`; the hottest thread remained `xla_tpu_thread`.
+- metrics/artifacts: No traceback, resource-exhausted error, or checkpoint was produced before deciding to stop and relaunch with the loop patch.
+
+Analysis:
+- This is not enough evidence to call the implementation numerically correct. It is enough evidence that the current compile shape is unhealthy for iteration and likely caused by loop unrolling.
+- An XLA loop is the minimal semantic-preserving change before rerunning the same 3-step smoke.
+
+Next:
+- Stop only the `wan-side-adapter-v6e64-smoke-bs1-20260614-101400` train processes, commit and push the loop patch, then relaunch a 3-step smoke on `v6-64-02-lzha`.

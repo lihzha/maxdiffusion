@@ -123,7 +123,7 @@ def _rollout_loss(
     z = jax.random.normal(noise_rng, z_video.shape, dtype=z_video.dtype)
     z = apply_first_frame_pin(z, z_i0)
 
-    for i in range(config.side_adapter_sampling_steps):
+    def _rollout_body(i, z):
         step_t = jnp.broadcast_to(timesteps[i], (b,))
         timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
         v_cond = wan_side_adapter_forward(
@@ -146,7 +146,9 @@ def _rollout_loss(
             v = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
         else:
             v = v_cond
-        z = apply_first_frame_pin(z + (sigmas[i + 1] - sigmas[i]).astype(z.dtype) * v, z_i0)
+        return apply_first_frame_pin(z + (sigmas[i + 1] - sigmas[i]).astype(z.dtype) * v, z_i0)
+
+    z = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), _rollout_body, z)
 
     diff = z - z_video
     loss = jnp.mean(diff**2)
