@@ -763,3 +763,38 @@ Analysis:
 
 Next:
 - Commit and push the probe checkpoint guard, then run storage-light batch-size probes on the same v6e-64 slice.
+
+## 2026-06-14T11:52:00Z - v6e-64 batch-size probes through gbs12
+
+Goal:
+- Find the largest storage-light global batch size that compiles and completes real side-adapter optimizer steps on v6e-64 before launching the full frozen-backbone adapter-only run.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `d1427d4ea164dc9916f43385c90c95ae96c6ca28`
+- changed_files: worklog
+
+Command / Job:
+- tpu_name: `v6-64-02-lzha`
+- accelerator: `v6e-64`
+- probe_template: `WANDB_DISABLED=true RUN_NAME=<run> MAX_TRAIN_STEPS=2 CHECKPOINT_EVERY=0 SAVE_FINAL_CHECKPOINT=False EVAL_EVERY=0 LOG_PERIOD=1 PER_DEVICE_BATCH_SIZE=<gbs/64> bash bash_scripts/train_wan_side_adapter.sh`
+- train_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- val_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+
+Result:
+- status: partial_pass_then_preempted_after_probe
+- metrics/artifacts: `gbs8` (`PER_DEVICE_BATCH_SIZE=0.125`) completed two train steps: `step 1/2 loss=3.343750 grad_norm=537.249`, `step 2/2 loss=2.343750 grad_norm=106417.656`.
+- metrics/artifacts: `gbs16` (`PER_DEVICE_BATCH_SIZE=0.25`) failed during compile with `CompileTimeHbmOom`, using `31.42G` of `31.25G` HBM and exceeding capacity by `182.73M`.
+- metrics/artifacts: `gbs12` (`PER_DEVICE_BATCH_SIZE=0.1875`, run `wan-side-adapter-v6e64-probe-gbs12-20260614-113600`) completed two train steps: `step 1/2 loss=3.265625 grad_norm=355.902`, `step 2/2 loss=1.093750 grad_norm=422.942`.
+- metrics/artifacts: Storage-light probe runs created no checkpoint payloads beyond the base GCS prefix, as intended.
+- metrics/artifacts: During post-gbs12 cleanup, `v6-64-02-lzha` entered terminal state `PREEMPTED`; workers 14 and 15 could no longer accept SSH.
+
+Analysis:
+- Global batch 12 is a validated feasible batch for the 25-step rollout on v6e-64. Global batch 16 is just over the compile-time HBM limit, so the next useful probe is `gbs14`.
+- The high `gbs8` step-2 grad norm is notable but did not produce NaNs or a runtime failure; `gbs12` gradients were much more ordinary over two steps.
+- The preemption happened after gbs12 produced both metrics, so it invalidates only TPU reuse, not the gbs12 result.
+
+Next:
+- Reacquire or recreate a v6e-64 slice with `tpu watch`, using `bash_scripts/setup.sh` for environment setup, then run a storage-light `gbs14` probe.
