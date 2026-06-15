@@ -1839,3 +1839,51 @@ Analysis:
 
 Next:
 - Continue monitoring worker `13` for the first `step 10/10000` metric, TPU health, and GCS checkpoint artifacts. If the process exits, logs an OOM/`RESOURCE_EXHAUSTED`/NaN/traceback, or stalls with no CPU activity, diagnose before relaunching.
+
+## 2026-06-15T02:38:30Z - relaunch batch 512 with checkpoint interval 100
+
+Goal:
+- Keep the validated global batch `512` training run, but make progress durable under v6 maintenance risk before the first checkpoint.
+
+Hypothesis:
+- Step-10 throughput from the retry1 run is slow enough that `CHECKPOINT_EVERY=1000` would leave roughly a day of work uncheckpointed, while `CHECKPOINT_EVERY=100` should remain storage-safe because adapter checkpoints were about `1.0 GiB` and Orbax keeps only a small bounded set.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `cb8e4e498a00d34b6888b16a632af750e9a948a5`
+- push/pull: pushed to `origin/codex/wan-ti2v-side-adapter-20260613-073227`; TPU workers checked out the commit detached
+- changed_files: worklog entries only since training commit `0ce8313`; model/data/training code unchanged
+
+Command / Job:
+- stopped_run_name: `wan-side-adapter-v6e64-full-gbs512-retry1-20260615-020300`
+- stopped_run_primary_log: `~/maxdiffusion/logs/tpu_20260615-020922.log`
+- stopped_run_wandb: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/pvlzlovx`
+- new_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800`
+- tpu_name: `v6-64-06-lzha`
+- queued_resource: `v6-64-06-lzha-qr`
+- accelerator: `v6e-64`
+- local_watch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800.log`
+- launch: `tpu watch --force v6 -n 64 --setup-cmd "git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach cb8e4e498a00d34b6888b16a632af750e9a948a5 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" cb8e4e498a00d34b6888b16a632af750e9a948a5 RUN_NAME=wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+- train_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- eval_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- output_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`
+
+Result:
+- status: running
+- metrics/artifacts: Retry1 reached `step 10/10000` with `loss=3.273438`, `grad_norm=7666088704.000`, `lr=9.00e-07`, and `steps/s=0.010`.
+- metrics/artifacts: Retry1 had no `Traceback`, `RESOURCE_EXHAUSTED`, OOM, or NaN; TPU state was `READY`, health `HEALTHY`.
+- metrics/artifacts: Retry1 GCS run prefix was still `0 B` because checkpointing was set to step `1000`.
+- metrics/artifacts: The retry1 training was stopped intentionally by matching the run-specific Python entrypoint; a first stop attempt matched its own remote shell and did not stop training, then a non-self-matching `[t]rain_wan.py` pattern left only defunct zero-RSS Python zombies before relaunch.
+- metrics/artifacts: New ckpt100 launch succeeded at `2026-06-15T02:38:21Z`.
+- metrics/artifacts: Direct worker verification confirms commit `cb8e4e4`, run name `wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800`, `checkpoint_every=100`, `global_batch_size_to_train_on=512`, and `per_device_batch_size=8.0`.
+- metrics/artifacts: All 16 workers have active new `train_wan.py` processes; TPU state remains `READY`, health `HEALTHY`.
+- storage: New GCS run prefix currently contains no checkpoint payload, as expected before step `100`.
+
+Analysis:
+- The batch-512 training path is valid and has now produced real optimizer metrics. The gradient norm is very large, but this matches the earlier batch-512 probe scale and is not accompanied by NaN/OOM; continue watching trend at steps `20`, `30`, etc.
+- At `0.010 steps/s`, checkpoint step `1000` would be too far away for current v6 maintenance behavior. Relaunching at checkpoint interval `100` sacrifices only the first ten uncheckpointed steps and keeps expected checkpoint storage bounded to a few GiB.
+
+Next:
+- Monitor the ckpt100 run for adapter/frozen-param confirmation, W&B run id, first `step 10/10000` metric, and then the step-`100` checkpoint in GCS.
