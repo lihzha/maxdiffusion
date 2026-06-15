@@ -106,7 +106,7 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_5b.yml \
-    run_name=ti2v_wan_droid_self_distill_multi_view \
+    run_name=ti2v_wan_droid_self_distill_single_view_2 \
     output_dir=gs://v6_east1d/checkpoints/wan-ti2v-finetune \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -118,7 +118,7 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=MATMUL_WITHOUT_BATCH \
-    ici_data_parallelism=2 \
+    ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=4 \
@@ -131,7 +131,7 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=10010 \
     checkpoint_every=10 \
     checkpoint_keep_period=1000 \
-    per_device_batch_size=0.25 \
+    per_device_batch_size=0.5 \
     height=480 \
     width=832 \
     num_frames=80 \
@@ -142,11 +142,11 @@ python src/maxdiffusion/train_wan.py \
     teacher_update_every=50 \
     distill=True \
     oracle_noise_offset=-1 \
-    wandb_project='wan-ti2v-self-distill-clean-multi-view' \
-    single_camera=False 
+    wandb_project='wan-ti2v-self-distill-clean-single-view-2' \
+    single_camera=True 
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name v6-32-03-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh"
-# tpu tmux v6-32-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
+# tpu create v6 --name v6-64-03-catherine -n 64 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh"
+# tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
