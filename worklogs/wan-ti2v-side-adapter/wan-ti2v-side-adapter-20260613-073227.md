@@ -2254,3 +2254,67 @@ Analysis:
 
 Next:
 - Commit/push the prefetch patch, continue monitoring r3 to step `100`, then inspect the checkpoint and validation sidecar outputs.
+
+## 2026-06-15T05:02:15Z - r3 preempted before checkpoint
+
+Goal:
+- Record the r3 outcome and prepare the next v6e-64 launch after maintenance preemption.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- r3_training_commit: `1fbc1609b4bd87f11224222e08c1cbe7d18e9ce7`
+- next_launch_commit: `df8cbe390f5937c0d513edb427106ce93a41aff2`
+- branch_status: clean and pushed at `origin/codex/wan-ti2v-side-adapter-20260613-073227`
+
+Command / Job:
+- r3_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100`
+- tpu_name: `v6-64-06-lzha`
+- accelerator: `v6e-64`
+- r3_primary_log: `~/maxdiffusion/logs/tpu_20260615-042314.log` on process-0 worker `6`
+- r3_checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100/checkpoints`
+- stopped_local_pids: r3 training watcher `80721`, `80728`, `80729`; r3 validation watcher `106178`, `106185`, `106186`
+- planned_r4_overrides: `PER_DEVICE_BATCH_SIZE=8`, `GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512`, `GLOBAL_BATCH_SIZE_TO_LOAD=512`, `CHECKPOINT_EVERY=100`, `EVAL_EVERY=1000`, `TFRECORD_SHUFFLE_BUFFER_SIZE=1024`
+
+Result:
+- status: preempted before durable checkpoint.
+- metrics/artifacts: r3 reached `step 30/10000` with losses `3.273438`, `3.171875`, `2.476562` at steps `10`, `20`, `30`.
+- metrics/artifacts: Throughput stabilized at `0.028 steps/s` after startup, matching the earlier batch-512 attempt.
+- metrics/artifacts: TPU health changed to `UNHEALTHY_MAINTENANCE`; `tpu watch` began deleting the node.
+- storage: r3 GCS prefix remains `0 B` with only placeholder objects; no checkpoint payload exists and no validation artifacts were launched.
+
+Analysis:
+- The r3 behavior supports the model/data/batch configuration: loss decreased and no NaN/OOM/RESOURCE_EXHAUSTED occurred. The failure was infrastructure preemption before step `100`.
+- Since no checkpoint exists, r4 should start fresh from the newest pushed commit containing the visual validator, configurable TFRecord shuffle buffer, and async next-batch prefetch. A smaller shuffle buffer should reduce startup cost without changing model math.
+
+Next:
+- Wait for the maintenance deletion to clear, launch r4 from `df8cbe390f5937c0d513edb427106ce93a41aff2`, and retarget the validation watcher to the r4 run prefix.
+
+## 2026-06-15T05:07:30Z - r4 queued
+
+Goal:
+- Requeue batch-512 training after r3 preempted before checkpoint.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `df8cbe390f5937c0d513edb427106ce93a41aff2`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- code_status: source changes are pushed; this worklog entry is local bookkeeping
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600`
+- tpu_name: `v6-64-06-lzha`
+- queued_resource: `v6-64-06-lzha-qr`
+- accelerator: `v6e-64`
+- launch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600.log`
+- launch: `tpu watch v6 -n 64 --setup-cmd "git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach df8cbe390f5937c0d513edb427106ce93a41aff2 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" df8cbe390f5937c0d513edb427106ce93a41aff2 RUN_NAME=wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 TFRECORD_SHUFFLE_BUFFER_SIZE=1024 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: queued.
+- metrics/artifacts: stale queued resource was deleted, then a fresh queued resource was created.
+- metrics/artifacts: current state is `WAITING_FOR_RESOURCES`; no TPU node is visible yet.
+
+Analysis:
+- r4 uses the same model/batch/optimizer/checkpoint plan as r3, plus the pushed loader/prefetch improvements intended to reduce startup and host-side input stalls. It still freezes the backbone and trains only adapter params.
+
+Next:
+- Monitor allocation, setup, and first metrics. Start a fresh validation watcher for the r4 checkpoint prefix.
