@@ -1740,3 +1740,37 @@ Analysis:
 
 Next:
 - Use these settings for the next full training launch unless a larger-batch probe is needed: `per_device_batch_size=8`, `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_fsdp_parallelism=-1`, `dcn_context_parallelism=1`.
+
+## 2026-06-15T01:52:34Z - launch v6e-64 global batch 512 full training
+
+Goal:
+- Start the real Wan2.2 TI2V 5B DROID side-adapter training run on a task-owned v6e-64 TPU slice using the batch size proven by the storage-light fit probe.
+
+Hypothesis:
+- The recipe-fixed MaxDiffusion implementation can run the full DROID side-adapter training with `global_batch_size_to_train_on=512` on pure ICI FSDP and produce stable early train metrics plus bounded adapter checkpoints.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `0a91485ce04485229e396cdc62841875a582579f`
+- push/pull: local branch is clean and pushed to `origin/codex/wan-ti2v-side-adapter-20260613-073227`
+- changed_files: worklog entry only for this launch
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-20260615-015234`
+- tpu_name: `v6-64-06-lzha`
+- accelerator: `v6e-64`
+- command: `tpu watch v6 -n 64 --setup-cmd "bash maxdiffusion/bash_scripts/setup.sh MODE=stable DEVICE=tpu" 0a91485ce04485229e396cdc62841875a582579f RUN_NAME=wan-side-adapter-v6e64-full-gbs512-20260615-015234 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=1000 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+- train_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- eval_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- output_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`
+- local_watch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-20260615-015234.log`
+
+Acceptance Criteria:
+- Worker log confirms commit `0a91485ce04485229e396cdc62841875a582579f`, v6e-64 with 64 devices, global batch `512`, pure FSDP mesh, adapter-only trainable params, frozen WAN params, and GCS train/val roots.
+- Training reaches stable early optimizer steps without OOM, `RESOURCE_EXHAUSTED`, NaN, data parse failure, or TPU maintenance before first metrics.
+- Checkpoint writes are bounded by Orbax `max_to_keep=3` plus `checkpoint_keep_period=5000`; `SAVE_FINAL_CHECKPOINT=False` avoids a duplicate step-10000 save because periodic checkpointing already saves that step.
+
+Result:
+- status: pending launch
