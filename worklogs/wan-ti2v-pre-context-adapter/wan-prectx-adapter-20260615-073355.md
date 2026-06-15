@@ -196,3 +196,38 @@ Analysis:
 
 Next:
 - Commit/push this launch record, start `tpu watch`, then monitor allocation, remote setup, first train step, W&B/log metrics, and exit state.
+
+## 2026-06-15T20:43:00Z - fresh v6e-64 retry remains quota-blocked
+
+Goal:
+- Keep the pre-context smoke launch retry loop alive until a fresh v6e-64 slot can be created.
+
+Hypothesis:
+- If enough preemptible v6e quota frees in `us-east1-d`, the existing `tpu watch` process for `v6-64-09-lzha` will create `v6-64-09-lzha-qr` and proceed to setup without needing a new command.
+
+Change:
+- Left the `tpu watch` process attached instead of stopping after the first quota error.
+- Did not interrupt the active old side-adapter training on `v6-64-08-lzha`.
+
+Version Control:
+- agent_id: wan-prectx-adapter-20260615-073355
+- worktree: /home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- launch_commit: 6277a16490fb88f7bb9e96cd7e155b5f56b57ddf
+
+Command / Job:
+- target_tpu: v6-64-09-lzha
+- run_name: wan-pre-context-v6e64-smoke-gbs512-r3-20260615-203132
+- local_watcher_pids: 772049, 772062, 772063
+- logs: logs/tpu_watch_wan-pre-context-v6e64-smoke-gbs512-r3-20260615-203132.log
+- queued_resource: not created yet
+
+Result:
+- status: active retry loop; no remote setup started
+- key evidence: repeated `RESOURCE_EXHAUSTED` errors for quota `TPUV6EPreemptiblePerProjectPerZoneForTPUAPI`, limit 512 in `us-east1-d`; `v6-64-09-lzha` remains `NOT_FOUND`.
+
+Analysis:
+- The implementation launch command is staged correctly, but current progress is blocked at queued-resource creation by project-level preemptible v6e quota. This is still an infrastructure wait.
+
+Next:
+- Continue monitoring the attached `tpu watch` process. If creation succeeds, verify the remote exact commit, setup, adapter mode, one train step, W&B/log metrics, and exit state.
