@@ -2520,3 +2520,45 @@ Analysis:
 
 Next:
 - Relaunch as r7 on `v6-64-07-lzha` with `HF_HUB_DISABLE_XET=1` and `HF_HUB_ENABLE_HF_TRANSFER=0`, then start the validation watcher for checkpoint `100` and every `1000` steps.
+
+## 2026-06-15T06:32:28Z - r9 active with periodic validation watcher
+
+Goal:
+- Relaunch training after the Hugging Face transfer failures and attach checkpoint-triggered validation similar to the original Wan2.2 workflow.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `b6631c7ca6abcc8c8b1798e6090fb3e387ea08cc`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- branch_head_at_launch: `b6631c7ca6abcc8c8b1798e6090fb3e387ea08cc`
+
+Command / Job:
+- failed_r7_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r7-20260615-062800`
+- failed_r8_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r8-20260615-062850`
+- active_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r9-20260615-063300`
+- tpu_name: `v6-64-07-lzha`
+- accelerator: `v6e-64`
+- train_log_worker0: `~/maxdiffusion/logs/tpu_20260615-063142.log`
+- local_launch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r9-20260615-063300.log`
+- validation_watch_log: `logs/wan_side_adapter_validation_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r9-20260615-063300.log`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r9-20260615-063300/checkpoints/`
+- validation_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r9-20260615-063300/validation/`
+- validation_schedule: first checkpoint `100`, then every `1000` steps, `NUM_EVAL_VIDEOS=4`.
+- launch_env: `HF_HUB_DISABLE_XET=1`, `HF_HUB_ENABLE_HF_TRANSFER=0`.
+
+Result:
+- r7_status: invalid setup launch; a mistyped full SHA caused `fatal: reference is not a tree` on workers. No r7 process or artifact remained.
+- r8_status: setup reached the right commit but `tpu watch` used a raw commit as its training branch argument, which is incompatible with its built-in `git pull origin <branch>` path. No r8 process or artifact remained.
+- cleanup: killed the stale `tpu` tmux session left by the failed launcher path; verified no `train_wan.py` process was active before r9.
+- r9_status: active; all 16 workers reported one r9 training process.
+- r9_source: worker `0` reports branch `codex/wan-ti2v-side-adapter-20260613-073227` at `b6631c7ca6abcc8c8b1798e6090fb3e387ea08cc`.
+- r9_config: process command includes train data `gs://v6_east1d/datasets/droid_wan_side_adapter/train`, eval data `gs://v6_east1d/datasets/droid_wan_side_adapter/val`, `per_device_batch_size=8`, `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `tfrecord_shuffle_buffer_size=1024`, `checkpoint_every=100`, `eval_every=1000`, `eval_max_batches=4`.
+- validation: local watcher is active for r9 and will launch `v6-8-wan-val-lzha` after checkpoint `100` appears.
+- current_model_state: worker `0` has loaded the VAE and scheduler and is continuing model initialization; adapter/frozen parameter assertions and first training metric are still pending.
+
+Analysis:
+- The r7/r8 failures were launcher mechanics, not model/data/training failures. The working r9 launch uses a branch name for `tpu watch` compatibility while preserving the exact commit in the setup checkout, worker verification, and validation watcher metadata.
+- Periodic validation is now automated against the r9 checkpoint prefix and does not require manual confirmation between checkpoints.
+
+Next:
+- Monitor r9 for transformer/adaptor initialization, adapter-only trainable/frozen parameter assertions, first train metric, checkpoint `100`, then validation summaries and videos.
