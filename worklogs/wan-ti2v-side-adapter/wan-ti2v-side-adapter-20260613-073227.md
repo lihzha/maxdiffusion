@@ -2715,3 +2715,29 @@ Result:
 
 Next:
 - Continue monitoring the recreated QR. If it reaches `READY`, verify worker setup and first training metrics. If it fails again or quota create retries persist, wait for quota/capacity or get explicit permission before deleting any existing v6 resources not owned by this run.
+
+## 2026-06-15T11:55:00Z - r11 download failure and r12 setup abort
+
+Goal:
+- Diagnose why the post-fix v6e-64 run did not reach the first training batch and avoid repeating the same launch errors.
+
+Result:
+- r11 allocated `v6-64-08-lzha` and started setup/training from `origin/adaptor`.
+- Training failed before the first batch. Worker 4 hit a Hugging Face CDN timeout while loading `Wan-AI/Wan2.2-TI2V-5B-Diffusers` (`408 Client Error: Request Time-out` on `model-00001-of-00003.safetensors`).
+- The barrier timeouts on other workers were secondary shutdown symptoms from the worker-4 model load failure, not data-loader, loss, sharding, or batch-size failures.
+- Ran all-worker `snapshot_download` warmup with `HF_HUB_DISABLE_XET=1`, `HF_HUB_ENABLE_HF_TRANSFER=0`, and longer Hugging Face timeouts. All 16 workers completed the snapshot cache at `/home/lzha/.cache/huggingface/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers/snapshots/b8fff7315c768468a5333511427288870b2e9635`.
+- r12 relaunch used a bad setup command containing `cd maxdiffusion`. In this `tpu watch` flow the setup command already runs from the remote repo checkout, so all workers failed setup with `cd: maxdiffusion: No such file or directory`.
+- Stopped the stale r12 local watcher. Verified no `train_wan.py` or `train_wan_side_adapter.sh` processes are active on any `v6-64-08-lzha` worker before reuse.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- branch: `adaptor`
+- current_commit: `c89be4a9c73a33abcdc400c1c94ad4370e375c05`
+- changed_files: `docs/wan_ti2v_side_adapter_handoff.md`, worklog
+
+Analysis:
+- r11 did not invalidate the model implementation or the full-batch settings; the first fatal error was external model download instability.
+- r12 did not launch training at all. The corrected relaunch must remove `cd maxdiffusion` from `--setup-cmd`.
+
+Next:
+- Relaunch as r13 on `v6-64-08-lzha` with the corrected setup command, Hugging Face timeout environment, global batch 512, and the same checkpoint/validation cadence.

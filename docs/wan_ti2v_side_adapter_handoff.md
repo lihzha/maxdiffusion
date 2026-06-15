@@ -125,6 +125,9 @@ If implementing another adapter, re-check:
 
 Use the `adaptor` branch for `tpu watch`. Use the exact commit in the setup
 command if reproducibility matters; `tpu watch` itself expects a branch name.
+For this repo flow, the `--setup-cmd` runs from the remote repo checkout that
+`tpu watch` prepares. Do not prefix it with `cd maxdiffusion`; that fails on
+v6 workers because the process is already inside the checkout.
 
 Example launch on an existing healthy v6e-64 slice:
 
@@ -254,6 +257,8 @@ Recommended path:
   evidence the Hugging Face transfer backend is fixed on all workers.
 - `tpu watch` wants a branch name. Use `adaptor` as the watch branch and put the
   exact commit checkout inside `--setup-cmd`.
+- The setup command is executed from the remote checkout for this launch path.
+  Do not add `cd maxdiffusion` inside `--setup-cmd`.
 - W&B online training requires secrets from `~/.config/irom-tpu/secrets.env`.
   Never print or commit those values.
 - If restarting from an existing run name and older W&B steps overlap, worker
