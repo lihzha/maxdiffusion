@@ -2159,3 +2159,32 @@ Analysis:
 
 Next:
 - Start the watcher after the validation implementation is pushed, then continue direct log/GCS monitoring until the first training metrics and validation videos are produced and inspected.
+
+## 2026-06-15T04:41:00Z - validation watcher started
+
+Goal:
+- Attach the periodic visual validation sidecar to the active r3 training run without touching the v6e-64 training slice.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `79d74119425eef15aea83a21e2bd9e90c434df87`
+- push/pull: pushed to `origin/codex/wan-ti2v-side-adapter-20260613-073227`
+- validation_checkout: watcher will checkout `79d74119425eef15aea83a21e2bd9e90c434df87` detached on the validation TPU.
+
+Command / Job:
+- local_session_id: `96626`
+- local_log: `logs/wan_side_adapter_validation_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100.log`
+- command: `RUN_NAME=wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100 COMMIT=79d74119425eef15aea83a21e2bd9e90c434df87 VALIDATION_TPU_NAME=v6-8-wan-val-lzha VALIDATION_TPU_CHIPS=8 VALIDATION_FIRST_STEP=100 VALIDATION_EVERY=1000 NUM_EVAL_VIDEOS=4 POLL_SECS=120 bash bash_scripts/watch_wan_side_adapter_validation.sh`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100/checkpoints`
+- validation_output_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100/validation`
+
+Result:
+- status: watcher running and idle.
+- metrics/artifacts: `tpu list v6` shows only the training TPU `v6-64-06-lzha`; no validation TPU has been created yet.
+- metrics/artifacts: GCS checkpoint prefix is still `0 B` and contains no numeric checkpoint step, so the watcher correctly has not launched validation.
+
+Analysis:
+- The watcher is now ready to validate step `100` as soon as Orbax writes it. A failed validation will not mark the step as seen, so the step remains eligible for retry.
+
+Next:
+- Keep monitoring the r3 training logs and GCS checkpoint prefix. When step `100` appears, confirm the watcher creates the validation TPU, then inspect `summary.json`, `summary.csv`, and representative MP4s for frame count/resolution/nonblank content.
