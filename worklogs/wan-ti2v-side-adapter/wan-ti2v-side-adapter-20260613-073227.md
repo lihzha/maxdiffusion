@@ -2562,3 +2562,23 @@ Analysis:
 
 Next:
 - Monitor r9 for transformer/adaptor initialization, adapter-only trainable/frozen parameter assertions, first train metric, checkpoint `100`, then validation summaries and videos.
+
+## 2026-06-15T06:35:02Z - validation watcher launch fix
+
+Goal:
+- Ensure periodic validation actually launches when checkpoint `100` appears.
+
+Change:
+- Split validation watcher source selection into `WATCH_BRANCH` for `tpu watch` compatibility and `COMMIT` for exact detached checkout.
+- Propagated `HF_HUB_DISABLE_XET=1` and `HF_HUB_ENABLE_HF_TRANSFER=0` into validation setup and validation commands.
+- Changed validation script defaults to avoid `hf_transfer` unless explicitly overridden.
+
+Validation:
+- `bash -n bash_scripts/watch_wan_side_adapter_validation.sh`
+- `bash -n bash_scripts/validate_wan_side_adapter.sh`
+
+Analysis:
+- This fixes the same launch-helper issue observed in r8 before the first validation checkpoint exists, so periodic validation should start from the corrected path.
+
+Next:
+- Restart the local r9 validation watcher from the fixed script and continue monitoring training to checkpoint `100`.
