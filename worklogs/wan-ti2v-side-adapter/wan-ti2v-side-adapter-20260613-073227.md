@@ -1791,3 +1791,51 @@ Acceptance Criteria:
 
 Result:
 - status: pending launch
+
+## 2026-06-15T02:17:30Z - retry1 batch 512 full run startup verified
+
+Goal:
+- Verify that the retry1 full training launch is running the intended immutable commit, data roots, batch size, sharding recipe, and adapter-only frozen-backbone parameter split before waiting for the first train metric.
+
+Hypothesis:
+- The full run is in normal first-batch/JAX compile startup; the primary log has confirmed setup and W&B, but step metrics are not expected until after compilation plus `LOG_PERIOD=10` completed optimizer steps.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- local_head: `0ce8313df3a29b1d22ba37aa69057457efb16c81`
+- remote_training_commit: `0ce8313df3a29b1d22ba37aa69057457efb16c81`
+- push/pull: branch was pushed; TPU workers checked out the commit detached before running `bash_scripts/setup.sh`
+- changed_files: worklog entry only
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-retry1-20260615-020300`
+- tpu_name: `v6-64-06-lzha`
+- queued_resource: `v6-64-06-lzha-qr`
+- accelerator: `v6e-64`
+- local_watch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-retry1-20260615-020300.log`
+- primary_worker: worker `13` (`t1v-n-1305de00-w-13`, JAX process `0`)
+- primary_log: `~/maxdiffusion/logs/tpu_20260615-020922.log`
+- wandb: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/pvlzlovx`
+- launch: `tpu watch --force v6 -n 64 --setup-cmd "git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach 0ce8313df3a29b1d22ba37aa69057457efb16c81 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" 0ce8313df3a29b1d22ba37aa69057457efb16c81 RUN_NAME=wan-side-adapter-v6e64-full-gbs512-retry1-20260615-020300 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=1000 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+- train_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- eval_data_dir: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- output_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: All 16 workers have active `train_wan.py` processes with about `65-70 GiB` RSS each and host memory headroom around `596 GiB`.
+- metrics/artifacts: Config confirms `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `per_device_batch_size=8.0`, `total_train_batch_size=512.0`, `ici_fsdp_parallelism=-1`, `dcn_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `dcn_context_parallelism=1`, `ici_tensor_parallelism=1`, and `dcn_tensor_parallelism=1`.
+- metrics/artifacts: Primary log confirms `trainable adapter params: 239.5M` and `frozen transformer params: 5.00B`.
+- metrics/artifacts: Primary log confirms W&B run `pvlzlovx` is online for `wan-side-adapter-v6e64-full-gbs512-retry1-20260615-020300`.
+- metrics/artifacts: No train metric or checkpoint has been written yet; GCS run prefix contains only the run directory and empty `checkpoints/` directory.
+- setup note: the retry setup encountered an Ubuntu unattended-upgrade dpkg lock on worker 2; after verifying it blocked only setup, the unattended-upgrade PIDs were killed and setup completed. Training then launched on all workers.
+
+Analysis:
+- This verifies the full run is using the intended adapter-only/frozen-backbone implementation and data path. The lack of step logs at this point is not itself abnormal because the primary process has entered the train loop after W&B setup and the first JAX compilation plus ten large-batch optimizer steps can take substantially longer than the two-step probe.
+- The current checkpoint cadence (`1000`) is storage-light but less preemption-resilient than the previous gbs15 checkpoint-100 run. This was intentionally kept for the user-requested batch-512 full run and to limit storage writes.
+
+Next:
+- Continue monitoring worker `13` for the first `step 10/10000` metric, TPU health, and GCS checkpoint artifacts. If the process exits, logs an OOM/`RESOURCE_EXHAUSTED`/NaN/traceback, or stalls with no CPU activity, diagnose before relaunching.
