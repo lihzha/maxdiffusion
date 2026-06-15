@@ -5,7 +5,8 @@ This trainer matches the side-adapter experiment in ``../Wan2.2``:
 * load the Wan2.2 TI2V 5B transformer from the pretrained checkpoint,
 * keep all backbone transformer parameters frozen,
 * train only the action token encoder and side-adapter residual blocks, and
-* optimize a full latent rollout MSE with the first latent frame pinned.
+* optimize Wan's one-step flow-matching denoising loss with the first latent
+  frame pinned.
 
 The dataset intentionally stores only cached VAE latents and actions. A single
 null prompt embedding is computed once from the loaded T5 encoder and reused for
@@ -38,7 +39,6 @@ from maxdiffusion.models.wan.side_adapter_wan import (
     adapter_param_count,
     apply_first_frame_pin,
     build_rollout_sigmas,
-    rollout_timesteps_from_sigmas,
     wan_side_adapter_forward,
     _build_per_token_timestep,
     _dtype,
@@ -87,7 +87,42 @@ def _replicated_sharding_tree(tree, sharding):
     return jax.tree.map(lambda _: sharding, tree)
 
 
-def _rollout_loss(
+def _sample_step_indices(
+    rng: jax.Array,
+    batch_size: int,
+    num_steps: int,
+    sigmas: jax.Array,
+    config,
+) -> jax.Array:
+    """Sample side-adapter denoising step indices as in ../Wan2.2."""
+    kind = getattr(config, "side_adapter_t_sampling", "uniform")
+    if kind == "uniform":
+        return jax.random.randint(rng, (batch_size,), 0, num_steps)
+    if kind == "logit_normal":
+        mu = jnp.asarray(getattr(config, "side_adapter_logit_normal_mu", 0.0), dtype=jnp.float32)
+        sigma = jnp.asarray(getattr(config, "side_adapter_logit_normal_sigma", 1.0), dtype=jnp.float32)
+        sigma_target = jax.nn.sigmoid(jax.random.normal(rng, (batch_size,), dtype=jnp.float32) * sigma + mu)
+        candidates = sigmas[:num_steps]
+        return jnp.argmin(jnp.abs(candidates[None, :] - sigma_target[:, None]), axis=1).astype(jnp.int32)
+    raise ValueError(f"Unsupported side_adapter_t_sampling={kind!r}")
+
+
+def _build_noise(
+    rng: jax.Array,
+    shape: tuple[int, ...],
+    dtype: jnp.dtype,
+    config,
+) -> jax.Array:
+    mode = getattr(config, "side_adapter_noise_mode", "fixed")
+    if mode == "fresh":
+        return jax.random.normal(rng, shape, dtype=dtype)
+    if mode == "fixed":
+        eps = jax.random.normal(jax.random.key(int(config.seed)), shape[1:], dtype=dtype)
+        return jnp.broadcast_to(eps[None, ...], shape)
+    raise ValueError(f"Unsupported side_adapter_noise_mode={mode!r}")
+
+
+def _denoising_loss(
     params,
     state: TrainState,
     data: dict,
@@ -95,75 +130,79 @@ def _rollout_loss(
     config,
     scheduler: FlaxFlowMatchScheduler,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
-    noise_rng, dropout_rng = jax.random.split(rng)
+    noise_rng, step_rng, dropout_rng = jax.random.split(rng, 3)
     weights_dtype = _dtype(config.weights_dtype)
     bsz = config.global_batch_size_to_train_on
 
     adapters = nnx.merge(state.graphdef, params, state.rest_of_state)
     transformer = nnx.merge(state.transformer_graphdef, state.transformer_params, state.transformer_rest)
 
-    z_i0 = data["z_i0"][:bsz].astype(weights_dtype)
-    z_video = data["z_video"][:bsz].astype(weights_dtype)
+    z_i0_f32 = data["z_i0"][:bsz].astype(jnp.float32)
+    z_video_f32 = data["z_video"][:bsz].astype(jnp.float32)
     actions = data["actions"][:bsz].astype(weights_dtype)
 
-    b, _, f_lat, h_lat, w_lat = z_video.shape
+    b, _, f_lat, h_lat, w_lat = z_video_f32.shape
+    num_steps = int(config.side_adapter_sampling_steps)
     sigmas = build_rollout_sigmas(
-        config.side_adapter_sampling_steps,
+        num_steps,
         config.flow_shift,
         scheduler.config.sigma_min,
         scheduler.config.sigma_max,
     )
-    timesteps = rollout_timesteps_from_sigmas(sigmas, scheduler.config.num_train_timesteps)
+    t_idx = _sample_step_indices(step_rng, b, num_steps, sigmas, config)
+    sigma_t = sigmas[t_idx]
+    step_t = sigma_t * jnp.asarray(scheduler.config.num_train_timesteps, dtype=jnp.float32)
+    timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
     null_context = jnp.broadcast_to(
         state.null_context.astype(weights_dtype),
         (b, state.null_context.shape[1], state.null_context.shape[2]),
     )
 
-    if config.side_adapter_noise_mode != "fresh":
-        raise ValueError("Only side_adapter_noise_mode='fresh' is supported for TPU training")
-    z = jax.random.normal(noise_rng, z_video.shape, dtype=z_video.dtype)
-    z = apply_first_frame_pin(z, z_i0)
+    eps = _build_noise(noise_rng, z_video_f32.shape, jnp.float32, config)
+    sigma_b = sigma_t.reshape((b, 1, 1, 1, 1))
+    z_t_f32 = (1.0 - sigma_b) * z_video_f32 + sigma_b * eps
+    z_t_f32 = apply_first_frame_pin(z_t_f32, z_i0_f32)
+    z_t = z_t_f32.astype(weights_dtype)
 
-    def _rollout_body(i, z):
-        step_t = jnp.broadcast_to(timesteps[i], (b,))
-        timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
-        v_cond = wan_side_adapter_forward(
-            transformer,
-            adapters,
-            hidden_states=z,
+    v_cond = wan_side_adapter_forward(
+        transformer,
+        adapters,
+        hidden_states=z_t,
+        timestep=timestep_2d,
+        encoder_hidden_states=null_context,
+        actions=actions,
+        deterministic=False,
+        rngs=nnx.Rngs(dropout=dropout_rng),
+    )
+    if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
+        # Match ../Wan2.2: the unconditional CFG branch is frozen and run
+        # without gradient through either the branch or its latent input.
+        v_uncond = transformer(
+            hidden_states=jax.lax.stop_gradient(z_t),
             timestep=timestep_2d,
             encoder_hidden_states=null_context,
-            actions=actions,
-            deterministic=False,
-            rngs=nnx.Rngs(dropout=dropout_rng),
+            deterministic=True,
         )
-        if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
-            # Match ../Wan2.2: the unconditional CFG branch is frozen and run
-            # without gradient through either the branch or its latent input.
-            v_uncond = transformer(
-                hidden_states=jax.lax.stop_gradient(z),
-                timestep=timestep_2d,
-                encoder_hidden_states=null_context,
-                deterministic=True,
-            )
-            v_uncond = jax.lax.stop_gradient(v_uncond)
-            v = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
-        else:
-            v = v_cond
-        return apply_first_frame_pin(z + (sigmas[i + 1] - sigmas[i]).astype(z.dtype) * v, z_i0)
+        v_uncond = jax.lax.stop_gradient(v_uncond)
+        v_pred = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
+    else:
+        v_pred = v_cond
 
-    # Reverse-mode through lax.fori_loop otherwise stores per-step residuals
-    # for the whole denoising rollout. Rematerializing the outer step body
-    # matches the PyTorch reference's checkpointed differentiable sampling loop.
-    z = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), jax.checkpoint(_rollout_body), z)
-
-    diff = z - z_video
-    loss = jnp.mean(diff**2)
+    v_target = eps - z_video_f32
+    mask = jnp.ones((1, z_video_f32.shape[1], f_lat, h_lat, w_lat), dtype=jnp.float32)
+    mask = mask.at[:, :, :1, :, :].set(0.0)
+    diff = (v_pred.astype(jnp.float32) - v_target.astype(jnp.float32)) * mask
+    n_valid = jnp.maximum(jnp.sum(mask) * b, 1.0)
+    loss = jnp.sum(diff**2) / n_valid
     aux = {
-        "latent_mse": loss,
-        "z_pred_std": jnp.std(z.astype(jnp.float32)),
-        "z_target_std": jnp.std(z_video.astype(jnp.float32)),
-        "z_init_anchor_mse": jnp.mean((z[:, :, :1].astype(jnp.float32) - z_i0[:, :, :1].astype(jnp.float32)) ** 2),
+        "velocity_mse": loss,
+        "sigma_mean": jnp.mean(sigma_t.astype(jnp.float32)),
+        "timestep_mean": jnp.mean(step_t.astype(jnp.float32)),
+        "v_pred_l2": jnp.linalg.norm(v_pred.astype(jnp.float32)),
+        "v_target_l2": jnp.linalg.norm(v_target.astype(jnp.float32)),
+        "z_noisy_std": jnp.std(z_t_f32),
+        "z_target_std": jnp.std(z_video_f32),
+        "z_init_anchor_mse": jnp.mean((z_t_f32[:, :, :1] - z_i0_f32[:, :, :1]) ** 2),
     }
     return loss, aux
 
@@ -172,7 +211,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array, scheduler, config
     rng, loss_rng = jax.random.split(rng)
 
     def loss_fn(params):
-        return _rollout_loss(params, state, data, loss_rng, config, scheduler)
+        return _denoising_loss(params, state, data, loss_rng, config, scheduler)
 
     grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
     (loss, aux), grads = grad_fn(state.params)
@@ -184,10 +223,14 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array, scheduler, config
     metrics = {
         "scalar": {
             "learning/loss": loss,
-            "learning/latent_mse": aux["latent_mse"],
+            "learning/velocity_mse": aux["velocity_mse"],
             "learning/grad_norm": grad_norm,
             "learning/max_abs_grad": max_abs_grad,
-            "learning/z_pred_std": aux["z_pred_std"],
+            "learning/sigma_mean": aux["sigma_mean"],
+            "learning/timestep_mean": aux["timestep_mean"],
+            "learning/v_pred_l2": aux["v_pred_l2"],
+            "learning/v_target_l2": aux["v_target_l2"],
+            "learning/z_noisy_std": aux["z_noisy_std"],
             "learning/z_target_std": aux["z_target_std"],
             "learning/z_init_anchor_mse": aux["z_init_anchor_mse"],
         },
@@ -198,12 +241,15 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array, scheduler, config
 
 def _eval_step(state: TrainState, data: dict, rng: jax.Array, scheduler, config):
     losses = jnp.zeros((config.global_batch_size_to_train_on,), dtype=jnp.float32)
-    loss, aux = _rollout_loss(state.params, state, data, rng, config, scheduler)
+    loss, aux = _denoising_loss(state.params, state, data, rng, config, scheduler)
     losses = losses.at[:].set(loss)
     metrics = {
         "scalar": {
             "learning/eval_loss": losses,
-            "learning/eval_z_pred_std": aux["z_pred_std"],
+            "learning/eval_sigma_mean": aux["sigma_mean"],
+            "learning/eval_v_pred_l2": aux["v_pred_l2"],
+            "learning/eval_v_target_l2": aux["v_target_l2"],
+            "learning/eval_z_noisy_std": aux["z_noisy_std"],
             "learning/eval_z_target_std": aux["z_target_std"],
         },
         "scalars": {},
@@ -465,7 +511,9 @@ class WanTI2VSideAdapterTrainer:
             max_logging.log(f"  Devices: {jax.device_count()}")
             max_logging.log(f"  Max train steps: {config.max_train_steps}")
             max_logging.log(f"  Output dir: {config.output_dir}")
-            max_logging.log(f"  Sampling steps: {config.side_adapter_sampling_steps}")
+            max_logging.log(f"  Denoising sigma steps: {config.side_adapter_sampling_steps}")
+            max_logging.log(f"  Timestep sampling: {getattr(config, 'side_adapter_t_sampling', 'uniform')}")
+            max_logging.log(f"  Noise mode: {getattr(config, 'side_adapter_noise_mode', 'fixed')}")
             max_logging.log(f"  Guidance scale: {config.side_adapter_guide_scale}")
 
         wandb_run = None

@@ -502,7 +502,7 @@ def wan_side_adapter_forward(
 
 
 def build_rollout_sigmas(num_inference_steps: int, shift: float, sigma_min: float, sigma_max: float) -> jax.Array:
-    """Build the N+1 descending sigma grid used by the side-adapter rollout loss."""
+    """Build the N+1 descending sigma grid used by side-adapter train/inference."""
     if num_inference_steps < 1:
         raise ValueError("num_inference_steps must be positive")
     sigmas = jnp.linspace(sigma_max, sigma_min, num_inference_steps + 1, dtype=jnp.float32)[:-1]

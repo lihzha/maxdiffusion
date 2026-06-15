@@ -707,7 +707,7 @@ Version Control:
 - worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
 - branch: `codex/wan-ti2v-side-adapter-20260613-073227`
 - base_commit: `0a2301adb613b6352beeb830cb1e9e9d85aaedff`
-- implementation_commit: pending
+- implementation_commit: `02931a577ec097614e1c125f4dc4b14a2c27693c`
 - changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, worklog
 - validation: `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`
 
@@ -2602,3 +2602,49 @@ Analysis:
 
 Next:
 - Monitor step progression to checkpoint `100`, confirm checkpoint payload in GCS, and inspect validation outputs from the separate validation TPU.
+
+## 2026-06-15T07:15:28Z - denoising-loss correction and adaptor handoff
+
+Goal:
+- Correct the TPU side-adapter training objective to match `../Wan2.2/run_train_droid.sh` before relaunch.
+- Prepare a new `adaptor` branch with enough handoff documentation for a fresh agent to continue development or launch training.
+
+Hypothesis:
+- The r9 run was slow because it optimized a 25-step full rollout MSE inside every train step.
+- The original DROID side-adapter run uses `scripts/train_adaptor.py` default `--loss_type denoise`, which samples one sigma/timestep per example and optimizes `v_pred` against `eps - z_video`.
+
+Change:
+- Replaced `_rollout_loss` in `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py` with one-step denoising/flow-matching loss.
+- Preserved frame-0 pinning, per-token timestep zeroing for the pinned frame, CFG-consistent velocity prediction with frozen unconditional branch, and masked MSE over non-frame-0 latent elements.
+- Built noise/interpolation/targets in float32 and cast only the model input to the configured weights dtype.
+- Added uniform/logit-normal side-adapter timestep sampling and fixed/fresh noise modes; default is fixed noise to match DROID `FIXED_NOISE=1`.
+- Updated launcher defaults to disable Hugging Face Xet and `hf_transfer`, matching the working r9 setup path.
+- Added `docs/wan_ti2v_side_adapter_handoff.md` with model/data/parallelism/launch/validation/new-adapter notes.
+- Changed validation watcher default branch to `adaptor`.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- worklog: `worklogs/wan-ti2v-side-adapter/wan-ti2v-side-adapter-20260613-073227.md`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `6e3d58ec44a8f411c8c031d6ae3f81e4a2f196a7`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml`, `src/maxdiffusion/models/wan/side_adapter_wan.py`, `bash_scripts/train_wan_side_adapter.sh`, `bash_scripts/watch_wan_side_adapter_validation.sh`, `docs/wan_ti2v_side_adapter_handoff.md`, worklog
+
+Validation:
+- `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py src/maxdiffusion/models/wan/side_adapter_wan.py`
+- `bash -n bash_scripts/train_wan_side_adapter.sh`
+- `bash -n bash_scripts/watch_wan_side_adapter_validation.sh`
+- `bash -n bash_scripts/validate_wan_side_adapter.sh`
+- `git diff --check`
+
+Result:
+- status: local static validation passed.
+- r9_status: intentionally stopped before this patch because it used the wrong rollout objective.
+
+Analysis:
+- `side_adapter_sampling_steps=25` should remain as the shifted sigma grid size for denoising timestep sampling and rollout validation, but it must not be interpreted as 25 train-step DiT evaluations.
+- The corrected train step should be substantially faster than r9 because it does one conditional adapter DiT forward plus the frozen unconditional CFG forward, instead of a 25-step rollout.
+
+Next:
+- Commit this fix, create/merge into branch `adaptor`, push it, then relaunch full v6e-64 training from the `adaptor` branch and restart checkpoint-triggered validation.
