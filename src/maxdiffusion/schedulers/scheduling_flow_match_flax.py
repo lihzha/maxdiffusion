@@ -269,7 +269,14 @@ class FlaxFlowMatchScheduler(FlaxSchedulerMixin, ConfigMixin):
     noisy_latents = (1 - sigma) * batch_images + sigma * noise
     target = noise - batch_images
 
-    training_weights = self._calculate_training_weights(timesteps, self.config.num_train_timesteps)
+    # Compute weights using the full schedule range so normalization is
+    # global (mean weight ≈ 1) rather than batch-relative (mean = N/B).
+    N = self.config.num_train_timesteps
+    all_t = jnp.arange(N, dtype=jnp.float32)
+    y_all = jnp.exp(-2 * ((all_t - N / 2) / N) ** 2)
+    y_all_shifted = y_all - jnp.min(y_all)
+    w_all = y_all_shifted * (N / jnp.sum(y_all_shifted))
+    training_weights = w_all[timesteps.astype(jnp.int32)]
 
     return noisy_latents, target, training_weights
 
