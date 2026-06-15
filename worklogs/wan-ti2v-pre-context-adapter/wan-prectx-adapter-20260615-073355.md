@@ -366,3 +366,35 @@ Analysis:
 
 Next:
 - Relaunch with `GH_REPO_NAME=maxdiffusion`, exact commit checkout, root `setup.sh`, and no missing prefetch helper.
+
+## 2026-06-15T23:12:05Z - r5 failed on Hugging Face download; add prefetch retry mitigation
+
+Goal:
+- Diagnose the first valid pre-context launch on `v6-64-09-lzha` and relaunch without repeating the same failure.
+
+Change:
+- Added `bash_scripts/prefetch_hf_snapshot.sh`, a retryable Hugging Face `snapshot_download` helper with Xet and `hf_transfer` disabled by default.
+- Added `HF_HUB_DOWNLOAD_TIMEOUT=300` and `HF_HUB_ETAG_TIMEOUT=120` defaults to training and validation launchers.
+- Updated the validation watcher setup path to prefetch the model before entering JAX.
+
+Version Control:
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- failing_launch_commit: db3c3d89ce642241e345b6856713a1c4d4742955
+- next_commit: pending
+
+Command / Job:
+- failed_run_name: wan-pre-context-v6e64-smoke-gbs512-r5-20260615-224804
+- target_tpu: v6-64-09-lzha
+- launch_state: TPU READY/HEALTHY; setup completed; training launched.
+
+Result:
+- status: failed before the first train step
+- metrics/artifacts: no loss, checkpoint, or validation artifact produced.
+- key evidence: worker 3 failed while loading `Wan-AI/Wan2.2-TI2V-5B-Diffusers` with `408 Client Error: Request Time-out` for `text_encoder/model-00002-of-00003.safetensors`; other workers then aborted through JAX coordination shutdown.
+
+Analysis:
+- This was a distributed launch hygiene failure, not an adapter-shape failure. Model downloads occurred after JAX distributed startup, so a transient Hugging Face timeout on one worker cascaded into a mesh-wide abort.
+- The relaunch should prefetch the model in the setup phase, before JAX initializes, and then start training only after every worker has a warmed local cache.
+
+Next:
+- Commit/push the prefetch mitigation, stop the failed r5 watcher, relaunch as r6 with setup prefetch enabled, and monitor through first loss/checkpoint evidence.

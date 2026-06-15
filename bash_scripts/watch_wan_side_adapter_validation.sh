@@ -45,6 +45,10 @@ COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
 WATCH_BRANCH="${WATCH_BRANCH:-adaptor}"
 HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
+HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-300}"
+HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
+HF_PREFETCH_ATTEMPTS="${HF_PREFETCH_ATTEMPTS:-6}"
+HF_PREFETCH_WORKERS="${HF_PREFETCH_WORKERS:-2}"
 STATE_FILE="${STATE_FILE:-logs/wan_side_adapter_validation_seen_${RUN_NAME}.txt}"
 
 mkdir -p "$(dirname "$STATE_FILE")" logs
@@ -63,6 +67,10 @@ echo "PRE_CONTEXT_TOKENS=${PRE_CONTEXT_TOKENS}"
 echo "PRE_CONTEXT_HEADS=${PRE_CONTEXT_HEADS}"
 echo "COMMIT=${COMMIT}"
 echo "WATCH_BRANCH=${WATCH_BRANCH}"
+echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
+echo "HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}"
+echo "HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT}"
+echo "HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT}"
 
 _step_is_target() {
   local step="$1"
@@ -125,7 +133,7 @@ _launch_validation() {
   local step="$1"
   local run_tag="wan-side-adapter-validation-${RUN_NAME}-step-${step}"
   local setup_cmd
-  setup_cmd="export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET} HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER} && git fetch origin ${WATCH_BRANCH} && git checkout --detach ${COMMIT} && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu"
+  setup_cmd="export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET} HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER} HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT} HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT} HF_PREFETCH_ATTEMPTS=${HF_PREFETCH_ATTEMPTS} HF_PREFETCH_WORKERS=${HF_PREFETCH_WORKERS} && git fetch origin ${WATCH_BRANCH} && git checkout --detach ${COMMIT} && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh \"${MODEL_DIR}\""
 
   export TPU_NAME="$VALIDATION_TPU_NAME"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) launching validation step ${step} on ${VALIDATION_TPU_NAME}"
@@ -135,6 +143,8 @@ _launch_validation() {
     RUN_NAME="$RUN_NAME" \
     HF_HUB_DISABLE_XET="$HF_HUB_DISABLE_XET" \
     HF_HUB_ENABLE_HF_TRANSFER="$HF_HUB_ENABLE_HF_TRANSFER" \
+    HF_HUB_DOWNLOAD_TIMEOUT="$HF_HUB_DOWNLOAD_TIMEOUT" \
+    HF_HUB_ETAG_TIMEOUT="$HF_HUB_ETAG_TIMEOUT" \
     OUTPUT_DIR="$OUTPUT_DIR" \
     CHECKPOINT_DIR="$CHECKPOINT_DIR" \
     CHECKPOINT_STEP="$step" \
