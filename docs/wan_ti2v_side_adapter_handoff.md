@@ -8,6 +8,10 @@ DROID training run.
 
 - Main development branch before handoff: `codex/wan-ti2v-side-adapter-20260613-073227`.
 - Handoff branch: `adaptor`.
+- Latest fixed commit at this handoff: `b574bc4cfd9f8604d80818456b97bd95565b92b6`
+  (`fix: filter tfrecord input files`).
+- Current full training attempt: `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r15-20260615-131841`
+  on `v6-64-08-lzha`, launched from commit `b574bc4cfd9f8604d80818456b97bd95565b92b6`.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`

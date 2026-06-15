@@ -2759,3 +2759,52 @@ Analysis:
 
 Next:
 - Patch `_tfds_data_processing.py` to filter TFRecord filenames, make `bash_scripts/setup.sh` idempotent from repo root or `$HOME`, validate locally, commit/push to `adaptor`, stop any remaining r13 worker processes, and relaunch as r14.
+
+## 2026-06-15T14:08:46Z - r15 fixed-loader launch verification
+
+Goal:
+- Record the post-fix integration state and verify the v6e-64 relaunch is actually running the fixed code before waiting for first metrics.
+
+Change:
+- Patched the generic TFRecord loader to read only `*.tfrecord`, preventing `summary.json` from being handed to `TFRecordDataset`.
+- Made `bash_scripts/setup.sh` safe from either `$HOME` or the repo root and safe to rerun against an existing `.venv`.
+- Updated the handoff document so a fresh agent can continue from branch `adaptor`, implement another adapter, or launch training.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `adaptor`
+- implementation_commit: `b574bc4cfd9f8604d80818456b97bd95565b92b6`
+- push/pull: pushed to `origin/adaptor`
+- changed_files: `src/maxdiffusion/input_pipeline/_tfds_data_processing.py`, `bash_scripts/setup.sh`, `docs/wan_ti2v_side_adapter_handoff.md`, this worklog
+
+Validation:
+- `python3 -m py_compile src/maxdiffusion/input_pipeline/_tfds_data_processing.py src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`
+- `bash -n bash_scripts/setup.sh bash_scripts/train_wan_side_adapter.sh bash_scripts/watch_wan_side_adapter_validation.sh bash_scripts/validate_wan_side_adapter.sh`
+- `git diff --check`
+
+Command / Job:
+- stopped_r13: deleted task-owned `v6-64-08-lzha` after SSH stop attempts could not reach workers during heavy compile/model load.
+- r14_status: queued resource stayed in `PROVISIONING`; delete/reset were unsupported in that state, so the watcher was restarted instead of forcing a destructive action.
+- active_run_name: `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r15-20260615-131841`
+- tpu_name: `v6-64-08-lzha`
+- queued_resource: `v6-64-08-lzha-qr`
+- local_watcher_session: `59151`
+- launch_commit: `b574bc4cfd9f8604d80818456b97bd95565b92b6`
+- training_data: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- validation_data: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- checkpoint_root: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`
+- batch: `PER_DEVICE_BATCH_SIZE=8`, `GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512`, `GLOBAL_BATCH_SIZE_TO_LOAD=512`
+
+Result:
+- r15 allocated successfully after long v6 queue/provisioning churn and `tpu watch` reported training launch complete.
+- Worker 0 direct verification: `HEAD=b574bc4cfd9f8604d80818456b97bd95565b92b6`, branch state `adaptor...origin/adaptor`, run name/data paths/batch size all match the intended fixed launch.
+- All 16 workers are reachable and each has one `train_wan.py` process.
+- As of `2026-06-15T14:08:07Z`, worker 0 had found 64 devices and was still loading/porting the WAN transformer; no `Traceback`, `RESOURCE_EXHAUSTED`, `No TFRecord`, `summary.json`, or `nan` error had appeared yet.
+
+Analysis:
+- The branch/doc request is satisfied on `origin/adaptor`, but the training job still needs active monitoring until adapter/frozen parameter logs, first batch fetch, first non-NaN step metric, checkpoint 100, and periodic validation are verified.
+- The current long interval is consistent with multi-host 5B model load/porting and first compile; most workers are using high CPU and about 69 GB RSS, so this is not yet evidence of a dead worker.
+
+Next:
+- Keep direct worker-log monitoring. Required next evidence: trainable adapter parameter count, frozen transformer parameter count, denoising sigma/timestep/noise-mode logs, successful batch read from filtered TFRecord list, first logged training loss at step 10, checkpoint 100 in GCS, then launch the validation watcher.
