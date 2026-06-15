@@ -10,6 +10,12 @@ export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
 export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-120}"
 export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
 
+if [ -f ".venv/bin/activate" ]; then
+  source .venv/bin/activate
+elif [ -f "maxdiffusion_venv/bin/activate" ]; then
+  source maxdiffusion_venv/bin/activate
+fi
+
 if [ -d "$MODEL_ID" ]; then
   echo "[prefetch_hf_snapshot] local model directory exists: $MODEL_ID"
   exit 0

@@ -2835,3 +2835,24 @@ Validation:
 
 Next:
 - Commit and push the prefetch fix, verify r15 training processes are no longer active, stop the stale r15 watcher, then relaunch on the same v6e-64 slice as r16 with a setup command that includes `bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers`.
+
+## 2026-06-15T14:14:00Z - r16/r17 setup-command hardening
+
+Goal:
+- Relaunch from the prefetch fix without leaving stale local watchers or starting distributed training from a bad setup state.
+
+Result:
+- r16 did not reach TPU setup. `tpu watch` exited locally before launch because the command exported only v6 TPU env vars; `irom-tpu-tools` also requires `TPU_ZONE_v4`, `TPU_ZONE_v5`, `TPU_BUCKET_v4`, and `TPU_BUCKET_v5`.
+- r17 reached the existing `v6-64-08-lzha` TPU and checked out `c293ae0`, but setup failed on all workers before training. The new prefetch script ran under system Python because activation inside `bash_scripts/setup.sh` does not persist after that script exits; system Python could not import `huggingface_hub`.
+- Verified r15 had left zero `train_wan.py` processes on all 16 workers before r17.
+- Stopped the stale local r17 watcher PIDs without touching unrelated v6 watchers.
+
+Change:
+- Updated `bash_scripts/prefetch_hf_snapshot.sh` to source `.venv/bin/activate` or `maxdiffusion_venv/bin/activate` before importing `huggingface_hub`.
+
+Validation:
+- `bash -n bash_scripts/prefetch_hf_snapshot.sh bash_scripts/watch_wan_side_adapter_validation.sh`
+- `git diff --check`
+
+Next:
+- Commit and push the activation fix, then relaunch as r18 from the new `adaptor` head with the full TPU environment block and the same v6e-64/global-batch-512 settings.
