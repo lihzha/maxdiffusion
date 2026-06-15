@@ -2741,3 +2741,21 @@ Analysis:
 
 Next:
 - Relaunch as r13 on `v6-64-08-lzha` with the corrected setup command, Hugging Face timeout environment, global batch 512, and the same checkpoint/validation cadence.
+
+## 2026-06-15T12:06:00Z - r13 data-loader correctness fix
+
+Goal:
+- Stop before treating r13 as valid if the input pipeline can ingest non-TFRecord sidecar files.
+
+Result:
+- r13 launched from commit `69c3780ddd8bed348f7bb2bea9fd8d77789637bb` on `v6-64-08-lzha`.
+- Verified worker 0 `HEAD=69c3780ddd8bed348f7bb2bea9fd8d77789637bb`, run name `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r13-20260615-115510`, train/val data on `gs://v6_east1d`, per-device batch `8`, and global batch `512`.
+- All 16 workers started one `train_wan.py` process and reached model/checkpoint initialization without Hugging Face download errors.
+- Found a data-loader correctness issue while debugging the long first-step interval: the generic TFRecord iterator used `glob("*")`, so it included `summary.json` alongside `train-*.tfrecord`. A worker-side parse smoke confirmed the actual data prefix has 704 train TFRecords plus `summary.json`; the first shuffled files parse correctly, but the sidecar would eventually be handed to `TFRecordDataset`.
+
+Analysis:
+- r13 should not be used as a correctness baseline because the input file list is not filtered to TFRecord files.
+- The fix is to load only `*.tfrecord` and fail fast if no matching data files exist.
+
+Next:
+- Patch `_tfds_data_processing.py` to filter TFRecord filenames, make `bash_scripts/setup.sh` idempotent from repo root or `$HOME`, validate locally, commit/push to `adaptor`, stop any remaining r13 worker processes, and relaunch as r14.

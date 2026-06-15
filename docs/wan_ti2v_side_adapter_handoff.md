@@ -12,10 +12,16 @@ DROID training run.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
   - val: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- Data files under those prefixes are named like
+  `train-00000-of-00704.tfrecord` and `val-00000-of-00008.tfrecord`.
+  The MaxDiffusion TFRecord iterator intentionally reads only `*.tfrecord`
+  so sidecar files such as `summary.json` are ignored.
 - Use v6 TPUs for training. The established full run target is v6e-64 with
   global batch size 512.
 - Run `bash_scripts/setup.sh MODE=stable DEVICE=tpu` on TPU workers during
-  setup. Do not rely on local workstation package state for TPU validation.
+  setup. It is safe to invoke from either `$HOME` or the repo root, and it
+  reuses an existing `.venv`. Do not rely on local workstation package state
+  for TPU validation.
 
 ## Important Correction
 

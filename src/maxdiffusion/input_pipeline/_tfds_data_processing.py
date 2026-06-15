@@ -140,7 +140,9 @@ def _make_tfrecord_iterator(
     clip_embeddings = tf.io.parse_tensor(tnp.asarray(features["clip_embeddings"]), out_type=tf.float32)
     return {"pixel_values": moments, "input_ids": clip_embeddings}
 
-  filenames = tf.io.gfile.glob(os.path.join(dataset_path, "*"))
+  filenames = sorted(tf.io.gfile.glob(os.path.join(dataset_path, "*.tfrecord")))
+  if not filenames:
+    raise FileNotFoundError(f"No TFRecord files matched {dataset_path}/*.tfrecord")
   if is_training and seed is not None:
     filenames = np.random.default_rng(seed).permutation(filenames).tolist()
   ds = tf.data.TFRecordDataset(filenames, num_parallel_reads=AUTOTUNE)
