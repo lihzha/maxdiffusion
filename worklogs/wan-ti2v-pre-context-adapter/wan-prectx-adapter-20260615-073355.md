@@ -125,3 +125,37 @@ Analysis:
 
 Next:
 - Launch the smoke/full training when a v6e-64 slice becomes available, or explicitly free/reassign an existing lzha v6e-64 queued resource/job.
+
+## 2026-06-15T20:18:00Z - resumed v6e-64 availability monitoring
+
+Goal:
+- Keep an active monitor on v6e-64 availability for the pre-context adapter smoke launch.
+
+Hypothesis:
+- If the old side-adapter watcher releases `v6-64-08-lzha`, or a fresh v6e-64 quota path becomes available, the pre-context smoke can be launched from the pushed branch without additional code changes.
+
+Change:
+- Started a local monitoring loop for TPU node state, queued resources, local `tpu watch` ownership, and worker process/log state.
+- Did not stop or alter unrelated active watchers or TPU jobs.
+
+Version Control:
+- agent_id: wan-prectx-adapter-20260615-073355
+- worktree: /home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- current_commit: aa70ec157574e20b6a842078b98489bc2656cbce
+- changed_files: worklogs/wan-ti2v-pre-context-adapter/wan-prectx-adapter-20260615-073355.md
+
+Command / Job:
+- command: local monitor loop checking `gcloud compute tpus tpu-vm list`, `gcloud alpha compute tpus queued-resources list`, local `tpu watch` processes, and `v6-64-08-lzha` worker state when READY.
+- monitor_log: logs/monitor_wan_pre_context_v6e64_availability_20260615-201801.log
+- owned_pre_context_job: none currently active
+
+Result:
+- status: monitoring
+- key evidence: `v6-64-08-lzha` is `CREATING/PROVISIONING` again and is still associated with the older side-adapter watcher; `v6-64-07-lzha` is also under a separate ego-lap watcher; no pre-context remote run has started.
+
+Analysis:
+- The active blocker remains resource ownership/capacity, not code readiness. The monitor should wait for a clean v6e-64 slot before launching the pre-context smoke.
+
+Next:
+- Continue polling; launch the one-step pre-context smoke only after a usable v6e-64 slice is available and not owned by another watcher.
