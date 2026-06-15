@@ -140,6 +140,7 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     ema_decay=0.0 \
     distill=False \
+    learning_rate=1.e-4 \
     wandb_project='wan-ti2v-finetune_single_view_2' \
     single_camera=True
 
