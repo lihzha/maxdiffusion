@@ -13,6 +13,17 @@ DROID training run.
   on `v6-64-08-lzha` launched from fixed-loader commit
   `b574bc4cfd9f8604d80818456b97bd95565b92b6`, but failed before first batch
   due a transient Hugging Face shard download error on one worker.
+- The r19 full training attempt
+  `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659`
+  reached step 630 on `v6-64-08-lzha` before a TPU maintenance event. The W&B
+  run `mcnoaonk` shows loss improving to about `0.3184` at step 630. The local
+  `tpu watch` process is retrying the v6e-64 replacement, but queued-resource
+  creation was blocked by `TPUV6EPreemptiblePerProjectPerZoneForTPUAPI` quota
+  as of `2026-06-15T16:13Z`.
+- Checkpoint 600 from r19 was copied to the validation cache:
+  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation_checkpoints/600`.
+  The step-600 validation has not completed yet; its v6e-8 queued resource was
+  still provisioning while the v6 quota was saturated.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
