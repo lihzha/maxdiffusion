@@ -2582,3 +2582,23 @@ Analysis:
 
 Next:
 - Restart the local r9 validation watcher from the fixed script and continue monitoring training to checkpoint `100`.
+
+## 2026-06-15T06:52:05Z - r9 first metric
+
+Goal:
+- Verify that r9 has moved past startup, model load, data load, and first train-step compile.
+
+Result:
+- status: active and training.
+- process_count: all 16 workers reported one r9 `train_wan.py` process.
+- parameter_check: process-0 log on worker `14` reports `[wan_side_adapter] trainable adapter params: 239.5M` and `[wan_side_adapter] frozen transformer params: 5.00B`.
+- first_metric: `step 10/10000 loss=3.276562 grad_norm=8875038566.400 lr=9.00e-07 steps/s=0.010`.
+- compile: TPU driver emitted XLA slow-compile alarm only; no `RESOURCE_EXHAUSTED`, OOM, or fatal compile error.
+- validation: corrected local watcher remains active and waiting for checkpoint `100`.
+
+Analysis:
+- The r9 first metric matches r4's step-10 metric exactly, so the launch/environment recovery did not change early training behavior.
+- The long quiet period was first-step compile/execution (`p_train_step` at `wan_ti2v_side_adapter_trainer.py:492-493`), not model download or data-loader failure.
+
+Next:
+- Monitor step progression to checkpoint `100`, confirm checkpoint payload in GCS, and inspect validation outputs from the separate validation TPU.
