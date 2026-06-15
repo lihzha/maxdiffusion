@@ -398,3 +398,34 @@ Analysis:
 
 Next:
 - Commit/push the prefetch mitigation, stop the failed r5 watcher, relaunch as r6 with setup prefetch enabled, and monitor through first loss/checkpoint evidence.
+
+## 2026-06-15T23:18:58Z - r7 reached adapter init; fix pre-context head count
+
+Goal:
+- Continue the r7 launch past setup/prefetch and diagnose the first adapter-code failure.
+
+Change:
+- Changed the pre-context attention head implementation to treat configured heads as a requested value and fall back to `gcd(feature_dim, heads)` when the actual feature dimension is not divisible by the request.
+- Updated default `pre_context_heads` from 40 to 8 in the 5B side-adapter config and launch scripts.
+
+Version Control:
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- failing_launch_commit: 0a3bb14315df680aed88fdc018af0dc955fe5d64
+- next_commit: pending
+
+Command / Job:
+- failed_run_name: wan-pre-context-v6e64-smoke-gbs512-r7-20260615-231417
+- target_tpu: v6-64-09-lzha
+- setup_result: completed with model prefetch; training launched.
+
+Result:
+- status: failed before first train step at adapter construction
+- metrics/artifacts: no loss, checkpoint, or validation artifact produced.
+- key evidence: worker 0 raised `ValueError: feature_dim must be divisible by heads` in `NNXPreContextFeatureContextHead`.
+
+Analysis:
+- The Hugging Face prefetch mitigation worked: the previous worker-local 408 did not recur during JAX startup.
+- The new pre-context head incorrectly assumed the requested head count would divide the model feature dimension. For this 5B path, 8 is a safer default and the code should defensively select a valid divisor.
+
+Next:
+- Commit/push the head-count fix, stop the failed r7 watcher, relaunch as r8 with `PRE_CONTEXT_HEADS=8`, and monitor through first loss/checkpoint evidence.

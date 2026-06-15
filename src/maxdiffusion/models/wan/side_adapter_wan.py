@@ -351,9 +351,12 @@ class NNXPreContextFeatureContextHead(nnx.Module):
     ):
         if context_tokens <= 0:
             raise ValueError("context_tokens must be positive")
-        if heads <= 0 or feature_dim % heads != 0:
-            raise ValueError("feature_dim must be divisible by heads")
+        if heads <= 0:
+            raise ValueError("heads must be positive")
+        if feature_dim % heads != 0:
+            heads = math.gcd(feature_dim, heads)
         self.context_tokens = int(context_tokens)
+        self.heads = int(heads)
         self.dtype = dtype
         self.norm_features = FP32LayerNorm(rngs=rngs, dim=feature_dim, eps=1e-5, elementwise_affine=True)
         self.norm_actions = FP32LayerNorm(rngs=rngs, dim=action_token_dim, eps=1e-5, elementwise_affine=True)
@@ -379,7 +382,7 @@ class NNXPreContextFeatureContextHead(nnx.Module):
             query_dim=feature_dim,
             kv_dim=feature_dim,
             hidden_dim=feature_dim,
-            heads=heads,
+            heads=self.heads,
             out_dim=feature_dim,
             dtype=dtype,
             weights_dtype=weights_dtype,
@@ -451,7 +454,7 @@ class NNXWanSideAdapterStack(nnx.Module):
         side_adapter_hidden: int = 512,
         side_adapter_heads: int = 8,
         pre_context_tokens: int = 8,
-        pre_context_heads: int = 40,
+        pre_context_heads: int = 8,
         dtype: jnp.dtype = jnp.bfloat16,
         weights_dtype: jnp.dtype = jnp.bfloat16,
         precision: jax.lax.Precision = None,

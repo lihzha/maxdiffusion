@@ -151,7 +151,7 @@ side_adapter_layers: '0-29'
 side_adapter_hidden: 512
 side_adapter_heads: 8
 pre_context_tokens: 8
-pre_context_heads: 40
+pre_context_heads: 8
 side_adapter_sampling_steps: 25
 side_adapter_noise_mode: 'fixed'
 side_adapter_t_sampling: 'uniform'
