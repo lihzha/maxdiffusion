@@ -18,7 +18,7 @@ Version Control:
 - worklog: worklogs/wan-ti2v-pre-context-adapter/wan-prectx-adapter-20260615-073355.md
 - branch: codex/wan-ti2v-pre-context-adapter-v6e64
 - base_commit: 7ee701de743169e6888a77dac1f3d31d24e408e1
-- implementation_commit: 28c0680886ce9223723beba8c9ea475622c7bac1
+- implementation_commit: 60781c70405dece76409c1c38554b0ecfd43f5f1
 - push/pull: pending
 - changed_files: src/maxdiffusion/models/wan/side_adapter_wan.py; src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py; src/maxdiffusion/generate_wan_side_adapter.py; src/maxdiffusion/configs/base_wan_5b_side_adapter.yml; bash_scripts/train_wan_side_adapter.sh; bash_scripts/validate_wan_side_adapter.sh; bash_scripts/watch_wan_side_adapter_validation.sh; worklogs/wan-ti2v-pre-context-adapter/wan-prectx-adapter-20260615-073355.md
 - remote_commit/status: pending TPU deployment
