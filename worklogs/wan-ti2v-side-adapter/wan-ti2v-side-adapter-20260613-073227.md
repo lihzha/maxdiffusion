@@ -1682,6 +1682,23 @@ Acceptance Criteria:
 Result:
 - status: pending launch
 
+## 2026-06-15T02:02:00Z - relaunch full training after setup checkout failure
+
+Goal:
+- Relaunch the global batch `512` full training run on the already allocated `v6-64-06-lzha` slice after the first setup attempt failed before training.
+
+Result:
+- status: first full launch failed before setup completed
+- key evidence: the TPU helper cloned `origin/main` before running setup; `origin/main` does not have the branch-only `bash_scripts/setup.sh`, so all workers failed with `bash: maxdiffusion/bash_scripts/setup.sh: No such file or directory`.
+- remote worker 0 had no `train_wan`/Python training process after the failed setup. The TPU remained `READY` and task-owned.
+
+Analysis:
+- This was a launch-order issue, not a model, data, memory, or batch-size failure. No training process started and no checkpoint artifacts were written.
+- The relaunch should make the setup command explicitly fetch and checkout the target commit before invoking `bash_scripts/setup.sh`.
+
+Next:
+- Relaunch with `tpu watch --force` on `v6-64-06-lzha` using setup command `git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach b4e26d4edf2492701dff9cb89dd983c7c00bbf89 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu`.
+
 ## 2026-06-14T22:15:49Z - relaunch batch 512 after setup cwd failure
 
 Goal:
