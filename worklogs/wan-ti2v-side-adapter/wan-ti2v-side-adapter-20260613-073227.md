@@ -1887,3 +1887,31 @@ Analysis:
 
 Next:
 - Monitor the ckpt100 run for adapter/frozen-param confirmation, W&B run id, first `step 10/10000` metric, and then the step-`100` checkpoint in GCS.
+
+## 2026-06-15T03:00:00Z - checkpoint-100 run first metric
+
+Goal:
+- Verify the checkpoint-100 relaunch is training with the same batch-512 behavior as the validated retry1 run.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800`
+- tpu_name: `v6-64-06-lzha`
+- primary_worker: worker `13` (`t1v-n-1305de00-w-13`, JAX process `0`)
+- primary_log: `~/maxdiffusion/logs/tpu_20260615-023808.log`
+- wandb: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/6u6pl1hn`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800/checkpoints`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Primary log confirms adapter/backbone split: `239.5M` trainable adapter params and `5.00B` frozen transformer params.
+- metrics/artifacts: Step `10/10000`: `loss=3.273438`, `grad_norm=7666088704.000`, `lr=9.00e-07`, `steps/s=0.010`.
+- metrics/artifacts: No `Traceback`, `ERROR`, `RESOURCE_EXHAUSTED`, OOM, killed process, or NaN signature was visible in the primary log.
+- metrics/artifacts: GCS run prefix is still `0 B`; first checkpoint is expected at step `100`.
+
+Analysis:
+- Step-10 metrics exactly match retry1, so the checkpoint-100 relaunch preserved the batch-512 training behavior. Continue monitoring trend; the high early grad norm is consistent with the previous batch-512 run/probe and not yet a failure signal.
+- At current throughput, step `100` should be on the order of a few hours from launch, which is acceptable for v6 maintenance risk and storage.
+
+Next:
+- Continue monitoring step `20`, subsequent loss/gradient trend, TPU health, and step-`100` checkpoint finalization.
