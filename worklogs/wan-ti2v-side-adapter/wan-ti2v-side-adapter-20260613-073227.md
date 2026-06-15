@@ -1942,3 +1942,56 @@ Analysis:
 
 Next:
 - Continue monitoring toward step `100`; verify checkpoint finalization and storage size once written.
+
+## 2026-06-15T03:36:30Z - checkpoint-100 run preempted before first checkpoint
+
+Goal:
+- Determine whether the checkpoint-100 relaunch produced durable progress before v6 preemption.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800`
+- tpu_name: `v6-64-06-lzha`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800/checkpoints`
+
+Result:
+- status: preempted
+- metrics/artifacts: Latest observed metrics before preemption were through step `40/10000`: `loss=2.003906`, `grad_norm=7660980044.800`, `lr=3.90e-06`, `steps/s=0.028`.
+- metrics/artifacts: TPU state changed to `PREEMPTED` before step `100`.
+- metrics/artifacts: GCS run prefix remained `0 B`; no checkpoint payload was written.
+- metrics/artifacts: After terminal preemption, direct TPU SSH was unavailable, so no later worker log could be fetched.
+
+Analysis:
+- The run was training correctly but lost progress before the first durable checkpoint due to v6 preemption. This is infrastructure churn, not a model/data failure.
+- The step-100 cadence is still preferable to step-1000; under current v6 instability, however, the next durable target remains step `100`.
+
+Next:
+- Requeue the same global-batch-512 checkpoint-100 recipe under a fresh run name, since there is no checkpoint to resume.
+
+## 2026-06-15T03:36:45Z - requeue checkpoint-100 batch 512 after preemption
+
+Goal:
+- Restart batch-512 side-adapter training after the preemption, preserving checkpoint interval `100`.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- implementation_commit: `93296c879dd7c9a31d93b8b19602a0576f0b42b9`
+- push/pull: branch is pushed; queued run will checkout the commit detached
+- changed_files: worklog entries only since the validated code commit
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r1-20260615-033000`
+- tpu_name: `v6-64-06-lzha`
+- queued_resource: `v6-64-06-lzha-qr`
+- accelerator: `v6e-64`
+- local_watch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r1-20260615-033000.log`
+- launch: `tpu watch v6 -n 64 --setup-cmd "git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach 93296c879dd7c9a31d93b8b19602a0576f0b42b9 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" 93296c879dd7c9a31d93b8b19602a0576f0b42b9 RUN_NAME=wan-side-adapter-v6e64-full-gbs512-ckpt100-r1-20260615-033000 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: requeueing
+- metrics/artifacts: `tpu watch` observed the existing TPU in terminal state `PREEMPTED` and started deleting it at local `2026-06-14 20:36:25`.
+
+Analysis:
+- No model or data changes were made. This is a straight restart because there is no durable checkpoint.
+
+Next:
+- Monitor deletion/requeue, verify setup/launch when a fresh v6e-64 slice is allocated, then repeat first-metric and first-checkpoint validation.
