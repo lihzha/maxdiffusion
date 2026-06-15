@@ -231,3 +231,36 @@ Analysis:
 
 Next:
 - Continue monitoring the attached `tpu watch` process. If creation succeeds, verify the remote exact commit, setup, adapter mode, one train step, W&B/log metrics, and exit state.
+
+## 2026-06-15T22:00:00Z - quota wait continuing
+
+Goal:
+- Continue the requested monitoring loop for the fresh pre-context v6e-64 smoke launch.
+
+Hypothesis:
+- The active watcher will proceed automatically once project preemptible v6e quota frees.
+
+Change:
+- No code or launch-command changes.
+- Kept the existing `tpu watch` process attached.
+
+Version Control:
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- current_worklog_commit_before_entry: cd173650e733bb2b82b4b5ec0cda71a62a955c9d
+- launch_commit: 6277a16490fb88f7bb9e96cd7e155b5f56b57ddf
+
+Command / Job:
+- target_tpu: v6-64-09-lzha
+- run_name: wan-pre-context-v6e64-smoke-gbs512-r3-20260615-203132
+- local_watcher_pids: 772049, 772062, 772063
+- logs: logs/tpu_watch_wan-pre-context-v6e64-smoke-gbs512-r3-20260615-203132.log
+
+Result:
+- status: still retrying queued-resource creation
+- key evidence: from 20:32Z through 22:00Z, repeated create attempts returned `RESOURCE_EXHAUSTED` for `TPUV6EPreemptiblePerProjectPerZoneForTPUAPI`, limit 512 in `us-east1-d`; `v6-64-09-lzha` remains `NOT_FOUND`.
+
+Analysis:
+- This remains an external quota/resource contention blocker. No remote setup, model import, JAX compile, or training step has started for the pre-context run.
+
+Next:
+- Keep the retry loop alive unless the user asks to stop, switch provisioning model, switch zone, or free an existing v6e resource.
