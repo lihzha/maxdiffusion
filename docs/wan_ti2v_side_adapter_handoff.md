@@ -15,15 +15,19 @@ DROID training run.
   due a transient Hugging Face shard download error on one worker.
 - The r19 full training attempt
   `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659`
-  has reached checkpoints through step 5200. The latest W&B run observed at
-  `2026-06-15T20:10Z` was `ldiw3cfi`, still marked running, with summary step
-  5190 and `train/loss ~= 0.2858`. The local `tpu watch` process is alive and
-  has re-submitted `v6-64-08-lzha-qr`, currently waiting for v6e-64 capacity
-  after a service-initiated suspension/deletion event.
-- The current periodic validation target is checkpoint 5000. It has been copied
-  to the validation cache:
-  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation_checkpoints/5000`.
-  No validation summary or videos had been written as of `2026-06-15T20:10Z`.
+  resumed from checkpoint 5200 on `v6-64-08-lzha` at commit
+  `b85becd444f10c41c83af888f308602f959d8ba7`. As of
+  `2026-06-15T20:44Z`, GCS had retained checkpoints `5000`, `5300`, `5400`,
+  and `5500`; the active W&B run is `wwkpnweb`, with summary step 5490 and
+  `train/loss ~= 0.2845`.
+- Periodic validation for checkpoint 5000 completed on `v6-8-wan-val-lzha`.
+  Outputs are under
+  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation/step_005000/`.
+  It generated 4 samples, each with prediction, ground-truth, comparison video,
+  metrics, and metadata. Aggregate metrics were mean latent MSE `1.5004`,
+  mean pixel MSE `0.1043`, and mean SSIM `0.3416`. The temporary validation
+  checkpoint cache was deleted afterward, leaving
+  `validation_checkpoints/` at `0 B`.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
