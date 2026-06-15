@@ -118,7 +118,7 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=MATMUL_WITHOUT_BATCH \
-    ici_data_parallelism=2 \
+    ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=4 \
@@ -131,7 +131,7 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=100100 \
     checkpoint_every=100 \
     checkpoint_keep_period=10000 \
-    per_device_batch_size=0.25 \
+    per_device_batch_size=0.5 \
     height=480 \
     width=832 \
     num_frames=80 \
@@ -146,5 +146,5 @@ python src/maxdiffusion/train_wan.py \
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name v6-32-04-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_single.sh"
-# tpu tmux v6-32-02-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan.sh' Enter
+# tpu create v6 --name v6-64-04-catherine -n 64 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_single.sh"
+# tpu tmux v6-64-04-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_single.sh' Enter
