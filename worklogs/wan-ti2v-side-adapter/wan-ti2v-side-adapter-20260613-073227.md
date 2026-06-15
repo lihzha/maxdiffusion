@@ -2912,3 +2912,31 @@ Analysis:
 
 Next:
 - Keep the maintenance watcher active until capacity returns. When the node reaches `READY`, re-verify worker commit/config, filtered data loading, adapter/frozen parameter counts, first non-NaN step metric, checkpoint 100, and then start the periodic validation watcher.
+
+## 2026-06-15T15:01:51Z - r19 second maintenance preemption
+
+Goal:
+- Verify that the requeued r19 launch reaches the corrected setup path and record exactly how far training progressed before the next infrastructure event.
+
+Result:
+- The replacement `v6-64-08-lzha` reached `READY`, all 16 workers completed setup, and the WAN Hugging Face prefetch verified successfully on all workers. One worker needed a second prefetch attempt after a partial multi-GB Hugging Face read; the retry succeeded before training launch.
+- `tpu watch` launched training at `2026-06-15T14:44:45Z`.
+- Direct worker-0 verification showed the actual worker `HEAD=134a362784bbf91573a7b24f87914229d40be6b4`. This is a doc-only commit on top of implementation commit `26e95fb6aa5835a830f91ccfe65b8f1c9ebb092c`, so the training code path is unchanged.
+- Worker-0 config matched the intended run: train/val data on `gs://v6_east1d`, `GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512`, `GLOBAL_BATCH_SIZE_TO_LOAD=512`, `PER_DEVICE_BATCH_SIZE=8`, `TFRECORD_SHUFFLE_BUFFER_SIZE=1024`, mesh axes `['data', 'fsdp', 'context', 'tensor']`, `ici_data_parallelism=1`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, and `ici_tensor_parallelism=1`.
+- The trainer reached 64-device initialization, WAN VAE/transformer load, checkpoint-manager setup, W&B online logging, and side-adapter metadata:
+  - trainable adapter params: `239.5M`
+  - frozen transformer params: `5.00B`
+  - denoising sigma steps: `25`
+  - timestep sampling: `uniform`
+  - noise mode: `fixed`
+  - guidance scale: `5.0`
+- Before any `step 10/... loss=...` log or checkpoint, the TPU again became `health=UNHEALTHY_MAINTENANCE` at `2026-06-15T14:50:17Z`. The watcher deleted the unhealthy TPU and stale queued resource.
+- After deletion, queued-resource creation retries began failing with `RESOURCE_EXHAUSTED` because the project is currently at the v6e preemptible quota limit of `512` chips in `us-east1-d`.
+
+Analysis:
+- The new setup path is validated on the target surface: branch checkout, `setup.sh`, HF prefetch, W&B, model load, adapter/frozen partitioning metadata, and pure FSDP config all reached the expected point.
+- The remaining missing evidence is data iteration and optimization: no first batch completion, first loss, checkpoint 100, or validation output has been produced yet.
+- The current blocker is external TPU maintenance/quota churn, not a code exception observed in the training log.
+
+Next:
+- Keep the non-forced watcher active so it can submit a replacement when quota opens. On the next successful allocation, verify first step metrics and checkpoint 100 before starting validation.
