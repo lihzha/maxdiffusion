@@ -2808,3 +2808,30 @@ Analysis:
 
 Next:
 - Keep direct worker-log monitoring. Required next evidence: trainable adapter parameter count, frozen transformer parameter count, denoising sigma/timestep/noise-mode logs, successful batch read from filtered TFRecord list, first logged training loss at step 10, checkpoint 100 in GCS, then launch the validation watcher.
+
+## 2026-06-15T14:10:30Z - r15 Hugging Face shard download failure
+
+Goal:
+- Diagnose the r15 pre-batch failure and patch the launch path so distributed training does not depend on live Hugging Face streaming during JAX startup.
+
+Result:
+- r15 failed before adapter initialization, first batch, or first metric.
+- Worker 11 showed the first actionable error: `requests.exceptions.ChunkedEncodingError` from Hugging Face download of a WAN transformer shard, with `IncompleteRead(1911109759 bytes read, 3067144585 more expected)`.
+- Workers 0, 3, 12 and others then aborted at the JAX distributed shutdown barrier while some had already reached `_compute_null_context`; those barrier errors are secondary symptoms from the worker-11 download failure.
+- No `No TFRecord`, `summary.json`, `RESOURCE_EXHAUSTED`, or model-sharding error appeared before the shutdown.
+
+Analysis:
+- This is the same failure class as r11 on a fresh v6 allocation: a single worker can fail while downloading multi-GB WAN shards, then all other workers die through distributed coordination.
+- The previous manual warmup was lost when the task-owned TPU was deleted/recreated; model cache cannot be assumed on fresh v6 workers.
+- The robust fix is to prefetch and verify the WAN Hugging Face snapshot during `tpu watch --setup-cmd`, which runs on all workers and completes before the training command is launched.
+
+Change:
+- Added `bash_scripts/prefetch_hf_snapshot.sh`, which retries `snapshot_download` with Xet/hf_transfer disabled, verifies key config files, reads the transformer index, and checks every indexed shard exists and is non-empty.
+- Updated the validation watcher setup command and handoff launch example to call the prefetch script during TPU setup.
+
+Validation:
+- `bash -n bash_scripts/prefetch_hf_snapshot.sh bash_scripts/watch_wan_side_adapter_validation.sh bash_scripts/train_wan_side_adapter.sh bash_scripts/setup.sh`
+- `git diff --check`
+
+Next:
+- Commit and push the prefetch fix, verify r15 training processes are no longer active, stop the stale r15 watcher, then relaunch on the same v6e-64 slice as r16 with a setup command that includes `bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers`.

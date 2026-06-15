@@ -119,7 +119,7 @@ _launch_validation() {
   local step="$1"
   local run_tag="wan-side-adapter-validation-${RUN_NAME}-step-${step}"
   local setup_cmd
-  setup_cmd="export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET} HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER} && git fetch origin ${WATCH_BRANCH} && git checkout --detach ${COMMIT} && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu"
+  setup_cmd="export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET} HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER} HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-120} HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-120} && git fetch origin ${WATCH_BRANCH} && git checkout --detach ${COMMIT} && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh ${MODEL_DIR}"
 
   export TPU_NAME="$VALIDATION_TPU_NAME"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) launching validation step ${step} on ${VALIDATION_TPU_NAME}"

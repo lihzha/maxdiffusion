@@ -8,10 +8,11 @@ DROID training run.
 
 - Main development branch before handoff: `codex/wan-ti2v-side-adapter-20260613-073227`.
 - Handoff branch: `adaptor`.
-- Latest fixed commit at this handoff: `b574bc4cfd9f8604d80818456b97bd95565b92b6`
-  (`fix: filter tfrecord input files`).
-- Current full training attempt: `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r15-20260615-131841`
-  on `v6-64-08-lzha`, launched from commit `b574bc4cfd9f8604d80818456b97bd95565b92b6`.
+- The r15 full training attempt
+  `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r15-20260615-131841`
+  on `v6-64-08-lzha` launched from fixed-loader commit
+  `b574bc4cfd9f8604d80818456b97bd95565b92b6`, but failed before first batch
+  due a transient Hugging Face shard download error on one worker.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
@@ -76,6 +77,10 @@ expensive per step. Rollout is still correct for visual generation/validation.
     jobs on a separate v6e-8 slice.
 - `bash_scripts/validate_wan_side_adapter.sh`
   - One-shot validation wrapper.
+- `bash_scripts/prefetch_hf_snapshot.sh`
+  - Retries and verifies Hugging Face snapshot downloads during TPU setup so
+    distributed JAX training does not start while workers are still streaming
+    multi-GB WAN shards.
 - `src/maxdiffusion/generate_wan_side_adapter.py`
   - Restores adapter checkpoints and generates validation videos through the
     full rollout sampler.
@@ -159,7 +164,7 @@ unset WANDB_DISABLED
 
 COMMIT="$(git rev-parse HEAD)"
 RUN_NAME="wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r10-$(date -u +%Y%m%d-%H%M%S)"
-SETUP_CMD="export HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER=0 && git fetch origin adaptor && git checkout --detach ${COMMIT} && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu"
+SETUP_CMD="export HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER=0 HF_HUB_DOWNLOAD_TIMEOUT=120 HF_HUB_ETAG_TIMEOUT=120 && git fetch origin adaptor && git checkout --detach ${COMMIT} && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 
 tpu watch v6 -n 64 --force \
   --setup-cmd "$SETUP_CMD" \
@@ -265,6 +270,10 @@ Recommended path:
   timestep sampling during training, not 25 DiT forwards per training step.
 - Keep `HF_HUB_DISABLE_XET=1` and `HF_HUB_ENABLE_HF_TRANSFER=0` unless you have
   evidence the Hugging Face transfer backend is fixed on all workers.
+- Prefetch the Hugging Face snapshot during `tpu watch --setup-cmd`. r11 and
+  r15 both failed before the first batch because one worker hit a transient
+  multi-GB model shard download error and the other workers then died at the
+  JAX distributed barrier.
 - `tpu watch` wants a branch name. Use `adaptor` as the watch branch and put the
   exact commit checkout inside `--setup-cmd`.
 - The setup command is executed from the remote checkout for this launch path.
