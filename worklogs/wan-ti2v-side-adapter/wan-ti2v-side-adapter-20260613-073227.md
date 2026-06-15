@@ -2648,3 +2648,26 @@ Analysis:
 
 Next:
 - Commit this fix, create/merge into branch `adaptor`, push it, then relaunch full v6e-64 training from the `adaptor` branch and restart checkpoint-triggered validation.
+
+## 2026-06-15T07:17:30Z - adaptor branch handoff merge
+
+Goal:
+- Create the requested handoff branch `adaptor` before relaunching TPU training.
+
+Change:
+- Created local branch `adaptor` from the current `origin/catherine-dev`.
+- Merged `codex/wan-ti2v-side-adapter-20260613-073227` into `adaptor` with merge commit `1a1f4bf67fa3932c6f6caaf8bda0a2db89e7dba8`.
+- Pushed `adaptor` to `origin/adaptor`.
+
+Validation:
+- `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py src/maxdiffusion/models/wan/side_adapter_wan.py`
+- `bash -n bash_scripts/train_wan_side_adapter.sh`
+- `bash -n bash_scripts/watch_wan_side_adapter_validation.sh`
+- `bash -n bash_scripts/validate_wan_side_adapter.sh`
+- `git diff --check`
+
+Result:
+- status: pushed branch `origin/adaptor`; no merge conflicts.
+
+Next:
+- Relaunch v6e-64 training from `origin/adaptor` with the denoising-loss fix and restart periodic validation.
