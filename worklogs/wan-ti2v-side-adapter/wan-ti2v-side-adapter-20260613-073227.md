@@ -707,7 +707,7 @@ Version Control:
 - worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
 - branch: `codex/wan-ti2v-side-adapter-20260613-073227`
 - base_commit: `0a2301adb613b6352beeb830cb1e9e9d85aaedff`
-- implementation_commit: `02931a577ec097614e1c125f4dc4b14a2c27693c`
+- implementation_commit: `e6aaa413f7570d28217eed482ad28b025a37cf38`
 - changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, worklog
 - validation: `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`
 
