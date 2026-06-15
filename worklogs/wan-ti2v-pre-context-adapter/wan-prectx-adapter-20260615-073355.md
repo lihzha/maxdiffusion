@@ -301,3 +301,37 @@ Analysis:
 
 Next:
 - Wait for the separate `adaptor` setup process to finish or for the user to allow stopping it. Then relaunch using an isolated remote repo name such as `GH_REPO_NAME=maxdiffusion-prectx`, exact commit checkout, root `setup.sh MODE=stable DEVICE=tpu`, no prefetch helper, and direct remote verification before training.
+
+## 2026-06-15T22:48:04Z - cleanup after maintenance and prepare isolated relaunch
+
+Goal:
+- Relaunch the pre-context smoke from a clean, isolated remote checkout after the first `v6-64-09-lzha` allocation was disrupted.
+
+Hypothesis:
+- Reusing the same TPU name after deleting the stale queued resource should be safe if the next launch uses `GH_REPO_NAME=maxdiffusion-prectx`, a robust setup command from the repo root, and no missing prefetch helper.
+
+Change:
+- Deleted stale `v6-64-09-lzha-qr` after the TPU went `UNHEALTHY_MAINTENANCE`, then `DELETING`, then `NOT_FOUND`.
+- Observed the separate `adaptor` setup process exit before cleanup.
+- Preparing a corrected smoke launch with a new run name.
+
+Version Control:
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- current_commit_before_entry: 701d42ab3d72514c82bd9b2f3e5e80269f9794b2
+
+Command / Job:
+- cleanup_command: `gcloud alpha compute tpus queued-resources delete v6-64-09-lzha-qr --project mae-irom-lab-guided-data --zone us-east1-d --quiet`
+- next_target_tpu: v6-64-09-lzha
+- next_run_name: wan-pre-context-v6e64-smoke-gbs512-r4-20260615-224804
+- next_remote_repo: `~/maxdiffusion-prectx`
+- next_setup: checkout exact commit; `uv venv --python 3.12 .venv --seed`; source venv; `bash setup.sh MODE=stable DEVICE=tpu`; no `bash_scripts/prefetch_hf_snapshot.sh`
+
+Result:
+- status: stale queued resource deleted; ready to retry
+- metrics/artifacts: none yet
+
+Analysis:
+- The previous allocation reached READY but was lost to maintenance before a valid pre-context setup/train could run. The next launch should avoid shared `~/maxdiffusion` interference and the missing prefetch script.
+
+Next:
+- Commit/push this cleanup record, then start the corrected `tpu watch` retry and monitor allocation/setup/train from the isolated repo.
