@@ -228,7 +228,7 @@ profiler_steps: 10
 enable_jax_named_scopes: False
 
 # ── Inference ──────────────────────────────────────────────────────────────────
-num_eval_videos: 1            # number of eval episodes to generate
+output_video_fps: 16            
 
 # ── Fields kept for pyconfig compat (unused by this trainer) ──────────────────
 unet_checkpoint: ''

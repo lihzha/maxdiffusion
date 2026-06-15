@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import functools
 import os
-from itertools import islice
 from typing import Sequence
 
 from maxdiffusion.utils import export_to_video
@@ -39,38 +38,8 @@ from maxdiffusion.trainers.wan_ctrl_world_trainer import (
     WanCtrlWorldModel,
     _build_per_token_timestep,
     _dtype,
+    _group_actions,
 )
-
-
-# ── Action grouping (mirrors updated _train_step) ─────────────────────────────
-
-
-def _group_actions(
-    actions: jnp.ndarray, F_lat: int, traj_starts: jnp.ndarray
-) -> jnp.ndarray:
-    """Map (B, 4*F_lat, 7) raw actions → (B, F_lat, 4, 7) grouped per latent frame.
-
-    traj_starts: (B,) latent index in the trajectory where this window begins.
-    See wan_ctrl_world_trainer._group_actions for the full alignment rationale.
-    """
-    B = actions.shape[0]
-    f = jnp.arange(F_lat)
-    offsets = jnp.where(
-        (traj_starts == 0)[:, None],
-        jnp.where(f == 0, 0, 4 * f - 3)[None, :],
-        (4 * f)[None, :],
-    )  # (B, F_lat)
-    act_idx = jnp.clip(
-        offsets[:, :, None] + jnp.arange(4)[None, None, :],
-        0, actions.shape[1] - 1,
-    )  # (B, F_lat, 4)
-    grouped = actions[jnp.arange(B)[:, None, None], act_idx, :]  # (B, F_lat, 4, 7)
-    zero_mask = (
-        (traj_starts == 0)[:, None, None]
-        & (f == 0)[None, :, None]
-        & (jnp.arange(4) > 0)[None, None, :]
-    )
-    return jnp.where(zero_mask[..., None], 0.0, grouped)
 
 
 # ── Inference step (single denoising iteration) ───────────────────────────────
@@ -83,28 +52,49 @@ def _denoise_step(
     latents: jnp.ndarray,
     clean_hist: jnp.ndarray,
     action_tokens: jnp.ndarray,
+    uncond_action_tokens: jnp.ndarray,
     timestep: jnp.ndarray,
     n_hist: int,
+    guidance_scale: float,
     scheduler: FlaxFlowMatchScheduler,
     scheduler_state,
 ):
-    """One Euler flow-matching step: model forward + scheduler update on future frames.
+    """One Euler flow-matching step with optional classifier-free guidance.
 
-    Returns (updated_latents, pred_std) where pred_std is the std of the model's
-    velocity prediction on future frames — used to verify actions are driving output.
+    When guidance_scale > 1, runs a single double-batched forward pass with
+    [uncond | cond] stacked along the batch axis, then blends:
+        pred = uncond + guidance_scale * (cond - uncond)
+
+    Returns (updated_latents, pred_std).
     """
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
     b, _, F_lat, H_lat, W_lat = latents.shape
     t_batch = jnp.broadcast_to(timestep, (b,))
     timestep_2d = _build_per_token_timestep(t_batch, F_lat, H_lat, W_lat, n_hist)
 
-    model_pred = model.transformer(
-        hidden_states=latents,
-        timestep=timestep_2d,
-        encoder_hidden_states=action_tokens,
-        deterministic=True,
-        frame_level_cond=True,
-    )
+    if guidance_scale > 1.0:
+        # Double-batch: [uncond, cond] in a single forward pass.
+        latents_2x = jnp.concatenate([latents, latents], axis=0)
+        tokens_2x  = jnp.concatenate([uncond_action_tokens, action_tokens], axis=0)
+        t_2d       = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
+        pred_2x = model.transformer(
+            hidden_states=latents_2x,
+            timestep=t_2d,
+            encoder_hidden_states=tokens_2x,
+            deterministic=True,
+            frame_level_cond=True,
+        )
+        pred_uncond = pred_2x[:b]
+        pred_cond   = pred_2x[b:]
+        model_pred  = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+    else:
+        model_pred = model.transformer(
+            hidden_states=latents,
+            timestep=timestep_2d,
+            encoder_hidden_states=action_tokens,
+            deterministic=True,
+            frame_level_cond=True,
+        )
 
     # Apply scheduler step to future frames only; restore clean history after.
     future_pred = model_pred[:, :, n_hist:]
@@ -121,15 +111,13 @@ def _encode_actions(
     graphdef: nnx.GraphDef,
     rest_of_state: nnx.State,
     actions: jnp.ndarray,
-    text_tokens: jnp.ndarray,
     F_lat: int,
     traj_starts: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Encode grouped actions into cross-attention tokens."""
+    """Encode grouped actions into cross-attention tokens (no text conditioning)."""
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
     actions_grouped = _group_actions(actions, F_lat, traj_starts)  # (B, F_lat, 4, 7)
-    text_pooled = text_tokens.mean(axis=1)                          # (B, 4096)
-    return model.action_encoder(actions_grouped, text_pooled)       # (B, F_lat, 4096)
+    return model.action_encoder(actions_grouped, None)              # (B, F_lat, 4096)
 
 
 # ── Full denoising loop ───────────────────────────────────────────────────────
@@ -149,8 +137,13 @@ def run_denoising(
     dtype,
     mesh,
     logical_axis_rules,
+    guidance_scale: float = 1.0,
 ) -> jnp.ndarray:
     """Denoise future latent frames from random noise, conditioned on history + actions.
+
+    When guidance_scale > 1, uses classifier-free guidance: the model runs with
+    zeroed action tokens (unconditioned) and real action tokens (conditioned) in
+    a single double-batched forward pass per step, then blends the predictions.
 
     Returns the denoised future latents: (B, C, n_fut, H, W).
     """
@@ -162,6 +155,8 @@ def run_denoising(
         scheduler.create_state(), num_inference_steps=num_inference_steps, training=False
     )
 
+    uncond_action_tokens = jnp.zeros_like(action_tokens)
+
     p_step = jax.jit(
         functools.partial(
             _denoise_step,
@@ -169,7 +164,9 @@ def run_denoising(
             rest_of_state=rest_of_state,
             clean_hist=clean_hist,
             action_tokens=action_tokens,
+            uncond_action_tokens=uncond_action_tokens,
             n_hist=n_hist,
+            guidance_scale=guidance_scale,
             scheduler=scheduler,
             scheduler_state=sched_state,
         ),
@@ -243,10 +240,17 @@ def run(argv: Sequence[str]) -> None:
     config = pyconfig.config
 
     num_inference_steps = int(getattr(config, "num_inference_steps", 20))
-    num_eval_videos = int(getattr(config, "num_eval_videos", 4))
+    guidance_scale = float(getattr(config, "guidance_scale", 1.0))
     n_hist = config.num_history_latent_frames
     weights_dtype = _dtype(config.weights_dtype)
-    fps = int(getattr(config, "fps", 8))
+    # DROID is 15 Hz; WAN VAE has 4× temporal compression → ~4 fps for real-time playback.
+    # config.fps is the WAN model's internet-video fps (16), not the data rate.
+    fps = int(getattr(config, "output_video_fps", 16))
+
+    max_logging.log(
+        f"[wan_ctrl_world_infer] num_inference_steps={num_inference_steps}  "
+        f"guidance_scale={guidance_scale}"
+    )
 
     # ── Load WAN pipeline (keeps VAE for decoding) ────────────────────────────
     max_logging.log("[wan_ctrl_world_infer] loading WAN pipeline...")
@@ -331,14 +335,11 @@ def run(argv: Sequence[str]) -> None:
     output_dir = os.path.join(config.output_dir, "inference_videos")
     rng = jax.random.key(config.seed + 42)
 
-    for vid_idx, batch in enumerate(islice(iter(dataset), num_eval_videos)):
-        max_logging.log(
-            f"[wan_ctrl_world_infer] generating {vid_idx + 1}/{num_eval_videos}..."
-        )
+    for vid_idx, batch in enumerate(dataset):
+        max_logging.log(f"[wan_ctrl_world_infer] generating sample {vid_idx + 1}...")
 
         latent = jnp.array(batch["latent"]).astype(weights_dtype)       # (1, C, W, H, Wl)
         actions = jnp.array(batch["action"]).astype(weights_dtype)      # (1, 4*W, 7)
-        text_tokens = jnp.array(batch["text_embeds"]).astype(weights_dtype)  # (1, 512, 4096)
         traj_starts = jnp.array(batch["starts"])                         # (1,) int32
 
         _, _, F_lat, _, _ = latent.shape
@@ -348,7 +349,7 @@ def run(argv: Sequence[str]) -> None:
 
         # Encode actions (constant across denoising steps).
         action_tokens = p_encode(
-            params, actions=actions, text_tokens=text_tokens,
+            params, actions=actions,
             F_lat=F_lat, traj_starts=traj_starts,
         )  # (1, F_lat, 4096)
 
@@ -361,6 +362,7 @@ def run(argv: Sequence[str]) -> None:
             n_hist, step_rng, weights_dtype,
             mesh=pipeline.mesh,
             logical_axis_rules=config.logical_axis_rules,
+            guidance_scale=guidance_scale,
         )
 
         # Decode GT and predicted full sequences.
