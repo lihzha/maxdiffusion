@@ -78,7 +78,8 @@ def verify_snapshot(snapshot_path: str) -> None:
             raise OSError(f"Transformer shard is empty: transformer/{shard_name}")
 
 
-last_error: BaseException | None = None
+last_error: Exception | None = None
+success = False
 for attempt in range(1, max_attempts + 1):
     try:
         print(f"[prefetch_hf_snapshot] attempt {attempt}/{max_attempts}: {repo_id}", flush=True)
@@ -89,12 +90,14 @@ for attempt in range(1, max_attempts + 1):
         )
         verify_snapshot(snapshot_path)
         print(f"[prefetch_hf_snapshot] verified snapshot: {snapshot_path}", flush=True)
-        sys.exit(0)
-    except BaseException as exc:  # keep retrying transient hub/network failures
+        success = True
+        break
+    except Exception as exc:  # keep retrying transient hub/network failures
         last_error = exc
         print(f"[prefetch_hf_snapshot] attempt {attempt} failed: {type(exc).__name__}: {exc}", flush=True)
         if attempt < max_attempts:
             time.sleep(retry_sleep_secs)
 
-raise SystemExit(f"[prefetch_hf_snapshot] failed after {max_attempts} attempts: {last_error!r}")
+if not success:
+    raise SystemExit(f"[prefetch_hf_snapshot] failed after {max_attempts} attempts: {last_error!r}")
 PY

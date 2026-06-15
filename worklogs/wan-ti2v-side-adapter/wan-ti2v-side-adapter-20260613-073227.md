@@ -2856,3 +2856,23 @@ Validation:
 
 Next:
 - Commit and push the activation fix, then relaunch as r18 from the new `adaptor` head with the full TPU environment block and the same v6e-64/global-batch-512 settings.
+
+## 2026-06-15T14:16:30Z - r18 prefetch success-exit fix
+
+Goal:
+- Fix the prefetch helper after observing it on the real v6 worker setup path.
+
+Result:
+- r18 setup reached `bash_scripts/prefetch_hf_snapshot.sh` from commit `cfd5045dbcaa36b5df849815379c25c56fd77e29`.
+- The helper successfully fetched and verified the WAN snapshot on several workers, but then printed `attempt 1 failed: SystemExit: 0` and retried because the retry loop caught `BaseException`, including its own `sys.exit(0)`.
+- Stopped the stale local r18 watcher before it could retry the old commit again.
+
+Change:
+- Updated the prefetch retry loop to catch only ordinary `Exception`, set a `success` flag after verification, break, and only raise `SystemExit` after exhausting attempts without success.
+
+Validation:
+- `bash -n bash_scripts/prefetch_hf_snapshot.sh bash_scripts/watch_wan_side_adapter_validation.sh`
+- `git diff --check`
+
+Next:
+- Commit and push the success-exit fix, then relaunch as r19 on `v6-64-08-lzha`.
