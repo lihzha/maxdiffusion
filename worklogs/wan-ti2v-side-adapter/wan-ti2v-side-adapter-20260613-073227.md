@@ -2188,3 +2188,36 @@ Analysis:
 
 Next:
 - Keep monitoring the r3 training logs and GCS checkpoint prefix. When step `100` appears, confirm the watcher creates the validation TPU, then inspect `summary.json`, `summary.csv`, and representative MP4s for frame count/resolution/nonblank content.
+
+## 2026-06-15T04:45:00Z - configurable TFRecord shuffle buffer fallback
+
+Goal:
+- Prepare a conservative fallback if the active batch-512 run remains stuck before first TPU execution due to first-batch TFRecord shuffle fill.
+
+Hypothesis:
+- The current default training data iterator shuffles `global_batch_size * 10` examples per host after host sharding. At global batch `512`, this can force a large first-batch fill from GCS before the first train step. Keeping the default preserves current behavior, but an explicit smaller buffer can reduce startup latency on a relaunch if needed.
+
+Change:
+- Added `tfrecord_shuffle_buffer_size` to the generic TFRecord iterator with default `-1`, which retains the existing `global_batch_size * 10` behavior.
+- Added the same config field to `base_wan_5b_side_adapter.yml`.
+- Added optional `TFRECORD_SHUFFLE_BUFFER_SIZE` forwarding in `bash_scripts/train_wan_side_adapter.sh`.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `9c52e11ccfe7441276743489d154866b4d6065c9`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/input_pipeline/_tfds_data_processing.py`, `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml`, `bash_scripts/train_wan_side_adapter.sh`, this worklog
+
+Command / Job:
+- local_checks: `python3 -m py_compile src/maxdiffusion/input_pipeline/_tfds_data_processing.py`; `bash -n bash_scripts/train_wan_side_adapter.sh`
+- active_run: unchanged; no relaunch performed.
+
+Result:
+- status: implementation validated locally, pending commit/push.
+- metrics/artifacts: The r3 checkpoint prefix still has no numeric checkpoint; watcher remains idle.
+
+Analysis:
+- This patch does not change any active process and does not alter default semantics. It only provides an explicit next-run lever, for example `TFRECORD_SHUFFLE_BUFFER_SIZE=512`, if the active run is lost or conclusively stuck before first step.
+
+Next:
+- Commit/push the fallback knob, continue monitoring r3, and only relaunch with the smaller shuffle buffer if the current run fails or remains pre-step long enough to justify replacing it.

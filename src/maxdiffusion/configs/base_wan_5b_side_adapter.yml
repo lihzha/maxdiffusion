@@ -114,6 +114,7 @@ hf_access_token: ''
 image_column: 'image'
 caption_column: 'text'
 enable_data_shuffling: True
+tfrecord_shuffle_buffer_size: -1
 reuse_example_batch: False
 
 # Wan2.2 TI2V 5B architecture. The loader reads the detailed transformer config

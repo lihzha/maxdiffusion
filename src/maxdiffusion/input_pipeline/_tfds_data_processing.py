@@ -177,8 +177,11 @@ def _make_tfrecord_iterator(
     )
     if filter_fn is not None:
       ds = ds.filter(filter_fn)
+    shuffle_buffer_size = int(getattr(config, "tfrecord_shuffle_buffer_size", -1))
+    if shuffle_buffer_size <= 0:
+      shuffle_buffer_size = global_batch_size * 10
     ds = (
-        ds.shuffle(global_batch_size * 10, seed=seed)
+        ds.shuffle(shuffle_buffer_size, seed=seed)
         .batch(global_batch_size // dataloading_host_count, drop_remainder=True)
         .repeat(-1)
         .prefetch(AUTOTUNE)
