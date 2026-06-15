@@ -2318,3 +2318,68 @@ Analysis:
 
 Next:
 - Monitor allocation, setup, and first metrics. Start a fresh validation watcher for the r4 checkpoint prefix.
+
+## 2026-06-15T05:27:10Z - r4 launched, waiting on first step
+
+Goal:
+- Record r4 setup recovery and current training/validation state after the v6e-64 allocation became ready.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `df8cbe390f5937c0d513edb427106ce93a41aff2`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- code_status: source is pushed; this entry is local bookkeeping
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600`
+- tpu_name: `v6-64-06-lzha`
+- accelerator: `v6e-64`
+- launch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600.log`
+- worker_log: `~/maxdiffusion/logs/tpu_20260615-051845.log`
+- validation_watch_log: `logs/wan_side_adapter_validation_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600.log`
+- validation_policy: watch `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600/checkpoints`, launch visual validation at checkpoint `100`, then every `1000` steps
+
+Result:
+- status: running, not yet validated by a train step.
+- setup: worker `5` was blocked by `/usr/bin/unattended-upgrade` holding `/var/lib/dpkg/lock-frontend`; `SIGTERM` failed, `SIGKILL` released the lock, and the waiting setup `apt-get` completed normally.
+- training: `tpu watch` reported `Training started successfully`; all 16 workers have a `train_wan.py` process for `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `per_device_batch_size=8`, `tfrecord_shuffle_buffer_size=1024`.
+- config: resolved mesh uses `ici_data_parallelism=1`, `ici_fsdp_parallelism=-1`, `ici_context_parallelism=1`, `ici_tensor_parallelism=1`; data sharding is `('data', 'fsdp', 'context', 'tensor')`.
+- logs: checkpoint manager initialized at the intended r4 GCS checkpoint path; no step metrics or checkpoints have appeared yet.
+- validation: watcher is running and waiting for the first checkpoint; no validation TPU has been launched yet.
+
+Analysis:
+- The r4 setup issue was infrastructure/package-manager contention, not model/data code. After releasing the stale unattended-upgrade lock, dependency setup and launch proceeded.
+- Current silence after checkpoint-manager creation is consistent with first-step materialization/compile; ranks remain alive and CPU-active. The run is not healthy enough to call validated until it emits adapter-only training logs, step metrics, and checkpoint `100`.
+
+Next:
+- Continue monitoring worker logs/processes until first training metrics appear. Inspect checkpoint `100` and the validation sidecar outputs before declaring the periodic validation path healthy.
+
+## 2026-06-15T05:39:13Z - r4 first metric
+
+Goal:
+- Record the first successful post-compile training metric for r4.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `df8cbe390f5937c0d513edb427106ce93a41aff2`
+- code_status: source is pushed; worklog has local bookkeeping edits
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600`
+- process0_host: `t1v-n-497ca205-w-3`
+- process0_log: `~/maxdiffusion/logs/tpu_20260615-051845.log`
+
+Result:
+- status: training active.
+- model: process 0 logged `trainable adapter params: 239.5M` and `frozen transformer params: 5.00B`.
+- compile: worker `4` TPU driver log showed `jit__train_step` HBM `26.12G / 31.25G` and VMEM `126.94M / 128.00M` for the first compiled train-step executable.
+- metric: `step 10/10000 loss=3.276562 grad_norm=8875038566.400 lr=9.00e-07 steps/s=0.010`.
+- checkpoint: no checkpoint yet; r4 GCS prefix is still `0 B` except directory markers.
+- validation: watcher remains waiting for checkpoint `100`.
+
+Analysis:
+- The first metric confirms that the long quiet period was XLA compile/startup, not a deadlock. The loss and startup throughput match r3's early behavior.
+- Batch `512` fits, but VMEM headroom is extremely small, so increasing batch size beyond `512` is not justified in this run.
+
+Next:
+- Continue to checkpoint `100`; then verify GCS checkpoint payload and ensure the validation watcher launches visual validation and writes videos/metrics.
