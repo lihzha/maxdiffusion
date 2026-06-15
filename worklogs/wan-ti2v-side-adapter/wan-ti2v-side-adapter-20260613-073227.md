@@ -2456,3 +2456,34 @@ Analysis:
 
 Next:
 - Continue monitoring process log for adapter-only parameter assertions, first training metrics, checkpoint `100`, and periodic validation output.
+
+## 2026-06-15T06:21:51Z - r5 stopped after Hugging Face Xet stall
+
+Goal:
+- Diagnose and recover the r5 startup stall without changing the adapter implementation.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `343de98c8251129d48413c911ab133f0fb231d1c`
+- monitor_commit: `51425e64879d5b04566f66cc9cc89441c94ab1ae`
+- code_status: no model or data code change; recovery is a launch/environment change.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200`
+- tpu_name: `v6-64-07-lzha`
+- diagnostic: `sudo env PATH=$PATH uvx py-spy dump -p <train_pid> --native` on worker `0`
+- cleanup: stop exact r5 `train_wan.py` processes on all workers, then delete stale Hugging Face `.incomplete` blobs and lock files for `Wan-AI/Wan2.2-TI2V-5B-Diffusers`.
+
+Result:
+- status: stopped before first train step; no checkpoint or validation artifact was produced.
+- evidence: worker `0` stack was inside `hf_xet` from `huggingface_hub.file_download.xet_get`, called by `maxdiffusion/models/wan/wan_utils.py:241` during transformer load.
+- evidence: Xet log showed CAS/CDN failures, including HTTP `500`, `503`, and `416 Range Not Satisfiable`, followed by a stale incomplete blob.
+- cleanup: all 16 workers reported `R5_PROCS=none`, `INCOMPLETE=0`, and `LOCKS=0`; HF caches remain partially useful at roughly `27G-32G` per worker.
+- TPU health: `v6-64-07-lzha` remained `READY` and `HEALTHY`.
+
+Analysis:
+- The r5 stall was external Hugging Face Xet download behavior, not a side-adapter implementation, sharding, data, or TPU memory issue.
+- Relaunching on the same healthy slice is preferable to deleting the allocation, because the caches are mostly warm and the failure can be avoided by disabling Xet for Hugging Face downloads.
+
+Next:
+- Relaunch as r6 on `v6-64-07-lzha` with `HF_HUB_DISABLE_XET=1`, same batch/checkpoint/eval settings, and a fresh validation watcher for checkpoint `100` then every `1000` steps.
