@@ -2383,3 +2383,40 @@ Analysis:
 
 Next:
 - Continue to checkpoint `100`; then verify GCS checkpoint payload and ensure the validation watcher launches visual validation and writes videos/metrics.
+
+## 2026-06-15T05:46:01Z - r4 preempted, r5 queued
+
+Goal:
+- Record the r4 maintenance preemption and launch the next attempt without waiting on a stuck node delete.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- r4_commit: `343de98c8251129d48413c911ab133f0fb231d1c`
+- r5_commit: `343de98c8251129d48413c911ab133f0fb231d1c`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+
+Command / Job:
+- r4_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600`
+- r4_tpu_name: `v6-64-06-lzha`
+- r5_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200`
+- r5_tpu_name: `v6-64-07-lzha`
+- r5_queued_resource: `v6-64-07-lzha-qr`
+- r5_launch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200.log`
+- r5_validation_watch_log: `logs/wan_side_adapter_validation_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200.log`
+- r5_launch: `tpu watch v6 -n 64 --setup-cmd "git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach 343de98c8251129d48413c911ab133f0fb231d1c && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" 343de98c8251129d48413c911ab133f0fb231d1c RUN_NAME=wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 TFRECORD_SHUFFLE_BUFFER_SIZE=1024 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- r4_status: preempted by TPU health `UNHEALTHY_MAINTENANCE` after step `10`, before checkpoint `100`.
+- r4_metrics: `step 10/10000 loss=3.276562 grad_norm=8875038566.400 lr=9.00e-07 steps/s=0.010`.
+- r4_storage: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r4-20260615-050600` remained `0 B`; no checkpoint or validation artifact exists.
+- cleanup: local r4 training watcher, validation watcher, and stuck local delete waiters were killed; unrelated ego-lap watcher was left alone.
+- infrastructure: `v6-64-06-lzha` still reports `UNHEALTHY_MAINTENANCE` while its server-side delete operation is slow; the active queued resource cannot be directly deleted.
+- r5_status: queued on fresh TPU name `v6-64-07-lzha`; state is `WAITING_FOR_RESOURCES`.
+- validation: r5 validation watcher is running and waiting for checkpoint `100`, then every `1000` steps.
+
+Analysis:
+- r4 confirmed the implementation and batch size but lost the allocation too early for checkpointing. This is another infrastructure interruption, not a model/data failure.
+- Using a fresh TPU name avoids blocking on the stuck r4 maintenance delete while preserving the same reproducible command and validation schedule.
+
+Next:
+- Monitor r5 allocation, setup, first metrics, checkpoint `100`, and validation artifacts.
