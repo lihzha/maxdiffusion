@@ -2420,3 +2420,39 @@ Analysis:
 
 Next:
 - Monitor r5 allocation, setup, first metrics, checkpoint `100`, and validation artifacts.
+
+## 2026-06-15T06:01:33Z - r5 launched, model initializing
+
+Goal:
+- Record the r5 transition from queued/setup into an active training process and keep validation waiting on the first checkpoint.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `343de98c8251129d48413c911ab133f0fb231d1c`
+- branch_head: `f55769e0db1c2aebaca099113a257fb747941ea7`
+- code_status: source implementation is unchanged from the launched commit; branch head only adds worklog bookkeeping.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200`
+- tpu_name: `v6-64-07-lzha`
+- queued_resource: `v6-64-07-lzha-qr`
+- accelerator: `v6e-64`
+- process_host: `t1v-n-08bcc318-w-5`
+- worker_log: `~/maxdiffusion/logs/tpu_20260615-055927.log`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200/checkpoints/`
+- validation_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r5-20260615-054200/validation/`
+
+Result:
+- status: training process is active; first train step not reached yet.
+- setup: dependency setup completed on all 16 workers and `tpu watch` reported `Training started successfully`.
+- health: TPU `v6-64-07-lzha` is `READY` and `HEALTHY`; queued resource state is `ACTIVE`.
+- config: process log confirms intended train/eval GCS roots, `checkpoint_every=100`, `eval_every=1000`, `eval_max_batches=4`, `per_device_batch_size=8`, `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, and `tfrecord_shuffle_buffer_size=1024`.
+- model: process is currently loading Wan2.2 checkpoint shards; side-adapter trainable/frozen parameter assertions have not appeared yet.
+- storage: r5 checkpoint prefix is still `0 B`.
+- validation: watcher is active and idle; no validation TPU is launched until checkpoint `100` appears.
+
+Analysis:
+- The run has moved past infrastructure setup and into model initialization. Current absence of step metrics and checkpoint payload is expected before HF checkpoint load, JAX initialization, and first compile finish.
+
+Next:
+- Continue monitoring process log for adapter-only parameter assertions, first training metrics, checkpoint `100`, and periodic validation output.
