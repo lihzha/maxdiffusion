@@ -142,7 +142,7 @@ python src/maxdiffusion/train_wan.py \
     teacher_update_every=50 \
     distill=True \
     oracle_noise_offset=-1 \
-    wandb_project='wan-ti2v-self-distill-clean-single-view-2' \
+    wandb_project='wan-ti2v-self-distill-clean-single-view-no-weighting' \
     single_camera=True 
 
 # --- 6. Unmount ---

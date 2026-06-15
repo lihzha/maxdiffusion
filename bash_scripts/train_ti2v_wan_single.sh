@@ -141,7 +141,7 @@ python src/maxdiffusion/train_wan.py \
     ema_decay=0.0 \
     distill=False \
     learning_rate=1.e-4 \
-    wandb_project='wan-ti2v-finetune_single_view_3' \
+    wandb_project='wan-ti2v-finetune_single_view_no_weighting' \
     single_camera=True
 
 # --- 6. Unmount ---
