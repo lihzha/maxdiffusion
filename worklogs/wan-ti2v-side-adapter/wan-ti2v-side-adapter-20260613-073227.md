@@ -1995,3 +1995,72 @@ Analysis:
 
 Next:
 - Monitor deletion/requeue, verify setup/launch when a fresh v6e-64 slice is allocated, then repeat first-metric and first-checkpoint validation.
+
+## 2026-06-15T03:56:00Z - corrected requeue after bad commit SHA
+
+Goal:
+- Stop the failed requeue watcher that was repeatedly trying to checkout a nonexistent commit, then relaunch the same batch-512 checkpoint-100 recipe at the actual pushed HEAD.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- bad_commit_attempted: `93296c879dd7c9a31d93b8b19602a0576f0b42b9`
+- corrected_commit: `936aa68435904f22103c064cd456f7101bb83d94`
+- push/pull: local branch is aligned with `origin/codex/wan-ti2v-side-adapter-20260613-073227`
+- changed_files: worklog entry only
+
+Command / Job:
+- stopped_local_pids: `42559`, `42566`, `42567`
+- tpu_name: `v6-64-06-lzha`
+- queued_resource: `v6-64-06-lzha-qr`
+- accelerator: `v6e-64`
+- intended_run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r2-20260615-034800`
+- intended_launch: `tpu watch --force v6 -n 64 --setup-cmd "git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach 936aa68435904f22103c064cd456f7101bb83d94 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" 936aa68435904f22103c064cd456f7101bb83d94 RUN_NAME=wan-side-adapter-v6e64-full-gbs512-ckpt100-r2-20260615-034800 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: preparing corrected relaunch
+- metrics/artifacts: The bad watcher was stopped locally. The unrelated `ego-lap` watcher on `v6-64-01-lihan` was left running.
+- metrics/artifacts: TPU `v6-64-06-lzha` is `READY/HEALTHY`; queued resource `v6-64-06-lzha-qr` is `ACTIVE`.
+- metrics/artifacts: All-worker process check found no active `train_wan.py` or `train_wan_side_adapter.sh` process.
+
+Analysis:
+- The previous failure was caused by recording/launching a bad full SHA for a worklog-only commit, not by the model implementation, data path, TPU memory, or batch-size configuration.
+- Reusing the healthy v6e-64 slice with `--force` is safe after verifying there is no active Wan training process on the workers.
+
+Next:
+- Launch the corrected run at commit `936aa68435904f22103c064cd456f7101bb83d94`, then monitor setup, worker logs, W&B, early metrics, and the step-100 checkpoint.
+
+## 2026-06-15T04:02:00Z - corrected batch-512 run launched
+
+Goal:
+- Confirm the corrected batch-512 checkpoint-100 run starts on the existing v6e-64 slice with the valid commit and expected command-line/data paths.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `936aa68435904f22103c064cd456f7101bb83d94`
+- local_worklog_status: worklog-only changes pending
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r2-20260615-034800`
+- tpu_name: `v6-64-06-lzha`
+- accelerator: `v6e-64`
+- launch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r2-20260615-034800.log`
+- primary_log_observed: `~/maxdiffusion/logs/tpu_20260615-035832.log` on worker `0`
+- launch: `tpu watch --force v6 -n 64 --setup-cmd "git fetch origin codex/wan-ti2v-side-adapter-20260613-073227 && git checkout --detach 936aa68435904f22103c064cd456f7101bb83d94 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" 936aa68435904f22103c064cd456f7101bb83d94 RUN_NAME=wan-side-adapter-v6e64-full-gbs512-ckpt100-r2-20260615-034800 WANDB_PROJECT=maxdiffusion-wan-side-adapter PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 MAX_TRAIN_STEPS=10000 CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 LOG_PERIOD=10 SAVE_FINAL_CHECKPOINT=False bash bash_scripts/train_wan_side_adapter.sh`
+
+Result:
+- status: launched, still in model initialization
+- metrics/artifacts: Setup reached command launch at local `2026-06-14 20:58:44`; all 16 workers have active `train_wan.py` processes.
+- metrics/artifacts: Worker `15` had a CPU-bound `unattended-upgrade` holding the dpkg lock for about eight minutes. It was terminated after verifying all other workers were clean; the intended setup `apt-get` then acquired the lock and completed.
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Primary log confirms `dataset_type=tfrecord`, train path `gs://v6_east1d/datasets/droid_wan_side_adapter/train`, eval path `gs://v6_east1d/datasets/droid_wan_side_adapter/val`, `per_device_batch_size=8.0`, `total_train_batch_size=512.0`, `checkpoint_every=100`, `save_final_checkpoint=False`, `width=320`, `height=192`, `num_frames=32`, and side-adapter config `layers=0-29`, `hidden=512`, `heads=8`.
+- metrics/artifacts: Primary log has loaded the VAE and is currently loading/porting the `Wan-AI/Wan2.2-TI2V-5B-Diffusers` transformer. No traceback, OOM, RESOURCE_EXHAUSTED, or NaN signature is visible.
+- storage: GCS run prefix is still `0 B`, expected before the first checkpoint at step `100`.
+
+Analysis:
+- The corrected launch uses the exact code/data/batch/parallelism setup validated by the earlier batch-512 probe and ckpt100 attempt. The remaining uncertainty is normal startup time through 5B model load, sharding, first compile, and first batch.
+- Because `tpu watch --force` exits after launch on an existing TPU, active monitoring is now being done through direct worker log/process checks and TPU health polls.
+
+Next:
+- Wait for model initialization to finish, then verify the adapter trainable/frozen parameter split, W&B run id, first `step 10/10000` metric, and step-`100` checkpoint.
