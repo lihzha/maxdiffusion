@@ -127,7 +127,7 @@ python src/maxdiffusion/train_wan.py \
     per_device_batch_size=0.25 \
     height=480 \
     width=832 \
-    num_frames=80 \
+    num_frames=81 \
     flash_min_seq_length=128 \
     hardware='tpu' \
     wandb_project='wan-ac'
