@@ -2487,3 +2487,36 @@ Analysis:
 
 Next:
 - Relaunch as r6 on `v6-64-07-lzha` with `HF_HUB_DISABLE_XET=1`, same batch/checkpoint/eval settings, and a fresh validation watcher for checkpoint `100` then every `1000` steps.
+
+## 2026-06-15T06:26:46Z - r6 stopped after hf_transfer download failure
+
+Goal:
+- Recover the failed r6 launch and keep the validation schedule attached to the next viable training run.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- launched_commit: `5018a7cc944cada178e32c95c89f762f0a9c1b94`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- code_status: no model/data code change; recovery is a launch/environment change.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r6-20260615-062300`
+- tpu_name: `v6-64-07-lzha`
+- accelerator: `v6e-64`
+- environment_change: `HF_HUB_DISABLE_XET=1`, `HF_HUB_ENABLE_HF_TRANSFER=1`
+- validation_watch_log: `logs/wan_side_adapter_validation_watch_wan-side-adapter-v6e64-full-gbs512-ckpt100-r6-20260615-062300.log`
+
+Result:
+- status: stopped before first train step; no checkpoint or validation artifact was produced.
+- evidence: worker `12` failed during Hugging Face model download with `RuntimeError: An error occurred while downloading using hf_transfer`.
+- evidence: the underlying signed download URL returned `403 Forbidden` with `no permits available`, so the faster transfer backend is not reliable for this artifact path.
+- cleanup: stopped exact r6 `train_wan.py` processes on all 16 workers; independent verification reported `R6_PROCS=none`, `INCOMPLETE=0`, and `LOCKS=0` on every worker.
+- validation: stopped the stale local r6 validation watcher before relaunching.
+- TPU health: `v6-64-07-lzha` remains `READY` and `HEALTHY`.
+
+Analysis:
+- Disabling Xet avoided the previous `hf_xet` stall, but enabling `hf_transfer` routed the remaining checkpoint download through a backend that returned a permit error on at least one worker.
+- The next run should keep Xet disabled and also disable `hf_transfer`, preserving the same batch, checkpoint, eval, and validation cadence.
+
+Next:
+- Relaunch as r7 on `v6-64-07-lzha` with `HF_HUB_DISABLE_XET=1` and `HF_HUB_ENABLE_HF_TRANSFER=0`, then start the validation watcher for checkpoint `100` and every `1000` steps.
