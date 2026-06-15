@@ -2089,3 +2089,73 @@ Analysis:
 
 Next:
 - Requeue the same batch-512 checkpoint-100 recipe with a fresh run name. Use the exact pushed HEAD from `git rev-parse HEAD` after committing this worklog entry.
+
+## 2026-06-15T04:37:22Z - visual validation sidecar implementation
+
+Goal:
+- Add periodic visual validation for the live MaxDiffusion WAN TI2V side-adapter run, matching the intent of `../Wan2.2/eval_adaptor.py`: restore adapter checkpoints, replay the same CFG Euler-style latent rollout, decode samples, save ground-truth-vs-prediction videos, and record metrics.
+
+Hypothesis:
+- A sidecar validator is safer than decoding inside the batch-512 training loop because the training run deletes VAE/text components to preserve HBM. A separate v6 validation slice can restore adapter-only checkpoints and inspect videos without perturbing the training process.
+
+Change:
+- Added `src/maxdiffusion/generate_wan_side_adapter.py`, a TFRecord-based visual validator for side-adapter checkpoints.
+- Added `bash_scripts/validate_wan_side_adapter.sh`, a one-shot TPU validator wrapper that uses `bash_scripts/setup.sh` beforehand and writes validation artifacts to GCS.
+- Added `bash_scripts/watch_wan_side_adapter_validation.sh`, a local checkpoint watcher that launches validation on a separate v6 TPU for step `100` and every `1000` steps afterward by default.
+- Added validation config compatibility fields to `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml`.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `codex/wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `1fbc1609b4bd87f11224222e08c1cbe7d18e9ce7`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/generate_wan_side_adapter.py`, `bash_scripts/validate_wan_side_adapter.sh`, `bash_scripts/watch_wan_side_adapter_validation.sh`, `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml`, this worklog
+
+Command / Job:
+- validation_targets: `CHECKPOINT_STEP=100`, then `CHECKPOINT_STEP % 1000 == 0`
+- validation_tpu_default: `v6-8-wan-val-lzha`, `VALIDATION_TPU_CHIPS=8`
+- validation_output_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/<RUN_NAME>/validation`
+- expected_artifacts: per-step `config.json`, `summary.csv`, `summary.json`; per-sample `ground_truth.mp4`, `sample.mp4`, `comparison_gt_top_pred_bottom.mp4`, `metrics.json`, optional `meta.json`
+- local_checks: `python3 -m py_compile src/maxdiffusion/generate_wan_side_adapter.py`; `bash -n bash_scripts/validate_wan_side_adapter.sh`; `bash -n bash_scripts/watch_wan_side_adapter_validation.sh`
+
+Result:
+- status: implementation validated locally, not yet launched because no step-100 checkpoint exists.
+- metrics/artifacts: TFRecord parser was checked against the converter and trainer. All use raw bytes for `z_i0` float16 `[48,1,12,20]`, `z_video` float16 `[48,9,12,20]`, and `actions` float32 `[32,7]`.
+- metrics/artifacts: Validator compares generated videos to the VAE decode of cached `z_video`, because the MaxDiffusion TFRecords do not include raw source frames.
+- metrics/artifacts: Watcher now bounds validation wait with `VALIDATION_MAX_WAIT_SECS=21600`; failed or missing summaries leave the checkpoint step eligible for retry instead of blocking future validations forever.
+
+Analysis:
+- The validation rollout reuses `wan_side_adapter_forward`, `build_rollout_sigmas`, `rollout_timesteps_from_sigmas`, `_build_per_token_timestep`, and `apply_first_frame_pin`, so it is sampling the same model path as training rather than a second hand-rolled path.
+- The restored `TrainState.params` contains only adapter parameters and restores from the adapter checkpoint; the frozen transformer is loaded from the pretrained model and sharded by the same trainer helper used by training.
+- The first validation may need a larger slice if v6e-8 cannot fit the 5B transformer plus VAE decode path, but batch-1 generation is expected to fit. If it does not, relaunch the watcher with a larger `VALIDATION_TPU_CHIPS` value and leave the training slice untouched.
+
+Next:
+- Commit and push this validation implementation, then start the validation watcher for run `wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100` at the pushed commit.
+
+## 2026-06-15T04:37:22Z - r3 batch-512 live status before validation watcher
+
+Goal:
+- Record the current state of the active batch-512 training run before attaching the periodic visual validation sidecar.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100`
+- tpu_name: `v6-64-06-lzha`
+- accelerator: `v6e-64`
+- training_commit: `1fbc1609b4bd87f11224222e08c1cbe7d18e9ce7`
+- primary_log: `~/maxdiffusion/logs/tpu_20260615-042314.log`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r3-20260615-041100/checkpoints`
+
+Result:
+- status: active, no durable checkpoint yet.
+- metrics/artifacts: TPU `v6-64-06-lzha` is `READY/HEALTHY`; queued resource is `ACTIVE`.
+- metrics/artifacts: All 16 workers have active `python src/maxdiffusion/train_wan.py` processes with the expected batch-512 command line.
+- metrics/artifacts: Worker logs have no traceback, `RESOURCE_EXHAUSTED`, OOM, NaN, or killed-process signature. One worker has emitted the expected `[wan_side_adapter] trainable adapter params: 239.5M`, `[wan_side_adapter] frozen transformer params: 5.00B`, and `***** Running WAN TI2V side-adapter training *****` lines.
+- metrics/artifacts: No `step N/10000` metrics or step-`100` checkpoint have appeared yet; the GCS run prefix is still `0 B`.
+
+Analysis:
+- The current evidence is consistent with first-batch compilation/materialization on the 5B model at global batch `512`. It is not yet evidence of a model or data failure.
+- Periodic visual validation cannot run until the first adapter checkpoint is saved at step `100`, so the watcher should be started now and allowed to idle on the GCS checkpoint prefix.
+
+Next:
+- Start the watcher after the validation implementation is pushed, then continue direct log/GCS monitoring until the first training metrics and validation videos are produced and inspected.
