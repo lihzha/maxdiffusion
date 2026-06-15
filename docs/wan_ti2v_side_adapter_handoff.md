@@ -16,11 +16,12 @@ DROID training run.
 - The r19 full training attempt
   `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659`
   resumed from checkpoint 5200 on `v6-64-08-lzha` at commit
-  `b85becd444f10c41c83af888f308602f959d8ba7`. As of
-  `2026-06-15T21:43Z`, GCS had retained checkpoints `5000`, `8200`, `8300`,
-  and `8400`; the active W&B run is `wwkpnweb`, with summary step 8440 and
-  `train/loss ~= 0.2838`. Worker 0 was still training normally with no
-  traceback, NaN, or resource-exhaustion signal in recent log tails.
+  `b85becd444f10c41c83af888f308602f959d8ba7`. It reached W&B summary step
+  9970 with `train/loss ~= 0.2849`, but `v6-64-08-lzha` was preempted before
+  checkpoint 10000 was written. GCS retained checkpoints `5000`, `9700`,
+  `9800`, and `9900`. The preempted TPU was deleted, and the last 100 steps
+  were relaunched from checkpoint 9900 on `v6-64-01-lihan` using the same run
+  name and training command from branch `adaptor`.
 - Periodic validation for checkpoint 5000 completed on `v6-8-wan-val-lzha`.
   Outputs are under
   `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation/step_005000/`.
@@ -62,6 +63,15 @@ DROID training run.
   checkpoint cache was deleted afterward, leaving `validation_checkpoints/` at
   `0 B`; the validation TPU had no remaining validation Python process after
   completion.
+- Periodic validation for checkpoint 9000 completed on replacement validator
+  `v6-8-09-lihan`, after the earlier validation TPU was preempted mid-run.
+  Outputs are under
+  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation/step_009000/`.
+  It generated 4 validation samples with aggregate mean latent MSE `1.5810`,
+  mean pixel MSE `0.1084`, and mean SSIM `0.3201`. Sample 0 comparison video is
+  a valid `320x384`, 33-frame, 16 fps MP4 with nonblank extracted frames; visual
+  quality remains artifact-heavy but not corrupt. The temporary checkpoint
+  cache was deleted afterward, leaving `validation_checkpoints/` at `0 B`.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
