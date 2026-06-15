@@ -2064,3 +2064,28 @@ Analysis:
 
 Next:
 - Wait for model initialization to finish, then verify the adapter trainable/frozen parameter split, W&B run id, first `step 10/10000` metric, and step-`100` checkpoint.
+
+## 2026-06-15T04:10:00Z - r2 preempted during initialization
+
+Goal:
+- Determine whether the corrected r2 run produced any durable progress before the v6 maintenance event.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-r2-20260615-034800`
+- tpu_name: `v6-64-06-lzha`
+- primary_log: `~/maxdiffusion/logs/tpu_20260615-035832.log`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-ckpt100-r2-20260615-034800/checkpoints`
+
+Result:
+- status: preempted
+- metrics/artifacts: The run reached WAN TI2V model load, VAE load, transformer load, checkpoint-manager initialization, and all 16 ranks were active with the expected batch-512 command line.
+- metrics/artifacts: The primary log had not yet emitted the adapter trainable/frozen parameter counts, W&B run link, or the first `step 10/10000` metric.
+- metrics/artifacts: TPU health changed from `HEALTHY` to `UNHEALTHY_MAINTENANCE`, SSH began refusing connections, and the TPU then transitioned to terminal state `PREEMPTED`.
+- storage: GCS run prefix contains only two empty placeholder objects (`0 B` total); no checkpoint payload was written.
+
+Analysis:
+- This is another infrastructure loss before the first durable checkpoint, not a model/data failure. The code path reached deeper initialization than prior failed launches but preempted before training metrics or checkpoint step `100`.
+- The current r2 checkpoint prefix is safe to leave or delete later; it is zero bytes and does not threaten storage.
+
+Next:
+- Requeue the same batch-512 checkpoint-100 recipe with a fresh run name. Use the exact pushed HEAD from `git rev-parse HEAD` after committing this worklog entry.
