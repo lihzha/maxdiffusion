@@ -159,3 +159,40 @@ Analysis:
 
 Next:
 - Continue polling; launch the one-step pre-context smoke only after a usable v6e-64 slice is available and not owned by another watcher.
+
+## 2026-06-15T20:31:32Z - retry fresh v6e-64 pre-context smoke
+
+Goal:
+- Launch the one-step target-surface pre-context adapter smoke on a fresh v6e-64 now that quota appears to have freed.
+
+Hypothesis:
+- A new `v6-64-09-lzha` SPOT queued resource should now fit under the project v6e preemptible quota, avoiding the occupied `v6-64-08-lzha` side-adapter run.
+
+Change:
+- Stopped the local availability-only monitor.
+- Preparing a fresh `tpu watch v6 -n 64` launch for `ACTION_ADAPTER_TYPE=pre_context`, full global batch 512, `MAX_TRAIN_STEPS=1`, and no final checkpoint.
+- Will source local TPU secrets for W&B-enabled smoke logging without writing secrets to the repo or command text.
+
+Version Control:
+- agent_id: wan-prectx-adapter-20260615-073355
+- worktree: /home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- current_commit_before_launch_entry: 780933643402d914bff379119097aa4754286ec0
+- changed_files: worklogs/wan-ti2v-pre-context-adapter/wan-prectx-adapter-20260615-073355.md
+
+Command / Job:
+- target_tpu: v6-64-09-lzha
+- run_name: wan-pre-context-v6e64-smoke-gbs512-r3-20260615-203132
+- command: `tpu watch v6 -n 64 --setup-cmd "<checkout exact commit; setup; prefetch Wan-AI/Wan2.2-TI2V-5B-Diffusers>" codex/wan-ti2v-pre-context-adapter-v6e64 ACTION_ADAPTER_TYPE=pre_context PRE_CONTEXT_TOKENS=8 PRE_CONTEXT_HEADS=40 MAX_TRAIN_STEPS=1 SAVE_FINAL_CHECKPOINT=False ... bash bash_scripts/train_wan_side_adapter.sh`
+- logs: logs/tpu_watch_wan-pre-context-v6e64-smoke-gbs512-r3-20260615-203132.log
+- artifacts: W&B smoke metrics expected; no final checkpoint expected
+
+Result:
+- status: pending launch
+- metrics/artifacts: none yet
+
+Analysis:
+- The old `v6-64-08-lzha` side-adapter run is active and should not be interrupted. A fresh TPU name is the cleaner path if quota now permits it.
+
+Next:
+- Commit/push this launch record, start `tpu watch`, then monitor allocation, remote setup, first train step, W&B/log metrics, and exit state.
