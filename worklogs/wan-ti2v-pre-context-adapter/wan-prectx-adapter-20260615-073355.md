@@ -42,3 +42,43 @@ Analysis:
 
 Next:
 - Commit and push the implementation, run TPU setup/import smoke from the exact commit, then launch v6e-64 training with `ACTION_ADAPTER_TYPE=pre_context`.
+
+## 2026-06-15T07:40:27Z - v6e-64 pre-context smoke launch
+
+Goal:
+- Run a one-step target-surface smoke on a fresh v6e-64 before launching full training.
+
+Hypothesis:
+- If the pre-context NNX path is wired correctly, TPU setup should complete and a one-step full-global-batch denoising train step should compile and log loss/grad metrics.
+
+Change:
+- No code changes since implementation commit.
+
+Version Control:
+- agent_id: wan-prectx-adapter-20260615-073355
+- worktree: /home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355
+- worklog: worklogs/wan-ti2v-pre-context-adapter/wan-prectx-adapter-20260615-073355.md
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- base_commit: 7ee701de743169e6888a77dac1f3d31d24e408e1
+- implementation_commit: 60781c70405dece76409c1c38554b0ecfd43f5f1
+- push/pull: pushed branch; launch checkout commit 89d22a379b494dd87c1731a83f83c98f4550464c
+- changed_files: n/a for launch
+- remote_commit/status: pending, worker not allocated yet
+
+Command / Job:
+- command: `tpu watch v6 -n 64 --setup-cmd "export HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER=0 && git fetch origin codex/wan-ti2v-pre-context-adapter-v6e64 && git checkout --detach 89d22a379b494dd87c1731a83f83c98f4550464c && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" codex/wan-ti2v-pre-context-adapter-v6e64 RUN_NAME=wan-pre-context-v6e64-smoke-gbs512-r1-20260615-074027 ACTION_ADAPTER_TYPE=pre_context PRE_CONTEXT_TOKENS=8 PRE_CONTEXT_HEADS=40 TRAIN_DATA_DIR=gs://v6_east1d/datasets/droid_wan_side_adapter/train EVAL_DATA_DIR=gs://v6_east1d/datasets/droid_wan_side_adapter/val OUTPUT_DIR=gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-pre-context-adapter MODEL_DIR=Wan-AI/Wan2.2-TI2V-5B-Diffusers MAX_TRAIN_STEPS=1 CHECKPOINT_EVERY=1000 EVAL_EVERY=0 LOG_PERIOD=1 SAVE_FINAL_CHECKPOINT=False PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 TFRECORD_SHUFFLE_BUFFER_SIZE=1024 WANDB_PROJECT=maxdiffusion-wan-pre-context-adapter HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER=0 bash bash_scripts/train_wan_side_adapter.sh`
+- job_id: local watcher session 86675; queued resource v6-64-08-lzha-qr; TPU name v6-64-08-lzha
+- run_dir: remote maxdiffusion checkout pending allocation
+- logs: logs/tpu_watch_wan-pre-context-v6e64-smoke-gbs512-r1-20260615-074027.log
+- artifacts: W&B smoke metrics expected; no checkpoint expected because `SAVE_FINAL_CHECKPOINT=False`
+
+Result:
+- status: queued
+- metrics/artifacts: none yet
+- key evidence: queued resource remains `PROVISIONING`; `gcloud alpha compute tpus tpu-vm describe v6-64-08-lzha` returns `NOT_FOUND`.
+
+Analysis:
+- No code path has run yet. This is a TPU capacity/allocation wait, not a model/setup failure.
+
+Next:
+- Continue watching until the TPU reaches READY and setup begins, or record external infrastructure blockage if provisioning does not progress.
