@@ -264,3 +264,40 @@ Analysis:
 
 Next:
 - Keep the retry loop alive unless the user asks to stop, switch provisioning model, switch zone, or free an existing v6e resource.
+
+## 2026-06-15T22:37:00Z - stopped unsafe pre-context watcher after remote checkout conflict
+
+Goal:
+- Prevent the pre-context smoke from launching against the wrong remote checkout after `v6-64-09-lzha` allocation succeeded.
+
+Hypothesis:
+- The smoke launch should be stopped and relaunched only from an isolated remote checkout, because the shared `~/maxdiffusion` tree was changed by another local process.
+
+Change:
+- Stopped the owned pre-context `tpu watch` process for `wan-pre-context-v6e64-smoke-gbs512-r3-20260615-203132`.
+- Cleaned up an owned orphaned setup SSH process left after interrupting the watcher.
+- Did not stop the separate local process targeting `v6-64-09-lzha` with `git checkout adaptor`.
+
+Version Control:
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- latest_worklog_commit_before_entry: c390e7e9ca5185497148b8f40720e258e2dfab92
+- launch_commit: 6277a16490fb88f7bb9e96cd7e155b5f56b57ddf
+
+Command / Job:
+- target_tpu: v6-64-09-lzha
+- queued_resource: v6-64-09-lzha-qr
+- queued_resource_state: ACTIVE
+- tpu_state: READY, HEALTHY
+- stopped_owned_pids: 772049, 772062, 772063; orphaned SSH child 898679
+- remaining_conflicting_process: local pids 900854, 900863, 900946, 900948 running a separate setup command on `adaptor`
+
+Result:
+- status: pre-context smoke not running
+- key evidence: worker 0 remote checkout changed to `adaptor` at `HEAD=f5ed765`; branch does not contain `bash_scripts/prefetch_hf_snapshot.sh`; the launch setup command called that missing helper and used the shared `~/maxdiffusion` tree.
+- metrics/artifacts: no pre-context training metrics, checkpoints, or validation artifacts produced.
+
+Analysis:
+- The v6e-64 quota/resource blocker cleared and `v6-64-09-lzha` was allocated, but the launch path was unsafe because it used the shared remote checkout and a missing prefetch helper. A relaunch should avoid `bash_scripts/setup.sh`'s `cd maxdiffusion` wrapper and should not depend on `bash_scripts/prefetch_hf_snapshot.sh`.
+
+Next:
+- Wait for the separate `adaptor` setup process to finish or for the user to allow stopping it. Then relaunch using an isolated remote repo name such as `GH_REPO_NAME=maxdiffusion-prectx`, exact commit checkout, root `setup.sh MODE=stable DEVICE=tpu`, no prefetch helper, and direct remote verification before training.
