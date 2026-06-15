@@ -335,3 +335,34 @@ Analysis:
 
 Next:
 - Commit/push this cleanup record, then start the corrected `tpu watch` retry and monitor allocation/setup/train from the isolated repo.
+
+## 2026-06-15T22:49:30Z - aborted invalid isolated repo-name launch
+
+Goal:
+- Avoid launching from a non-existent GitHub repository after discovering how `tpu watch` interprets `GH_REPO_NAME`.
+
+Hypothesis:
+- `GH_REPO_NAME` controls the GitHub repository name, not only the remote directory name, so setting it to `maxdiffusion-prectx` is invalid for this project.
+
+Change:
+- Started and immediately stopped `wan-pre-context-v6e64-smoke-gbs512-r4-20260615-224804` after `tpu watch` reported repo `lihzha/maxdiffusion-prectx`.
+- Verified no `v6-64-09-lzha-qr` remained to delete.
+
+Version Control:
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- launch_commit: 37009b292cf962a35ae8b7029abb51de4156ea08
+
+Command / Job:
+- stopped_run_name: wan-pre-context-v6e64-smoke-gbs512-r4-20260615-224804
+- invalid_repo: lihzha/maxdiffusion-prectx
+- target_tpu: v6-64-09-lzha
+
+Result:
+- status: aborted before setup; no TPU created and no training started
+- metrics/artifacts: none
+
+Analysis:
+- The next relaunch should keep `GH_REPO_NAME=maxdiffusion` and rely on exact commit checkout plus direct verification rather than trying to change the remote clone directory through this variable.
+
+Next:
+- Relaunch with `GH_REPO_NAME=maxdiffusion`, exact commit checkout, root `setup.sh`, and no missing prefetch helper.
