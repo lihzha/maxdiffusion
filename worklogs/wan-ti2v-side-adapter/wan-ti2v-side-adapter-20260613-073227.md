@@ -2221,3 +2221,36 @@ Analysis:
 
 Next:
 - Commit/push the fallback knob, continue monitoring r3, and only relaunch with the smaller shuffle buffer if the current run fails or remains pre-step long enough to justify replacing it.
+
+## 2026-06-15T04:52:00Z - side-adapter async batch prefetch fallback
+
+Goal:
+- Prepare a next-run improvement for the side-adapter trainer if input loading remains a bottleneck, while preserving the current active run.
+
+Hypothesis:
+- The generic WAN and SDXL trainers overlap `load_next_batch` with the train step via a single-worker `ThreadPoolExecutor`. The side-adapter trainer was loading batches synchronously after each step, which can leave TPU execution idle while host input work catches up.
+
+Change:
+- Added the same one-worker async next-batch prefetch pattern to `WanTI2VSideAdapterTrainer.start_training`.
+- Imported `ThreadPoolExecutor` in `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- base_commit: `48e0a8a1ad5a782c0a54ec8eda6b6a6914a79cde`
+- implementation_commit: pending
+- changed_files: `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`, this worklog
+
+Command / Job:
+- local_checks: `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`
+- active_run: unchanged; no relaunch performed.
+
+Result:
+- status: implementation validated locally, pending commit/push.
+- metrics/artifacts: Active r3 run advanced to `step 20/10000` with `loss=3.171875`, `grad_norm=41297142732.800`, `lr=1.90e-06`, `steps/s=0.028`.
+
+Analysis:
+- Step 20 confirms the active run is not stuck; the first step-10 interval was dominated by startup/first-batch work. The measured step-20 throughput matches the earlier successful batch-512 attempt, so the correct decision is to keep the active run.
+- The prefetch patch remains useful for the next launch or resume, but should not replace a healthy running job before the first checkpoint.
+
+Next:
+- Commit/push the prefetch patch, continue monitoring r3 to step `100`, then inspect the checkpoint and validation sidecar outputs.

@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime
 import functools
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import jax
@@ -484,46 +485,48 @@ class WanTI2VSideAdapterTrainer:
         last_log_time = datetime.datetime.now()
         batch = load_next_batch(train_iter, None, config)
 
-        for step in range(start_step, config.max_train_steps):
-            with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-                state, metrics, rng = p_train_step(state, batch, rng)
-                metrics["scalar"]["learning/loss"].block_until_ready()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for step in range(start_step, config.max_train_steps):
+                next_batch_future = executor.submit(load_next_batch, train_iter, batch, config)
+                with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+                    state, metrics, rng = p_train_step(state, batch, rng)
+                    metrics["scalar"]["learning/loss"].block_until_ready()
 
-            recent_loss.append(float(metrics["scalar"]["learning/loss"]))
-            recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
+                recent_loss.append(float(metrics["scalar"]["learning/loss"]))
+                recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
 
-            if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
-                now = datetime.datetime.now()
-                avg_loss = sum(recent_loss) / len(recent_loss)
-                avg_grad = sum(recent_grad) / len(recent_grad)
-                sps = len(recent_loss) / max(1e-6, (now - last_log_time).total_seconds())
-                lr = float(lr_schedule(step))
-                max_logging.log(
-                    f"step {step + 1}/{config.max_train_steps} "
-                    f"loss={avg_loss:.6f} grad_norm={avg_grad:.3f} "
-                    f"lr={lr:.2e} steps/s={sps:.3f}"
-                )
-                if wandb_run is not None:
-                    wandb_run.log(
-                        {
-                            "train/loss": avg_loss,
-                            "train/grad_norm": avg_grad,
-                            "train/lr": lr,
-                            "train/steps_per_sec": sps,
-                        },
-                        step=step + 1,
+                if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
+                    now = datetime.datetime.now()
+                    avg_loss = sum(recent_loss) / len(recent_loss)
+                    avg_grad = sum(recent_grad) / len(recent_grad)
+                    sps = len(recent_loss) / max(1e-6, (now - last_log_time).total_seconds())
+                    lr = float(lr_schedule(step))
+                    max_logging.log(
+                        f"step {step + 1}/{config.max_train_steps} "
+                        f"loss={avg_loss:.6f} grad_norm={avg_grad:.3f} "
+                        f"lr={lr:.2e} steps/s={sps:.3f}"
                     )
-                recent_loss.clear()
-                recent_grad.clear()
-                last_log_time = now
+                    if wandb_run is not None:
+                        wandb_run.log(
+                            {
+                                "train/loss": avg_loss,
+                                "train/grad_norm": avg_grad,
+                                "train/lr": lr,
+                                "train/steps_per_sec": sps,
+                            },
+                            step=step + 1,
+                        )
+                    recent_loss.clear()
+                    recent_grad.clear()
+                    last_log_time = now
 
-            if config.eval_every > 0 and config.eval_data_dir and (step + 1) % config.eval_every == 0:
-                self._run_eval(mesh, p_eval_step, state, data_shardings, step + 1, rng, wandb_run)
+                if config.eval_every > 0 and config.eval_data_dir and (step + 1) % config.eval_every == 0:
+                    self._run_eval(mesh, p_eval_step, state, data_shardings, step + 1, rng, wandb_run)
 
-            if config.checkpoint_every > 0 and (step + 1) % config.checkpoint_every == 0:
-                self._save_checkpoint(ckpt_mgr, step + 1, state)
+                if config.checkpoint_every > 0 and (step + 1) % config.checkpoint_every == 0:
+                    self._save_checkpoint(ckpt_mgr, step + 1, state)
 
-            batch = load_next_batch(train_iter, batch, config)
+                batch = next_batch_future.result()
 
         if config.save_final_checkpoint:
             self._save_checkpoint(ckpt_mgr, config.max_train_steps, state)
