@@ -82,3 +82,46 @@ Analysis:
 
 Next:
 - Continue watching until the TPU reaches READY and setup begins, or record external infrastructure blockage if provisioning does not progress.
+
+## 2026-06-15T08:24:00Z - v6e-64 launch blocked by quota/occupied slices
+
+Goal:
+- Find a usable v6e-64 slice for the pre-context smoke and subsequent full training.
+
+Hypothesis:
+- If `v6-64-08-lzha` is tied to a stale queued resource, either an existing READY lzha v6e-64 or a new unused TPU name can be used for the smoke.
+
+Change:
+- Stopped only the local pre-context smoke watcher for `v6-64-08-lzha`; left the unrelated older side-adapter watcher on `v6-64-08-lzha` untouched.
+- Checked `v6-64-07-lzha` and found it occupied by an active `ego-lap` v6-64 training job.
+- Tried a fresh unused name `v6-64-09-lzha`, then stopped the retry watcher after GCP returned quota exhaustion.
+
+Version Control:
+- agent_id: wan-prectx-adapter-20260615-073355
+- worktree: /home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355
+- worklog: worklogs/wan-ti2v-pre-context-adapter/wan-prectx-adapter-20260615-073355.md
+- branch: codex/wan-ti2v-pre-context-adapter-v6e64
+- base_commit: 7ee701de743169e6888a77dac1f3d31d24e408e1
+- implementation_commit: 60781c70405dece76409c1c38554b0ecfd43f5f1
+- push/pull: branch pushed; final blockage entry pending commit/push
+- changed_files: worklogs/wan-ti2v-pre-context-adapter/wan-prectx-adapter-20260615-073355.md
+- remote_commit/status: no pre-context remote run launched
+
+Command / Job:
+- command: `gcloud alpha compute tpus tpu-vm ssh v6-64-07-lzha --worker=all --command='ps ...'`
+- command: `tpu watch v6 -n 64 ... TPU_NAME=v6-64-09-lzha ... MAX_TRAIN_STEPS=1 ...`
+- job_id: local watcher sessions 86675 and 19751 stopped; no active pre-context TPU job
+- run_dir: n/a
+- logs: logs/tpu_watch_wan-pre-context-v6e64-smoke-gbs512-r1-20260615-074027.log; logs/tpu_watch_wan-pre-context-v6e64-smoke-gbs512-r2-20260615-082200.log
+- artifacts: n/a
+
+Result:
+- status: blocked
+- metrics/artifacts: no training metrics; no checkpoint; no validation artifacts
+- key evidence: `v6-64-07-lzha` has active `ego-lap` Python processes across workers; `v6-64-09-lzha` creation failed with `RESOURCE_EXHAUSTED` for quota `TPUV6EPreemptiblePerProjectPerZoneForTPUAPI`, limit 512 in `us-east1-d`; queued resources show `v6-64-08-lzha-qr` still `PROVISIONING`.
+
+Analysis:
+- The implementation is ready and pushed, but v6e-64 execution is externally blocked. The only lzha READY v6e-64 is already running another training job, the requested fresh `v6-64-08-lzha` name is tied to an older provisioning watcher, and creating another v6e-64 exceeds project quota.
+
+Next:
+- Launch the smoke/full training when a v6e-64 slice becomes available, or explicitly free/reassign an existing lzha v6e-64 queued resource/job.
