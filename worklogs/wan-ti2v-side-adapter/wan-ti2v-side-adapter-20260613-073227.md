@@ -2671,3 +2671,32 @@ Result:
 
 Next:
 - Relaunch v6e-64 training from `origin/adaptor` with the denoising-loss fix and restart periodic validation.
+
+## 2026-06-15T07:21:33Z - r11 denoising-loss v6e-64 queue
+
+Goal:
+- Relaunch full global-batch-512 side-adapter training from `origin/adaptor` after correcting the objective to one-step denoising loss.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- branch: `adaptor`
+- launch_commit: `7ee701de743169e6888a77dac1f3d31d24e408e1`
+- branch_remote: `origin/adaptor`
+
+Command / Job:
+- failed_r10_run_name: `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r10-20260615-071856`
+- active_run_name: `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r11-20260615-071951`
+- tpu_name: `v6-64-08-lzha`
+- queued_resource: `v6-64-08-lzha-qr`
+- local_launch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r11-20260615-071951.log`
+- checkpoint_dir: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r11-20260615-071951/checkpoints/`
+- launch: `tpu watch v6 -n 64 --setup-cmd "git fetch origin adaptor && git checkout --detach 7ee701de743169e6888a77dac1f3d31d24e408e1 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" adaptor ... PER_DEVICE_BATCH_SIZE=8 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 GLOBAL_BATCH_SIZE_TO_LOAD=512 TFRECORD_SHUFFLE_BUFFER_SIZE=1024 CHECKPOINT_EVERY=100 EVAL_EVERY=1000 EVAL_MAX_BATCHES=4 ...`
+
+Result:
+- r10_status: launcher wrapper exited before `tpu watch` emitted a submit attempt; no queued resource was created.
+- r11_status: active local `tpu watch` session `18691`; queued resource submitted and currently `PROVISIONING`.
+- first_create_attempt: hit v6e preemptible quota `TPUV6EPreemptiblePerProjectPerZoneForTPUAPI` limit `512` in `us-east1-d`; retry succeeded when the request was accepted by the queued-resource API.
+- occupied_resource: `v6-64-07-lzha` is running an unrelated `ego-lap` job, so it was not reused or stopped.
+
+Next:
+- Monitor `v6-64-08-lzha-qr` until it allocates, then verify worker `HEAD`, setup, train command, dataset paths, adapter/frozen parameter counts, first denoising-loss metric, checkpoint `100`, and validation launch.
