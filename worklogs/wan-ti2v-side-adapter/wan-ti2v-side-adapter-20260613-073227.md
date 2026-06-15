@@ -2700,3 +2700,18 @@ Result:
 
 Next:
 - Monitor `v6-64-08-lzha-qr` until it allocates, then verify worker `HEAD`, setup, train command, dataset paths, adapter/frozen parameter counts, first denoising-loss metric, checkpoint `100`, and validation launch.
+
+## 2026-06-15T10:40:00Z - r11 v6 queue churn
+
+Goal:
+- Keep the r11 v6e-64 training request alive without touching unrelated TPU jobs or other users' slices.
+
+Result:
+- The first accepted `v6-64-08-lzha-qr` repeatedly flickered between `PROVISIONING`/node `CREATING` and no node, then entered `SUSPENDING` with `stateInitiator=SERVICE` and finally `FAILED`.
+- `tpu watch` deleted the failed QR and retried creation.
+- Several recreate attempts hit `RESOURCE_EXHAUSTED` because `TPUV6EPreemptiblePerProjectPerZoneForTPUAPI` is limited to 512 chips in `us-east1-d`.
+- A later retry was accepted and recreated `v6-64-08-lzha-qr`; it advanced through `WAITING_FOR_RESOURCES` to `PROVISIONING`, but no stable TPU VM exists yet.
+- Rechecked `v6-64-07-lzha` non-destructively: it is actively running an unrelated `ego-lap` `lap_rhb_scale_catnorm_maskhuman_p1_v6_64_b4096_s0_20260615` training job, so it was not reused or stopped.
+
+Next:
+- Continue monitoring the recreated QR. If it reaches `READY`, verify worker setup and first training metrics. If it fails again or quota create retries persist, wait for quota/capacity or get explicit permission before deleting any existing v6 resources not owned by this run.
