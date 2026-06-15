@@ -2876,3 +2876,39 @@ Validation:
 
 Next:
 - Commit and push the success-exit fix, then relaunch as r19 on `v6-64-08-lzha`.
+
+## 2026-06-15T14:29:15Z - r19 launch and maintenance requeue
+
+Goal:
+- Run the fixed side-adapter training from the integrated `adaptor` branch on a v6e-64 slice with global batch 512, and recover cleanly if the allocated TPU enters maintenance before useful metrics.
+
+Version Control:
+- agent_id: `wan-ti2v-side-adapter-20260613-073227`
+- worktree: `/home/lzha/code/.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227`
+- branch: `adaptor`
+- launch_commit: `26e95fb6aa5835a830f91ccfe65b8f1c9ebb092c`
+- push/pull: pushed to `origin/adaptor`; workers checked out the detached commit during setup.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659`
+- tpu_name: `v6-64-08-lzha`
+- queued_resource: `v6-64-08-lzha-qr`
+- local_force_launch_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659.log`
+- local_maintenance_monitor_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659_maintenance_monitor.log`
+- checkpoint_root: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`
+- data: train `gs://v6_east1d/datasets/droid_wan_side_adapter/train`, val `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- batch: `PER_DEVICE_BATCH_SIZE=8`, `GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512`, `GLOBAL_BATCH_SIZE_TO_LOAD=512`
+- setup: `bash bash_scripts/setup.sh MODE=stable DEVICE=tpu` followed by `bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers`
+
+Result:
+- The force launch succeeded from `26e95fb`: all workers checked out the intended commit, the prefetch helper verified the WAN Hugging Face snapshot, and `tpu watch --force` reported `Training started successfully!`.
+- Direct worker-0 verification showed the intended commit, run name, GCS data paths, global/per-device batch settings, 64 JAX devices, and no Hugging Face download error after prefetch. The worker reached transformer/checkpoint initialization, but no first batch or first loss had been logged yet.
+- Before first useful metrics, the TPU reported `health=UNHEALTHY_MAINTENANCE`. A non-forced watcher for the same run detected this as preemption, deleted the unhealthy TPU and stale queued resource, and recreated `v6-64-08-lzha-qr`.
+- Current state at this entry: queued resource is `WAITING_FOR_RESOURCES`, node `v6-64-08-lzha` is absent, and the maintenance monitor is active.
+
+Analysis:
+- r19 has not yet validated training correctness because maintenance interrupted it before adapter parameter logs, first TFRecord batch, first loss, checkpoint 100, or validation.
+- The prefetch and setup fixes are behaving correctly on the target surface; the remaining blocker is v6 capacity/maintenance, not the branch code path observed so far.
+
+Next:
+- Keep the maintenance watcher active until capacity returns. When the node reaches `READY`, re-verify worker commit/config, filtered data loading, adapter/frozen parameter counts, first non-NaN step metric, checkpoint 100, and then start the periodic validation watcher.
