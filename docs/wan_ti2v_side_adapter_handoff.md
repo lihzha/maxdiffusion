@@ -17,10 +17,10 @@ DROID training run.
   `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659`
   resumed from checkpoint 5200 on `v6-64-08-lzha` at commit
   `b85becd444f10c41c83af888f308602f959d8ba7`. As of
-  `2026-06-15T21:05Z`, GCS had retained checkpoints `5000`, `6300`, `6400`,
-  and `6500`; the active W&B run is `wwkpnweb`, with summary step 6520 and
-  `train/loss ~= 0.2873`. Worker 0 was still training normally with no
-  traceback, NaN, or resource-exhaustion signal in the log tail.
+  `2026-06-15T21:25Z`, GCS had retained checkpoints `5000`, `7300`, `7400`,
+  and `7500`; the active W&B run is `wwkpnweb`, with summary step 7530 and
+  `train/loss ~= 0.2868`. Worker 0 was still training normally with no
+  traceback, NaN, or resource-exhaustion signal in recent log tails.
 - Periodic validation for checkpoint 5000 completed on `v6-8-wan-val-lzha`.
   Outputs are under
   `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation/step_005000/`.
@@ -40,6 +40,17 @@ DROID training run.
   blank/corrupt. The temporary checkpoint cache was deleted afterward, leaving
   `validation_checkpoints/` at `0 B`; the validation TPU had no remaining
   validation Python process after completion.
+- Periodic validation for checkpoint 7000 completed on the same validation TPU,
+  using branch commit `f2e23e6df92351831d40cf41db4a8b64add5fd86`. Outputs are
+  under
+  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation/step_007000/`.
+  It generated 4 validation samples with aggregate mean latent MSE `1.6222`,
+  mean pixel MSE `0.1088`, and mean SSIM `0.3206`. Sample 0 comparison video is
+  a valid `320x384`, 33-frame, 16 fps MP4 with nonblank full-range extracted
+  frames; visual quality remains artifact-heavy but not corrupt. The temporary
+  checkpoint cache was deleted afterward, leaving `validation_checkpoints/` at
+  `0 B`; the validation TPU had no remaining validation Python process after
+  completion.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
