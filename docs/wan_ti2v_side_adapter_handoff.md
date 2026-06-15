@@ -23,6 +23,11 @@ DROID training run.
   so sidecar files such as `summary.json` are ignored.
 - Use v6 TPUs for training. The established full run target is v6e-64 with
   global batch size 512.
+- When using frequent checkpoints such as `CHECKPOINT_EVERY=100`, pass
+  `CHECKPOINT_KEEP_PERIOD=1000` for future launches if validation should run at
+  every 1000 steps. Otherwise Orbax keeps only the newest 3 checkpoints plus
+  the config default keep period, so intermediate validation targets can be
+  pruned before a validation TPU becomes ready.
 - Run `bash_scripts/setup.sh MODE=stable DEVICE=tpu` on TPU workers during
   setup. It is safe to invoke from either `$HOME` or the repo root, and it
   reuses an existing `.venv`. Do not rely on local workstation package state
@@ -176,6 +181,7 @@ tpu watch v6 -n 64 --force \
   MODEL_DIR=Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   MAX_TRAIN_STEPS=10000 \
   CHECKPOINT_EVERY=100 \
+  CHECKPOINT_KEEP_PERIOD=1000 \
   EVAL_EVERY=1000 \
   EVAL_MAX_BATCHES=4 \
   LOG_PERIOD=10 \
@@ -199,6 +205,11 @@ on all workers.
 
 Start the local watcher after training is launched. It will validate checkpoint
 100, then every 1000 steps, by creating or reusing a v6e-8 validation slice.
+The watcher first copies the target checkpoint to
+`<OUTPUT_DIR>/<RUN_NAME>/validation_checkpoints/<step>/` and validates from that
+cache. This prevents the training checkpoint manager from deleting the target
+while the validation TPU is queued. The cached checkpoint is deleted after a
+successful validation summary is written.
 
 ```bash
 COMMIT="$(git rev-parse HEAD)"
@@ -282,3 +293,7 @@ Recommended path:
   Never print or commit those values.
 - If restarting from an existing run name and older W&B steps overlap, worker
   logs are the authority for repeated step numbers.
+- If validation is started late and checkpoint 100 has already been pruned,
+  set `VALIDATION_FIRST_STEP` and `VALIDATION_MIN_STEP` to the latest retained
+  checkpoint for an immediate sanity validation, then leave
+  `VALIDATION_EVERY=1000` for later periodic validation.

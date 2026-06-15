@@ -26,6 +26,7 @@ RUN_NAME="${RUN_NAME:?RUN_NAME must match the training run}"
 OUTPUT_DIR="${OUTPUT_DIR:-gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${OUTPUT_DIR%/}/${RUN_NAME}/checkpoints}"
 VALIDATION_OUTPUT_DIR="${VALIDATION_OUTPUT_DIR:-${OUTPUT_DIR%/}/${RUN_NAME}/validation}"
+VALIDATION_CHECKPOINT_CACHE_DIR="${VALIDATION_CHECKPOINT_CACHE_DIR:-${OUTPUT_DIR%/}/${RUN_NAME}/validation_checkpoints}"
 EVAL_DATA_DIR="${EVAL_DATA_DIR:-gs://v6_east1d/datasets/droid_wan_side_adapter/val}"
 MODEL_DIR="${MODEL_DIR:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}"
 VALIDATION_TPU_NAME="${VALIDATION_TPU_NAME:-v6-8-wan-val-lzha}"
@@ -36,6 +37,8 @@ VALIDATION_MIN_STEP="${VALIDATION_MIN_STEP:-100}"
 NUM_EVAL_VIDEOS="${NUM_EVAL_VIDEOS:-4}"
 VALIDATION_START_INDEX="${VALIDATION_START_INDEX:-0}"
 VALIDATION_SEED="${VALIDATION_SEED:-0}"
+VALIDATION_CACHE_CHECKPOINTS="${VALIDATION_CACHE_CHECKPOINTS:-1}"
+VALIDATION_DELETE_CACHED_CHECKPOINT="${VALIDATION_DELETE_CACHED_CHECKPOINT:-1}"
 POLL_SECS="${POLL_SECS:-120}"
 VALIDATION_MAX_WAIT_SECS="${VALIDATION_MAX_WAIT_SECS:-21600}"
 COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
@@ -50,11 +53,14 @@ touch "$STATE_FILE"
 echo "RUN_NAME=${RUN_NAME}"
 echo "CHECKPOINT_DIR=${CHECKPOINT_DIR}"
 echo "VALIDATION_OUTPUT_DIR=${VALIDATION_OUTPUT_DIR}"
+echo "VALIDATION_CHECKPOINT_CACHE_DIR=${VALIDATION_CHECKPOINT_CACHE_DIR}"
 echo "VALIDATION_TPU_NAME=${VALIDATION_TPU_NAME}"
 echo "VALIDATION_TPU_CHIPS=${VALIDATION_TPU_CHIPS}"
 echo "VALIDATION_FIRST_STEP=${VALIDATION_FIRST_STEP}"
 echo "VALIDATION_EVERY=${VALIDATION_EVERY}"
 echo "VALIDATION_MAX_WAIT_SECS=${VALIDATION_MAX_WAIT_SECS}"
+echo "VALIDATION_CACHE_CHECKPOINTS=${VALIDATION_CACHE_CHECKPOINTS}"
+echo "VALIDATION_DELETE_CACHED_CHECKPOINT=${VALIDATION_DELETE_CACHED_CHECKPOINT}"
 echo "COMMIT=${COMMIT}"
 echo "WATCH_BRANCH=${WATCH_BRANCH}"
 
@@ -81,6 +87,37 @@ _checkpoint_steps() {
 _summary_path() {
   local step="$1"
   printf "%s/step_%06d/summary.json" "$VALIDATION_OUTPUT_DIR" "$step"
+}
+
+_cache_checkpoint_for_validation() {
+  local step="$1"
+  local source_step_dir="${CHECKPOINT_DIR%/}/${step}"
+  local cache_step_dir="${VALIDATION_CHECKPOINT_CACHE_DIR%/}/${step}"
+
+  if [ "$VALIDATION_CACHE_CHECKPOINTS" != "1" ]; then
+    return 0
+  fi
+  if gsutil -q stat "${cache_step_dir}/_CHECKPOINT_METADATA"; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) validation checkpoint cache exists for step ${step}: ${cache_step_dir}"
+    return 0
+  fi
+  if ! gsutil -q stat "${source_step_dir}/_CHECKPOINT_METADATA"; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) source checkpoint missing for step ${step}: ${source_step_dir}"
+    return 1
+  fi
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) caching checkpoint step ${step} for validation: ${source_step_dir} -> ${cache_step_dir}"
+  gsutil -m rsync -r "$source_step_dir" "$cache_step_dir"
+}
+
+_cleanup_cached_checkpoint() {
+  local step="$1"
+  local cache_step_dir="${VALIDATION_CHECKPOINT_CACHE_DIR%/}/${step}"
+
+  if [ "$VALIDATION_CACHE_CHECKPOINTS" != "1" ] || [ "$VALIDATION_DELETE_CACHED_CHECKPOINT" != "1" ]; then
+    return 0
+  fi
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) deleting validation checkpoint cache for step ${step}: ${cache_step_dir}"
+  gsutil -m rm -r "$cache_step_dir" >/dev/null 2>&1 || true
 }
 
 _remote_proc_running() {
@@ -119,8 +156,13 @@ _launch_validation() {
   local step="$1"
   local run_tag="wan-side-adapter-validation-${RUN_NAME}-step-${step}"
   local setup_cmd
+  local launch_checkpoint_dir="$CHECKPOINT_DIR"
   setup_cmd="export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET} HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER} HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-120} HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-120} && git fetch origin ${WATCH_BRANCH} && git checkout --detach ${COMMIT} && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh ${MODEL_DIR}"
 
+  if [ "$VALIDATION_CACHE_CHECKPOINTS" = "1" ]; then
+    _cache_checkpoint_for_validation "$step" || return 1
+    launch_checkpoint_dir="$VALIDATION_CHECKPOINT_CACHE_DIR"
+  fi
   export TPU_NAME="$VALIDATION_TPU_NAME"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) launching validation step ${step} on ${VALIDATION_TPU_NAME}"
   tpu watch v6 -n "$VALIDATION_TPU_CHIPS" --force \
@@ -130,7 +172,7 @@ _launch_validation() {
     HF_HUB_DISABLE_XET="$HF_HUB_DISABLE_XET" \
     HF_HUB_ENABLE_HF_TRANSFER="$HF_HUB_ENABLE_HF_TRANSFER" \
     OUTPUT_DIR="$OUTPUT_DIR" \
-    CHECKPOINT_DIR="$CHECKPOINT_DIR" \
+    CHECKPOINT_DIR="$launch_checkpoint_dir" \
     CHECKPOINT_STEP="$step" \
     VALIDATION_OUTPUT_DIR="$VALIDATION_OUTPUT_DIR" \
     EVAL_DATA_DIR="$EVAL_DATA_DIR" \
@@ -140,7 +182,9 @@ _launch_validation() {
     VALIDATION_SEED="$VALIDATION_SEED" \
     bash bash_scripts/validate_wan_side_adapter.sh \
     2>&1 | tee -a "logs/tpu_watch_${run_tag}.log"
-  if ! _wait_for_validation "$step"; then
+  if _wait_for_validation "$step"; then
+    _cleanup_cached_checkpoint "$step"
+  else
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) validation step ${step} did not finish; it remains eligible for retry"
   fi
 }

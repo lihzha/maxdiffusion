@@ -57,6 +57,7 @@ MODEL_DIR="${MODEL_DIR:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}"
 
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-10}"
 CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-1000}"
+CHECKPOINT_KEEP_PERIOD="${CHECKPOINT_KEEP_PERIOD:-}"
 EVAL_EVERY="${EVAL_EVERY:-0}"
 EVAL_MAX_BATCHES="${EVAL_MAX_BATCHES:-}"
 LOG_PERIOD="${LOG_PERIOD:-1}"
@@ -74,6 +75,7 @@ echo "OUTPUT_DIR=${OUTPUT_DIR}"
 echo "MODEL_DIR=${MODEL_DIR}"
 echo "MAX_TRAIN_STEPS=${MAX_TRAIN_STEPS}"
 echo "CHECKPOINT_EVERY=${CHECKPOINT_EVERY}"
+echo "CHECKPOINT_KEEP_PERIOD=${CHECKPOINT_KEEP_PERIOD:-config_default}"
 echo "EVAL_EVERY=${EVAL_EVERY}"
 echo "EVAL_MAX_BATCHES=${EVAL_MAX_BATCHES:-config_default}"
 echo "LOG_PERIOD=${LOG_PERIOD}"
@@ -98,6 +100,7 @@ python src/maxdiffusion/train_wan.py \
   base_output_directory="${OUTPUT_DIR}" \
   max_train_steps="${MAX_TRAIN_STEPS}" \
   checkpoint_every="${CHECKPOINT_EVERY}" \
+  ${CHECKPOINT_KEEP_PERIOD:+checkpoint_keep_period="${CHECKPOINT_KEEP_PERIOD}"} \
   eval_every="${EVAL_EVERY}" \
   ${EVAL_MAX_BATCHES:+eval_max_batches="${EVAL_MAX_BATCHES}"} \
   log_period="${LOG_PERIOD}" \
