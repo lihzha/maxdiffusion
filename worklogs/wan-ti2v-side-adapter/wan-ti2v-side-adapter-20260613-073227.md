@@ -1915,3 +1915,30 @@ Analysis:
 
 Next:
 - Continue monitoring step `20`, subsequent loss/gradient trend, TPU health, and step-`100` checkpoint finalization.
+
+## 2026-06-15T03:15:30Z - checkpoint-100 run early trend
+
+Goal:
+- Inspect the early loss/gradient trend before the first checkpoint.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-ckpt100-20260615-023800`
+- primary_worker: worker `13`
+- primary_log: `~/maxdiffusion/logs/tpu_20260615-023808.log`
+- wandb: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/6u6pl1hn`
+
+Result:
+- status: running
+- metrics/artifacts: TPU state is `READY`, health is `HEALTHY`.
+- metrics/artifacts: Step `10/10000`: `loss=3.273438`, `grad_norm=7666088704.000`, `lr=9.00e-07`, `steps/s=0.010`.
+- metrics/artifacts: Step `20/10000`: `loss=3.171875`, `grad_norm=41297142732.800`, `lr=1.90e-06`, `steps/s=0.028`.
+- metrics/artifacts: Step `30/10000`: `loss=2.476562`, `grad_norm=66094817894.400`, `lr=2.90e-06`, `steps/s=0.028`.
+- metrics/artifacts: Step `40/10000`: `loss=2.003906`, `grad_norm=7660980044.800`, `lr=3.90e-06`, `steps/s=0.028`.
+- metrics/artifacts: GCS run prefix is still `0 B`; first checkpoint is expected at step `100`.
+
+Analysis:
+- Loss is decreasing through step `40`, and the high gradient norms at steps `20-30` have already dropped back by step `40`. This resembles the earlier transient-gradient behavior observed in lower-batch full runs and does not show NaN/divergence.
+- Post-startup throughput is about `0.028 steps/s`, so the step-`100` checkpoint is expected roughly 35-40 minutes after this check if the TPU remains healthy.
+
+Next:
+- Continue monitoring toward step `100`; verify checkpoint finalization and storage size once written.
