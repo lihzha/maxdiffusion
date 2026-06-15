@@ -15,15 +15,15 @@ DROID training run.
   due a transient Hugging Face shard download error on one worker.
 - The r19 full training attempt
   `wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659`
-  reached step 630 on `v6-64-08-lzha` before a TPU maintenance event. The W&B
-  run `mcnoaonk` shows loss improving to about `0.3184` at step 630. The local
-  `tpu watch` process is retrying the v6e-64 replacement, but queued-resource
-  creation was blocked by `TPUV6EPreemptiblePerProjectPerZoneForTPUAPI` quota
-  as of `2026-06-15T16:13Z`.
-- Checkpoint 600 from r19 was copied to the validation cache:
-  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation_checkpoints/600`.
-  The step-600 validation has not completed yet; its v6e-8 queued resource was
-  still provisioning while the v6 quota was saturated.
+  has reached checkpoints through step 5200. The latest W&B run observed at
+  `2026-06-15T20:10Z` was `ldiw3cfi`, still marked running, with summary step
+  5190 and `train/loss ~= 0.2858`. The local `tpu watch` process is alive and
+  has re-submitted `v6-64-08-lzha-qr`, currently waiting for v6e-64 capacity
+  after a service-initiated suspension/deletion event.
+- The current periodic validation target is checkpoint 5000. It has been copied
+  to the validation cache:
+  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation_checkpoints/5000`.
+  No validation summary or videos had been written as of `2026-06-15T20:10Z`.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
@@ -220,7 +220,9 @@ The watcher first copies the target checkpoint to
 `<OUTPUT_DIR>/<RUN_NAME>/validation_checkpoints/<step>/` and validates from that
 cache. This prevents the training checkpoint manager from deleting the target
 while the validation TPU is queued. The cached checkpoint is deleted after a
-successful validation summary is written.
+successful validation summary is written. `VALIDATION_FORCE=0` is the default
+and should be used when the validation TPU does not already exist; set
+`VALIDATION_FORCE=1` only when intentionally reusing a verified idle slice.
 
 ```bash
 COMMIT="$(git rev-parse HEAD)"
