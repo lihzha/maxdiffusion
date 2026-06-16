@@ -3171,3 +3171,39 @@ Analysis:
 
 Next:
 - Continue monitoring to checkpoint `6000` and validate it with the same success-marker guarded copy path.
+
+## 2026-06-16T10:36:00Z - r20 fresh-noise validation at step 6000
+
+Goal:
+- Validate checkpoint `6000` from the active r20 fresh-noise run, inspect artifacts with `viz-open`, clean up the temporary validation checkpoint copy, and decide whether the visual degradation after step `2000` is still present.
+
+Training status:
+- Active training TPU `v6-64-12-lzha` remains running on `us-east1-d`.
+- Worker-2 log shows checkpoint saves continuing after validation, through checkpoint `6600` by `2026-06-16T10:33:21Z`.
+- Training process command still matches the intended full r20 fresh-noise run: `global_batch_size_to_train_on=512`, `global_batch_size_to_load=512`, `per_device_batch_size=8`, data roots under `gs://v6_east1d/datasets/droid_wan_side_adapter`, and output under `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`.
+
+Validation:
+- Copied checkpoint `6000` to `validation_checkpoints/6000` only after verifying source success markers: root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
+- Validation ran on `v4-4-03-interactive` with `JAX_PLATFORMS` unset, restored step `6000` cleanly, and wrote `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_006000`.
+- Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step6000/step_006000`
+- `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step6000/step_006000`
+- Output videos have the expected `320x384`, `33` frames, `16` fps, duration `2.0625s`.
+
+Metrics:
+- Mean latent MSE `0.444165`
+- Mean pixel MSE `0.030355`
+- Mean SSIM `0.580033`
+- Per-sample SSIM: sample 0 `0.6213`, sample 1 `0.7020`, sample 2 `0.4164`, sample 3 `0.5804`.
+
+Visual read:
+- Step `6000` recovers some metrics relative to step `5000`, but it is still not as good as the step `2000` validation peak on this fixed four-sample subset.
+- Samples `0` and `1` preserve the table/robot layout better than step `5000`.
+- Samples `2` and `3` still show strong temporal smearing, color drift, and incorrect foreground/occluding geometry; sample `2` remains the worst case.
+- The coherent degradation pattern from steps `3000` through `6000` suggests checkpoint `2000` is still the best visual checkpoint so far, despite stable training loss.
+
+Storage cleanup:
+- Removed `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation_checkpoints/6000` after copying and inspecting local artifacts.
+
+Next:
+- Continue monitoring to checkpoint `7000`, validate it with the same marker-guarded copy path, and compare against checkpoint `2000` and checkpoint `6000`.
+- If checkpoint `7000` is also worse than `2000`, prioritize a larger validation subset or a learning-rate/overtraining diagnosis before treating the later checkpoints as better just because the training loss remains stable.
