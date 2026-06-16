@@ -3014,3 +3014,11 @@ Result update:
 - First losses are finite: step 10 `0.610243`, step 100 `0.398474`, step 200 `0.412408`, step 270 `0.394279`.
 - Checkpoint 100 was saved to `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/checkpoints/100`.
 - Launched the validation watcher for step 100 and periodic every 1000 steps. It cached checkpoint 100 to `validation_checkpoints/100`, then hit v6e preemptible quota exhaustion while trying to create `v6-8-wan-val-lzha`; the watcher remains active and retrying.
+
+Result update:
+- Training continued with finite fresh-noise losses through at least step 590; the latest checked worker log line before maintenance was step 590 loss `0.355722`, grad norm `2.466`, lr `5.00e-05`.
+- GCS checkpoint listing shows checkpoints `400`, `500`, and `600` under the r20 run directory, so checkpoint `600` is the latest verified safe resume point.
+- At `2026-06-16T07:54:58Z`, `v6-64-12-lzha` reported `READY` with `health=UNHEALTHY_MAINTENANCE`; the training watcher treated it as preempted.
+- The direct node delete hung inside the local watcher for several minutes. Terminating only the stuck child `gcloud tpu-vm delete v6-64-12-lzha` process allowed the delete to unwind; the watcher then deleted the stale queued resource and submitted replacement QR `v6-64-12-lzha-qr`.
+- Current state at this entry: `v6-64-12-lzha-qr` is `WAITING_FOR_RESOURCES`, node `v6-64-12-lzha` is absent, and the training watcher remains active.
+- Stopped the separate validation retry loop for `v6-8-wan-val-lzha` after confirming no validation node or queued resource existed. Since the project is at the v6e preemptible quota limit when the 64-chip training slice is active, validation retries can race the training requeue and should be relaunched only after the training allocation is stable or after a checkpoint is intentionally validated during a training gap.
