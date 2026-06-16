@@ -34,6 +34,7 @@ import functools
 import jax
 import jax.numpy as jnp
 import jaxopt
+import numpy as np
 import tensorflow as tf
 from flax import nnx
 from flax.linen import partitioning as nn_partitioning
@@ -45,6 +46,72 @@ from maxdiffusion.checkpointing.wan_checkpointer_ti2v_2p2 import WanCheckpointer
 from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
 from maxdiffusion.train_utils import load_next_batch
 from maxdiffusion.trainers.base_wan_trainer import BaseWanTrainer
+
+
+def _compute_video_ssim(pred_video: np.ndarray, gt_video: np.ndarray) -> float:
+    """SSIM between decoded predicted and GT videos, averaged over batch and frames.
+
+    pred_video / gt_video: (B, F, H, W, 3) float32 in [0, 1] as returned by
+    pipeline._decode_latents_to_video → video_processor.postprocess_video.
+    """
+    from skimage.metrics import structural_similarity as ssim
+
+    B, F, H, W, _ = pred_video.shape
+    scores = []
+    for b in range(B):
+        for f in range(F):
+            scores.append(ssim(pred_video[b, f], gt_video[b, f],
+                               channel_axis=-1, data_range=1.0))
+    return float(np.mean(scores))
+
+
+def _compute_video_lpips(pred_video: np.ndarray, gt_video: np.ndarray) -> float | None:
+    """LPIPS between decoded predicted and GT videos, per frame, averaged over batch.
+
+    pred_video / gt_video: (B, F, H, W, 3) float32 in [0, 1].
+    Returns None if lpips or torch are unavailable.
+    """
+    try:
+        import torch
+        import lpips as lpips_lib
+    except ImportError:
+        return None
+
+    if not hasattr(_compute_video_lpips, "_model"):
+        _compute_video_lpips._model = lpips_lib.LPIPS(net="alex", verbose=False)
+    loss_fn = _compute_video_lpips._model
+
+    B, F, H, W, _ = pred_video.shape
+    scores = []
+    for b in range(B):
+        for f in range(F):
+            # (H, W, 3) → (3, H, W), map [0, 1] → [-1, 1] as lpips expects
+            pred_t = torch.from_numpy(
+                np.transpose(pred_video[b, f], (2, 0, 1)) * 2 - 1
+            ).float().unsqueeze(0)
+            gt_t = torch.from_numpy(
+                np.transpose(gt_video[b, f], (2, 0, 1)) * 2 - 1
+            ).float().unsqueeze(0)
+            with torch.no_grad():
+                scores.append(float(loss_fn(pred_t, gt_t).item()))
+    return float(np.mean(scores))
+
+
+def _compute_video_psnr(pred_video: np.ndarray, gt_video: np.ndarray) -> float:
+    """PSNR between decoded predicted and GT videos, averaged over batch and frames.
+
+    pred_video / gt_video: (B, F, H, W, 3) float32 in [0, 1].
+    """
+    B, F, H, W, _ = pred_video.shape
+    scores = []
+    for b in range(B):
+        for f in range(F):
+            mse = float(np.mean((pred_video[b, f].astype(np.float32) - gt_video[b, f].astype(np.float32)) ** 2))
+            if mse < 1e-10:
+                scores.append(100.0)
+            else:
+                scores.append(-10.0 * np.log10(mse))
+    return float(np.mean(scores))
 
 
 def _build_per_token_timestep(
@@ -228,7 +295,9 @@ class WanTI2VTrainer(BaseWanTrainer):
         )
 
     def get_eval_step(self, pipeline, mesh, state_shardings, eval_data_shardings):
+        self._pipeline = pipeline  # stored for VAE decode inside eval()
         n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
+        self._n_hist = n_hist
         return jax.jit(
             functools.partial(
                 ti2v_eval_step,
@@ -254,13 +323,84 @@ class WanTI2VTrainer(BaseWanTrainer):
         gathered = multihost_utils.process_allgather(losses, tiled=True)
         all_losses = jax.device_get(gathered).flatten().tolist()
 
+        # Perceptual metrics: each host decodes its own local bs samples, then
+        # gathers only the cheap scalar scores — avoids decoding bs*N_hosts samples
+        # per host that a latents-allgather approach would require.
+        ssim_score = psnr_score = lpips_score = None
+        if hasattr(self, "_pipeline"):
+            import torch as _torch
+            n_hist = getattr(self, "_n_hist", 1)
+            pred_local = jax.device_get(metrics["latents"]["pred"])  # (bs, C, F, H, W)
+            gt_local = jax.device_get(metrics["latents"]["gt"])
+
+            def _decode_direct(latents_np):
+                latents_jax = jnp.array(latents_np.astype(np.float32))
+                with self._pipeline.vae_mesh, nn_partitioning.axis_rules(
+                    self._pipeline.vae_logical_axis_rules
+                ):
+                    video = self._pipeline.vae.decode(
+                        self._pipeline._denormalize_latents(latents_jax),
+                        self._pipeline.vae_cache,
+                    )[0]
+                video = jnp.transpose(video, (0, 4, 1, 2, 3))
+                video_t = _torch.from_numpy(
+                    jax.device_get(video.astype(jnp.float32))
+                ).to(_torch.bfloat16)
+                return self._pipeline.video_processor.postprocess_video(
+                    video_t, output_type="np"
+                )
+
+            pred_video = _decode_direct(pred_local)
+            gt_video = _decode_direct(gt_local)
+
+            # Trim history frames (same in pred and GT) to avoid inflating metrics.
+            vae_t = getattr(self._pipeline, "vae_scale_factor_temporal", 4)
+            n_hist_pixels = 1 + (n_hist - 1) * vae_t  # first history latent → 1px
+            pred_video = pred_video[:, n_hist_pixels:]
+            gt_video = gt_video[:, n_hist_pixels:]
+
+            if pred_video.shape[1] > 0:
+                ssim_local = _compute_video_ssim(pred_video, gt_video)
+                psnr_local = _compute_video_psnr(pred_video, gt_video)
+                lpips_local = _compute_video_lpips(pred_video, gt_video)
+
+                # Gather per-host scalars and average (all processes must participate)
+                ssim_score = float(np.mean(jax.device_get(
+                    multihost_utils.process_allgather(jnp.array([ssim_local]), tiled=True)
+                )))
+                psnr_score = float(np.mean(jax.device_get(
+                    multihost_utils.process_allgather(jnp.array([psnr_local]), tiled=True)
+                )))
+                if lpips_local is not None:
+                    lpips_score = float(np.mean(jax.device_get(
+                        multihost_utils.process_allgather(jnp.array([lpips_local]), tiled=True)
+                    )))
+
         if all_losses and jax.process_index() == 0:
             final_eval_loss = float(jnp.mean(jnp.array(all_losses)))
             max_logging.log(f"Step {step}, Eval loss: {final_eval_loss:.4f}")
             if writer:
                 writer.add_scalar("learning/eval_loss", final_eval_loss, step)
+
+            if ssim_score is not None:
+                max_logging.log(f"Step {step}, Eval SSIM: {ssim_score:.4f}")
+                max_logging.log(f"Step {step}, Eval PSNR: {psnr_score:.2f} dB")
+                if writer:
+                    writer.add_scalar("learning/eval_ssim", ssim_score, step)
+                    writer.add_scalar("learning/eval_psnr", psnr_score, step)
+            if lpips_score is not None:
+                max_logging.log(f"Step {step}, Eval LPIPS: {lpips_score:.4f}")
+                if writer:
+                    writer.add_scalar("learning/eval_lpips", lpips_score, step)
+
             if getattr(self, "_wandb_run", None) is not None:
-                self._wandb_run.log({"eval/loss": final_eval_loss}, step=step)
+                wandb_log = {"eval/loss": final_eval_loss}
+                if ssim_score is not None:
+                    wandb_log["eval/ssim"] = ssim_score
+                    wandb_log["eval/psnr"] = psnr_score
+                if lpips_score is not None:
+                    wandb_log["eval/lpips"] = lpips_score
+                self._wandb_run.log(wandb_log, step=step)
 
 
 # ── Training step ─────────────────────────────────────────────────────────────
@@ -495,23 +635,33 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
             encoder_hidden_states=encoder_hidden_states,
             deterministic=True,
         )
-        diff = target_future - model_pred[:, :, n_hist:]
+        pred_vel = model_pred[:, :, n_hist:]
+        diff = target_future - pred_vel
         loss = diff ** 2
         if not config.disable_training_weights:
             loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
-        return loss.reshape(loss.shape[0], -1).mean(axis=1)
+        per_sample_loss = loss.reshape(loss.shape[0], -1).mean(axis=1)
+
+        # Reconstruct predicted clean latents: x_0 = x_t - sigma * v_pred
+        # sigma from apply_flow_match: (1 - t) * sigma_min + t * sigma_max
+        t = timesteps.astype(jnp.float32) / scheduler.config.num_train_timesteps
+        sigma = (1 - t) * scheduler.config.sigma_min + t * scheduler.config.sigma_max
+        pred_clean_future = noisy_future - sigma.reshape(-1, 1, 1, 1, 1) * pred_vel
+
+        # Return full-window latents (history + predicted/GT future) for VAE decoding
+        pred_full = jnp.concatenate([latents[:, :, :n_hist], pred_clean_future], axis=2)
+        gt_full = latents
+        return per_sample_loss, pred_full, gt_full
 
     bs = config.global_batch_size_to_train_on
-    single_batch_size = config.global_batch_size_to_train_on
-    losses = jnp.zeros(bs)
-    for i in range(0, bs, single_batch_size):
-        end = min(i + single_batch_size, bs)
-        latents = data["latents"][i:end].astype(config.weights_dtype)
-        encoder_hidden_states = data["encoder_hidden_states"][i:end].astype(config.weights_dtype)
-        rng, t_rng, noise_rng = jax.random.split(rng, 3)
-        timesteps = scheduler.sample_timesteps(t_rng, end - i)
-        loss = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
-        losses = losses.at[i:end].set(loss)
+    latents = data["latents"][:bs].astype(config.weights_dtype)
+    encoder_hidden_states = data["encoder_hidden_states"][:bs].astype(config.weights_dtype)
+    rng, t_rng, noise_rng = jax.random.split(rng, 3)
+    timesteps = scheduler.sample_timesteps(t_rng, bs)
+    losses, pred_futures, gt_futures = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
 
-    metrics = {"scalar": {"learning/eval_loss": losses}}
+    metrics = {
+        "scalar": {"learning/eval_loss": losses},
+        "latents": {"pred": pred_futures, "gt": gt_futures},
+    }
     return metrics, rng
