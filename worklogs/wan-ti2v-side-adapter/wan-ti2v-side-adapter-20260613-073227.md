@@ -2999,3 +2999,10 @@ Success criteria:
 - Training startup logs show 64 JAX devices, adapter trainable params, frozen 5B backbone params, and `Noise mode: fresh`.
 - First data batch and first non-NaN losses appear.
 - Checkpoint 100 is written, then the existing validation watcher can launch fresh-noise 25-step visual validation.
+
+Result update:
+- The first allocation reached `READY` and all workers checked out `779c3e5`.
+- Setup progressed through `bash_scripts/setup.sh` and Hugging Face prefetch; multiple workers verified the WAN snapshot.
+- Before the training command launched, the TPU became `health=UNHEALTHY_MAINTENANCE`.
+- `tpu watch` aborted setup, deleted `v6-64-12-lzha` and its stale queued resource, and re-submitted `v6-64-12-lzha-qr`.
+- No training metrics or checkpoints were produced before maintenance.
