@@ -3035,3 +3035,64 @@ Result update:
 - Post-resume losses are finite: step 610 `0.352888`, step 700 `0.348239`, step 760 `0.354832`; grad norms are around `2.0-3.0`, lr `5.00e-05`.
 - Checkpoint `700` was saved and finalized on GCS. GCS now keeps checkpoints `500`, `600`, and `700`.
 - Current state at this entry: training is active and healthy. Continue monitoring toward checkpoint `800`, checkpoint `1000`, and the next validation opportunity.
+
+## 2026-06-16T09:34:05Z - r20 fresh-noise validation through step 3000
+
+Goal:
+- Monitor the active r20 fresh-noise v6e-64 training run, run periodic visual validation from cached checkpoints without racing the v6 training quota, inspect the artifacts with `viz-open`, and remove temporary validation checkpoint copies after use.
+
+Training status:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855`
+- active training TPU: `v6-64-12-lzha` in `us-east1-d`, `health=HEALTHY` on the latest direct checks.
+- W&B run: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/j17wnp4x`
+- Training remained finite and stable after the checkpoint-600 resume. Representative worker-2 losses:
+  - step 2000: `0.331565`
+  - step 2500: `0.337284`
+  - step 3000: `0.326008`
+  - step 3200: `0.329078`
+  - step 3400: `0.336062`
+  - step 3500: `0.331127`
+- Latest checked worker log line: step 3520 loss `0.334843`, grad norm `1.373`, lr `5.00e-05`.
+- Latest checked retained training checkpoints: `3300`, `3400`, `3500`.
+
+Validation setup:
+- Used idle v4-8 interactive TPU `v4-4-03-interactive` in `us-central2-b` for validation, keeping the v6e-64 slice dedicated to training.
+- Validation repo: `/home/lzha/worktrees/maxdiffusion/wan_val_step1000_fresh_bundle`
+- Validation commit: `737622cc972b22fb1396b63be0ab6c3460584a6d`
+- Validation settings: `NUM_EVAL_VIDEOS=4`, `CHECKPOINT_STEP={1000,2000,3000}`, `side_adapter_noise_mode=fresh`, `side_adapter_sampling_steps=25`, `side_adapter_guide_scale=5.0`, validation batch size `4` total on v4.
+- The validation output videos are comparison MP4s with GT on top and prediction on bottom, `320x384`, `33` frames, `16` fps, duration `2.0625s`.
+
+Validation results:
+- Step 1000:
+  - GCS: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_001000`
+  - Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step1000/step_001000`
+  - `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step1000/step_001000`
+  - Metrics: mean latent MSE `0.501075`, mean pixel MSE `0.035048`, mean SSIM `0.543436`.
+  - Visual read: rough but nonblank; predictions preserve some table/lab layout but have blur, color shift, and foreground artifacts.
+- Step 2000:
+  - GCS: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_002000`
+  - Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step2000/step_002000`
+  - `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step2000/step_002000`
+  - Metrics: mean latent MSE `0.354568`, mean pixel MSE `0.025436`, mean SSIM `0.663717`.
+  - Visual read: clear improvement over step 1000 in samples 0 and 1; samples 2 and 3 still show severe foreground artifacts and geometry/color drift.
+- Step 3000:
+  - GCS: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_003000`
+  - Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step3000/step_003000`
+  - `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step3000/step_003000`
+  - Metrics: mean latent MSE `0.416834`, mean pixel MSE `0.029608`, mean SSIM `0.607507`.
+  - Visual read: not better than step 2000; broad scene layout remains, but later frames still show foreground smearing, warm color drift in sample 2, and occluding/incorrect arm-object geometry.
+
+Issues / fixes:
+- First step-3000 validation launch failed before restore because the launch command set `JAX_PLATFORMS=tpu`, which hid the CPU backend used by `jax.devices("cpu")` during VAE loading. Relaunched with `JAX_PLATFORMS` unset; restore and validation then completed successfully.
+- The failed step-3000 launch did not produce useful validation artifacts beyond setup logging.
+
+Storage cleanup:
+- Cached checkpoint copies were made only under `validation_checkpoints/<step>` for validation and then removed after local artifact copy/inspection.
+- Removed temporary validation checkpoint caches for `100`, `1000`, `2000`, and `3000`; latest check shows `validation_checkpoints/` empty.
+
+Analysis:
+- Fresh-noise training is running correctly and improving from step 1000 to step 2000, but step 3000 regressed on the fixed four-sample validation subset. Given the very small validation sample count and stochastic 25-step generation, this should be treated as a noisy early signal, not a reason to stop training.
+- Continue training and validate later checkpoints before changing the loss or adapter. If step 4000/5000 remain worse or visually collapse, inspect whether the validation seed/noise and sampler make the metric too noisy, and consider a larger validation subset.
+
+Next:
+- Keep monitoring toward checkpoint `4000`. When `_CHECKPOINT_METADATA` appears for `checkpoints/4000`, copy it to `validation_checkpoints/4000`, run the same v4 validation, inspect with `viz-open`, then delete the cached validation checkpoint copy.
