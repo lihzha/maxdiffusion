@@ -3401,3 +3401,5 @@ Next:
 Cleanup:
 - Deleted the task-owned v6 TPU slice `v6-64-12-lzha` after the final checkpoint and validation artifacts were inspected.
 - Verified `gcloud compute tpus tpu-vm describe v6-64-12-lzha --zone us-east1-d` returns `NOT_FOUND`; existing unrelated v6 slices were left untouched.
+- Deleted the suspended queued resource `v6-64-12-lzha-qr` with `gcloud alpha compute tpus queued-resources delete`; verified queued-resource describe now returns `NOT_FOUND`.
+- Confirmed there is no local `tpu watch` process matching `v6-64-12-lzha`, `v6-64-12-lzha-qr`, or the r20 side-adapter run, and no managed watcher files remain under `~/.tpu-jobs`.
