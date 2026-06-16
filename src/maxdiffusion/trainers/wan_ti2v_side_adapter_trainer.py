@@ -113,7 +113,7 @@ def _build_noise(
     dtype: jnp.dtype,
     config,
 ) -> jax.Array:
-    mode = getattr(config, "side_adapter_noise_mode", "fixed")
+    mode = getattr(config, "side_adapter_noise_mode", "fresh")
     if mode == "fresh":
         return jax.random.normal(rng, shape, dtype=dtype)
     if mode == "fixed":
@@ -513,7 +513,7 @@ class WanTI2VSideAdapterTrainer:
             max_logging.log(f"  Output dir: {config.output_dir}")
             max_logging.log(f"  Denoising sigma steps: {config.side_adapter_sampling_steps}")
             max_logging.log(f"  Timestep sampling: {getattr(config, 'side_adapter_t_sampling', 'uniform')}")
-            max_logging.log(f"  Noise mode: {getattr(config, 'side_adapter_noise_mode', 'fixed')}")
+            max_logging.log(f"  Noise mode: {getattr(config, 'side_adapter_noise_mode', 'fresh')}")
             max_logging.log(f"  Guidance scale: {config.side_adapter_guide_scale}")
 
         wandb_run = None

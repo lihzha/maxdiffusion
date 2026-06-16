@@ -150,7 +150,7 @@ side_adapter_layers: '0-29'
 side_adapter_hidden: 512
 side_adapter_heads: 8
 side_adapter_sampling_steps: 25
-side_adapter_noise_mode: 'fixed'
+side_adapter_noise_mode: 'fresh'
 side_adapter_t_sampling: 'uniform'
 side_adapter_logit_normal_mu: 0.0
 side_adapter_logit_normal_sigma: 1.0

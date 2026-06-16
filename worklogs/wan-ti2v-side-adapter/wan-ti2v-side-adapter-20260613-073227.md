@@ -2940,3 +2940,28 @@ Analysis:
 
 Next:
 - Keep the non-forced watcher active so it can submit a replacement when quota opens. On the next successful allocation, verify first step metrics and checkpoint 100 before starting validation.
+
+## 2026-06-16T06:52:12Z - fresh-noise correction and GT decode inspection
+
+Goal:
+- Correct the side-adapter default training noise mode after diagnosing that the previous MaxDiffusion run trained with fixed broadcast noise while validation sampled fresh noise, and expose ground-truth decoded videos for inspection.
+
+Change:
+- Switched `base_wan_5b_side_adapter.yml` to `side_adapter_noise_mode: 'fresh'`.
+- Switched the trainer's missing-config fallback and startup log fallback from `fixed` to `fresh`.
+
+Validation:
+- `python3 -m py_compile src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py`
+- `rg` confirmed the base config and trainer fallbacks now resolve to `fresh`.
+- Opened GT decoded videos with `viz-open` from the step-10000 validation gallery:
+  - `sample_0000_ep10099_v0_s00000_gt.mp4`
+  - `sample_0001_ep10099_v0_s00004_gt.mp4`
+  - `sample_0002_ep10099_v0_s00008_gt.mp4`
+  - `sample_0003_ep10099_v0_s00012_gt.mp4`
+- `ffprobe` confirmed GT videos are 320x192, 33 frames, 16 fps, 2.0625 seconds.
+
+Analysis:
+- The decoded GT videos/contact-sheet rows look coherent: stable table/object appearance and plausible robot motion. The severe saturation and geometry collapse are isolated to generated prediction rows, supporting the diagnosis that the bad result is training/generation mismatch rather than GT decode corruption.
+
+Next:
+- Commit and push the fresh-noise correction. The next training run should use fresh noise from the start and validate early against the same fresh-noise 25-step rollout.
