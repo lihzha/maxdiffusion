@@ -3207,3 +3207,49 @@ Storage cleanup:
 Next:
 - Continue monitoring to checkpoint `7000`, validate it with the same marker-guarded copy path, and compare against checkpoint `2000` and checkpoint `6000`.
 - If checkpoint `7000` is also worse than `2000`, prioritize a larger validation subset or a learning-rate/overtraining diagnosis before treating the later checkpoints as better just because the training loss remains stable.
+
+## 2026-06-16T10:54:00Z - r20 fresh-noise validation at step 7000
+
+Goal:
+- Validate checkpoint `7000` from the active r20 fresh-noise run, inspect artifacts with `viz-open`, remove the temporary validation checkpoint copy, and keep monitoring toward the next periodic validation checkpoint.
+
+Training status:
+- Active training TPU `v6-64-12-lzha` continued running on `us-east1-d`.
+- Worker-2 log showed checkpoint `7000` saved at `2026-06-16T10:41:04Z`, followed by finite losses through at least step `7040`.
+- Representative train losses: step `6900` `0.330437`, step `7000` `0.328580`, step `7010` `0.327172`, step `7020` `0.329599`, step `7030` `0.327190`, step `7040` `0.327921`; grad norms stayed roughly `1.1` to `1.5` and lr stayed `5.00e-05`.
+- Latest GCS checkpoint probe after validation showed retained checkpoints through at least `7600`.
+
+Validation:
+- Copied checkpoint `7000` to `validation_checkpoints/7000` only after verifying source success markers: root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
+- Validation ran on `v4-4-03-interactive` with `JAX_PLATFORMS` unset, restored step `7000`, and wrote `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_007000`.
+- Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step7000/step_007000`
+- `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step7000/step_007000`
+- Output videos have the expected `320x384`, `33` frames, `16` fps, duration `2.0625s`.
+
+Metrics:
+- Mean latent MSE `0.376921`
+- Mean pixel MSE `0.025593`
+- Mean SSIM `0.638788`
+- Per-sample metrics:
+  - sample `0`: latent MSE `0.210816`, pixel MSE `0.008733`, SSIM `0.7764`
+  - sample `1`: latent MSE `0.299005`, pixel MSE `0.025023`, SSIM `0.7171`
+  - sample `2`: latent MSE `0.544146`, pixel MSE `0.042086`, SSIM `0.4639`
+  - sample `3`: latent MSE `0.453718`, pixel MSE `0.026529`, SSIM `0.5977`
+
+Visual read:
+- Step `7000` is a real recovery relative to steps `3000` through `6000`, and is numerically close to the current step `2000` peak on the fixed four-sample subset.
+- Sample `0` is the cleanest seen so far: table/robot layout is preserved, occluding foreground artifacts are much reduced, and only mild blur/drift remains.
+- Sample `1` keeps the broad layout but still has a large blurred gray/white foreground object at lower left.
+- Sample `2` remains poor, with a large yellow/gray hallucinated foreground and scene smear in the bottom prediction row.
+- Sample `3` still has ghosted/occluding hallucinations, though less severe than sample `2`.
+
+Storage cleanup:
+- Removed `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation_checkpoints/7000` after copying and inspecting local artifacts.
+
+Analysis:
+- Step `7000` is the strongest later checkpoint so far, but step `2000` still has the best aggregate metrics on the fixed four-sample subset: step `2000` mean SSIM `0.6637`, pixel MSE `0.02544`; step `7000` mean SSIM `0.6388`, pixel MSE `0.02559`.
+- Because the fixed validation subset is tiny and sample `0` improved substantially at step `7000`, continue periodic validation before deciding whether training is overfitting or whether the subset/sampler is too noisy.
+
+Next:
+- Continue monitoring to checkpoint `8000`.
+- When checkpoint `8000` source success markers are present, copy it to `validation_checkpoints/8000`, run the same v4 validation, inspect with `viz-open`, then delete the cached validation checkpoint copy.
