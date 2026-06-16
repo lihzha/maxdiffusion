@@ -3096,3 +3096,39 @@ Analysis:
 
 Next:
 - Keep monitoring toward checkpoint `4000`. When `_CHECKPOINT_METADATA` appears for `checkpoints/4000`, copy it to `validation_checkpoints/4000`, run the same v4 validation, inspect with `viz-open`, then delete the cached validation checkpoint copy.
+
+## 2026-06-16T09:56:00Z - r20 fresh-noise validation at step 4000
+
+Goal:
+- Validate checkpoint `4000` from the active r20 fresh-noise run, inspect the generated artifacts, clean up the temporary validation checkpoint copy, and continue monitoring training toward checkpoint `5000`.
+
+Training status:
+- Active training TPU `v6-64-12-lzha` remains `READY` / `HEALTHY` in `us-east1-d`.
+- Latest checked retained training checkpoints: `4400`, `4500`, `4600`.
+- Worker-2 log shows finite losses through step `4410`. Representative values: step `4000` train loss `0.331319`, eval loss `0.335567`, step `4300` train loss `0.326093`, step `4410` train loss `0.328071`; lr stayed `5.00e-05`.
+
+Validation:
+- First `4000` validation attempt failed because `validation_checkpoints/4000` had been populated from a still-incomplete/stale checkpoint copy. Orbax saw an incomplete checkpoint even though some files existed.
+- Fixed by deleting `validation_checkpoints/4000`, waiting for the source checkpoint success markers, recopied with `gsutil -m cp -r`, and verified root/item `commit_success.txt` markers plus `_CHECKPOINT_METADATA` size before relaunching.
+- Validation ran on `v4-4-03-interactive` with `JAX_PLATFORMS` unset, restored step `4000`, and wrote `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_004000`.
+- Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step4000/step_004000`
+- `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step4000/step_004000`
+- Output videos have the expected `320x384`, `33` frames, `16` fps, duration `2.0625s`.
+
+Metrics:
+- Mean latent MSE `0.496580`
+- Mean pixel MSE `0.035743`
+- Mean SSIM `0.550084`
+- Per-sample SSIM: sample 0 `0.6074`, sample 1 `0.6392`, sample 2 `0.3928`, sample 3 `0.5609`.
+
+Visual read:
+- Step `4000` is visually worse than step `2000` and worse than step `3000` on this fixed four-sample subset.
+- The broad table/lab layout is still preserved, but predictions show heavy foreground smearing, color drift, and incorrect occluding geometry, especially samples `2` and `3`.
+- This is consistent with the degraded aggregate metrics; do not treat step `4000` as an improvement.
+
+Storage cleanup:
+- Removed `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation_checkpoints/4000` after copying and inspecting local artifacts.
+
+Next:
+- Continue monitoring toward checkpoint `5000`.
+- For future validation copies, only copy a checkpoint after verifying source markers: root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
