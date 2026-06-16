@@ -2965,3 +2965,37 @@ Analysis:
 
 Next:
 - Commit and push the fresh-noise correction. The next training run should use fresh noise from the start and validate early against the same fresh-noise 25-step rollout.
+
+## 2026-06-16T06:58:55Z - r20 fresh-noise training launch
+
+Goal:
+- Launch a new full-scale Wan2.2 TI2V 5B side-adapter run after changing training noise from fixed broadcast noise to fresh random noise.
+
+Version Control:
+- branch: `adaptor`
+- launch_commit: `779c3e5ddda35b296df20a391cb1370794003389`
+- change under test: `side_adapter_noise_mode: 'fresh'` plus trainer fresh-noise fallback/logging.
+
+Command / Job:
+- run_name: `wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855`
+- tpu_name: `v6-64-12-lzha`
+- target: v6e-64 in `us-east1-d`
+- checkpoint_root: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter`
+- train_data: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
+- val_data: `gs://v6_east1d/datasets/droid_wan_side_adapter/val`
+- model: `Wan-AI/Wan2.2-TI2V-5B-Diffusers`
+- max_train_steps: `10000`
+- checkpoint_every: `100`
+- eval_every: `1000`
+- eval_max_batches: `4`
+- batch: `PER_DEVICE_BATCH_SIZE=8`, `GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512`, `GLOBAL_BATCH_SIZE_TO_LOAD=512`
+- shuffle_buffer: `1024`
+- wandb_project: `maxdiffusion-wan-side-adapter`
+- local_log: `logs/tpu_watch_wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855.log`
+- setup: `git fetch origin adaptor && git checkout --detach 779c3e5ddda35b296df20a391cb1370794003389 && bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers`
+
+Success criteria:
+- Worker 0 reaches the intended commit and clean detached tree.
+- Training startup logs show 64 JAX devices, adapter trainable params, frozen 5B backbone params, and `Noise mode: fresh`.
+- First data batch and first non-NaN losses appear.
+- Checkpoint 100 is written, then the existing validation watcher can launch fresh-noise 25-step visual validation.
