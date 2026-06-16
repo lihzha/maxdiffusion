@@ -3022,3 +3022,16 @@ Result update:
 - The direct node delete hung inside the local watcher for several minutes. Terminating only the stuck child `gcloud tpu-vm delete v6-64-12-lzha` process allowed the delete to unwind; the watcher then deleted the stale queued resource and submitted replacement QR `v6-64-12-lzha-qr`.
 - Current state at this entry: `v6-64-12-lzha-qr` is `WAITING_FOR_RESOURCES`, node `v6-64-12-lzha` is absent, and the training watcher remains active.
 - Stopped the separate validation retry loop for `v6-8-wan-val-lzha` after confirming no validation node or queued resource existed. Since the project is at the v6e preemptible quota limit when the 64-chip training slice is active, validation retries can race the training requeue and should be relaunched only after the training allocation is stable or after a checkpoint is intentionally validated during a training gap.
+
+Result update:
+- The replacement QR returned a healthy `READY` v6e-64 slice, but setup had overlapping Hugging Face prefetches left from the maintenance-interrupted attempt on multiple workers.
+- Worker 0 showed an orphaned setup process group parented by PID 1 holding an HF cache lock on an incomplete WAN blob, while the current setup tree was still connected to the active watcher. Killed only orphaned setup process groups parented by PID 1 across workers; the active watcher-connected setup trees were left intact.
+- After cleanup, all workers completed WAN snapshot verification and `tpu watch` launched training at `2026-06-16T08:25:40Z`.
+- Worker 0 confirms run `wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855`, `GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512`, `GLOBAL_BATCH_SIZE_TO_LOAD=512`, `PER_DEVICE_BATCH_SIZE=8`, pure FSDP parallelism (`ici_fsdp_parallelism=-1`, `dcn_fsdp_parallelism=-1`), and `side_adapter_noise_mode: fresh`.
+- The worker checkout is branch head `97de3950f7d7bb824de0aa00830e19dd3fec341c`, which is worklog-only commits on top of the fresh-noise implementation commit.
+- The trainer restored checkpoint `600` from GCS and logged `[wan_side_adapter] resumed at step 600` at `2026-06-16T08:27:19Z`.
+- All 16 ranks were alive through the long first resumed compile/input execution after restore.
+- W&B resumed as run `j17wnp4x`: `https://wandb.ai/lihanzha/maxdiffusion-wan-side-adapter/runs/j17wnp4x`.
+- Post-resume losses are finite: step 610 `0.352888`, step 700 `0.348239`, step 760 `0.354832`; grad norms are around `2.0-3.0`, lr `5.00e-05`.
+- Checkpoint `700` was saved and finalized on GCS. GCS now keeps checkpoints `500`, `600`, and `700`.
+- Current state at this entry: training is active and healthy. Continue monitoring toward checkpoint `800`, checkpoint `1000`, and the next validation opportunity.
