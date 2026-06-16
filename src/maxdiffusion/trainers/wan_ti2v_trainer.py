@@ -327,41 +327,38 @@ class WanTI2VTrainer(BaseWanTrainer):
         all_losses = jax.device_get(gathered).flatten().tolist()
 
         # Perceptual metrics via full multi-step generation.
-        # Each host runs inference on its own local slice (B_local samples) using
-        # the same data sharding as training — same memory footprint as a training step.
-        # Only small scalars are gathered at the end.
+        # Each host works on its own B_local samples extracted directly from eval_batch
+        # (no allgather of full-size latent tensors). Only scalar metrics are gathered.
         ssim_score = psnr_score = lpips_score = None
         if hasattr(self, "_pipeline") and hasattr(self._pipeline, "vae"):
             from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import run_inference_ti2v_2_2
             import torch as _torch
 
-            # Gather latents and ehs to host memory, then slice the local portion.
-            # frame0 and gt are also needed for GT VAE decode (small tensors).
-            frame0_all = jax.device_get(
-                multihost_utils.process_allgather(metrics["latents"]["frame0"], tiled=True)
-            )  # (B_global, C, 1, H, W)
-            gt_all = jax.device_get(
-                multihost_utils.process_allgather(metrics["latents"]["gt"], tiled=True)
-            )  # (B_global, C, F, H, W)
-            ehs_all = jax.device_get(
-                multihost_utils.process_allgather(metrics["latents"]["encoder_hidden_states"], tiled=True)
-            )  # (B_global, 512, 4096)
+            # Extract per-host local data directly from the globally-sharded eval_batch.
+            # MultiHostDataLoadIterator places each host's unique samples on local
+            # devices (one sample per device with P(('data','fsdp','context','tensor'))).
+            # Collecting all local addressable_shards avoids any cross-host communication.
+            def _host_local_numpy(arr):
+                shards = sorted(
+                    arr.addressable_shards,
+                    key=lambda s: s.index[0].start if s.index[0].start is not None else 0,
+                )
+                return np.concatenate([np.asarray(s.data) for s in shards], axis=0)
 
             N = jax.process_count()
-            B_global = gt_all.shape[0]
-            B_local = B_global // N
-            start = jax.process_index() * B_local
+            B_local = self.config.global_batch_size_to_train_on // N
 
-            # Local slices — each host only processes its own B_local samples.
-            frame0_local = frame0_all[start : start + B_local]   # (B_local, C, 1, H, W)
-            gt_local = gt_all[start : start + B_local]           # (B_local, C, F, H, W)
-            ehs_local = ehs_all[start : start + B_local]         # (B_local, 512, 4096)
+            gt_local = _host_local_numpy(eval_batch["latents"])[:B_local]          # (B_local, C, F, H, W)
+            ehs_local = _host_local_numpy(eval_batch["encoder_hidden_states"])[:B_local]  # (B_local, 512, 4096)
+
+            # frame0: first n_hist latent frame(s), used as Ti2V clean conditioning.
+            frame0_local = gt_local[:, :, :self._n_hist]  # (B_local, C, n_hist, H, W)
 
             # Build inference inputs (channels-last) from local slices.
             # frame0 channels-first (B, C, 1, H, W) → channels-last (B, 1, H, W, C)
-            frame0_cl = np.transpose(frame0_local.astype(np.float32), (0, 2, 3, 4, 1))
+            frame0_cl = np.transpose(frame0_local[:, :, :1].astype(np.float32), (0, 2, 3, 4, 1))
             B_loc, C, F_lat, H_lat, W_lat = gt_local.shape
-            n_future = F_lat - 1
+            n_future = F_lat - self._n_hist
 
             # Initial latents: clean frame 0 + pure Gaussian noise for future frames
             rng_inf = jax.random.PRNGKey(step)
