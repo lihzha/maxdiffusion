@@ -3347,3 +3347,53 @@ Analysis:
 Next:
 - Continue monitoring to checkpoint `10000` and validate it once source success markers appear.
 - Unless final checkpoint recovers, recommend keeping step `2000` and step `7000` for closer comparison and diagnosing the persistent sample `2` collapse before launching another long run.
+
+## 2026-06-16T11:55:00Z - r20 fresh-noise validation at final step 10000
+
+Goal:
+- Validate the final checkpoint `10000` from the r20 fresh-noise run, inspect the videos with `viz-open`, clean the temporary validation checkpoint copy, and record final run status.
+
+Training status:
+- Checkpoint `10000` source success markers were present before validation copy: root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
+- Worker-2 training log shows the run reached `step 10000/10000 loss=0.323785 grad_norm=1.247 lr=5.00e-05 steps/s=0.897`.
+- Final checkpoint save completed at `2026-06-16T11:39:52Z`: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/checkpoints/10000`.
+- No validation or training Python process remained after the step `10000` validation finished.
+
+Validation:
+- Copied checkpoint `10000` to `validation_checkpoints/10000`, verified copied markers, and launched v4 validation on `v4-4-03-interactive`.
+- Validation restored step `10000` cleanly from the validation prefix; checkpoint load completed in `49.47` seconds.
+- GCS output: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_010000`
+- Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step10000/step_010000`
+- `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step10000/step_010000`
+- Output videos have the expected metadata: comparison videos `320x384`, GT/pred videos `320x192`, all `33` frames at `16` fps, duration `2.0625s`.
+
+Metrics:
+- Mean latent MSE `0.397113`
+- Mean pixel MSE `0.026944`
+- Mean SSIM `0.615260`
+- Per-sample metrics:
+  - sample `0`: latent MSE `0.281489`, pixel MSE `0.013569`, SSIM `0.6986`
+  - sample `1`: latent MSE `0.287343`, pixel MSE `0.022948`, SSIM `0.7242`
+  - sample `2`: latent MSE `0.557821`, pixel MSE `0.044859`, SSIM `0.4445`
+  - sample `3`: latent MSE `0.461800`, pixel MSE `0.026403`, SSIM `0.5938`
+
+Visual read:
+- Step `10000` did not recover from the late-checkpoint regression.
+- Sample `0` preserves the coarse table/robot layout but develops table/object smearing in later frames.
+- Sample `1` keeps the broad scene structure and has a usable SSIM, but the lower-left foreground artifact and tabletop blur remain.
+- Sample `2` is still the persistent failure case: after the first generated frame, the prediction shifts into a bright/yellow wrong scene with strong smear and poor table/robot alignment.
+- Sample `3` still has occluding/ghosted foreground artifacts and wrong object appearance.
+
+Storage cleanup:
+- Removed `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation_checkpoints/10000` after local copy and inspection.
+- Local artifacts are kept under `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step10000` for inspection.
+
+Analysis:
+- Final checkpoint quality is essentially tied with step `9000` and worse than the best earlier checkpoints on the fixed four-sample validation subset.
+- Best aggregate fixed-subset checkpoint remains step `2000` with mean SSIM `0.6637`; best later checkpoint remains step `7000` with mean SSIM `0.6388`.
+- Training loss stayed stable around `0.32`, but validation videos show late training is not improving perceptual quality and repeatedly fails on sample `2`.
+
+Next:
+- Treat the final checkpoint as a completed but not-best run result.
+- Keep checkpoints `2000`, `7000`, and `10000` for comparison if storage policy allows; otherwise preserve the validation artifacts and select `2000` or `7000` before any downstream usage.
+- Before another long run, diagnose why the fixed validation subset has persistent sample `2` scene collapse despite fresh training noise and stable diffusion loss.
