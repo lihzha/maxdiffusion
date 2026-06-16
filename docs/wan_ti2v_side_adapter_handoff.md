@@ -18,10 +18,13 @@ DROID training run.
   resumed from checkpoint 5200 on `v6-64-08-lzha` at commit
   `b85becd444f10c41c83af888f308602f959d8ba7`. It reached W&B summary step
   9970 with `train/loss ~= 0.2849`, but `v6-64-08-lzha` was preempted before
-  checkpoint 10000 was written. GCS retained checkpoints `5000`, `9700`,
-  `9800`, and `9900`. The preempted TPU was deleted, and the last 100 steps
-  were relaunched from checkpoint 9900 on `v6-64-01-lihan` using the same run
-  name and training command from branch `adaptor`.
+  checkpoint 10000 was written. A short retry on `v6-64-10-lihan` also hit
+  maintenance before a new checkpoint. The successful final retry ran from
+  checkpoint 9900 on `v6-64-11-lihan` at commit
+  `f5ed765f3f7acf67d37784261698bac6d3015532`, with W&B run `z0uuxuue`.
+  It reached step 10000 with `train/loss = 0.28593420684337617`, wrote
+  checkpoint `10000`, and W&B marked the retry finished. GCS retained
+  checkpoints `5000`, `9800`, `9900`, and `10000`.
 - Periodic validation for checkpoint 5000 completed on `v6-8-wan-val-lzha`.
   Outputs are under
   `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation/step_005000/`.
@@ -72,6 +75,19 @@ DROID training run.
   a valid `320x384`, 33-frame, 16 fps MP4 with nonblank extracted frames; visual
   quality remains artifact-heavy but not corrupt. The temporary checkpoint
   cache was deleted afterward, leaving `validation_checkpoints/` at `0 B`.
+- Final validation for checkpoint 10000 completed on `v6-64-11-lihan` from
+  staged cache
+  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation_checkpoints/10000/`.
+  Outputs are under
+  `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-denoise-ckpt100-r19-20260615-141659/validation/step_010000/`.
+  It generated 4 validation samples with aggregate mean latent MSE `1.6042`,
+  mean pixel MSE `0.1097`, and mean SSIM `0.3212`. Sample 1 comparison video is
+  a valid `320x384`, 33-frame, 16 fps MP4. Extracted first, middle, and final
+  frames are nonblank and full-range; the anchor frame is aligned, while later
+  predicted frames remain artifact-heavy. The temporary checkpoint cache was
+  deleted afterward, leaving `validation_checkpoints/` at `0 B`. Worker0 logs
+  were copied locally to
+  `/tmp/wan_side_adapter_step10000_validation/tpu_logs/`.
 - The side-adapter model/trainer is implemented for `MODEL_TYPE=SIDE_ADAPTER_TI2V`.
 - The converted cached DROID dataset lives on the v6 bucket:
   - train: `gs://v6_east1d/datasets/droid_wan_side_adapter/train`
