@@ -5,23 +5,22 @@ Each TFRecord example stores one full episode in pre-encoded form:
     latent_cam0: (F_lat, C, H_lat, W_lat)  float16 — WAN VAE latent sequence, camera 0
     latent_cam1: (F_lat, C, H_lat, W_lat)  float16 — WAN VAE latent sequence, camera 1
     latent_cam2: (F_lat, C, H_lat, W_lat)  float16 — WAN VAE latent sequence, camera 2
-    action:      (T_ep, 7)                 float32 — raw (unnormalised) cartesian+gripper
+    action:      (T_ep, 7)                 float32 — raw (unnormalised) cartesian+gripper,
+                                                     T_ep raw video frames (not pre-grouped)
     text_embed:  (512, 4096)               float16 — T5 text tokens
     episode_id:  int64
     traj_len:    int64                              — F_lat (number of latent frames)
 
-Trajectories are batched together; within each batch the window size W equals
-``min(traj_len in batch)``, so ``n_fut = W - n_hist`` varies per batch. Three
-camera latents are concatenated along H and transposed to channel-first.
+Each trajectory is flat_mapped into windows. History frames are picked with a
+random stride going backwards from ``frame_now`` (ctrl-world style); future frames
+are contiguous from ``frame_now``. Three camera latents are concatenated along H
+and transposed to channel-first.
 
-Actions are normalised to [-1, 1] using per-dimension percentile stats loaded
-from ``stats_path`` (produced by ``make_wan_ctrl_world_tfrecords.py``).  Four
-consecutive raw-frame actions are associated with each latent frame, so the
-output action has shape ``(4*W, 7)`` — the trainer groups them into
-``(W, 4, 7)`` before passing to the action encoder.
+Actions are normalised to [-1, 1] using per-dimension percentile stats. Latent
+frame k uses raw actions at indices 4k..4k+3.
 
 Each yielded batch contains:
-    latent:      (B, C, W, H_lat*3, W_lat)  float32  W varies per batch
+    latent:      (B, C, W, H_lat*3, W_lat)  float32
     action:      (B, 4*W, 7)                float32  in [-1, 1]
     text_embeds: (B, 512, 4096)             float32
 """
@@ -81,30 +80,27 @@ def _load_action_stats(stats_path: str) -> tuple[np.ndarray, np.ndarray]:
 class WanCtrlWorldDroidDataset:
     """Pre-encoded TFRecord dataset for action-conditioned WAN training.
 
-    Expects TFRecord shards at ``data_dir/shard-*.tfrecord`` produced by
-    ``make_wan_ctrl_world_tfrecords.py``.
-
-    Trajectories are batched together. Window size W is determined per batch:
-
-    * ``max_latent_frames > 0``: W = ``max_latent_frames`` (static shapes, no
-      JAX recompilation). Only trajectories of at least that length are kept.
-    * ``max_latent_frames <= 0``: W = ``min(traj_len in batch)`` (dynamic; JAX
-      recompiles on each unique W).
-
-    Three camera latents are concatenated along H, then transposed to
-    channel-first, matching the trainer's expected layout.
+    Each trajectory is flat_mapped into per-frame windows. History frames are
+    sampled with a random stride ``skip_his`` going backwards from ``frame_now``;
+    future frames are contiguous from ``frame_now``. This matches the Ctrl-World
+    data-augmentation scheme.
 
     Args:
         data_dir:           Directory of ``shard-*.tfrecord`` files.
         stats_path:         Path to ``action_stats.json`` with ``state_01`` /
                             ``state_99`` arrays for per-dimension normalisation.
         n_hist:             Number of history latent frames per window.
-        max_latent_frames:  Fixed total window length (n_hist + n_fut). Pass
-                            ``-1`` (default) to use per-batch dynamic sizing.
+        max_latent_frames:  Total window length (n_hist + n_fut). Must be > 0.
         action_dim:         Width of a single raw-frame action (default 7).
         batch_size:         Per-host batch size.
         split:              ``"train"`` or ``"val"``.
         seed:               Shuffle seed.
+        max_skip_his:       Maximum stride for history frame sampling. At train
+                            time ``skip_his`` is drawn uniformly from
+                            ``[1, max_skip_his]`` (or forced to 0 with probability
+                            ``skip_his_zero_prob``). At val time ``skip_his=1``.
+        skip_his_zero_prob: Probability of collapsing all history to repeats of
+                            ``frame_now`` (``skip_his=0``). Train only.
         shuffle:            Whether to shuffle.
         shuffle_buffer:     Trajectory-level shuffle buffer size.
         shard_for_training: Shard files across JAX processes.
@@ -116,22 +112,30 @@ class WanCtrlWorldDroidDataset:
         data_dir: str,
         stats_path: str,
         n_hist: int = 1,
-        max_latent_frames: int = -1,
+        max_latent_frames: int,
         action_dim: int = 7,
         batch_size: int,
         split: str = "train",
         seed: int = 0,
+        max_skip_his: int = 1,
+        skip_his_zero_prob: float = 0.0,
         shuffle: bool = True,
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
     ):
+        if max_latent_frames <= 0:
+            raise ValueError("max_latent_frames must be > 0")
+
         _configure_tf()
         tf.random.set_seed(seed)
 
         self._is_train = split == "train"
         self.n_hist = n_hist
+        self.n_fut = max_latent_frames - n_hist
         self.max_latent_frames = max_latent_frames
         self.action_dim = action_dim
+        self.max_skip_his = max_skip_his
+        self.skip_his_zero_prob = skip_his_zero_prob
         self._seed = seed
 
         p01, p99 = _load_action_stats(stats_path)
@@ -164,17 +168,20 @@ class WanCtrlWorldDroidDataset:
         ds = ds.with_options(_tf_options(deterministic=not self._is_train))
         ds = ds.map(self._parse, num_parallel_calls=AUTOTUNE)
 
-        # Drop episodes shorter than the fixed window (or n_hist+1 if no fixed window).
-        min_len = max_latent_frames if max_latent_frames > 0 else n_hist + 1
-        ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], min_len))
+        # Keep only trajectories long enough to have at least one valid future window.
+        ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], self.n_fut))
 
         if self._is_train:
             ds = ds.repeat()
         if shuffle and self._is_train:
             ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=True)
 
-        ds = ds.padded_batch(batch_size, padded_shapes=None, drop_remainder=True)
-        ds = ds.map(self._build_batch, num_parallel_calls=AUTOTUNE)
+        ds = ds.flat_map(self._traj_to_windows)
+
+        if shuffle and self._is_train:
+            ds = ds.shuffle(shuffle_buffer * batch_size, seed=seed, reshuffle_each_iteration=True)
+
+        ds = ds.batch(batch_size, drop_remainder=True)
         ds = ds.prefetch(AUTOTUNE)
         self.dataset = ds
 
@@ -192,7 +199,7 @@ class WanCtrlWorldDroidDataset:
         cam2.set_shape([None, None, None, None])
 
         action = tf.io.parse_tensor(f["action"], out_type=tf.float32)
-        # (T_ep, 7) raw unnormalised
+        # (4*F_lat, 7) raw unnormalised — 4 consecutive raw frames per latent frame
         action.set_shape([None, None])
 
         text_embed = tf.cast(
@@ -212,63 +219,90 @@ class WanCtrlWorldDroidDataset:
             "episode_id": f["episode_id"],
         }
 
-    # ── Batch builder ──────────────────────────────────────────────────────────
+    # ── Trajectory → windows ───────────────────────────────────────────────────
 
-    def _build_batch(self, batch: dict) -> dict:
-        """Build one training batch from a trajectory-level padded batch.
+    def _traj_to_windows(self, traj: dict) -> tf.data.Dataset:
+        T = tf.cast(traj["traj_len"], tf.int32)
+        # frame_now in [0, T - n_fut]: future window frame_now..frame_now+n_fut-1 stays in bounds.
+        valid_starts = tf.range(0, T - self.n_fut + 1)
+        return tf.data.Dataset.from_tensor_slices(valid_starts).map(
+            lambda frame_now: self._build_window(traj, frame_now),
+            num_parallel_calls=AUTOTUNE,
+            deterministic=not self._is_train,
+        )
 
-        Window size W = max_latent_frames if fixed, else min(traj_len in batch).
-        A random start is sampled per trajectory so the window fits within its
-        valid (non-padded) frames.
-        """
-        # batch["traj_len"]: (B,) int32
-        # batch["cam*"]:     (B, T_max, C, H_lat, W_lat) float16  (padded)
-        # batch["action_raw"]: (B, T_ep_max, 7) float32            (padded)
+    def _build_window(self, traj: dict, frame_now: tf.Tensor) -> dict:
+        n_hist = self.n_hist
+        n_fut = self.n_fut
+        W = n_hist + n_fut
+        T = tf.cast(traj["traj_len"], tf.int32)
 
-        # Use a fixed window so all batches have the same shape (avoids JAX recompilation).
-        W = self.max_latent_frames if self.max_latent_frames > 0 else tf.reduce_min(batch["traj_len"])
-        B = tf.shape(batch["traj_len"])[0]
+        # Stateless RNG keyed on (episode_id, frame_now) for reproducibility.
+        episode = tf.cast(traj["episode_id"], tf.int64)
+        seed_a = tf.stack([
+            tf.cast(self._seed, tf.int32) + tf.cast(episode % 2147483647, tf.int32),
+            tf.cast(frame_now, tf.int32),
+        ])
+        seed_b = tf.stack([
+            tf.cast(self._seed, tf.int32) + tf.cast(episode % 2147483647, tf.int32),
+            tf.cast(frame_now, tf.int32) + 7919,
+        ])
 
-        # Random start per trajectory in [0, traj_len - W].
-        max_starts = tf.maximum(batch["traj_len"] - W, 0)  # (B,)
-        rand = tf.random.uniform([B], 0.0, 1.0, dtype=tf.float32, seed=self._seed)
-        starts = tf.cast(tf.cast(max_starts, tf.float32) * rand, tf.int32)  # (B,)
+        if self._is_train:
+            zero_skip = tf.random.stateless_uniform([], seed=seed_b) < self.skip_his_zero_prob
+            skip_his = tf.where(
+                zero_skip,
+                tf.constant(0, tf.int32),
+                tf.random.stateless_uniform(
+                    [], seed=seed_a, minval=1, maxval=self.max_skip_his + 1, dtype=tf.int32
+                ),
+            )
+        else:
+            skip_his = tf.constant(1, dtype=tf.int32)
 
-        # Latent frame indices: (B, W)
-        frame_indices = tf.expand_dims(starts, 1) + tf.expand_dims(tf.range(W), 0)
+        # History: n_hist frames going back at stride skip_his from frame_now.
+        hist_offsets = tf.range(n_hist, 0, -1) * skip_his          # (n_hist,)
+        # Future: n_fut contiguous frames starting at frame_now.
+        fut_offsets = tf.range(n_fut)                                # (n_fut,)
 
-        # Gather window from each cam: (B, W, C, H_lat, W_lat)
-        cam0_w = tf.gather(batch["cam0"], frame_indices, batch_dims=1)
-        cam1_w = tf.gather(batch["cam1"], frame_indices, batch_dims=1)
-        cam2_w = tf.gather(batch["cam2"], frame_indices, batch_dims=1)
+        rgb_id = tf.concat([
+            tf.cast(frame_now, tf.int32) - hist_offsets,
+            tf.cast(frame_now, tf.int32) + fut_offsets,
+        ], axis=0)                                                   # (W,)
+        rgb_id = tf.clip_by_value(rgb_id, 0, T - 1)
 
-        # Concat cameras along H: (B, W, C, H_lat*3, W_lat)
-        latent = tf.cast(tf.concat([cam0_w, cam1_w, cam2_w], axis=-2), tf.float32)
-        # Transpose to channel-first: (B, C, W, H_lat*3, W_lat)
-        latent = tf.transpose(latent, [0, 2, 1, 3, 4])
+        # Gather latents: (W, C, H_lat, W_lat) per camera.
+        cam0_w = tf.cast(tf.gather(traj["cam0"], rgb_id, axis=0), tf.float32)
+        cam1_w = tf.cast(tf.gather(traj["cam1"], rgb_id, axis=0), tf.float32)
+        cam2_w = tf.cast(tf.gather(traj["cam2"], rgb_id, axis=0), tf.float32)
 
-        # Action window: 4 raw frames per latent frame.
-        # Shift back 3 so that for mid-trajectory windows (starts>0) the anchor
-        # frame's action window covers raw frames [4s-3..4s], matching what the
-        # WAN VAE encoded.  For trajectory-start windows (starts==0) the shift
-        # is clamped to 0 and the trainer zero-pads the unused anchor slots.
-        T_ep_max = tf.shape(batch["action_raw"])[1]
-        raw_starts = tf.maximum(starts * 4 - 3, 0)  # (B,)
-        raw_frame_indices = tf.clip_by_value(
-            tf.expand_dims(raw_starts, 1) + tf.expand_dims(tf.range(4 * W), 0),
-            0, T_ep_max - 1,
-        )  # (B, 4W)
-        action_raw = tf.gather(batch["action_raw"], raw_frame_indices, batch_dims=1)  # (B, 4W, 7)
+        # Concat cameras along H: (W, C, H_lat*3, W_lat), then channel-first: (C, W, H_lat*3, W_lat).
+        latent = tf.concat([cam0_w, cam1_w, cam2_w], axis=-2)
+        latent = tf.transpose(latent, [1, 0, 2, 3])
+
+        # Actions: WAN VAE has non-uniform temporal compression — latent 0 is a
+        # single-frame anchor (raw frame 0); latent k>0 covers raw frames 4k-3..4k.
+        # Formula: action_start = 4*rgb_id[k] - 3, clipped to 0.
+        # This naturally repeats action[0] for the anchor ([-3,-2,-1,0] → all 0).
+        T_raw = tf.shape(traj["action_raw"])[0]
+        raw_indices = tf.clip_by_value(
+            tf.reshape(rgb_id[:, None] * 4 - 3 + tf.range(4)[None, :], [-1]),
+            0, T_raw - 1,
+        )                                                             # (4*W,)
+        action_raw = tf.gather(traj["action_raw"], raw_indices, axis=0)  # (4*W, 7)
 
         # Normalise to [-1, 1].
         action = 2.0 * (action_raw - self._p01) / (self._p99 - self._p01 + 1e-8) - 1.0
         action = tf.clip_by_value(action, -1.0, 1.0)
 
+        # Set static shapes for downstream tracing.
+        latent.set_shape([None, W, None, None])
+        action.set_shape([4 * W, self.action_dim])
+
         return {
             "latent":      latent,
             "action":      action,
-            "text_embeds": batch["text_embed"],
-            "starts":      tf.cast(starts, tf.int32),
+            "text_embeds": traj["text_embed"],
         }
 
     def __iter__(self):

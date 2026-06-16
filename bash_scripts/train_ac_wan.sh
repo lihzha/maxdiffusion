@@ -99,7 +99,7 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-    run_name=ac_wan_droid_2 \
+    run_name=ac_wan_droid_history \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -111,7 +111,7 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=MATMUL_WITHOUT_BATCH \
-    ici_data_parallelism=2 \
+    ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=4 \
@@ -124,7 +124,7 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=100100 \
     checkpoint_every=100 \
     checkpoint_keep_period=10000 \
-    per_device_batch_size=0.25 \
+    per_device_batch_size=0.5 \
     height=480 \
     width=832 \
     num_frames=81 \
@@ -161,5 +161,5 @@ python src/maxdiffusion/train_wan.py \
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name v6-32-01-catherine -n 32 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ac_wan.sh" 
-# tpu tmux v6-32-01-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ac_wan.sh' Enter
+# tpu create v6 --name v6-64-01-catherine -n 64 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ac_wan.sh" 
+# tpu tmux v6-64-01-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ac_wan.sh' Enter

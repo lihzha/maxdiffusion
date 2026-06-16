@@ -112,12 +112,11 @@ def _encode_actions(
     rest_of_state: nnx.State,
     actions: jnp.ndarray,
     F_lat: int,
-    traj_starts: jnp.ndarray,
 ) -> jnp.ndarray:
     """Encode grouped actions into cross-attention tokens (no text conditioning)."""
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
-    actions_grouped = _group_actions(actions, F_lat, traj_starts)  # (B, F_lat, 4, 7)
-    return model.action_encoder(actions_grouped, None)              # (B, F_lat, 4096)
+    actions_grouped = _group_actions(actions, F_lat)  # (B, F_lat, 4, 7)
+    return model.action_encoder(actions_grouped, None) # (B, F_lat, 4096)
 
 
 # ── Full denoising loop ───────────────────────────────────────────────────────
@@ -307,7 +306,7 @@ def run(argv: Sequence[str]) -> None:
     from maxdiffusion.input_pipeline.robot.wan_ctrl_world_dataset import (
         WanCtrlWorldDroidDataset,
     )
-    max_latent_frames = 1 + (config.num_frames - 1) // 4
+    max_latent_frames = 1 + (config.num_frames - 1) // 4 + config.num_history_latent_frames
     dataset = WanCtrlWorldDroidDataset(
         data_dir=config.eval_data_dir,
         stats_path=config.action_stats_path,
@@ -317,6 +316,8 @@ def run(argv: Sequence[str]) -> None:
         batch_size=1,
         split="val",
         seed=config.seed,
+        max_skip_his=getattr(config, "max_skip_his", 1),
+        skip_his_zero_prob=0.0,
         shuffle=False,
         shard_for_training=False,
     )
@@ -340,7 +341,6 @@ def run(argv: Sequence[str]) -> None:
 
         latent = jnp.array(batch["latent"]).astype(weights_dtype)       # (1, C, W, H, Wl)
         actions = jnp.array(batch["action"]).astype(weights_dtype)      # (1, 4*W, 7)
-        traj_starts = jnp.array(batch["starts"])                         # (1,) int32
 
         _, _, F_lat, _, _ = latent.shape
         clean_hist = latent[:, :, :n_hist, :, :]                        # (1, C, n_hist, H, Wl)
@@ -350,7 +350,7 @@ def run(argv: Sequence[str]) -> None:
         # Encode actions (constant across denoising steps).
         action_tokens = p_encode(
             params, actions=actions,
-            F_lat=F_lat, traj_starts=traj_starts,
+            F_lat=F_lat,
         )  # (1, F_lat, 4096)
 
         # Denoising.
