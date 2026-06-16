@@ -141,6 +141,9 @@ class WanTI2VTrainer(BaseWanTrainer):
     def _get_checkpointer(self):
         return WanCheckpointerTI2V_2_2(config=self.config)
 
+    def _needs_vae_for_eval(self) -> bool:
+        return self.config.eval_every != -1
+
     def post_train_step(self, state, step: int):
         """EMA teacher update, run outside JIT so teacher_update_every is a free host check."""
         ema_decay = getattr(self.config, "ema_decay", 0.0)
@@ -328,7 +331,7 @@ class WanTI2VTrainer(BaseWanTrainer):
         # the same data sharding as training — same memory footprint as a training step.
         # Only small scalars are gathered at the end.
         ssim_score = psnr_score = lpips_score = None
-        if hasattr(self, "_pipeline"):
+        if hasattr(self, "_pipeline") and hasattr(self._pipeline, "vae"):
             from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import run_inference_ti2v_2_2
             import torch as _torch
 
