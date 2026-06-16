@@ -372,12 +372,13 @@ class WanTI2VTrainer(BaseWanTrainer):
                 [frame0_cl, noise_future.astype(np.float32)], axis=1
             )  # (B_local, F, H, W, C)
 
-            # Build globally-sharded arrays from per-host local slices, matching how
-            # training data is distributed via MultiHostDataLoadIterator.
-            data_sharding = NamedSharding(mesh, P(*self.config.data_sharding))
-            init_latents_jax = jax.make_array_from_process_local_data(data_sharding, init_latents_np)
-            frame0_cl_jax = jax.make_array_from_process_local_data(data_sharding, frame0_cl)
-            ehs_jax = jax.make_array_from_process_local_data(data_sharding, ehs_local.astype(np.float32))
+            # Shard eval tensors only along the data axis (replicated within each
+            # FSDP/tensor group). P(*data_sharding) shards across all 64 devices
+            # and requires batch ≥ 64; P('data') only requires batch ≥ num_data_hosts.
+            eval_data_sharding = NamedSharding(mesh, P('data'))
+            init_latents_jax = jax.make_array_from_process_local_data(eval_data_sharding, init_latents_np)
+            frame0_cl_jax = jax.make_array_from_process_local_data(eval_data_sharding, frame0_cl)
+            ehs_jax = jax.make_array_from_process_local_data(eval_data_sharding, ehs_local.astype(np.float32))
 
             # Inference scheduler: set up N-step schedule (different from 1000-step training).
             num_inference_steps = getattr(self.config, "num_inference_steps", 20)
