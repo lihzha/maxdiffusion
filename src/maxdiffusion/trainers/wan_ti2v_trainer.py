@@ -334,41 +334,50 @@ class WanTI2VTrainer(BaseWanTrainer):
             from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import run_inference_ti2v_2_2
             import torch as _torch
 
-            # Extract per-host local data directly from the globally-sharded eval_batch.
-            # MultiHostDataLoadIterator places each host's unique samples on local
-            # devices (one sample per device with P(('data','fsdp','context','tensor'))).
-            # Collecting all local addressable_shards avoids any cross-host communication.
-            def _host_local_numpy(arr):
-                shards = sorted(
-                    arr.addressable_shards,
-                    key=lambda s: s.index[0].start if s.index[0].start is not None else 0,
-                )
-                return np.concatenate([np.asarray(s.data) for s in shards], axis=0)
+            # Extract per-host local data from the globally-sharded eval_batch.
+            #
+            # MultiHostDataLoadIterator uses P('data','fsdp','context','tensor') —
+            # mapping EACH array dim to a separate mesh axis:
+            #   dim 0 (batch)    → data  (split across hosts, unique per host)
+            #   dim 1 (channels) → fsdp  (split across local devices)
+            #   dim 2 (frames)   → context (split across local devices)
+            #   dim 3 (H)        → tensor (split, but tensor=1 so no-op)
+            #
+            # All 8 local devices on a host share the same batch slice but differ
+            # in their channel/frame slices. _reconstruct_local_batch assembles the
+            # full (B_local, C, F, H, W) tensor by placing each device's shard in
+            # the correct channel/frame position — no cross-host communication.
+            def _reconstruct_local_batch(arr):
+                shards = arr.addressable_shards
+                batch_sl = shards[0].index[0]
+                B_loc = (batch_sl.stop or arr.shape[0]) - (batch_sl.start or 0)
+                result = np.empty((B_loc,) + arr.shape[1:], dtype=np.float32)
+                for shard in shards:
+                    result[(slice(None),) + tuple(shard.index[1:])] = (
+                        np.asarray(shard.data).astype(np.float32)
+                    )
+                return result
 
             N = jax.process_count()
-            # n_valid: how many samples actually count for metrics.
+            # n_valid: samples this host contributes to metrics.
             n_valid = self.config.global_batch_size_to_train_on // N
 
-            # Flash attention's shard_map partitions the batch axis over (data, fsdp).
-            # The global inference batch must be divisible by data_size * fsdp_size.
-            # If global_batch_size_to_train_on is smaller, pad with repeated samples
-            # so the constraint is met; metrics are computed only on n_valid samples.
+            # Flash attention's shard_map partitions the batch over (data, fsdp).
+            # Global inference batch must be divisible by data_size * fsdp_size.
+            # Ensure we send at least min_per_host samples so this holds.
             data_size = mesh.shape.get('data', 1)
             fsdp_size = mesh.shape.get('fsdp', 1)
-            # Minimum samples this host must contribute so global batch ≥ data*fsdp
-            # and global batch % (data*fsdp) == 0.
-            min_per_host = max(1, -(-(data_size * fsdp_size) // N))  # ceil division
+            min_per_host = max(1, -(-(data_size * fsdp_size) // N))  # ceil(data*fsdp/N)
             B_local = max(n_valid, min_per_host)
 
-            # Pull all locally-held samples from the data loader (no cross-host comm).
-            gt_pool   = _host_local_numpy(eval_batch["latents"])          # (pool, C, F, H, W)
-            ehs_pool  = _host_local_numpy(eval_batch["encoder_hidden_states"])  # (pool, 512, 4096)
+            # Reconstruct full (B_pool, C, F, H, W) per host (no cross-host comm).
+            gt_pool  = _reconstruct_local_batch(eval_batch["latents"])          # (B_pool, C, F, H, W)
+            ehs_pool = _reconstruct_local_batch(eval_batch["encoder_hidden_states"])  # (B_pool, 512, 4096)
 
             def _take_or_tile(arr, n):
-                """Take first n rows, tiling if the pool is smaller than n."""
                 if arr.shape[0] >= n:
                     return arr[:n]
-                reps = -(-n // arr.shape[0])  # ceil division
+                reps = -(-n // arr.shape[0])
                 return np.tile(arr, [reps] + [1] * (arr.ndim - 1))[:n]
 
             gt_local  = _take_or_tile(gt_pool,  B_local)   # (B_local, C, F, H, W)
