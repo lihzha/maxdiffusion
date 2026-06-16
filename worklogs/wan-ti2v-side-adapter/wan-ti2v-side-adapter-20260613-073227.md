@@ -3132,3 +3132,42 @@ Storage cleanup:
 Next:
 - Continue monitoring toward checkpoint `5000`.
 - For future validation copies, only copy a checkpoint after verifying source markers: root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
+
+## 2026-06-16T10:14:00Z - r20 fresh-noise validation at step 5000
+
+Goal:
+- Validate checkpoint `5000` from the active r20 fresh-noise run, inspect artifacts, remove the temporary validation checkpoint copy, and decide whether to keep monitoring later checkpoints.
+
+Training status:
+- Active training TPU `v6-64-12-lzha` remains `READY` / `HEALTHY`.
+- Checkpoint `5000` source was copied only after verifying root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
+- Worker-2 log around checkpoint `5000`: train loss `0.330557`, eval loss `0.333536`, lr `5.00e-05`; training continued through at least step `5050` before the latest log tail.
+- Latest checked retained training checkpoints after validation cleanup: `5000`, `5300`, `5400`, and `5500`.
+
+Validation:
+- Validation ran on `v4-4-03-interactive` with `JAX_PLATFORMS` unset and restored step `5000` cleanly from `validation_checkpoints/5000`.
+- GCS output: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_005000`
+- Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step5000/step_005000`
+- `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step5000/step_005000`
+- Output videos have the expected `320x384`, `33` frames, `16` fps, duration `2.0625s`.
+
+Metrics:
+- Mean latent MSE `0.545641`
+- Mean pixel MSE `0.036928`
+- Mean SSIM `0.508979`
+- Per-sample SSIM: sample 0 `0.6230`, sample 1 `0.5342`, sample 2 `0.3583`, sample 3 `0.5204`.
+
+Visual read:
+- Step `5000` is worse than step `4000` on the fixed four-sample validation subset.
+- Sample 0 is slightly cleaner numerically, but samples `1` through `3` degrade, with strong smearing, color drift, foreground hallucination, and wrong occluding geometry.
+- This makes the current visual best still step `2000`; step `3000`, `4000`, and `5000` all trend worse on this tiny fixed validation set.
+
+Storage cleanup:
+- Removed `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation_checkpoints/5000` after local artifact copy and inspection.
+
+Analysis:
+- The training loss remains finite and stable around `0.33`, but fixed-seed validation quality has degraded since step `2000`.
+- This could be small-sample/sampler noise, but because the visual degradation is coherent across steps `3000` through `5000`, keep monitoring later checkpoints and consider stopping at or comparing against checkpoint `2000` if the trend persists at `6000`.
+
+Next:
+- Continue monitoring to checkpoint `6000` and validate it with the same success-marker guarded copy path.
