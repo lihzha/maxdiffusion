@@ -111,10 +111,10 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=MATMUL_WITHOUT_BATCH \
-    ici_data_parallelism=4 \
+    ici_data_parallelism=8 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=4 \
+    ici_context_parallelism=2 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
@@ -124,13 +124,13 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=100100 \
     checkpoint_every=100 \
     checkpoint_keep_period=10000 \
-    per_device_batch_size=0.5 \
+    per_device_batch_size=0.25 \
     height=480 \
     width=832 \
     num_frames=81 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    wandb_project='wan-ac'
+    wandb_project='wan-ac-2'
 
 # --- DROID path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
