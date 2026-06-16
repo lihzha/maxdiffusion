@@ -3006,3 +3006,11 @@ Result update:
 - Before the training command launched, the TPU became `health=UNHEALTHY_MAINTENANCE`.
 - `tpu watch` aborted setup, deleted `v6-64-12-lzha` and its stale queued resource, and re-submitted `v6-64-12-lzha-qr`.
 - No training metrics or checkpoints were produced before maintenance.
+
+Result update:
+- The replacement allocation reached `READY`; setup completed and training launched at `2026-06-16T07:32:24Z`.
+- Actual worker `HEAD` is `01cb91a259dbd2d926e16bf4b1e0614eeef1fb3b`, a worklog-only commit on top of the fresh-noise implementation. Worker-side config and trainer fallback both resolve to `side_adapter_noise_mode: 'fresh'`.
+- Runtime log confirms `Noise mode: fresh` and W&B run `6v7oya6f`.
+- First losses are finite: step 10 `0.610243`, step 100 `0.398474`, step 200 `0.412408`, step 270 `0.394279`.
+- Checkpoint 100 was saved to `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/checkpoints/100`.
+- Launched the validation watcher for step 100 and periodic every 1000 steps. It cached checkpoint 100 to `validation_checkpoints/100`, then hit v6e preemptible quota exhaustion while trying to create `v6-8-wan-val-lzha`; the watcher remains active and retrying.
