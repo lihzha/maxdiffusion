@@ -3253,3 +3253,50 @@ Analysis:
 Next:
 - Continue monitoring to checkpoint `8000`.
 - When checkpoint `8000` source success markers are present, copy it to `validation_checkpoints/8000`, run the same v4 validation, inspect with `viz-open`, then delete the cached validation checkpoint copy.
+
+## 2026-06-16T11:12:00Z - r20 fresh-noise validation at step 8000
+
+Goal:
+- Validate checkpoint `8000` from the active r20 fresh-noise run, inspect artifacts with `viz-open`, remove the temporary validation checkpoint copy, and continue monitoring toward checkpoint `9000`.
+
+Training status:
+- Checkpoint `8000` source was copied only after verifying all source success markers: root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
+- Worker-2 log showed step `8000` train loss `0.323938`, grad norm `1.423`, lr `5.00e-05`, followed by a completed save at `2026-06-16T11:00:42Z`.
+- Training continued through at least step `8530` after validation. Representative later losses: step `8200` `0.325784`, step `8300` `0.328611`, step `8400` `0.329289`, step `8500` `0.322883`, step `8530` `0.325956`.
+
+Validation:
+- Copied checkpoint `8000` to `validation_checkpoints/8000`, verified copied markers, and launched v4 validation on `v4-4-03-interactive` with `JAX_PLATFORMS` unset.
+- Validation restored step `8000` cleanly from the validation prefix; checkpoint load completed in `51.20` seconds.
+- GCS output: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_008000`
+- Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step8000/step_008000`
+- `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step8000/step_008000`
+- Output videos have the expected metadata: comparison videos `320x384`, GT/pred videos `320x192`, all `33` frames at `16` fps, duration `2.0625s`.
+
+Metrics:
+- Mean latent MSE `0.377103`
+- Mean pixel MSE `0.026553`
+- Mean SSIM `0.634340`
+- Per-sample metrics:
+  - sample `0`: latent MSE `0.248346`, pixel MSE `0.011477`, SSIM `0.7434`
+  - sample `1`: latent MSE `0.301328`, pixel MSE `0.028426`, SSIM `0.7115`
+  - sample `2`: latent MSE `0.555116`, pixel MSE `0.042682`, SSIM `0.4543`
+  - sample `3`: latent MSE `0.403623`, pixel MSE `0.023625`, SSIM `0.6281`
+
+Visual read:
+- Step `8000` is close to step `7000` but slightly worse overall by mean SSIM and pixel MSE.
+- Sample `0` remains structurally good; table and room geometry align, but later frames add a pale/greenish smear near the right side of the table.
+- Sample `1` preserves the broad layout but still contains a strong white foreground hallucination/blur at lower left, and the tabletop object smears.
+- Sample `2` remains the worst failure case: after the first generated frame, the prediction picks up a large yellow/gray foreground scene smear and loses the correct table/robot appearance.
+- Sample `3` improves relative to step `7000` by metric and visual read, but still has ghosted/occluding artifacts.
+
+Storage cleanup:
+- Removed `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation_checkpoints/8000` after local copy and inspection.
+- Latest check showed `validation_checkpoints/` empty after cleanup.
+
+Analysis:
+- Step `8000` is not an improvement over step `7000`: mean SSIM fell from `0.6388` to `0.6343`, and mean pixel MSE rose from `0.02559` to `0.02655`.
+- Step `2000` remains the best aggregate fixed-subset checkpoint so far, while step `7000` is the best later checkpoint. Step `8000` continues the pattern that samples `0` and `1` can look reasonable, but samples `2` and sometimes `3` still suffer from severe foreground/scene hallucination.
+
+Next:
+- Continue monitoring to checkpoint `9000`.
+- Validate checkpoint `9000` with the same marker-guarded copy path, then decide whether to continue to final `10000` validation or prioritize diagnosing the persistent sample `2` collapse.
