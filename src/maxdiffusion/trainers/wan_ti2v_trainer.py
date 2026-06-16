@@ -372,12 +372,12 @@ class WanTI2VTrainer(BaseWanTrainer):
                 [frame0_cl, noise_future.astype(np.float32)], axis=1
             )  # (B_local, F, H, W, C)
 
-            # Use training data sharding so each host's B_local samples are sharded the
-            # same way as during training — avoids replicating the full global batch.
+            # Build globally-sharded arrays from per-host local slices, matching how
+            # training data is distributed via MultiHostDataLoadIterator.
             data_sharding = NamedSharding(mesh, P(*self.config.data_sharding))
-            init_latents_jax = jax.device_put(jnp.array(init_latents_np), data_sharding)
-            frame0_cl_jax = jax.device_put(jnp.array(frame0_cl), data_sharding)
-            ehs_jax = jax.device_put(jnp.array(ehs_local.astype(np.float32)), data_sharding)
+            init_latents_jax = jax.make_array_from_process_local_data(data_sharding, init_latents_np)
+            frame0_cl_jax = jax.make_array_from_process_local_data(data_sharding, frame0_cl)
+            ehs_jax = jax.make_array_from_process_local_data(data_sharding, ehs_local.astype(np.float32))
 
             # Inference scheduler: set up N-step schedule (different from 1000-step training).
             num_inference_steps = getattr(self.config, "num_inference_steps", 20)
