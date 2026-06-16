@@ -3300,3 +3300,50 @@ Analysis:
 Next:
 - Continue monitoring to checkpoint `9000`.
 - Validate checkpoint `9000` with the same marker-guarded copy path, then decide whether to continue to final `10000` validation or prioritize diagnosing the persistent sample `2` collapse.
+
+## 2026-06-16T11:32:00Z - r20 fresh-noise validation at step 9000
+
+Goal:
+- Validate checkpoint `9000` from the active r20 fresh-noise run, inspect artifacts with `viz-open`, clean the temporary validation checkpoint copy, and continue monitoring to the final checkpoint.
+
+Training status:
+- Checkpoint `9000` source success markers were present before copying: root `commit_success.txt`, `_CHECKPOINT_METADATA`, and `params`, `opt_state`, and `step` `commit_success.txt`.
+- Worker-2 log showed step `9000` train loss `0.326849`, grad norm `1.100`, lr `5.00e-05`, followed by a completed save at `2026-06-16T11:20:03Z`.
+- Training continued through at least step `9550` after validation. Representative later losses: step `9200` `0.322048`, step `9300` `0.322007`, step `9400` `0.325900`, step `9500` `0.329656`, step `9550` `0.323661`.
+
+Validation:
+- Copied checkpoint `9000` to `validation_checkpoints/9000`, verified copied markers, and launched v4 validation on `v4-4-03-interactive` with `JAX_PLATFORMS` unset.
+- Validation restored step `9000` cleanly from the validation prefix; checkpoint load completed in `49.53` seconds.
+- GCS output: `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation/step_009000`
+- Local artifact path: `/home/lzha/code/maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step9000/step_009000`
+- `viz-open`: `http://localhost:8765/view?path=maxdiffusion_artifacts/wan_side_adapter_fresh_r20_step9000/step_009000`
+- Output videos have the expected metadata: comparison videos `320x384`, GT/pred videos `320x192`, all `33` frames at `16` fps, duration `2.0625s`.
+
+Metrics:
+- Mean latent MSE `0.396358`
+- Mean pixel MSE `0.025859`
+- Mean SSIM `0.615188`
+- Per-sample metrics:
+  - sample `0`: latent MSE `0.248731`, pixel MSE `0.010521`, SSIM `0.7507`
+  - sample `1`: latent MSE `0.340327`, pixel MSE `0.027596`, SSIM `0.6654`
+  - sample `2`: latent MSE `0.554221`, pixel MSE `0.040152`, SSIM `0.4450`
+  - sample `3`: latent MSE `0.442153`, pixel MSE `0.025167`, SSIM `0.5997`
+
+Visual read:
+- Step `9000` is a clear regression relative to step `7000` and step `8000` on the fixed four-sample validation subset.
+- Sample `0` remains structurally strong and has the best SSIM for this checkpoint, but still develops the familiar pale/green smear on the tabletop.
+- Sample `1` is worse than step `8000`: the lower-left foreground blur is larger and the tabletop object is more washed out.
+- Sample `2` remains collapsed with the same large yellow/gray scene hallucination seen at step `8000`; its SSIM is slightly worse.
+- Sample `3` regresses relative to step `8000`, with more occluding/ghosted foreground artifacts.
+
+Storage cleanup:
+- Removed `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter/wan-side-adapter-v6e64-full-gbs512-fresh-denoise-ckpt100-r20-20260616-065855/validation_checkpoints/9000` after local copy and inspection.
+- Latest cleanup check showed `validation_checkpoints/` empty after removal.
+
+Analysis:
+- Step `9000` should not be selected over earlier checkpoints. Mean SSIM fell to `0.6152`, below step `8000` (`0.6343`), step `7000` (`0.6388`), and step `2000` (`0.6637`).
+- The late run has stable training loss but validation quality is not improving. The fixed-subset best is still step `2000`; the best later checkpoint remains step `7000`.
+
+Next:
+- Continue monitoring to checkpoint `10000` and validate it once source success markers appear.
+- Unless final checkpoint recovers, recommend keeping step `2000` and step `7000` for closer comparison and diagnosing the persistent sample `2` collapse before launching another long run.
