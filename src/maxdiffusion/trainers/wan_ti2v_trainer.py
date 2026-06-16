@@ -346,10 +346,33 @@ class WanTI2VTrainer(BaseWanTrainer):
                 return np.concatenate([np.asarray(s.data) for s in shards], axis=0)
 
             N = jax.process_count()
-            B_local = self.config.global_batch_size_to_train_on // N
+            # n_valid: how many samples actually count for metrics.
+            n_valid = self.config.global_batch_size_to_train_on // N
 
-            gt_local = _host_local_numpy(eval_batch["latents"])[:B_local]          # (B_local, C, F, H, W)
-            ehs_local = _host_local_numpy(eval_batch["encoder_hidden_states"])[:B_local]  # (B_local, 512, 4096)
+            # Flash attention's shard_map partitions the batch axis over (data, fsdp).
+            # The global inference batch must be divisible by data_size * fsdp_size.
+            # If global_batch_size_to_train_on is smaller, pad with repeated samples
+            # so the constraint is met; metrics are computed only on n_valid samples.
+            data_size = mesh.shape.get('data', 1)
+            fsdp_size = mesh.shape.get('fsdp', 1)
+            # Minimum samples this host must contribute so global batch ≥ data*fsdp
+            # and global batch % (data*fsdp) == 0.
+            min_per_host = max(1, -(-(data_size * fsdp_size) // N))  # ceil division
+            B_local = max(n_valid, min_per_host)
+
+            # Pull all locally-held samples from the data loader (no cross-host comm).
+            gt_pool   = _host_local_numpy(eval_batch["latents"])          # (pool, C, F, H, W)
+            ehs_pool  = _host_local_numpy(eval_batch["encoder_hidden_states"])  # (pool, 512, 4096)
+
+            def _take_or_tile(arr, n):
+                """Take first n rows, tiling if the pool is smaller than n."""
+                if arr.shape[0] >= n:
+                    return arr[:n]
+                reps = -(-n // arr.shape[0])  # ceil division
+                return np.tile(arr, [reps] + [1] * (arr.ndim - 1))[:n]
+
+            gt_local  = _take_or_tile(gt_pool,  B_local)   # (B_local, C, F, H, W)
+            ehs_local = _take_or_tile(ehs_pool, B_local)   # (B_local, 512, 4096)
 
             # frame0: first n_hist latent frame(s), used as Ti2V clean conditioning.
             frame0_local = gt_local[:, :, :self._n_hist]  # (B_local, C, n_hist, H, W)
@@ -426,6 +449,10 @@ class WanTI2VTrainer(BaseWanTrainer):
 
             pred_video = _decode_direct(gen_local)
             gt_video = _decode_direct(gt_local)
+
+            # Drop padded samples (added to satisfy flash-attention divisibility).
+            pred_video = pred_video[:n_valid]
+            gt_video = gt_video[:n_valid]
 
             # Compare only future frames (skip frame 0 which is clean conditioning).
             # The first latent frame encodes to exactly 1 pixel frame in the WAN VAE.
