@@ -323,15 +323,88 @@ class WanTI2VTrainer(BaseWanTrainer):
         gathered = multihost_utils.process_allgather(losses, tiled=True)
         all_losses = jax.device_get(gathered).flatten().tolist()
 
-        # Perceptual metrics: each host decodes its own local bs samples, then
-        # gathers only the cheap scalar scores — avoids decoding bs*N_hosts samples
-        # per host that a latents-allgather approach would require.
+        # Perceptual metrics via full multi-step generation.
+        # Each host runs inference on its own local slice (B_local samples) using
+        # the same data sharding as training — same memory footprint as a training step.
+        # Only small scalars are gathered at the end.
         ssim_score = psnr_score = lpips_score = None
         if hasattr(self, "_pipeline"):
+            from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import run_inference_ti2v_2_2
             import torch as _torch
-            n_hist = getattr(self, "_n_hist", 1)
-            pred_local = jax.device_get(metrics["latents"]["pred"])  # (bs, C, F, H, W)
-            gt_local = jax.device_get(metrics["latents"]["gt"])
+
+            # Gather latents and ehs to host memory, then slice the local portion.
+            # frame0 and gt are also needed for GT VAE decode (small tensors).
+            frame0_all = jax.device_get(
+                multihost_utils.process_allgather(metrics["latents"]["frame0"], tiled=True)
+            )  # (B_global, C, 1, H, W)
+            gt_all = jax.device_get(
+                multihost_utils.process_allgather(metrics["latents"]["gt"], tiled=True)
+            )  # (B_global, C, F, H, W)
+            ehs_all = jax.device_get(
+                multihost_utils.process_allgather(metrics["latents"]["encoder_hidden_states"], tiled=True)
+            )  # (B_global, 512, 4096)
+
+            N = jax.process_count()
+            B_global = gt_all.shape[0]
+            B_local = B_global // N
+            start = jax.process_index() * B_local
+
+            # Local slices — each host only processes its own B_local samples.
+            frame0_local = frame0_all[start : start + B_local]   # (B_local, C, 1, H, W)
+            gt_local = gt_all[start : start + B_local]           # (B_local, C, F, H, W)
+            ehs_local = ehs_all[start : start + B_local]         # (B_local, 512, 4096)
+
+            # Build inference inputs (channels-last) from local slices.
+            # frame0 channels-first (B, C, 1, H, W) → channels-last (B, 1, H, W, C)
+            frame0_cl = np.transpose(frame0_local.astype(np.float32), (0, 2, 3, 4, 1))
+            B_loc, C, F_lat, H_lat, W_lat = gt_local.shape
+            n_future = F_lat - 1
+
+            # Initial latents: clean frame 0 + pure Gaussian noise for future frames
+            rng_inf = jax.random.PRNGKey(step)
+            noise_future = jax.device_get(
+                jax.random.normal(rng_inf, (B_loc, n_future, H_lat, W_lat, C))
+            )
+            init_latents_np = np.concatenate(
+                [frame0_cl, noise_future.astype(np.float32)], axis=1
+            )  # (B_local, F, H, W, C)
+
+            # Use training data sharding so each host's B_local samples are sharded the
+            # same way as during training — avoids replicating the full global batch.
+            data_sharding = NamedSharding(mesh, P(*self.config.data_sharding))
+            init_latents_jax = jax.device_put(jnp.array(init_latents_np), data_sharding)
+            frame0_cl_jax = jax.device_put(jnp.array(frame0_cl), data_sharding)
+            ehs_jax = jax.device_put(jnp.array(ehs_local.astype(np.float32)), data_sharding)
+
+            # Inference scheduler: set up N-step schedule (different from 1000-step training).
+            num_inference_steps = getattr(self.config, "num_inference_steps", 20)
+            
+            inf_sched_state = self._pipeline.scheduler.set_timesteps(
+                self._pipeline.scheduler_state,
+                num_inference_steps=num_inference_steps,
+            )
+
+            # Full multi-step denoising — all hosts participate in FSDP/TP collectively.
+            with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
+                generated_cl = run_inference_ti2v_2_2(
+                    graphdef=state.graphdef,
+                    state=state.params,
+                    rest=state.rest_of_state,
+                    latents=init_latents_jax,
+                    clean_latent=frame0_cl_jax,
+                    prompt_embeds=ehs_jax,
+                    negative_prompt_embeds=ehs_jax,  # unused: guidance_scale=1.0
+                    guidance_scale=1.0,
+                    num_inference_steps=num_inference_steps,
+                    scheduler=self._pipeline.scheduler,
+                    scheduler_state=inf_sched_state,
+                )
+            # generated_cl: (B_local, F, H, W, C) channels-last, normalized latent space
+
+            # Transpose to channels-first for VAE decode.
+            gen_local = jax.device_get(
+                jnp.transpose(generated_cl, (0, 4, 1, 2, 3)).astype(jnp.float32)
+            )  # (B_local, C, F, H, W)
 
             def _decode_direct(latents_np):
                 latents_jax = jnp.array(latents_np.astype(np.float32))
@@ -350,14 +423,13 @@ class WanTI2VTrainer(BaseWanTrainer):
                     video_t, output_type="np"
                 )
 
-            pred_video = _decode_direct(pred_local)
+            pred_video = _decode_direct(gen_local)
             gt_video = _decode_direct(gt_local)
 
-            # Trim history frames (same in pred and GT) to avoid inflating metrics.
-            vae_t = getattr(self._pipeline, "vae_scale_factor_temporal", 4)
-            n_hist_pixels = 1 + (n_hist - 1) * vae_t  # first history latent → 1px
-            pred_video = pred_video[:, n_hist_pixels:]
-            gt_video = gt_video[:, n_hist_pixels:]
+            # Compare only future frames (skip frame 0 which is clean conditioning).
+            # The first latent frame encodes to exactly 1 pixel frame in the WAN VAE.
+            pred_video = pred_video[:, 1:]   # drop the single pixel frame from latent frame 0
+            gt_video = gt_video[:, 1:]
 
             if pred_video.shape[1] > 0:
                 ssim_local = _compute_video_ssim(pred_video, gt_video)
@@ -641,27 +713,23 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
         if not config.disable_training_weights:
             loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
         per_sample_loss = loss.reshape(loss.shape[0], -1).mean(axis=1)
-
-        # Reconstruct predicted clean latents: x_0 = x_t - sigma * v_pred
-        # sigma from apply_flow_match: (1 - t) * sigma_min + t * sigma_max
-        t = timesteps.astype(jnp.float32) / scheduler.config.num_train_timesteps
-        sigma = (1 - t) * scheduler.config.sigma_min + t * scheduler.config.sigma_max
-        pred_clean_future = noisy_future - sigma.reshape(-1, 1, 1, 1, 1) * pred_vel
-
-        # Return full-window latents (history + predicted/GT future) for VAE decoding
-        pred_full = jnp.concatenate([latents[:, :, :n_hist], pred_clean_future], axis=2)
-        gt_full = latents
-        return per_sample_loss, pred_full, gt_full
+        return per_sample_loss
 
     bs = config.global_batch_size_to_train_on
     latents = data["latents"][:bs].astype(config.weights_dtype)
     encoder_hidden_states = data["encoder_hidden_states"][:bs].astype(config.weights_dtype)
     rng, t_rng, noise_rng = jax.random.split(rng, 3)
     timesteps = scheduler.sample_timesteps(t_rng, bs)
-    losses, pred_futures, gt_futures = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
+    losses = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
 
     metrics = {
         "scalar": {"learning/eval_loss": losses},
-        "latents": {"pred": pred_futures, "gt": gt_futures},
+        "latents": {
+            # Frame 0 (channels-first) used as clean anchor for inference conditioning.
+            # Always frame 0 regardless of training n_hist so eval inference is consistent.
+            "frame0": latents[:, :, :1],
+            "gt": latents,
+            "encoder_hidden_states": encoder_hidden_states,
+        },
     }
     return metrics, rng
