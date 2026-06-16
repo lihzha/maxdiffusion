@@ -3397,3 +3397,7 @@ Next:
 - Treat the final checkpoint as a completed but not-best run result.
 - Keep checkpoints `2000`, `7000`, and `10000` for comparison if storage policy allows; otherwise preserve the validation artifacts and select `2000` or `7000` before any downstream usage.
 - Before another long run, diagnose why the fixed validation subset has persistent sample `2` scene collapse despite fresh training noise and stable diffusion loss.
+
+Cleanup:
+- Deleted the task-owned v6 TPU slice `v6-64-12-lzha` after the final checkpoint and validation artifacts were inspected.
+- Verified `gcloud compute tpus tpu-vm describe v6-64-12-lzha --zone us-east1-d` returns `NOT_FOUND`; existing unrelated v6 slices were left untouched.
