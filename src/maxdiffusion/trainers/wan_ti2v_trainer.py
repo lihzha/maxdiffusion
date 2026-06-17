@@ -333,7 +333,11 @@ class WanTI2VTrainer(BaseWanTrainer):
         # Each host works on its own B_local samples extracted directly from eval_batch
         # (no allgather of full-size latent tensors). Only scalar metrics are gathered.
         ssim_score = psnr_score = lpips_score = None
-        if hasattr(self, "_pipeline") and hasattr(self._pipeline, "vae"):
+        if (
+            getattr(self.config, "enable_generate_video_for_eval", False)
+            and hasattr(self, "_pipeline")
+            and hasattr(self._pipeline, "vae")
+        ):
             from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import run_inference_ti2v_2_2
             import torch as _torch
 
@@ -450,21 +454,27 @@ class WanTI2VTrainer(BaseWanTrainer):
             )  # (B_local, F, H, W, C)
             gen_local = np.transpose(gen_cl_np, (0, 4, 1, 2, 3))  # (B_local, C, F, H, W)
 
-            def _decode_direct(latents_np):
-                latents_jax = jnp.array(latents_np.astype(np.float32))
+            def _decode_one(latent_np):
+                """Decode a single (C, F, H, W) latent; returns (F_px, H_px, W_px, 3) uint8."""
+                lat = jnp.array(latent_np[None].astype(np.float32))  # (1, C, F, H, W)
                 with self._pipeline.vae_mesh, nn_partitioning.axis_rules(
                     self._pipeline.vae_logical_axis_rules
                 ):
                     video = self._pipeline.vae.decode(
-                        self._pipeline._denormalize_latents(latents_jax),
+                        self._pipeline._denormalize_latents(lat),
                         self._pipeline.vae_cache,
-                    )[0]
-                video = jnp.transpose(video, (0, 4, 1, 2, 3))
+                    )[0]  # (1, F_px, H_px, W_px, 3)
+                video = jnp.transpose(video, (0, 4, 1, 2, 3))  # (1, 3, F_px, H_px, W_px)
                 video_t = _torch.from_numpy(
                     jax.device_get(video.astype(jnp.float32))
                 ).to(_torch.bfloat16)
                 return self._pipeline.video_processor.postprocess_video(
                     video_t, output_type="np"
+                )  # (1, F_px, H_px, W_px, 3)
+
+            def _decode_direct(latents_np):
+                return np.concatenate(
+                    [_decode_one(latents_np[i]) for i in range(latents_np.shape[0])], axis=0
                 )
 
             pred_video = _decode_direct(gen_local)
