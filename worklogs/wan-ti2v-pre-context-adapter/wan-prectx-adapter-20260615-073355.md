@@ -429,3 +429,29 @@ Analysis:
 
 Next:
 - Commit/push the head-count fix, stop the failed r7 watcher, relaunch as r8 with `PRE_CONTEXT_HEADS=8`, and monitor through first loss/checkpoint evidence.
+
+## 2026-06-17T18:25:40Z - stopped pre-context training and deleted TPU watcher resources
+
+Goal:
+- Stop all task-owned MaxDiffusion pre-context TPU jobs/watchers and delete the v6e-64 TPU resources after the user requested teardown.
+
+Change:
+- Confirmed no local `tpu watch` / validation watcher process remained for `wan-pre-context`, `v6-64-10-lzha`, or `v6-8-wan-val-lzha`.
+- Attempted a scoped all-worker stop for `train_wan.py` / `train_wan_side_adapter.sh` matching run `wan-pre-context-v6e64-full-gbs512-fresh-scratch-ckpt100-east1d-20260616-191526`; SSH was unreliable after the processes detached, so cleanup proceeded by deleting the owned TPU slice.
+- Deleted TPU VM `v6-64-10-lzha` and queued resource `v6-64-10-lzha-qr` in `us-east1-d`.
+
+Command / Job:
+- `gcloud alpha compute tpus tpu-vm delete v6-64-10-lzha --project=mae-irom-lab-guided-data --zone=us-east1-d --quiet`
+- `gcloud alpha compute tpus queued-resources delete v6-64-10-lzha-qr --project=mae-irom-lab-guided-data --zone=us-east1-d --quiet`
+- Verification: `gcloud alpha compute tpus tpu-vm describe v6-64-10-lzha ...` and `gcloud alpha compute tpus queued-resources describe v6-64-10-lzha-qr ...`
+
+Result:
+- status: stopped and deleted
+- verification: both describe calls returned `NOT_FOUND`; `us-east1-d` lzha TPU/queued-resource listing showed no remaining lzha entries; local watcher process check was clean.
+- latest durable numeric checkpoint observed in GCS: `26900`; no `27000` checkpoint metadata was present during cleanup.
+
+Analysis:
+- The active run was the fresh-noise pre-context training run on commit `7260778`, with `action_adapter_type=pre_context` and `side_adapter_noise_mode=fresh`. Deleting the TPU/queued resource terminates any worker process that survived the interrupted SSH kill attempt.
+
+Next:
+- No active MaxDiffusion TPU watcher, TPU VM, queued resource, or monitoring loop remains for this run.
