@@ -111,7 +111,7 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=CUSTOM \
-    names_which_can_be_saved=['self_attn'] \
+    names_which_can_be_saved="['self_attn']" \
     ici_data_parallelism=2 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
