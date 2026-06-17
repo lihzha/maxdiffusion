@@ -39,7 +39,7 @@ from maxdiffusion.models.wan.side_adapter_wan import (
     adapter_param_count,
     apply_first_frame_pin,
     build_rollout_sigmas,
-    wan_side_adapter_forward,
+    wan_action_adapter_forward,
     _build_per_token_timestep,
     _dtype,
 )
@@ -164,7 +164,7 @@ def _denoising_loss(
     z_t_f32 = apply_first_frame_pin(z_t_f32, z_i0_f32)
     z_t = z_t_f32.astype(weights_dtype)
 
-    v_cond = wan_side_adapter_forward(
+    v_cond = wan_action_adapter_forward(
         transformer,
         adapters,
         hidden_states=z_t,
@@ -292,6 +292,8 @@ class WanTI2VSideAdapterTrainer:
             rngs=nnx.Rngs(jax.random.key(self.config.seed)),
             num_layers=transformer.config.num_layers,
             model_dim=model_dim,
+            text_dim=self.config.text_dim,
+            action_adapter_type=getattr(self.config, "action_adapter_type", "side_adapter"),
             action_dim=self.config.action_dim,
             action_len=self.config.action_len,
             action_repr=self.config.action_repr,
@@ -301,6 +303,8 @@ class WanTI2VSideAdapterTrainer:
             side_adapter_layers=self.config.side_adapter_layers,
             side_adapter_hidden=self.config.side_adapter_hidden,
             side_adapter_heads=self.config.side_adapter_heads,
+            pre_context_tokens=getattr(self.config, "pre_context_tokens", 8),
+            pre_context_heads=getattr(self.config, "pre_context_heads", transformer.config.num_attention_heads),
             dtype=_dtype(self.config.activations_dtype),
             weights_dtype=_dtype(self.config.weights_dtype),
             precision=getattr(jax.lax.Precision, self.config.precision),
@@ -511,6 +515,7 @@ class WanTI2VSideAdapterTrainer:
             max_logging.log(f"  Devices: {jax.device_count()}")
             max_logging.log(f"  Max train steps: {config.max_train_steps}")
             max_logging.log(f"  Output dir: {config.output_dir}")
+            max_logging.log(f"  Action adapter type: {getattr(config, 'action_adapter_type', 'side_adapter')}")
             max_logging.log(f"  Denoising sigma steps: {config.side_adapter_sampling_steps}")
             max_logging.log(f"  Timestep sampling: {getattr(config, 'side_adapter_t_sampling', 'uniform')}")
             max_logging.log(f"  Noise mode: {getattr(config, 'side_adapter_noise_mode', 'fresh')}")

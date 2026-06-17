@@ -21,6 +21,8 @@ export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu,cpu}"
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
+export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-300}"
+export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}"
 
 export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
@@ -54,6 +56,10 @@ TRAIN_DATA_DIR="${TRAIN_DATA_DIR:-gs://v6_east1d/datasets/droid_wan_side_adapter
 EVAL_DATA_DIR="${EVAL_DATA_DIR:-gs://v6_east1d/datasets/droid_wan_side_adapter/val}"
 OUTPUT_DIR="${OUTPUT_DIR:-gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter}"
 MODEL_DIR="${MODEL_DIR:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}"
+ACTION_ADAPTER_TYPE="${ACTION_ADAPTER_TYPE:-side_adapter}"
+PRE_CONTEXT_TOKENS="${PRE_CONTEXT_TOKENS:-8}"
+PRE_CONTEXT_HEADS="${PRE_CONTEXT_HEADS:-8}"
+SIDE_ADAPTER_NOISE_MODE="${SIDE_ADAPTER_NOISE_MODE:-fixed}"
 
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-10}"
 CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-1000}"
@@ -73,6 +79,10 @@ echo "TRAIN_DATA_DIR=${TRAIN_DATA_DIR}"
 echo "EVAL_DATA_DIR=${EVAL_DATA_DIR}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
 echo "MODEL_DIR=${MODEL_DIR}"
+echo "ACTION_ADAPTER_TYPE=${ACTION_ADAPTER_TYPE}"
+echo "PRE_CONTEXT_TOKENS=${PRE_CONTEXT_TOKENS}"
+echo "PRE_CONTEXT_HEADS=${PRE_CONTEXT_HEADS}"
+echo "SIDE_ADAPTER_NOISE_MODE=${SIDE_ADAPTER_NOISE_MODE}"
 echo "MAX_TRAIN_STEPS=${MAX_TRAIN_STEPS}"
 echo "CHECKPOINT_EVERY=${CHECKPOINT_EVERY}"
 echo "CHECKPOINT_KEEP_PERIOD=${CHECKPOINT_KEEP_PERIOD:-config_default}"
@@ -87,6 +97,8 @@ echo "TFRECORD_SHUFFLE_BUFFER_SIZE=${TFRECORD_SHUFFLE_BUFFER_SIZE:-config_defaul
 echo "WANDB_PROJECT=${WANDB_PROJECT}"
 echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
 echo "HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}"
+echo "HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT}"
+echo "HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT}"
 echo "COMMIT=$(git rev-parse HEAD)"
 git status --short --branch
 
@@ -98,6 +110,10 @@ python src/maxdiffusion/train_wan.py \
   eval_data_dir="${EVAL_DATA_DIR}" \
   output_dir="${OUTPUT_DIR}" \
   base_output_directory="${OUTPUT_DIR}" \
+  action_adapter_type="${ACTION_ADAPTER_TYPE}" \
+  pre_context_tokens="${PRE_CONTEXT_TOKENS}" \
+  pre_context_heads="${PRE_CONTEXT_HEADS}" \
+  side_adapter_noise_mode="${SIDE_ADAPTER_NOISE_MODE}" \
   max_train_steps="${MAX_TRAIN_STEPS}" \
   checkpoint_every="${CHECKPOINT_EVERY}" \
   ${CHECKPOINT_KEEP_PERIOD:+checkpoint_keep_period="${CHECKPOINT_KEEP_PERIOD}"} \

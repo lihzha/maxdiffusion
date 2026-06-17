@@ -26,6 +26,16 @@ from maxdiffusion import multihost_dataloading, max_logging
 AUTOTUNE = tf.data.AUTOTUNE
 
 
+def _tfrecord_filenames(dataset_path):
+  filenames = sorted(tf.io.gfile.glob(os.path.join(dataset_path, "*.tfrecord")))
+  if filenames:
+    return filenames
+  filenames = sorted(tf.io.gfile.glob(os.path.join(dataset_path, "*")))
+  if not filenames:
+    raise FileNotFoundError(f"No TFRecord files matched {dataset_path}/*.tfrecord")
+  return filenames
+
+
 def _tf_data_options() -> tf.data.Options:
   opts = tf.data.Options()
   opts.autotune.enabled = True
@@ -140,9 +150,7 @@ def _make_tfrecord_iterator(
     clip_embeddings = tf.io.parse_tensor(tnp.asarray(features["clip_embeddings"]), out_type=tf.float32)
     return {"pixel_values": moments, "input_ids": clip_embeddings}
 
-  filenames = sorted(tf.io.gfile.glob(os.path.join(dataset_path, "*.tfrecord")))
-  if not filenames:
-    raise FileNotFoundError(f"No TFRecord files matched {dataset_path}/*.tfrecord")
+  filenames = _tfrecord_filenames(dataset_path)
   if is_training and seed is not None:
     filenames = np.random.default_rng(seed).permutation(filenames).tolist()
   ds = tf.data.TFRecordDataset(filenames, num_parallel_reads=AUTOTUNE)

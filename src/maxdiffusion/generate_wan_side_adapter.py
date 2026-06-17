@@ -34,7 +34,7 @@ from maxdiffusion.models.wan.side_adapter_wan import (
     apply_first_frame_pin,
     build_rollout_sigmas,
     rollout_timesteps_from_sigmas,
-    wan_side_adapter_forward,
+    wan_action_adapter_forward,
 )
 from maxdiffusion.trainers.wan_ti2v_side_adapter_trainer import (
     TrainState,
@@ -136,7 +136,7 @@ def _rollout_sample(state: TrainState, data: dict, rng: jax.Array, scheduler, co
     def _body(i, current):
         step_t = jnp.broadcast_to(timesteps[i], (b,))
         timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
-        v_cond = wan_side_adapter_forward(
+        v_cond = wan_action_adapter_forward(
             transformer,
             adapters,
             hidden_states=current,
@@ -330,6 +330,7 @@ def run(argv: Sequence[str]) -> None:
                 "seed": seed,
                 "side_adapter_sampling_steps": int(config.side_adapter_sampling_steps),
                 "side_adapter_guide_scale": float(config.side_adapter_guide_scale),
+                "action_adapter_type": getattr(config, "action_adapter_type", "side_adapter"),
             },
         )
 

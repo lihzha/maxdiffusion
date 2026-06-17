@@ -1,34 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_ID="${1:-${MODEL_DIR:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}}"
-MAX_ATTEMPTS="${HF_PREFETCH_MAX_ATTEMPTS:-6}"
-RETRY_SLEEP_SECS="${HF_PREFETCH_RETRY_SLEEP_SECS:-30}"
+MODEL_DIR="${1:-${MODEL_DIR:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}}"
+HF_PREFETCH_ATTEMPTS="${HF_PREFETCH_ATTEMPTS:-${HF_PREFETCH_MAX_ATTEMPTS:-6}}"
+HF_PREFETCH_SLEEP_SECS="${HF_PREFETCH_SLEEP_SECS:-${HF_PREFETCH_RETRY_SLEEP_SECS:-30}}"
+HF_PREFETCH_WORKERS="${HF_PREFETCH_WORKERS:-2}"
 
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
-export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-120}"
+export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-300}"
 export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
-
 if [ -f ".venv/bin/activate" ]; then
   source .venv/bin/activate
 elif [ -f "maxdiffusion_venv/bin/activate" ]; then
   source maxdiffusion_venv/bin/activate
 fi
 
-if [ -d "$MODEL_ID" ]; then
-  echo "[prefetch_hf_snapshot] local model directory exists: $MODEL_ID"
+if [ -d "$MODEL_DIR" ]; then
+  echo "[prefetch_hf_snapshot] local model directory exists: $MODEL_DIR"
   exit 0
 fi
 
-case "$MODEL_ID" in
+case "$MODEL_DIR" in
   gs://*)
-    echo "[prefetch_hf_snapshot] skipping non-Hugging Face model path: $MODEL_ID"
+    echo "[prefetch_hf_snapshot] skipping non-Hugging Face model path: $MODEL_DIR"
     exit 0
     ;;
 esac
 
-python - "$MODEL_ID" "$MAX_ATTEMPTS" "$RETRY_SLEEP_SECS" <<'PY'
+echo "HF prefetch MODEL_DIR=${MODEL_DIR}"
+echo "HF_PREFETCH_ATTEMPTS=${HF_PREFETCH_ATTEMPTS}"
+echo "HF_PREFETCH_SLEEP_SECS=${HF_PREFETCH_SLEEP_SECS}"
+echo "HF_PREFETCH_WORKERS=${HF_PREFETCH_WORKERS}"
+echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
+echo "HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}"
+echo "HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT}"
+echo "HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT}"
+
+python - "$MODEL_DIR" "$HF_PREFETCH_ATTEMPTS" "$HF_PREFETCH_SLEEP_SECS" "$HF_PREFETCH_WORKERS" <<'PY'
 import json
 import sys
 import time
@@ -40,6 +49,7 @@ from huggingface_hub import snapshot_download
 repo_id = sys.argv[1]
 max_attempts = int(sys.argv[2])
 retry_sleep_secs = int(sys.argv[3])
+max_workers = int(sys.argv[4])
 
 allow_patterns = [
     "model_index.json",
@@ -86,7 +96,7 @@ for attempt in range(1, max_attempts + 1):
         snapshot_path = snapshot_download(
             repo_id=repo_id,
             allow_patterns=allow_patterns,
-            max_workers=1,
+            max_workers=max_workers,
         )
         verify_snapshot(snapshot_path)
         print(f"[prefetch_hf_snapshot] verified snapshot: {snapshot_path}", flush=True)

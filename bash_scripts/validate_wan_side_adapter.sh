@@ -21,6 +21,8 @@ export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu,cpu}"
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
+export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-300}"
+export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.92}"
 
 export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
@@ -53,6 +55,9 @@ RUN_NAME="${RUN_NAME:?RUN_NAME must match the training run to validate}"
 OUTPUT_DIR="${OUTPUT_DIR:-gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter}"
 EVAL_DATA_DIR="${EVAL_DATA_DIR:-gs://v6_east1d/datasets/droid_wan_side_adapter/val}"
 MODEL_DIR="${MODEL_DIR:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}"
+ACTION_ADAPTER_TYPE="${ACTION_ADAPTER_TYPE:-side_adapter}"
+PRE_CONTEXT_TOKENS="${PRE_CONTEXT_TOKENS:-8}"
+PRE_CONTEXT_HEADS="${PRE_CONTEXT_HEADS:-8}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${OUTPUT_DIR%/}/${RUN_NAME}/checkpoints}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:--1}"
 NUM_EVAL_VIDEOS="${NUM_EVAL_VIDEOS:-4}"
@@ -65,6 +70,9 @@ echo "RUN_NAME=${RUN_NAME}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
 echo "EVAL_DATA_DIR=${EVAL_DATA_DIR}"
 echo "MODEL_DIR=${MODEL_DIR}"
+echo "ACTION_ADAPTER_TYPE=${ACTION_ADAPTER_TYPE}"
+echo "PRE_CONTEXT_TOKENS=${PRE_CONTEXT_TOKENS}"
+echo "PRE_CONTEXT_HEADS=${PRE_CONTEXT_HEADS}"
 echo "CHECKPOINT_DIR=${CHECKPOINT_DIR}"
 echo "CHECKPOINT_STEP=${CHECKPOINT_STEP}"
 echo "NUM_EVAL_VIDEOS=${NUM_EVAL_VIDEOS}"
@@ -72,6 +80,10 @@ echo "VALIDATION_START_INDEX=${VALIDATION_START_INDEX}"
 echo "VALIDATION_SEED=${VALIDATION_SEED}"
 echo "VALIDATION_OUTPUT_DIR=${VALIDATION_OUTPUT_DIR}"
 echo "PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE}"
+echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
+echo "HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}"
+echo "HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT}"
+echo "HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT}"
 echo "COMMIT=$(git rev-parse HEAD)"
 git status --short --branch
 
@@ -82,6 +94,9 @@ python src/maxdiffusion/generate_wan_side_adapter.py \
   eval_data_dir="${EVAL_DATA_DIR}" \
   output_dir="${OUTPUT_DIR}" \
   base_output_directory="${OUTPUT_DIR}" \
+  action_adapter_type="${ACTION_ADAPTER_TYPE}" \
+  pre_context_tokens="${PRE_CONTEXT_TOKENS}" \
+  pre_context_heads="${PRE_CONTEXT_HEADS}" \
   checkpoint_dir="${CHECKPOINT_DIR}" \
   checkpoint_step="${CHECKPOINT_STEP}" \
   num_eval_videos="${NUM_EVAL_VIDEOS}" \
