@@ -167,6 +167,9 @@ def _make_tfrecord_iterator(
       ds = ds.concatenate(padding_ds)
       max_logging.log(f"Padded evaluation dataset with {num_to_pad} samples.")
 
+    total_eval_samples = num_eval_samples + (0 if remainder == 0 else global_batch_size - remainder)
+    ds = ds.shuffle(buffer_size=total_eval_samples, reshuffle_each_iteration=True)
+
     ds = ds.shard(num_shards=dataloading_host_count, index=dataloading_host_index)
     ds = ds.batch(global_batch_size // dataloading_host_count, drop_remainder=True).prefetch(AUTOTUNE)
   else:

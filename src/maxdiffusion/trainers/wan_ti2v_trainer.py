@@ -250,7 +250,10 @@ class WanTI2VTrainer(BaseWanTrainer):
                 latent = cam0  # use cam0 (wrist) for eval, consistent with existing convention
             else:
                 latent = tf.concat([cam0, cam1, cam2], axis=2)     # (F_lat, C, H_lat*3, W_lat)
-            latent = latent[:window_size]
+            f_total = tf.shape(latent)[0]
+            max_start = tf.maximum(0, f_total - window_size)
+            start = tf.random.uniform((), 0, max_start + 1, dtype=tf.int32)
+            latent = latent[start : start + window_size]
             latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat[*3], W_lat)
             encoder_hidden_states = tf.cast(
                 tf.io.parse_tensor(features["text_embed"], out_type=tf.float16), tf.float32
