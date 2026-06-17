@@ -481,9 +481,34 @@ def _tpu_flash_attention(
         "Warning, batch dimension should be shardable among the devices in data and context"
         f" axis, batch dimension: {query.shape[0]}, devices_in_data_context: {devices_in_data_context}"
     )
+
+  # shard_map requires the batch dimension to be evenly divisible by the product
+  # of all mesh axes it is mapped to (e.g. data * fsdp = 32).  During eval the
+  # global batch can be smaller or have a different remainder, so we pad to the
+  # next valid multiple and trim the output afterwards.
+  orig_batch = query.shape[0]
+  batch_spec = q_axis_names[0] if q_axis_names is not None else None
+  if batch_spec is None:
+    batch_divisor = 1
+  elif isinstance(batch_spec, str):
+    batch_divisor = mesh.shape[batch_spec]
+  else:  # tuple of axis names
+    batch_divisor = 1
+    for ax in batch_spec:
+      batch_divisor *= mesh.shape[ax]
+  batch_rem = orig_batch % batch_divisor
+  if batch_rem != 0:
+    batch_pad = batch_divisor - batch_rem
+    query = jnp.pad(query, [(0, batch_pad)] + [(0, 0)] * (query.ndim - 1))
+    key   = jnp.pad(key,   [(0, batch_pad)] + [(0, 0)] * (key.ndim   - 1))
+    value = jnp.pad(value, [(0, batch_pad)] + [(0, 0)] * (value.ndim - 1))
+
   x = wrap_flash_attention(query, key, value)
   # Trim back to original sequence length after context-axis padding.
   x = x[:, :, :orig_q_seq_len, :]
+  # Trim batch padding if we added any.
+  if batch_rem != 0:
+    x = x[:orig_batch]
   x = _reshape_heads_to_head_dim(x)
 
   return x
