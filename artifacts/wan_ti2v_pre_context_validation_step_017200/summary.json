@@ -1,0 +1,8 @@
+{
+  "checkpoint_step": 17200,
+  "mean_latent_mse": 1.4145757555961609,
+  "mean_pixel_mse": 0.09378330409526825,
+  "mean_ssim": 0.298560576682741,
+  "num_samples": 4,
+  "summary_csv": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-pre-context-adapter/wan-pre-context-v6e64-full-gbs512-fresh-scratch-ckpt100-east1d-20260616-191526/validation/step_017200/summary.csv"
+}

@@ -427,10 +427,10 @@ Current active recovery state as of 2026-06-17T17:51:01Z:
 
 ## Visual Validation Results
 
-Local artifact root in the active training worktree:
+Committed artifact root:
 
 ```text
-/home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355/artifacts/
+artifacts/
 ```
 
 Validated fresh-noise scratch checkpoints:
@@ -443,16 +443,16 @@ Validated fresh-noise scratch checkpoints:
 Useful local artifact paths:
 
 ```text
-/home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355/artifacts/validation_step_013300/comparison_midframe_contact_sheet.png
-/home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355/artifacts/validation_step_017200/comparison_midframe_contact_sheet.png
-/home/lzha/code/maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355/artifacts/validation_step_017200/sample_0000_ep10099_v0_s00000/comparison_gt_top_pred_bottom.mp4
+artifacts/wan_ti2v_pre_context_validation_step_013300/comparison_midframe_contact_sheet.png
+artifacts/wan_ti2v_pre_context_validation_step_017200/comparison_midframe_contact_sheet.png
+artifacts/wan_ti2v_pre_context_validation_step_017200/sample_0000_ep10099_v0_s00000/comparison_gt_top_pred_bottom.mp4
 ```
 
-Artifact viewer URLs that were opened:
+Artifact viewer URL shape from `/home/lzha/code`:
 
 ```text
-http://localhost:8765/view?path=maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355/artifacts/validation_step_017200/comparison_midframe_contact_sheet.png
-http://localhost:8765/view?path=maxdiffusion-worktrees/wan-prectx-adapter-20260615-073355/artifacts/validation_step_017200/sample_0000_ep10099_v0_s00000/comparison_gt_top_pred_bottom.mp4
+http://localhost:8765/view?path=.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227/artifacts/wan_ti2v_pre_context_validation_step_017200/comparison_midframe_contact_sheet.png
+http://localhost:8765/view?path=.codex-worktrees/maxdiffusion-wan-ti2v-side-adapter-20260613-073227/artifacts/wan_ti2v_pre_context_validation_step_017200/sample_0000_ep10099_v0_s00000/comparison_gt_top_pred_bottom.mp4
 ```
 
 No fresh validation video has yet been generated from checkpoint 26900 or later.

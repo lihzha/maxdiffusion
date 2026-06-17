@@ -1,0 +1,12 @@
+{
+  "action_adapter_type": "pre_context",
+  "checkpoint_dir": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-pre-context-adapter/wan-pre-context-v6e64-full-gbs512-fresh-scratch-ckpt100-east1d-20260616-191526/checkpoints",
+  "checkpoint_step": 17200,
+  "eval_data_dir": "gs://v6_east1d/datasets/droid_wan_side_adapter/val",
+  "num_eval_videos": 4,
+  "run_name": "wan-pre-context-v6e64-full-gbs512-fresh-scratch-ckpt100-east1d-20260616-191526",
+  "seed": 0,
+  "side_adapter_guide_scale": 5.0,
+  "side_adapter_sampling_steps": 25,
+  "validation_start_index": 0
+}
