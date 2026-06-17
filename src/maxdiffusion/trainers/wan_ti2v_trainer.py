@@ -435,12 +435,20 @@ class WanTI2VTrainer(BaseWanTrainer):
                     scheduler=self._pipeline.scheduler,
                     scheduler_state=inf_sched_state,
                 )
-            # generated_cl: (B_local, F, H, W, C) channels-last, normalized latent space
-
-            # Transpose to channels-first for VAE decode.
-            gen_local = jax.device_get(
-                jnp.transpose(generated_cl, (0, 4, 1, 2, 3)).astype(jnp.float32)
-            )  # (B_local, C, F, H, W)
+            # generated_cl: (B_global, F, H, W, C) channels-last, globally sharded.
+            # Flash attention reshards batch to P(('data','fsdp')) inside JIT, so
+            # generated_cl spans non-addressable devices — jax.device_get would fail.
+            # Collect this host's batch slices via addressable_shards, deduplicating
+            # across context=2 replication (fsdp=4 unique slices per host).
+            _batch_pieces = {}
+            for _s in generated_cl.addressable_shards:
+                _b = _s.index[0].start or 0
+                if _b not in _batch_pieces:
+                    _batch_pieces[_b] = np.asarray(_s.data).astype(np.float32)
+            gen_cl_np = np.concatenate(
+                [_batch_pieces[k] for k in sorted(_batch_pieces)], axis=0
+            )  # (B_local, F, H, W, C)
+            gen_local = np.transpose(gen_cl_np, (0, 4, 1, 2, 3))  # (B_local, C, F, H, W)
 
             def _decode_direct(latents_np):
                 latents_jax = jnp.array(latents_np.astype(np.float32))
