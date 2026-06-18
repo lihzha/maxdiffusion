@@ -110,12 +110,11 @@ python src/maxdiffusion/train_wan.py \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=CUSTOM \
-    names_which_can_be_saved="['self_attn']" \
-    ici_data_parallelism=2 \
+    remat_policy=FULL \
+    ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=8 \
+    ici_context_parallelism=4 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
