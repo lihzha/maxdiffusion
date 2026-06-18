@@ -34,7 +34,6 @@ import functools
 import jax
 import jax.numpy as jnp
 import jaxopt
-import numpy as np
 import tensorflow as tf
 from flax import nnx
 from flax.linen import partitioning as nn_partitioning
@@ -46,72 +45,6 @@ from maxdiffusion.checkpointing.wan_checkpointer_ti2v_2p2 import WanCheckpointer
 from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
 from maxdiffusion.train_utils import load_next_batch
 from maxdiffusion.trainers.base_wan_trainer import BaseWanTrainer
-
-
-def _compute_video_ssim(pred_video: np.ndarray, gt_video: np.ndarray) -> float:
-    """SSIM between decoded predicted and GT videos, averaged over batch and frames.
-
-    pred_video / gt_video: (B, F, H, W, 3) float32 in [0, 1] as returned by
-    pipeline._decode_latents_to_video → video_processor.postprocess_video.
-    """
-    from skimage.metrics import structural_similarity as ssim
-
-    B, F, H, W, _ = pred_video.shape
-    scores = []
-    for b in range(B):
-        for f in range(F):
-            scores.append(ssim(pred_video[b, f], gt_video[b, f],
-                               channel_axis=-1, data_range=1.0))
-    return float(np.mean(scores))
-
-
-def _compute_video_lpips(pred_video: np.ndarray, gt_video: np.ndarray) -> float | None:
-    """LPIPS between decoded predicted and GT videos, per frame, averaged over batch.
-
-    pred_video / gt_video: (B, F, H, W, 3) float32 in [0, 1].
-    Returns None if lpips or torch are unavailable.
-    """
-    try:
-        import torch
-        import lpips as lpips_lib
-    except ImportError:
-        return None
-
-    if not hasattr(_compute_video_lpips, "_model"):
-        _compute_video_lpips._model = lpips_lib.LPIPS(net="alex", verbose=False)
-    loss_fn = _compute_video_lpips._model
-
-    B, F, H, W, _ = pred_video.shape
-    scores = []
-    for b in range(B):
-        for f in range(F):
-            # (H, W, 3) → (3, H, W), map [0, 1] → [-1, 1] as lpips expects
-            pred_t = torch.from_numpy(
-                np.transpose(pred_video[b, f], (2, 0, 1)) * 2 - 1
-            ).float().unsqueeze(0)
-            gt_t = torch.from_numpy(
-                np.transpose(gt_video[b, f], (2, 0, 1)) * 2 - 1
-            ).float().unsqueeze(0)
-            with torch.no_grad():
-                scores.append(float(loss_fn(pred_t, gt_t).item()))
-    return float(np.mean(scores))
-
-
-def _compute_video_psnr(pred_video: np.ndarray, gt_video: np.ndarray) -> float:
-    """PSNR between decoded predicted and GT videos, averaged over batch and frames.
-
-    pred_video / gt_video: (B, F, H, W, 3) float32 in [0, 1].
-    """
-    B, F, H, W, _ = pred_video.shape
-    scores = []
-    for b in range(B):
-        for f in range(F):
-            mse = float(np.mean((pred_video[b, f].astype(np.float32) - gt_video[b, f].astype(np.float32)) ** 2))
-            if mse < 1e-10:
-                scores.append(100.0)
-            else:
-                scores.append(-10.0 * np.log10(mse))
-    return float(np.mean(scores))
 
 
 def _build_per_token_timestep(
@@ -140,9 +73,6 @@ class WanTI2VTrainer(BaseWanTrainer):
 
     def _get_checkpointer(self):
         return WanCheckpointerTI2V_2_2(config=self.config)
-
-    def _needs_vae_for_eval(self) -> bool:
-        return self.config.eval_every != -1
 
     def post_train_step(self, state, step: int):
         """EMA teacher update, run outside JIT so teacher_update_every is a free host check."""
@@ -250,10 +180,7 @@ class WanTI2VTrainer(BaseWanTrainer):
                 latent = cam0  # use cam0 (wrist) for eval, consistent with existing convention
             else:
                 latent = tf.concat([cam0, cam1, cam2], axis=2)     # (F_lat, C, H_lat*3, W_lat)
-            f_total = tf.shape(latent)[0]
-            max_start = tf.maximum(0, f_total - window_size)
-            start = tf.random.uniform((), 0, max_start + 1, dtype=tf.int32)
-            latent = latent[start : start + window_size]
+            latent = latent[:window_size]
             latent = tf.transpose(latent, [1, 0, 2, 3])        # (C, window_size, H_lat[*3], W_lat)
             encoder_hidden_states = tf.cast(
                 tf.io.parse_tensor(features["text_embed"], out_type=tf.float16), tf.float32
@@ -301,9 +228,7 @@ class WanTI2VTrainer(BaseWanTrainer):
         )
 
     def get_eval_step(self, pipeline, mesh, state_shardings, eval_data_shardings):
-        self._pipeline = pipeline  # stored for VAE decode inside eval()
         n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
-        self._n_hist = n_hist
         return jax.jit(
             functools.partial(
                 ti2v_eval_step,
@@ -329,208 +254,13 @@ class WanTI2VTrainer(BaseWanTrainer):
         gathered = multihost_utils.process_allgather(losses, tiled=True)
         all_losses = jax.device_get(gathered).flatten().tolist()
 
-        # Perceptual metrics via full multi-step generation.
-        # Each host works on its own B_local samples extracted directly from eval_batch
-        # (no allgather of full-size latent tensors). Only scalar metrics are gathered.
-        ssim_score = psnr_score = lpips_score = None
-        if (
-            getattr(self.config, "enable_generate_video_for_eval", False)
-            and hasattr(self, "_pipeline")
-            and hasattr(self._pipeline, "vae")
-        ):
-            from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import run_inference_ti2v_2_2
-            import torch as _torch
-
-            # Extract per-host local data from the globally-sharded eval_batch.
-            #
-            # MultiHostDataLoadIterator uses P('data','fsdp','context','tensor') —
-            # mapping EACH array dim to a separate mesh axis:
-            #   dim 0 (batch)    → data  (split across hosts, unique per host)
-            #   dim 1 (channels) → fsdp  (split across local devices)
-            #   dim 2 (frames)   → context (split across local devices)
-            #   dim 3 (H)        → tensor (split, but tensor=1 so no-op)
-            #
-            # All 8 local devices on a host share the same batch slice but differ
-            # in their channel/frame slices. _reconstruct_local_batch assembles the
-            # full (B_local, C, F, H, W) tensor by placing each device's shard in
-            # the correct channel/frame position — no cross-host communication.
-            def _reconstruct_local_batch(arr):
-                shards = arr.addressable_shards
-                batch_sl = shards[0].index[0]
-                B_loc = (batch_sl.stop or arr.shape[0]) - (batch_sl.start or 0)
-                result = np.empty((B_loc,) + arr.shape[1:], dtype=np.float32)
-                for shard in shards:
-                    result[(slice(None),) + tuple(shard.index[1:])] = (
-                        np.asarray(shard.data).astype(np.float32)
-                    )
-                return result
-
-            N = jax.process_count()
-            # n_valid: samples this host contributes to metrics.
-            n_valid = self.config.global_batch_size_to_train_on // N
-
-            # Flash attention's shard_map partitions the batch over (data, fsdp).
-            # Global inference batch must be divisible by data_size * fsdp_size.
-            # Ensure we send at least min_per_host samples so this holds.
-            data_size = mesh.shape.get('data', 1)
-            fsdp_size = mesh.shape.get('fsdp', 1)
-            min_per_host = max(1, -(-(data_size * fsdp_size) // N))  # ceil(data*fsdp/N)
-            B_local = max(n_valid, min_per_host)
-
-            # Reconstruct full (B_pool, C, F, H, W) per host (no cross-host comm).
-            gt_pool  = _reconstruct_local_batch(eval_batch["latents"])          # (B_pool, C, F, H, W)
-            ehs_pool = _reconstruct_local_batch(eval_batch["encoder_hidden_states"])  # (B_pool, 512, 4096)
-
-            def _take_or_tile(arr, n):
-                if arr.shape[0] >= n:
-                    return arr[:n]
-                reps = -(-n // arr.shape[0])
-                return np.tile(arr, [reps] + [1] * (arr.ndim - 1))[:n]
-
-            gt_local  = _take_or_tile(gt_pool,  B_local)   # (B_local, C, F, H, W)
-            ehs_local = _take_or_tile(ehs_pool, B_local)   # (B_local, 512, 4096)
-
-            # frame0: first n_hist latent frame(s), used as Ti2V clean conditioning.
-            frame0_local = gt_local[:, :, :self._n_hist]  # (B_local, C, n_hist, H, W)
-
-            # Build inference inputs (channels-last) from local slices.
-            # frame0 channels-first (B, C, 1, H, W) → channels-last (B, 1, H, W, C)
-            frame0_cl = np.transpose(frame0_local[:, :, :1].astype(np.float32), (0, 2, 3, 4, 1))
-            B_loc, C, F_lat, H_lat, W_lat = gt_local.shape
-            n_future = F_lat - self._n_hist
-
-            # Initial latents: clean frame 0 + pure Gaussian noise for future frames
-            rng_inf = jax.random.PRNGKey(step)
-            noise_future = jax.device_get(
-                jax.random.normal(rng_inf, (B_loc, n_future, H_lat, W_lat, C))
-            )
-            init_latents_np = np.concatenate(
-                [frame0_cl, noise_future.astype(np.float32)], axis=1
-            )  # (B_local, F, H, W, C)
-
-            # Shard eval tensors only along the data axis (replicated within each
-            # FSDP/tensor group). P(*data_sharding) shards across all 64 devices
-            # and requires batch ≥ 64; P('data') only requires batch ≥ num_data_hosts.
-            eval_data_sharding = NamedSharding(mesh, P('data'))
-            init_latents_jax = jax.make_array_from_process_local_data(eval_data_sharding, init_latents_np)
-            frame0_cl_jax = jax.make_array_from_process_local_data(eval_data_sharding, frame0_cl)
-            ehs_jax = jax.make_array_from_process_local_data(eval_data_sharding, ehs_local.astype(np.float32))
-
-            # Inference scheduler: set up N-step schedule (different from 1000-step training).
-            num_inference_steps = getattr(self.config, "num_inference_steps", 20)
-            
-            inf_sched_state = self._pipeline.scheduler.set_timesteps(
-                self._pipeline.scheduler_state,
-                num_inference_steps=num_inference_steps,
-            )
-
-            # Full multi-step denoising — all hosts participate in FSDP/TP collectively.
-            with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
-                generated_cl = run_inference_ti2v_2_2(
-                    graphdef=state.graphdef,
-                    state=state.params,
-                    rest=state.rest_of_state,
-                    latents=init_latents_jax,
-                    clean_latent=frame0_cl_jax,
-                    prompt_embeds=ehs_jax,
-                    negative_prompt_embeds=ehs_jax,  # unused: guidance_scale=1.0
-                    guidance_scale=1.0,
-                    num_inference_steps=num_inference_steps,
-                    scheduler=self._pipeline.scheduler,
-                    scheduler_state=inf_sched_state,
-                )
-            # generated_cl: (B_global, F, H, W, C) channels-last, globally sharded.
-            # Flash attention reshards batch to P(('data','fsdp')) inside JIT, so
-            # generated_cl spans non-addressable devices — jax.device_get would fail.
-            # Collect this host's batch slices via addressable_shards, deduplicating
-            # across context=2 replication (fsdp=4 unique slices per host).
-            _batch_pieces = {}
-            for _s in generated_cl.addressable_shards:
-                _b = _s.index[0].start or 0
-                if _b not in _batch_pieces:
-                    _batch_pieces[_b] = np.asarray(_s.data).astype(np.float32)
-            gen_cl_np = np.concatenate(
-                [_batch_pieces[k] for k in sorted(_batch_pieces)], axis=0
-            )  # (B_local, F, H, W, C)
-            gen_local = np.transpose(gen_cl_np, (0, 4, 1, 2, 3))  # (B_local, C, F, H, W)
-
-            def _decode_one(latent_np):
-                """Decode a single (C, F, H, W) latent; returns (F_px, H_px, W_px, 3) uint8."""
-                lat = jnp.array(latent_np[None].astype(np.float32))  # (1, C, F, H, W)
-                with self._pipeline.vae_mesh, nn_partitioning.axis_rules(
-                    self._pipeline.vae_logical_axis_rules
-                ):
-                    video = self._pipeline.vae.decode(
-                        self._pipeline._denormalize_latents(lat),
-                        self._pipeline.vae_cache,
-                    )[0]  # (1, F_px, H_px, W_px, 3)
-                video = jnp.transpose(video, (0, 4, 1, 2, 3))  # (1, 3, F_px, H_px, W_px)
-                video_t = _torch.from_numpy(
-                    jax.device_get(video.astype(jnp.float32))
-                ).to(_torch.bfloat16)
-                return self._pipeline.video_processor.postprocess_video(
-                    video_t, output_type="np"
-                )  # (1, F_px, H_px, W_px, 3)
-
-            def _decode_direct(latents_np):
-                return np.concatenate(
-                    [_decode_one(latents_np[i]) for i in range(latents_np.shape[0])], axis=0
-                )
-
-            pred_video = _decode_direct(gen_local)
-            gt_video = _decode_direct(gt_local)
-
-            # Drop padded samples (added to satisfy flash-attention divisibility).
-            pred_video = pred_video[:n_valid]
-            gt_video = gt_video[:n_valid]
-
-            # Compare only future frames (skip frame 0 which is clean conditioning).
-            # The first latent frame encodes to exactly 1 pixel frame in the WAN VAE.
-            pred_video = pred_video[:, 1:]   # drop the single pixel frame from latent frame 0
-            gt_video = gt_video[:, 1:]
-
-            if pred_video.shape[1] > 0:
-                ssim_local = _compute_video_ssim(pred_video, gt_video)
-                psnr_local = _compute_video_psnr(pred_video, gt_video)
-                lpips_local = _compute_video_lpips(pred_video, gt_video)
-
-                # Gather per-host scalars and average (all processes must participate)
-                ssim_score = float(np.mean(jax.device_get(
-                    multihost_utils.process_allgather(jnp.array([ssim_local]), tiled=True)
-                )))
-                psnr_score = float(np.mean(jax.device_get(
-                    multihost_utils.process_allgather(jnp.array([psnr_local]), tiled=True)
-                )))
-                if lpips_local is not None:
-                    lpips_score = float(np.mean(jax.device_get(
-                        multihost_utils.process_allgather(jnp.array([lpips_local]), tiled=True)
-                    )))
-
         if all_losses and jax.process_index() == 0:
             final_eval_loss = float(jnp.mean(jnp.array(all_losses)))
             max_logging.log(f"Step {step}, Eval loss: {final_eval_loss:.4f}")
             if writer:
                 writer.add_scalar("learning/eval_loss", final_eval_loss, step)
-
-            if ssim_score is not None:
-                max_logging.log(f"Step {step}, Eval SSIM: {ssim_score:.4f}")
-                max_logging.log(f"Step {step}, Eval PSNR: {psnr_score:.2f} dB")
-                if writer:
-                    writer.add_scalar("learning/eval_ssim", ssim_score, step)
-                    writer.add_scalar("learning/eval_psnr", psnr_score, step)
-            if lpips_score is not None:
-                max_logging.log(f"Step {step}, Eval LPIPS: {lpips_score:.4f}")
-                if writer:
-                    writer.add_scalar("learning/eval_lpips", lpips_score, step)
-
             if getattr(self, "_wandb_run", None) is not None:
-                wandb_log = {"eval/loss": final_eval_loss}
-                if ssim_score is not None:
-                    wandb_log["eval/ssim"] = ssim_score
-                    wandb_log["eval/psnr"] = psnr_score
-                if lpips_score is not None:
-                    wandb_log["eval/lpips"] = lpips_score
-                self._wandb_run.log(wandb_log, step=step)
+                self._wandb_run.log({"eval/loss": final_eval_loss}, step=step)
 
 
 # ── Training step ─────────────────────────────────────────────────────────────
@@ -765,29 +495,23 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
             encoder_hidden_states=encoder_hidden_states,
             deterministic=True,
         )
-        pred_vel = model_pred[:, :, n_hist:]
-        diff = target_future - pred_vel
+        diff = target_future - model_pred[:, :, n_hist:]
         loss = diff ** 2
         if not config.disable_training_weights:
             loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
-        per_sample_loss = loss.reshape(loss.shape[0], -1).mean(axis=1)
-        return per_sample_loss
+        return loss.reshape(loss.shape[0], -1).mean(axis=1)
 
     bs = config.global_batch_size_to_train_on
-    latents = data["latents"][:bs].astype(config.weights_dtype)
-    encoder_hidden_states = data["encoder_hidden_states"][:bs].astype(config.weights_dtype)
-    rng, t_rng, noise_rng = jax.random.split(rng, 3)
-    timesteps = scheduler.sample_timesteps(t_rng, bs)
-    losses = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
+    single_batch_size = config.global_batch_size_to_train_on
+    losses = jnp.zeros(bs)
+    for i in range(0, bs, single_batch_size):
+        end = min(i + single_batch_size, bs)
+        latents = data["latents"][i:end].astype(config.weights_dtype)
+        encoder_hidden_states = data["encoder_hidden_states"][i:end].astype(config.weights_dtype)
+        rng, t_rng, noise_rng = jax.random.split(rng, 3)
+        timesteps = scheduler.sample_timesteps(t_rng, end - i)
+        loss = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
+        losses = losses.at[i:end].set(loss)
 
-    metrics = {
-        "scalar": {"learning/eval_loss": losses},
-        "latents": {
-            # Frame 0 (channels-first) used as clean anchor for inference conditioning.
-            # Always frame 0 regardless of training n_hist so eval inference is consistent.
-            "frame0": latents[:, :, :1],
-            "gt": latents,
-            "encoder_hidden_states": encoder_hidden_states,
-        },
-    }
+    metrics = {"scalar": {"learning/eval_loss": losses}}
     return metrics, rng
