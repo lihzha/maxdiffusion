@@ -121,7 +121,7 @@ python src/maxdiffusion/train_wan.py \
     ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=8 \
+    ici_context_parallelism=4 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
@@ -148,5 +148,13 @@ python src/maxdiffusion/train_wan.py \
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # testing memory allocations 
+
+# OOMed
+# ici_data_parallelism=8 \
+# ici_fsdp_parallelism=4 \
+# ici_tensor_parallelism=1 \
+# ici_context_parallelism=2 \
+# per_device_batch_size=1.0
+
 # tpu create v6 --name v6-64-03-catherine -n 64 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh"
 # tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
