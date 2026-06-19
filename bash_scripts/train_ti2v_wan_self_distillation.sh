@@ -118,10 +118,10 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
-    ici_data_parallelism=8 \
+    ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=2 \
+    ici_context_parallelism=4 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
@@ -150,11 +150,20 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # testing memory allocations 
 
 # OOMed
+# remat_policy=MATMUL_WITHOUT_BATCH \
 # ici_data_parallelism=4 \
 # ici_fsdp_parallelism=4 \
 # ici_tensor_parallelism=1 \
 # ici_context_parallelism=4 \
 # per_device_batch_size=1.0
+
+# remat_policy=FULL \
+# ici_data_parallelism=8 \
+# ici_fsdp_parallelism=4 \
+# ici_tensor_parallelism=1 \
+# ici_context_parallelism=2 \
+# per_device_batch_size=1.0
+    
 
 # tpu create v6 --name v6-64-03-catherine -n 64 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh"
 # tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
