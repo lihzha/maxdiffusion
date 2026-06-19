@@ -144,75 +144,102 @@ def _build_per_token_timestep(
 
 def _train_step(state: TrainState, data: dict, rng: jax.Array,
                 scheduler_state, scheduler, config) -> tuple:
+    """
+    When grad_accum_steps == 1 (default): data leaves have shape [bsz, ...].
+    When grad_accum_steps > 1: data leaves have shape [grad_accum_steps, bsz, ...];
+    gradients are accumulated via jax.lax.scan before a single optimizer update.
+    """
     _, noise_rng, timestep_rng, drop_rng, text_drop_rng, new_rng = jax.random.split(rng, 6)
 
     bsz = config.global_batch_size_to_train_on
     weights_dtype = _dtype(config.weights_dtype)
     n_hist = config.num_history_latent_frames
+    grad_accum_steps = getattr(config, "grad_accum_steps", 1)
 
-    def loss_fn(params):
+    def compute_loss(params, micro_data, n_rng, t_rng, d_rng, td_rng):
         model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
 
-        latents = data["latent"][:bsz].astype(weights_dtype)        # (B,C,F_lat,H,W)
-        actions = data["action"][:bsz].astype(weights_dtype)        # (B,4*F_lat,7)
-        text_tokens = data["text_embeds"][:bsz].astype(weights_dtype)  # (B,512,4096)
+        latents = micro_data["latent"][:bsz].astype(weights_dtype)        # (B,C,F_lat,H,W)
+        actions = micro_data["action"][:bsz].astype(weights_dtype)        # (B,4*F_lat,7)
+        text_tokens = micro_data["text_embeds"][:bsz].astype(weights_dtype)  # (B,512,4096)
 
         b, _, F_lat, H_lat, W_lat = latents.shape
 
         actions_grouped = _group_actions(actions, F_lat)             # (B, F_lat, 4, 7)
 
-        # ── Sample a global denoising timestep for the future frames ──────────
-        timesteps = scheduler.sample_timesteps(timestep_rng, b)
+        timesteps = scheduler.sample_timesteps(t_rng, b)
 
-        # ── Apply flow-matching noise to future frames only ───────────────────
-        # History frames stay clean; future frames get noised at timestep t.
         future_latents = latents[:, :, n_hist:]
-        noise = jax.random.normal(noise_rng, future_latents.shape, dtype=future_latents.dtype)
+        noise = jax.random.normal(n_rng, future_latents.shape, dtype=future_latents.dtype)
         noisy_future, target_future, training_weight = scheduler.apply_flow_match(
             noise, future_latents, timesteps
         )
-        # Concatenate clean history + noisy future → full noisy input.
         noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
-        # ── Per-token timestep: history → 0, future → t ───────────────────────
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
 
-        # ── Action conditioning ───────────────────────────────────────────────
-        # The encoder aggregates 4 raw-frame actions into one token per latent
-        # frame. The transformer's frame_level_cond cross-attention then lets
-        # each latent frame's patches attend to its corresponding action token.
         text_pooled = text_tokens.mean(axis=1)                           # (B, 4096)
-        text_keep = (jax.random.uniform(text_drop_rng, (b, 1)) >= 0.5).astype(text_pooled.dtype)
+        text_keep = (jax.random.uniform(td_rng, (b, 1)) >= 0.5).astype(text_pooled.dtype)
         text_pooled = text_pooled * text_keep
         action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
-        action_tokens = _apply_cfg_dropout(drop_rng, action_tokens, config.ctrl_cfg_drop_prob)
+        action_tokens = _apply_cfg_dropout(d_rng, action_tokens, config.ctrl_cfg_drop_prob)
 
-        # ── WAN transformer forward (per-token timestep triggers Ti2V path) ───
         model_pred = model.transformer(
             hidden_states=noisy_latents,
             timestep=timestep_2d,           # (B, seq_len) → per-token AdaLN
             encoder_hidden_states=action_tokens,
             deterministic=False,
-            rngs=nnx.Rngs(dropout=drop_rng),
+            rngs=nnx.Rngs(dropout=d_rng),
             frame_level_cond=True,
         )
 
-        # ── Loss on future latent frames only ─────────────────────────────────
         diff = target_future - model_pred[:, :, n_hist:]
         loss = diff ** 2
         if not config.disable_training_weights:
             loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
         return jnp.mean(loss)
 
-    grad_fn = nnx.value_and_grad(loss_fn)
-    loss, grads = grad_fn(state.params)
+    if grad_accum_steps == 1:
+        def loss_fn(params):
+            return compute_loss(params, data, noise_rng, timestep_rng, drop_rng, text_drop_rng)
+
+        grad_fn = nnx.value_and_grad(loss_fn)
+        loss, grads = grad_fn(state.params)
+        total_loss = loss
+    else:
+        # data leaves: [grad_accum_steps, bsz, ...]
+        # Split each RNG into per-microbatch keys so every microbatch sees different noise.
+        noise_rngs = jax.random.split(noise_rng, grad_accum_steps)
+        timestep_rngs = jax.random.split(timestep_rng, grad_accum_steps)
+        drop_rngs = jax.random.split(drop_rng, grad_accum_steps)
+        text_drop_rngs = jax.random.split(text_drop_rng, grad_accum_steps)
+
+        def scan_fn(carry, xs):
+            acc_grads, loss_sum = carry
+            micro_data, n_rng, t_rng, d_rng, td_rng = xs
+
+            def loss_fn(params):
+                return compute_loss(params, micro_data, n_rng, t_rng, d_rng, td_rng)
+
+            grad_fn = nnx.value_and_grad(loss_fn)
+            micro_loss, micro_grads = grad_fn(state.params)
+            scaled = jax.tree_util.tree_map(lambda g: g / grad_accum_steps, micro_grads)
+            new_acc = jax.tree_util.tree_map(jnp.add, acc_grads, scaled)
+            return (new_acc, loss_sum + micro_loss / grad_accum_steps), None
+
+        init_acc = jax.tree_util.tree_map(jnp.zeros_like, state.params)
+        (grads, total_loss), _ = jax.lax.scan(
+            scan_fn,
+            (init_acc, jnp.zeros((), dtype=jnp.float32)),
+            (data, noise_rngs, timestep_rngs, drop_rngs, text_drop_rngs),
+        )
 
     grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
     new_state = state.apply_gradients(grads=grads)
 
     metrics = {
         "scalar": {
-            "learning/loss": loss,
+            "learning/loss": total_loss,
             "learning/grad_norm": grad_norm,
         },
         "scalars": {},
@@ -364,7 +391,11 @@ class WanCtrlWorldTrainer:
         return state, state_shardings
 
     def _data_shardings(self, mesh) -> dict:
-        pspec = NamedSharding(mesh, P(*self.config.data_sharding))
+        if getattr(self.config, "grad_accum_steps", 1) > 1:
+            # Leading dim is the micro-batch index (local, not distributed).
+            pspec = NamedSharding(mesh, P(None, *self.config.data_sharding))
+        else:
+            pspec = NamedSharding(mesh, P(*self.config.data_sharding))
         return {
             "latent":      pspec,
             "action":      pspec,
@@ -430,6 +461,15 @@ class WanCtrlWorldTrainer:
         # 8. Data iterator — offset seed by start_step so resume sees a fresh shuffle order.
         train_iter = self._load_dataset(mesh, is_training=True, seed=config.seed + start_step)
 
+        grad_accum_steps = getattr(config, "grad_accum_steps", 1)
+
+        def _next_batch(iterator):
+            """Return one batch (grad_accum_steps == 1) or a stacked micro-batch tensor."""
+            if grad_accum_steps == 1:
+                return next(iterator)
+            bufs = [next(iterator) for _ in range(grad_accum_steps)]
+            return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *bufs)
+
         # 9. Compile train step
         p_train_step = jax.jit(
             functools.partial(_train_step, scheduler=scheduler, config=config),
@@ -443,6 +483,8 @@ class WanCtrlWorldTrainer:
             max_logging.log("***** Running WAN Ctrl-World training *****")
             max_logging.log(f"  Per-device batch size: {config.per_device_batch_size}")
             max_logging.log(f"  Devices: {jax.device_count()}")
+            max_logging.log(f"  Grad accum steps: {grad_accum_steps}")
+            max_logging.log(f"  Effective batch size: {config.global_batch_size_to_train_on * grad_accum_steps}")
             max_logging.log(f"  Max train steps: {config.max_train_steps}")
             max_logging.log(f"  Output dir: {config.output_dir}")
 
@@ -462,7 +504,7 @@ class WanCtrlWorldTrainer:
         recent_grad: list[float] = []
         last_step_time = datetime.datetime.now()
 
-        example_batch = next(train_iter)
+        example_batch = _next_batch(train_iter)
 
         for step in range(start_step, config.max_train_steps):
             step_start = datetime.datetime.now()
@@ -513,7 +555,7 @@ class WanCtrlWorldTrainer:
             ):
                 self._save_checkpoint(ckpt_mgr, step + 1, state)
 
-            example_batch = next(train_iter)
+            example_batch = _next_batch(train_iter)
 
         if config.save_final_checkpoint:
             self._save_checkpoint(ckpt_mgr, config.max_train_steps, state)

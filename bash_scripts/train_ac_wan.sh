@@ -110,16 +110,17 @@ python src/maxdiffusion/train_wan.py \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=FULL \
-    ici_data_parallelism=16 \
+    remat_policy=MATMUL_WITHOUT_BATCH \
+    ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=1 \
+    ici_context_parallelism=4 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
     dcn_context_parallelism=1 \
-    per_device_batch_size=1.0 \
+    per_device_batch_size=0.5 \
+    grad_accum_steps=2 \
     allow_split_physical_axes=True \
     scan_layers=True \
     max_train_steps=100100 \
@@ -130,11 +131,7 @@ python src/maxdiffusion/train_wan.py \
     num_frames=81 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    wandb_project='wan-ac-history' \
-    enable_profiler=True \
-    skip_first_n_steps_for_profiler=5 \
-    profiler_steps=3 \
-    tensorboard_dir=gs://v6_east1d/profiles/wan-ac
+    wandb_project='wan-ac-history'     
 
     # 9.35 s/step
     # remat_policy=FULL \

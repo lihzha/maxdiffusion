@@ -192,6 +192,7 @@ per_device_batch_size: 1.0
 global_batch_size: 0
 global_batch_size_to_train_on: 1
 global_batch_size_to_load: 1
+grad_accum_steps: 1  # number of micro-batches to accumulate before an optimizer update
 
 warmup_steps_fraction: 0.05
 learning_rate_schedule_steps: -1
