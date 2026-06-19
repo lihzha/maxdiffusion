@@ -229,6 +229,7 @@ eval_max_batches: 1
 enable_profiler: False
 skip_first_n_steps_for_profiler: 5
 profiler_steps: 10
+tensorboard_dir: ""
 enable_jax_named_scopes: False
 
 # ── Inference ──────────────────────────────────────────────────────────────────
