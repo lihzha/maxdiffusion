@@ -465,6 +465,7 @@ class WanCtrlWorldTrainer:
         example_batch = next(train_iter)
 
         for step in range(start_step, config.max_train_steps):
+            step_start = datetime.datetime.now()
             with (
                 mesh,
                 nn_partitioning.axis_rules(config.logical_axis_rules),
@@ -477,6 +478,10 @@ class WanCtrlWorldTrainer:
             recent_loss.append(float(metrics["scalar"]["learning/loss"]))
             recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
             now = datetime.datetime.now()
+            step_secs = (now - step_start).total_seconds()
+
+            if jax.process_index() == 0:
+                max_logging.log(f"step {step} s/step={step_secs:.2f}")
 
             if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
                 lr = float(lr_schedule(step))
@@ -486,7 +491,7 @@ class WanCtrlWorldTrainer:
                 max_logging.log(
                     f"step {step + 1}/{config.max_train_steps} "
                     f"loss={avg_loss:.4f} grad_norm={avg_grad:.3f} "
-                    f"lr={lr:.2e} steps/s={sps:.2f}"
+                    f"lr={lr:.2e} steps/s={sps:.2f} s/step={1/sps:.2f}"
                 )
                 if wandb_run is not None:
                     wandb_run.log({"train/loss": avg_loss, "train/grad_norm": avg_grad,
