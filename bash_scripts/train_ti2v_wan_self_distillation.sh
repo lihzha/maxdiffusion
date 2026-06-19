@@ -158,10 +158,10 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # per_device_batch_size=1.0
 
 # remat_policy=FULL \
-# ici_data_parallelism=8 \
+# ici_data_parallelism=4 \
 # ici_fsdp_parallelism=4 \
 # ici_tensor_parallelism=1 \
-# ici_context_parallelism=2 \
+# ici_context_parallelism=4 \
 # per_device_batch_size=1.0
     
 
