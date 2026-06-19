@@ -134,7 +134,7 @@ python src/maxdiffusion/train_wan.py \
     enable_profiler=True \
     skip_first_n_steps_for_profiler=5 \
     profiler_steps=3 \
-    tensorboard_dir=gs://v6_east1d/profiles/wan-ac \
+    tensorboard_dir=gs://v6_east1d/profiles/wan-ac
 
     # 9.35 s/step
     # remat_policy=FULL \
