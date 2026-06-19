@@ -214,25 +214,27 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         drop_rngs = jax.random.split(drop_rng, grad_accum_steps)
         text_drop_rngs = jax.random.split(text_drop_rng, grad_accum_steps)
 
-        def scan_fn(carry, xs):
-            acc_grads, loss_sum = carry
-            micro_data, n_rng, t_rng, d_rng, td_rng = xs
+        # Python loop: unrolled at JIT trace time, keeping nnx.value_and_grad at
+        # JIT trace level (avoids the cross-trace-level NNX graph inspection error
+        # that occurs inside jax.lax.scan).
+        acc_grads = jax.tree_util.tree_map(jnp.zeros_like, state.params)
+        total_loss = jnp.zeros((), dtype=jnp.float32)
 
-            def loss_fn(params):
-                return compute_loss(params, micro_data, n_rng, t_rng, d_rng, td_rng)
+        for i in range(grad_accum_steps):
+            micro_data = jax.tree_util.tree_map(lambda x, _i=i: x[_i], data)
+            n_i, t_i, d_i, td_i = noise_rngs[i], timestep_rngs[i], drop_rngs[i], text_drop_rngs[i]
+
+            def loss_fn(params, _d=micro_data, _n=n_i, _t=t_i, _dr=d_i, _td=td_i):
+                return compute_loss(params, _d, _n, _t, _dr, _td)
 
             grad_fn = nnx.value_and_grad(loss_fn)
             micro_loss, micro_grads = grad_fn(state.params)
-            scaled = jax.tree_util.tree_map(lambda g: g / grad_accum_steps, micro_grads)
-            new_acc = jax.tree_util.tree_map(jnp.add, acc_grads, scaled)
-            return (new_acc, loss_sum + micro_loss / grad_accum_steps), None
+            acc_grads = jax.tree_util.tree_map(
+                lambda a, g: a + g / grad_accum_steps, acc_grads, micro_grads
+            )
+            total_loss = total_loss + micro_loss / grad_accum_steps
 
-        init_acc = jax.tree_util.tree_map(jnp.zeros_like, state.params)
-        (grads, total_loss), _ = jax.lax.scan(
-            scan_fn,
-            (init_acc, jnp.zeros((), dtype=jnp.float32)),
-            (data, noise_rngs, timestep_rngs, drop_rngs, text_drop_rngs),
-        )
+        grads = acc_grads
 
     grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
     new_state = state.apply_gradients(grads=grads)
