@@ -128,15 +128,14 @@ def _build_per_token_timestep(
 
     WAN patches spatially at 2×2, so tokens_per_frame = (H_lat//2)*(W_lat//2).
     """
-    b = timesteps.shape[0]
     tokens_per_frame = (H_lat // 2) * (W_lat // 2)
     seq_len = F_lat * tokens_per_frame
     n_hist_tokens = n_hist_lat * tokens_per_frame
-
-    # Broadcast global t to all tokens, then zero the history prefix.
-    full = jnp.broadcast_to(timesteps[:, None], (b, seq_len))
+    # Use implicit broadcasting so the result inherits batch sharding from
+    # timesteps. An explicit broadcast_to(x, (global_b, seq)) materialises a
+    # replicated [global_b, seq_len] tensor regardless of input sharding.
     is_future = jnp.arange(seq_len)[None, :] >= n_hist_tokens   # (1, seq_len)
-    return jnp.where(is_future, full, jnp.zeros_like(full))
+    return jnp.where(is_future, timesteps[:, None], 0)
 
 
 # ── Training step ─────────────────────────────────────────────────────────────
@@ -177,6 +176,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
 
         text_pooled = text_tokens.mean(axis=1)                           # (B, 4096)
         text_keep = (jax.random.uniform(td_rng, (b, 1)) >= 0.5).astype(text_pooled.dtype)
@@ -647,6 +647,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+    timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
 
     text_pooled = text_tokens.mean(axis=1)
     action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
