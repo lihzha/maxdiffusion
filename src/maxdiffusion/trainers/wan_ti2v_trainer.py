@@ -324,13 +324,21 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         # Per-sample: sample how many steps to take; the stopping timestep becomes
         # the training timestep t for that element.
         k_steps = jax.random.randint(gen_rng, (b,), 0, num_gen_steps)
-        timesteps = rollout_ts[k_steps]  # override training timesteps
+        # jax.random.randint with explicit shape is unsharded (replicated). Constrain
+        # to batch sharding so that should_update inside rollout_body is also batch-
+        # sharded and jnp.where can maintain the sharded carry throughout the loop.
+        k_steps = nn_partitioning.with_logical_constraint(k_steps, ('activation_batch',))
+        timesteps = rollout_ts[k_steps]  # override training timesteps; inherits batch sharding
 
         def _sigma(t_int):
             t_n = t_int.astype(jnp.float32) / num_train_t
             return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
 
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
+        # jax.random.normal with an explicit shape produces an unsharded (replicated) tensor.
+        # Constrain to match future_latents' batch sharding so the while_loop carry is
+        # correctly sharded from the start and the model sees [local_batch, …] per device.
+        gen_init = nn_partitioning.with_logical_constraint(gen_init, ('activation_batch', None, None, None, None))
         max_k = jnp.max(k_steps)
 
         def rollout_cond(carry):
@@ -349,8 +357,12 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             sig_to   = _sigma(t_to)
 
             roll_input = jnp.concatenate([latents[:, :, :n_hist], lat], axis=2)
+            # t_from is a scalar from the while_loop carry, so broadcast_to creates an
+            # unsharded [b] vector. Derive the batch-sharded timestep from lat instead
+            # so that roll_ts_2d inherits the correct per-device batch dimension.
+            t_from_vec = jnp.zeros_like(lat[:, 0, 0, 0, 0], dtype=jnp.int32) + t_from
             roll_ts_2d = _build_per_token_timestep(
-                jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
+                t_from_vec, F_lat, H_lat, W_lat, n_hist
             )
             roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
             with jax.named_scope("online_gen_rollout_step"):
@@ -372,9 +384,13 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             return (step_idx + 1, jnp.where(should_update, new_lat, lat))
 
         _, gen_t = jax.lax.while_loop(rollout_cond, rollout_body, (0, gen_init))
+        # Ensure gen_t (the while_loop output) retains its batch sharding — the loop
+        # carry sharding may degrade if any body op lost the annotation.
+        gen_t = nn_partitioning.with_logical_constraint(gen_t, ('activation_batch', None, None, None, None))
 
         # Recompute per-token timestep from the rollout-derived timesteps.
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+        timestep_2d = nn_partitioning.with_logical_constraint(timestep_2d, ('activation_batch', 'activation_length'))
 
         # Student and teacher both operate on gen_t (on-policy latent at t).
         noisy_future = gen_t
@@ -406,6 +422,11 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         teacher_timestep_2d = teacher_timestep_2d.at[:, :n_hist_tok].set(0)
         teacher_timestep_2d = teacher_timestep_2d.at[:, n_hist_tok:n_hist_tok + n_oracle_tok].set(
             jnp.broadcast_to(t_oracle[:, None], (b, n_oracle_tok))
+        )
+        # .at[].set() can drop batch-sharding in GSPMD; re-annotate so the teacher
+        # forward pass sees a properly batch-sharded per-token timestep tensor.
+        teacher_timestep_2d = nn_partitioning.with_logical_constraint(
+            teacher_timestep_2d, ('activation_batch', 'activation_length')
         )
 
         # Frame positions: oracle and noisy-gen frames share temporal RoPE slots.
