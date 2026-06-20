@@ -19,6 +19,7 @@ import contextlib
 import math
 import jax
 import jax.numpy as jnp
+from jax.sharding import PartitionSpec as P
 from jax.ad_checkpoint import checkpoint_name
 from flax import nnx
 import flax.linen as nn
@@ -661,10 +662,20 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         # reshaping with the global bt, materialising a replicated
         # [global_b, seq, 6*dim] timestep_proj on every device (~38 GB OOM).
         t_sinusoidal = self.condition_embedder.timesteps_proj(timestep)  # [B, sl, freq_dim]
+        # The time_embedder linear layers have weights sharded over the 'fsdp'
+        # axis (via the 'mlp' logical axis).  This conflicts with having 'fsdp'
+        # also shard the batch dim, so GSPMD may silently drop 'fsdp' from the
+        # batch sharding after the matmul, leaving only 'data'-sharded (2-way)
+        # intermediates.  Pin the sharding at every step so that the 8-way
+        # batch sharding is maintained all the way through to timestep_proj.
+        t_sinusoidal = jax.lax.with_sharding_constraint(t_sinusoidal, P(('data', 'fsdp'), None, None))
         temb = self.condition_embedder.time_embedder(t_sinusoidal)  # [B, sl, dim]
+        temb = jax.lax.with_sharding_constraint(temb, P(('data', 'fsdp'), None, None))
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]
+        timestep_proj = jax.lax.with_sharding_constraint(timestep_proj, P(('data', 'fsdp'), None, None))
         timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim] — last-dim split, sharding preserved
+        timestep_proj = jax.lax.with_sharding_constraint(timestep_proj, P(('data', 'fsdp'), None, None, None))
         # Text processing
         encoder_hidden_states = self.condition_embedder.text_embedder(encoder_hidden_states)
         encoder_hidden_states_image = None
