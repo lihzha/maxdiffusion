@@ -517,6 +517,7 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
         )
         noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
         model_pred = model(
             hidden_states=noisy_latents,
             timestep=timestep_2d,
@@ -530,16 +531,11 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
         return loss.reshape(loss.shape[0], -1).mean(axis=1)
 
     bs = config.global_batch_size_to_train_on
-    single_batch_size = config.global_batch_size_to_train_on
-    losses = jnp.zeros(bs)
-    for i in range(0, bs, single_batch_size):
-        end = min(i + single_batch_size, bs)
-        latents = data["latents"][i:end].astype(config.weights_dtype)
-        encoder_hidden_states = data["encoder_hidden_states"][i:end].astype(config.weights_dtype)
-        rng, t_rng, noise_rng = jax.random.split(rng, 3)
-        timesteps = scheduler.sample_timesteps(t_rng, end - i)
-        loss = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
-        losses = losses.at[i:end].set(loss)
+    latents = data["latents"][:bs].astype(config.weights_dtype)
+    encoder_hidden_states = data["encoder_hidden_states"][:bs].astype(config.weights_dtype)
+    rng, t_rng, noise_rng = jax.random.split(rng, 3)
+    timesteps = scheduler.sample_timesteps(t_rng, bs)
+    losses = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
 
     metrics = {"scalar": {"learning/eval_loss": losses}}
     return metrics, rng
