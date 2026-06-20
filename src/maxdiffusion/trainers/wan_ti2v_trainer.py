@@ -290,7 +290,12 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
     noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
     # Per-token timestep for student: history → 0, future → t.
+    # sample_timesteps uses jax.random.uniform with explicit shape → unsharded.
+    # Constrain to batch sharding so timestep_proj inside the transformer is
+    # [local_b, seq, 6, dim] per device instead of [global_b, seq, 6, dim],
+    # preventing a ~38 GB scan-invariant on the path to all 40 blocks.
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+    timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
 
     # ── Teacher forward pass (EMA model, oracle / privileged mode) ───────────
     # Mirrors the oracle inference layout from wan_pipeline_ti2v_2p2:
@@ -327,7 +332,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         # jax.random.randint with explicit shape is unsharded (replicated). Constrain
         # to batch sharding so that should_update inside rollout_body is also batch-
         # sharded and jnp.where can maintain the sharded carry throughout the loop.
-        k_steps = nn_partitioning.with_sharding_constraint(k_steps, ('activation_batch',))
+        k_steps = jax.lax.with_sharding_constraint(k_steps, P(('data', 'fsdp'),))
         timesteps = rollout_ts[k_steps]  # override training timesteps; inherits batch sharding
 
         def _sigma(t_int):
@@ -338,7 +343,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         # jax.random.normal with an explicit shape produces an unsharded (replicated) tensor.
         # Constrain to match future_latents' batch sharding so the while_loop carry is
         # correctly sharded from the start and the model sees [local_batch, …] per device.
-        gen_init = nn_partitioning.with_sharding_constraint(gen_init, ('activation_batch', None, None, None, None))
+        gen_init = jax.lax.with_sharding_constraint(gen_init, P(('data', 'fsdp'), None, None, None, None))
         max_k = jnp.max(k_steps)
 
         def rollout_cond(carry):
@@ -386,11 +391,11 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         _, gen_t = jax.lax.while_loop(rollout_cond, rollout_body, (0, gen_init))
         # Ensure gen_t (the while_loop output) retains its batch sharding — the loop
         # carry sharding may degrade if any body op lost the annotation.
-        gen_t = nn_partitioning.with_sharding_constraint(gen_t, ('activation_batch', None, None, None, None))
+        gen_t = jax.lax.with_sharding_constraint(gen_t, P(('data', 'fsdp'), None, None, None, None))
 
         # Recompute per-token timestep from the rollout-derived timesteps.
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
-        timestep_2d = nn_partitioning.with_sharding_constraint(timestep_2d, ('activation_batch', 'activation_length'))
+        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
 
         # Student and teacher both operate on gen_t (on-policy latent at t).
         noisy_future = gen_t
@@ -425,8 +430,8 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         )
         # .at[].set() can drop batch-sharding in GSPMD; re-annotate so the teacher
         # forward pass sees a properly batch-sharded per-token timestep tensor.
-        teacher_timestep_2d = nn_partitioning.with_sharding_constraint(
-            teacher_timestep_2d, ('activation_batch', 'activation_length')
+        teacher_timestep_2d = jax.lax.with_sharding_constraint(
+            teacher_timestep_2d, P(('data', 'fsdp'), None)
         )
 
         # Frame positions: oracle and noisy-gen frames share temporal RoPE slots.
