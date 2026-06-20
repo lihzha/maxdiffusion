@@ -586,9 +586,14 @@ class WanCtrlWorldTrainer:
 
         eval_iter = self._load_dataset(mesh, is_training=False)
 
+        # Always use single-batch shardings for eval — no grad_accum leading dim.
+        eval_data_shardings = {
+            k: NamedSharding(mesh, P(*self.config.data_sharding))
+            for k in ("latent", "action", "text_embeds")
+        }
         p_eval_step = jax.jit(
             functools.partial(_eval_step, scheduler=scheduler, config=config),
-            in_shardings=(state_shardings, data_shardings, None, None),
+            in_shardings=(state_shardings, eval_data_shardings, None, None),
             out_shardings=None,
         )
 
@@ -616,18 +621,22 @@ class WanCtrlWorldTrainer:
 
 def _eval_step(state: TrainState, data: dict, rng: jax.Array,
                scheduler_state, scheduler, config) -> jax.Array:
-    """Eval forward pass.
+    """Eval-only forward pass — no backward graph, honoring remat annotations.
 
-    Uses value_and_grad (gradients discarded) so that the remat/checkpoint
-    annotations on transformer layers are honoured by JAX's AD, bounding peak
-    HBM to one layer's activations — the same budget as training.  A plain
-    forward-only jit ignores checkpoint markers and materialises all 40 layers'
-    intermediates simultaneously, causing RESOURCE_EXHAUSTED at eval time.
+    stop_gradient on params prevents XLA from building a backward pass through
+    the scanned transformer layers.  Without this, even a discarded value_and_grad
+    materialises all 40 layers' residuals simultaneously (RESOURCE_EXHAUSTED).
     """
     _, noise_rng, timestep_rng = jax.random.split(rng, 3)
     bsz = config.global_batch_size_to_train_on
     weights_dtype = _dtype(config.weights_dtype)
     n_hist = config.num_history_latent_frames
+
+    # Stop-gradient prevents any backward graph from being traced, so the
+    # transformer's remat checkpoints are skipped entirely and peak HBM stays
+    # at one layer's activations (XLA fuses the scan body as a single kernel).
+    params = jax.lax.stop_gradient(state.params)
+    model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
 
     latents = data["latent"][:bsz].astype(weights_dtype)
     actions = data["action"][:bsz].astype(weights_dtype)
@@ -639,7 +648,6 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
 
     timesteps = scheduler.sample_timesteps(timestep_rng, b)
 
-    # Future frames noised; history frames clean.
     future_latents = latents[:, :, n_hist:]
     noise = jax.random.normal(noise_rng, future_latents.shape, dtype=future_latents.dtype)
     noisy_future, target_future, training_weight = scheduler.apply_flow_match(
@@ -649,22 +657,19 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
 
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
 
-    def compute_loss(params):
-        model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
-        text_pooled = text_tokens.mean(axis=1)
-        action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
-        model_pred = model.transformer(
-            hidden_states=noisy_latents,
-            timestep=timestep_2d,
-            encoder_hidden_states=action_tokens,
-            deterministic=True,
-            frame_level_cond=True,
-        )
-        diff = target_future - model_pred[:, :, n_hist:]
-        loss = diff ** 2
-        if not config.disable_training_weights:
-            loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
-        return jnp.mean(loss)
+    text_pooled = text_tokens.mean(axis=1)
+    action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
 
-    loss, _ = nnx.value_and_grad(compute_loss)(state.params)
-    return loss
+    model_pred = model.transformer(
+        hidden_states=noisy_latents,
+        timestep=timestep_2d,
+        encoder_hidden_states=action_tokens,
+        deterministic=True,
+        frame_level_cond=True,
+    )
+
+    diff = target_future - model_pred[:, :, n_hist:]
+    loss = diff ** 2
+    if not config.disable_training_weights:
+        loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
+    return jnp.mean(loss)
