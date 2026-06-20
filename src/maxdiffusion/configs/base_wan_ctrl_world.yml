@@ -223,7 +223,7 @@ checkpoint_keep_period: -1
 enable_single_replica_ckpt_restoring: False
 save_final_checkpoint: True
 
-eval_every: 10
+eval_every: 200
 eval_data_dir: ""
 eval_max_batches: 1
 

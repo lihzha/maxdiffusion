@@ -371,6 +371,11 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             roll_ts_2d = _build_per_token_timestep(
                 t_from_vec, F_lat, H_lat, W_lat, n_hist
             )
+            # Inside jax.lax.while_loop, GSPMD may not propagate sharding through
+            # non-carry intermediates. Explicitly constrain so roll_model sees a
+            # batch-sharded [local_b, seq] timestep and does not materialise a
+            # replicated [global_b, seq, 6, dim] timestep_proj scan-invariant.
+            roll_ts_2d = jax.lax.with_sharding_constraint(roll_ts_2d, P(('data', 'fsdp'), None))
             roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
             with jax.named_scope("online_gen_rollout_step"):
                 v_pred = roll_model(
