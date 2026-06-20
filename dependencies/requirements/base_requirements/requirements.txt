@@ -26,7 +26,6 @@ pyink
 pylint
 pytest
 ruff
-lpips
 scikit-image
 sentencepiece
 tensorboard-plugin-profile

@@ -19,7 +19,6 @@ import contextlib
 import math
 import jax
 import jax.numpy as jnp
-from jax.sharding import PartitionSpec as P
 from jax.ad_checkpoint import checkpoint_name
 from flax import nnx
 import flax.linen as nn
@@ -124,20 +123,14 @@ class WanTimeTextImageEmbedding(nnx.Module):
         dtype=jnp.float32,
         param_dtype=weights_dtype,
         precision=precision,
-        # Replicate this weight across fsdp devices (not sharded over "mlp"/fsdp).
-        # time_proj is called in the per-token TI2V path where the batch dim is
-        # also sharded over fsdp via P(('data','fsdp'),...).  If the kernel were
-        # fsdp-sharded on the output-features axis, GSPMD cannot simultaneously
-        # shard both batch and output-features over fsdp, so it silently drops
-        # fsdp from the batch, leaving only 2-way (data-only) batch sharding.
-        # That produces a local timestep_proj of [32, seq, 6*dim] f32 per device
-        # (~38 GB) instead of the correct [8, seq, 6*dim] (~9.7 GB).  Replicating
-        # this 226 MB weight eliminates the conflict; cost is negligible.
         kernel_init=nnx.with_partitioning(
             nnx.initializers.xavier_uniform(),
-            (None, None),
+            (
+                "embed",
+                "mlp",
+            ),
         ),
-        bias_init=nnx.with_partitioning(nnx.initializers.zeros, (None,)),
+        bias_init=nnx.with_partitioning(nnx.initializers.zeros, ("mlp",)),
     )
     self.text_embedder = NNXPixArtAlphaTextProjection(
         rngs=rngs,
@@ -661,27 +654,13 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         # This matches the official WAN 2.2 TI2V pipeline where first-frame
         # tokens receive timestep=0 (clean) and other tokens receive timestep=t.
         bt, sl = timestep.shape
-        # Pass the 2-D [B, seq] tensor directly to timesteps_proj.
-        # get_sinusoidal_embeddings supports both 1-D and 2-D input, so no
-        # flatten/unflatten is required.  The old reshape(-1) + reshape(bt, sl, ...)
-        # pattern forced an all-gather of the batch-sharded tensor before
-        # reshaping with the global bt, materialising a replicated
-        # [global_b, seq, 6*dim] timestep_proj on every device (~38 GB OOM).
-        t_sinusoidal = self.condition_embedder.timesteps_proj(timestep)  # [B, sl, freq_dim]
-        # The time_embedder linear layers have weights sharded over the 'fsdp'
-        # axis (via the 'mlp' logical axis).  This conflicts with having 'fsdp'
-        # also shard the batch dim, so GSPMD may silently drop 'fsdp' from the
-        # batch sharding after the matmul, leaving only 'data'-sharded (2-way)
-        # intermediates.  Pin the sharding at every step so that the 8-way
-        # batch sharding is maintained all the way through to timestep_proj.
-        t_sinusoidal = jax.lax.with_sharding_constraint(t_sinusoidal, P(('data', 'fsdp'), None, None))
+        t_flat = timestep.reshape(-1)  # [B*seq_len]
+        t_sinusoidal = self.condition_embedder.timesteps_proj(t_flat)  # [B*sl, freq_dim]
+        t_sinusoidal = t_sinusoidal.reshape(bt, sl, -1)  # [B, sl, freq_dim]
         temb = self.condition_embedder.time_embedder(t_sinusoidal)  # [B, sl, dim]
-        temb = jax.lax.with_sharding_constraint(temb, P(('data', 'fsdp'), None, None))
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]
-        timestep_proj = jax.lax.with_sharding_constraint(timestep_proj, P(('data', 'fsdp'), None, None))
-        timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim] — last-dim split, sharding preserved
-        timestep_proj = jax.lax.with_sharding_constraint(timestep_proj, P(('data', 'fsdp'), None, None, None))
+        timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim]
         # Text processing
         encoder_hidden_states = self.condition_embedder.text_embedder(encoder_hidden_states)
         encoder_hidden_states_image = None

@@ -195,10 +195,6 @@ class BaseWanTrainer(abc.ABC):
         max_logging.log(f"Calculated TFLOPs per pass: {train_tflops:.4f}")
         return train_tflops, total_attn_flops, seq_len
 
-    def _needs_vae_for_eval(self) -> bool:
-        """Override to True in subclasses whose eval() decodes latents with the VAE."""
-        return False
-
     @abc.abstractmethod
     def get_data_shardings(self, mesh):
         """Returns data shardings for training."""
@@ -242,8 +238,7 @@ class BaseWanTrainer(abc.ABC):
             pretrained_video_path = generate_sample(self.config, pipeline, filename_prefix="pre-training-")
 
         needs_vae_for_training = getattr(self.config, "dataset_type", "") == "droid"
-        needs_vae_for_eval = self._needs_vae_for_eval()
-        if not needs_vae_for_training and not needs_vae_for_eval and (
+        if not needs_vae_for_training and (
             self.config.eval_every == -1 or (not self.config.enable_generate_video_for_eval)
         ):
             # save some memory.

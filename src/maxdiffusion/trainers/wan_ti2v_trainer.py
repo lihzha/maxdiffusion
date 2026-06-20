@@ -60,15 +60,13 @@ def _build_per_token_timestep(
     by the transformer's AdaLN); future frame tokens receive the sampled t.
     Matches the per-token scheme used in wan_pipeline_ti2v_2p2 inference.
     """
+    b = timesteps.shape[0]
     tokens_per_frame = (H_lat // 2) * (W_lat // 2)
     seq_len = F_lat * tokens_per_frame
     n_hist_tokens = n_hist * tokens_per_frame
-    # is_future: [1, seq_len] replicated mask; timesteps[:, None]: [B, 1] — inherits
-    # the caller's sharding so the broadcast result is [B, seq_len] with batch sharding
-    # matching timesteps. Using explicit broadcast_to(x, (global_b, seq)) would
-    # materialise a replicated [global_b, seq_len] tensor regardless of input sharding.
+    full = jnp.broadcast_to(timesteps[:, None], (b, seq_len))
     is_future = jnp.arange(seq_len)[None, :] >= n_hist_tokens
-    return jnp.where(is_future, timesteps[:, None], 0)
+    return jnp.where(is_future, full, jnp.zeros_like(full))
 
 
 class WanTI2VTrainer(BaseWanTrainer):
@@ -292,12 +290,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
     noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
     # Per-token timestep for student: history → 0, future → t.
-    # sample_timesteps uses jax.random.uniform with explicit shape → unsharded.
-    # Constrain to batch sharding so timestep_proj inside the transformer is
-    # [local_b, seq, 6, dim] per device instead of [global_b, seq, 6, dim],
-    # preventing a ~38 GB scan-invariant on the path to all 40 blocks.
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
-    timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
 
     # ── Teacher forward pass (EMA model, oracle / privileged mode) ───────────
     # Mirrors the oracle inference layout from wan_pipeline_ti2v_2p2:
@@ -331,21 +324,13 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         # Per-sample: sample how many steps to take; the stopping timestep becomes
         # the training timestep t for that element.
         k_steps = jax.random.randint(gen_rng, (b,), 0, num_gen_steps)
-        # jax.random.randint with explicit shape is unsharded (replicated). Constrain
-        # to batch sharding so that should_update inside rollout_body is also batch-
-        # sharded and jnp.where can maintain the sharded carry throughout the loop.
-        k_steps = jax.lax.with_sharding_constraint(k_steps, P(('data', 'fsdp'),))
-        timesteps = rollout_ts[k_steps]  # override training timesteps; inherits batch sharding
+        timesteps = rollout_ts[k_steps]  # override training timesteps
 
         def _sigma(t_int):
             t_n = t_int.astype(jnp.float32) / num_train_t
             return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
 
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
-        # jax.random.normal with an explicit shape produces an unsharded (replicated) tensor.
-        # Constrain to match future_latents' batch sharding so the while_loop carry is
-        # correctly sharded from the start and the model sees [local_batch, …] per device.
-        gen_init = jax.lax.with_sharding_constraint(gen_init, P(('data', 'fsdp'), None, None, None, None))
         max_k = jnp.max(k_steps)
 
         def rollout_cond(carry):
@@ -364,18 +349,9 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             sig_to   = _sigma(t_to)
 
             roll_input = jnp.concatenate([latents[:, :, :n_hist], lat], axis=2)
-            # t_from is a scalar from the while_loop carry, so broadcast_to creates an
-            # unsharded [b] vector. Derive the batch-sharded timestep from lat instead
-            # so that roll_ts_2d inherits the correct per-device batch dimension.
-            t_from_vec = jnp.zeros_like(lat[:, 0, 0, 0, 0], dtype=jnp.int32) + t_from
             roll_ts_2d = _build_per_token_timestep(
-                t_from_vec, F_lat, H_lat, W_lat, n_hist
+                jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
             )
-            # Inside jax.lax.while_loop, GSPMD may not propagate sharding through
-            # non-carry intermediates. Explicitly constrain so roll_model sees a
-            # batch-sharded [local_b, seq] timestep and does not materialise a
-            # replicated [global_b, seq, 6, dim] timestep_proj scan-invariant.
-            roll_ts_2d = jax.lax.with_sharding_constraint(roll_ts_2d, P(('data', 'fsdp'), None))
             roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
             with jax.named_scope("online_gen_rollout_step"):
                 v_pred = roll_model(
@@ -396,13 +372,9 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             return (step_idx + 1, jnp.where(should_update, new_lat, lat))
 
         _, gen_t = jax.lax.while_loop(rollout_cond, rollout_body, (0, gen_init))
-        # Ensure gen_t (the while_loop output) retains its batch sharding — the loop
-        # carry sharding may degrade if any body op lost the annotation.
-        gen_t = jax.lax.with_sharding_constraint(gen_t, P(('data', 'fsdp'), None, None, None, None))
 
         # Recompute per-token timestep from the rollout-derived timesteps.
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
-        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
 
         # Student and teacher both operate on gen_t (on-policy latent at t).
         noisy_future = gen_t
@@ -434,11 +406,6 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         teacher_timestep_2d = teacher_timestep_2d.at[:, :n_hist_tok].set(0)
         teacher_timestep_2d = teacher_timestep_2d.at[:, n_hist_tok:n_hist_tok + n_oracle_tok].set(
             jnp.broadcast_to(t_oracle[:, None], (b, n_oracle_tok))
-        )
-        # .at[].set() can drop batch-sharding in GSPMD; re-annotate so the teacher
-        # forward pass sees a properly batch-sharded per-token timestep tensor.
-        teacher_timestep_2d = jax.lax.with_sharding_constraint(
-            teacher_timestep_2d, P(('data', 'fsdp'), None)
         )
 
         # Frame positions: oracle and noisy-gen frames share temporal RoPE slots.
@@ -522,7 +489,6 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
         )
         noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
-        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(('data', 'fsdp'), None))
         model_pred = model(
             hidden_states=noisy_latents,
             timestep=timestep_2d,
@@ -536,11 +502,16 @@ def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist)
         return loss.reshape(loss.shape[0], -1).mean(axis=1)
 
     bs = config.global_batch_size_to_train_on
-    latents = data["latents"][:bs].astype(config.weights_dtype)
-    encoder_hidden_states = data["encoder_hidden_states"][:bs].astype(config.weights_dtype)
-    rng, t_rng, noise_rng = jax.random.split(rng, 3)
-    timesteps = scheduler.sample_timesteps(t_rng, bs)
-    losses = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
+    single_batch_size = config.global_batch_size_to_train_on
+    losses = jnp.zeros(bs)
+    for i in range(0, bs, single_batch_size):
+        end = min(i + single_batch_size, bs)
+        latents = data["latents"][i:end].astype(config.weights_dtype)
+        encoder_hidden_states = data["encoder_hidden_states"][i:end].astype(config.weights_dtype)
+        rng, t_rng, noise_rng = jax.random.split(rng, 3)
+        timesteps = scheduler.sample_timesteps(t_rng, end - i)
+        loss = loss_fn(state.params, latents, encoder_hidden_states, timesteps, noise_rng)
+        losses = losses.at[i:end].set(loss)
 
     metrics = {"scalar": {"learning/eval_loss": losses}}
     return metrics, rng
