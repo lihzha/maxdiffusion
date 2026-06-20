@@ -124,14 +124,20 @@ class WanTimeTextImageEmbedding(nnx.Module):
         dtype=jnp.float32,
         param_dtype=weights_dtype,
         precision=precision,
+        # Replicate this weight across fsdp devices (not sharded over "mlp"/fsdp).
+        # time_proj is called in the per-token TI2V path where the batch dim is
+        # also sharded over fsdp via P(('data','fsdp'),...).  If the kernel were
+        # fsdp-sharded on the output-features axis, GSPMD cannot simultaneously
+        # shard both batch and output-features over fsdp, so it silently drops
+        # fsdp from the batch, leaving only 2-way (data-only) batch sharding.
+        # That produces a local timestep_proj of [32, seq, 6*dim] f32 per device
+        # (~38 GB) instead of the correct [8, seq, 6*dim] (~9.7 GB).  Replicating
+        # this 226 MB weight eliminates the conflict; cost is negligible.
         kernel_init=nnx.with_partitioning(
             nnx.initializers.xavier_uniform(),
-            (
-                "embed",
-                "mlp",
-            ),
+            (None, None),
         ),
-        bias_init=nnx.with_partitioning(nnx.initializers.zeros, ("mlp",)),
+        bias_init=nnx.with_partitioning(nnx.initializers.zeros, (None,)),
     )
     self.text_embedder = NNXPixArtAlphaTextProjection(
         rngs=rngs,
