@@ -654,13 +654,17 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         # This matches the official WAN 2.2 TI2V pipeline where first-frame
         # tokens receive timestep=0 (clean) and other tokens receive timestep=t.
         bt, sl = timestep.shape
-        t_flat = timestep.reshape(-1)  # [B*seq_len]
-        t_sinusoidal = self.condition_embedder.timesteps_proj(t_flat)  # [B*sl, freq_dim]
-        t_sinusoidal = t_sinusoidal.reshape(bt, sl, -1)  # [B, sl, freq_dim]
+        # Pass the 2-D [B, seq] tensor directly to timesteps_proj.
+        # get_sinusoidal_embeddings supports both 1-D and 2-D input, so no
+        # flatten/unflatten is required.  The old reshape(-1) + reshape(bt, sl, ...)
+        # pattern forced an all-gather of the batch-sharded tensor before
+        # reshaping with the global bt, materialising a replicated
+        # [global_b, seq, 6*dim] timestep_proj on every device (~38 GB OOM).
+        t_sinusoidal = self.condition_embedder.timesteps_proj(timestep)  # [B, sl, freq_dim]
         temb = self.condition_embedder.time_embedder(t_sinusoidal)  # [B, sl, dim]
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]
-        timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim]
+        timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim] — last-dim split, sharding preserved
         # Text processing
         encoder_hidden_states = self.condition_embedder.text_embedder(encoder_hidden_states)
         encoder_hidden_states_image = None
