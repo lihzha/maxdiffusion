@@ -117,11 +117,11 @@ python src/maxdiffusion/train_wan.py \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=FULL \
-    ici_data_parallelism=2 \
+    remat_policy=MATMUL_WITHOUT_BATCH \
+    ici_data_parallelism=4 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=8 \
+    ici_context_parallelism=4 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
@@ -131,7 +131,7 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=10010 \
     checkpoint_every=10 \
     checkpoint_keep_period=1000 \
-    per_device_batch_size=1.0 \
+    per_device_batch_size=0.25 \
     height=480 \
     width=832 \
     num_frames=80 \
