@@ -664,7 +664,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         # reshape nodes that break op fusion (~20% overhead on ctrl_world).
         # With context=1, P(("data","fsdp"),...) already gives 64-way sharding.
         _mesh = getattr(self.config, "mesh", None)
-        _ctx = _mesh.axis_sizes.get("context", 1) if _mesh is not None else 1
+        _ctx = _mesh.shape.get("context", 1) if _mesh is not None else 1
         _batch_axes = ("data", "fsdp", "context") if _ctx > 1 else ("data", "fsdp")
         temb = jax.lax.with_sharding_constraint(temb, P(_batch_axes, None, None))
         with jax.named_scope("time_proj"):
