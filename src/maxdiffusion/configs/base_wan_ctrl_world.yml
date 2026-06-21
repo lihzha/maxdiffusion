@@ -163,7 +163,7 @@ wan_action_encoder_hidden_dim: 1024
 
 # Windowing in latent space. Each latent frame corresponds to 4 raw frames.
 # num_frames = number of future (generated) latent frames; total window = num_history_latent_frames + num_frames.
-num_history_latent_frames: 1
+num_history_latent_frames: 4
 # Strided history sampling (ctrl-world style). skip_his is drawn uniformly from [1, max_skip_his]
 # at train time; val always uses skip_his=1. skip_his_zero_prob collapses all history to frame_now.
 max_skip_his: 3 #ctrl-world uses 8, which maps to 2 with 4x temporal compression (1 = no skipping, 2 = skip 1 frame, 3 = skip 2 frames)
