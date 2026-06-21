@@ -143,7 +143,7 @@ python src/maxdiffusion/train_wan.py \
     distill=True \
     oracle_noise_offset=-1 \
     wandb_project='wan-ti2v-self-distill-clean-single-view-no-ema' \
-    single_camera=True 
+    single_camera=True
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"

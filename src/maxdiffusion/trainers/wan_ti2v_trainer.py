@@ -330,20 +330,15 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
 
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
-        max_k = jnp.max(k_steps)
 
-        def rollout_cond(carry):
-            step_idx, _ = carry
-            return step_idx < max_k
+        # Build roll_model once outside the loop: nnx.merge is a Python/trace-time
+        # operation, but keeping it inside a fori_loop body would re-run it on
+        # every JAX re-trace.  Moving it out is cleaner and saves trace overhead.
+        roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
 
-        def rollout_body(carry):
-            step_idx, lat = carry
+        def rollout_body(step_idx, lat):
             t_from = rollout_ts[step_idx]
             t_to   = rollout_ts[step_idx + 1]
-            jax.debug.print(
-                "[distill rollout] step {step}/{total}  t_from={t_from}  t_to={t_to}",
-                step=step_idx, total=num_gen_steps, t_from=t_from, t_to=t_to,
-            )
             sig_from = _sigma(t_from)
             sig_to   = _sigma(t_to)
 
@@ -351,7 +346,6 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             roll_ts_2d = _build_per_token_timestep(
                 jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
             )
-            roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
             with jax.named_scope("online_gen_rollout_step"):
                 v_pred = roll_model(
                     hidden_states=roll_input,
@@ -363,14 +357,17 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
 
             # Euler step: x_{t_to} = x_{t_from} + (σ_{t_to} - σ_{t_from}) * v
             # Cast back to lat.dtype: _sigma computes in float32, which would
-            # otherwise promote new_lat and break fori_loop's carry type check.
+            # otherwise promote new_lat and break the carry type check.
             new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
 
             # Per-element: only commit this step if step_idx < k_steps[i].
             should_update = (step_idx < k_steps)[:, None, None, None, None]
-            return (step_idx + 1, jnp.where(should_update, new_lat, lat))
+            return jnp.where(should_update, new_lat, lat)
 
-        _, gen_t = jax.lax.while_loop(rollout_cond, rollout_body, (0, gen_init))
+        # fori_loop (fixed iteration count) lets XLA unroll and pipeline the
+        # rollout steps.  The per-sample masking via should_update above is
+        # equivalent to the old while_loop's dynamic max_k stopping condition.
+        gen_t = jax.lax.fori_loop(0, num_gen_steps, rollout_body, gen_init)
 
         # Recompute per-token timestep from the rollout-derived timesteps.
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)

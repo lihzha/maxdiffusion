@@ -514,14 +514,18 @@ class WanCtrlWorldTrainer:
                 state, scheduler_state, metrics, rng = p_train_step(
                     state, example_batch, rng, scheduler_state
                 )
-                metrics["scalar"]["learning/loss"].block_until_ready()
 
+            # Prefetch next batch while the accelerator finishes step N.
+            # The host→device DMA in _next_batch overlaps with GPU/TPU compute.
+            example_batch = _next_batch(train_iter)
+
+            metrics["scalar"]["learning/loss"].block_until_ready()
             recent_loss.append(float(metrics["scalar"]["learning/loss"]))
             recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
             now = datetime.datetime.now()
             step_secs = (now - step_start).total_seconds()
 
-            if jax.process_index() == 0:
+            if jax.process_index() == 0 and (step < 5 or (step + 1) % config.log_period == 0):
                 max_logging.log(f"step {step} s/step={step_secs:.2f}")
 
             if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
@@ -553,8 +557,6 @@ class WanCtrlWorldTrainer:
                 and (step + 1) % config.checkpoint_every == 0
             ):
                 self._save_checkpoint(ckpt_mgr, step + 1, state)
-
-            example_batch = _next_batch(train_iter)
 
         if config.save_final_checkpoint:
             self._save_checkpoint(ckpt_mgr, config.max_train_steps, state)
