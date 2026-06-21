@@ -113,7 +113,7 @@ python src/maxdiffusion/train_wan.py \
     train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/train \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     cache_latents_text_encoder_outputs=True \
-    eval_every=20 \
+    eval_every=50 \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
@@ -179,6 +179,14 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # ici_fsdp_parallelism=8 \
 # ici_tensor_parallelism=1 \
 # ici_context_parallelism=2 \
+# per_device_batch_size=1.0 \
+
+# seconds: 10
+# remat_policy=FULL \
+# ici_data_parallelism=8 \
+# ici_fsdp_parallelism=8 \
+# ici_tensor_parallelism=1 \
+# ici_context_parallelism=1 \
 # per_device_batch_size=1.0 \
 
 # seconds: 30
