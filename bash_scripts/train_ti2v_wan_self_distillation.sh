@@ -117,11 +117,11 @@ python src/maxdiffusion/train_wan.py \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=MATMUL_WITHOUT_BATCH \
-    ici_data_parallelism=2 \
+    remat_policy=FULL \
+    ici_data_parallelism=8 \
     ici_fsdp_parallelism=8 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=4 \
+    ici_context_parallelism=1 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
@@ -173,7 +173,6 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # ici_context_parallelism=4 \
 # per_device_batch_size=1.0 \
 
-# try next: halve context comm overhead; fsdp=8 frees ~7.5 GB/chip to compensate for 2x activations from context=4->2
 # seconds: 20
 # remat_policy=FULL \
 # ici_data_parallelism=4 \
@@ -182,8 +181,7 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # ici_context_parallelism=2 \
 # per_device_batch_size=1.0 \
 
-# try next: MATMUL_WITHOUT_BATCH at context=4 (not 8) — fsdp=8 frees 7.5 GB to cover the extra checkpoint tensors
-# seconds: ???
+# seconds: 30
 # remat_policy=MATMUL_WITHOUT_BATCH \
 # ici_data_parallelism=2 \
 # ici_fsdp_parallelism=8 \
