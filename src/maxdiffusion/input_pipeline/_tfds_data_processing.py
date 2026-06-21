@@ -171,7 +171,7 @@ def _make_tfrecord_iterator(
     ds = ds.shuffle(buffer_size=total_eval_samples, reshuffle_each_iteration=True)
 
     ds = ds.shard(num_shards=dataloading_host_count, index=dataloading_host_index)
-    ds = ds.batch(global_batch_size // dataloading_host_count, drop_remainder=True).prefetch(AUTOTUNE)
+    ds = ds.batch(global_batch_size // dataloading_host_count, drop_remainder=True).repeat(-1).prefetch(AUTOTUNE)
   else:
     ds = (
         ds.shard(num_shards=dataloading_host_count, index=dataloading_host_index)
