@@ -128,15 +128,11 @@ def _build_per_token_timestep(
 
     WAN patches spatially at 2×2, so tokens_per_frame = (H_lat//2)*(W_lat//2).
     """
-    b = timesteps.shape[0]
     tokens_per_frame = (H_lat // 2) * (W_lat // 2)
     seq_len = F_lat * tokens_per_frame
     n_hist_tokens = n_hist_lat * tokens_per_frame
-
-    # Broadcast global t to all tokens, then zero the history prefix.
-    full = jnp.broadcast_to(timesteps[:, None], (b, seq_len))
     is_future = jnp.arange(seq_len)[None, :] >= n_hist_tokens   # (1, seq_len)
-    return jnp.where(is_future, full, jnp.zeros_like(full))
+    return jnp.where(is_future, timesteps[:, None], 0)
 
 
 # ── Training step ─────────────────────────────────────────────────────────────

@@ -125,12 +125,9 @@ class WanTimeTextImageEmbedding(nnx.Module):
         precision=precision,
         kernel_init=nnx.with_partitioning(
             nnx.initializers.xavier_uniform(),
-            (
-                "embed",
-                "mlp",
-            ),
+            (None, None),
         ),
-        bias_init=nnx.with_partitioning(nnx.initializers.zeros, ("mlp",)),
+        bias_init=nnx.with_partitioning(nnx.initializers.zeros, (None,)),
     )
     self.text_embedder = NNXPixArtAlphaTextProjection(
         rngs=rngs,
@@ -654,9 +651,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         # This matches the official WAN 2.2 TI2V pipeline where first-frame
         # tokens receive timestep=0 (clean) and other tokens receive timestep=t.
         bt, sl = timestep.shape
-        t_flat = timestep.reshape(-1)  # [B*seq_len]
-        t_sinusoidal = self.condition_embedder.timesteps_proj(t_flat)  # [B*sl, freq_dim]
-        t_sinusoidal = t_sinusoidal.reshape(bt, sl, -1)  # [B, sl, freq_dim]
+        t_sinusoidal = self.condition_embedder.timesteps_proj(timestep)  # [B, sl, freq_dim]
         temb = self.condition_embedder.time_embedder(t_sinusoidal)  # [B, sl, dim]
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]

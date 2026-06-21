@@ -60,13 +60,11 @@ def _build_per_token_timestep(
     by the transformer's AdaLN); future frame tokens receive the sampled t.
     Matches the per-token scheme used in wan_pipeline_ti2v_2p2 inference.
     """
-    b = timesteps.shape[0]
     tokens_per_frame = (H_lat // 2) * (W_lat // 2)
     seq_len = F_lat * tokens_per_frame
     n_hist_tokens = n_hist * tokens_per_frame
-    full = jnp.broadcast_to(timesteps[:, None], (b, seq_len))
     is_future = jnp.arange(seq_len)[None, :] >= n_hist_tokens
-    return jnp.where(is_future, full, jnp.zeros_like(full))
+    return jnp.where(is_future, timesteps[:, None], 0)
 
 
 class WanTI2VTrainer(BaseWanTrainer):
