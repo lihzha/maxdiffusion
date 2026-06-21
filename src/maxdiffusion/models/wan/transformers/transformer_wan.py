@@ -20,6 +20,7 @@ import math
 import jax
 import jax.numpy as jnp
 from jax.ad_checkpoint import checkpoint_name
+from jax.sharding import PartitionSpec as P
 from flax import nnx
 import flax.linen as nn
 import numpy as np
@@ -653,6 +654,14 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         bt, sl = timestep.shape
         t_sinusoidal = self.condition_embedder.timesteps_proj(timestep)  # [B, sl, freq_dim]
         temb = self.condition_embedder.time_embedder(t_sinusoidal)  # [B, sl, dim]
+        # Force 8-way batch sharding after time_embedder.  The time_embedder
+        # weights are partitioned ("embed", "mlp") where mlp→fsdp.  If the
+        # batch is also sharded over fsdp, GSPMD drops fsdp from the batch
+        # (2-way only) to avoid a doubly-sharded axis.  The constraint below
+        # re-shards the output back to the full (data,fsdp) batch sharding
+        # before the time_proj matmul, keeping the gradient-accumulation
+        # buffer at local_batch × seq × 18432 instead of 4× that.
+        temb = jax.lax.with_sharding_constraint(temb, P(("data", "fsdp"), None, None))
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]
         timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim]
