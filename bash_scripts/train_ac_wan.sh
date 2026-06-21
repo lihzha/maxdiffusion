@@ -114,7 +114,7 @@ python src/maxdiffusion/train_wan.py \
     ici_data_parallelism=2 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=16 \
+    ici_context_parallelism=8 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
