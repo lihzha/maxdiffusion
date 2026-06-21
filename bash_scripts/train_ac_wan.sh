@@ -110,11 +110,11 @@ python src/maxdiffusion/train_wan.py \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=FULL \
-    ici_data_parallelism=16 \
-    ici_fsdp_parallelism=4 \
+    remat_policy=MATMUL_WITHOUT_BATCH \
+    ici_data_parallelism=2 \
+    ici_fsdp_parallelism=1 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=1 \
+    ici_context_parallelism=16 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
@@ -149,7 +149,7 @@ python src/maxdiffusion/train_wan.py \
     # ici_context_parallelism=2 \
     # per_device_batch_size=1.0 \
 
-    # 7.87 s/step
+    # 7.87 s/step  ← current best
     # remat_policy=FULL \
     # ici_data_parallelism=16 \
     # ici_fsdp_parallelism=4 \
