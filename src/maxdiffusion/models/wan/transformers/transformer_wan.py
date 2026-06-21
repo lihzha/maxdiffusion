@@ -654,19 +654,18 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         bt, sl = timestep.shape
         t_sinusoidal = self.condition_embedder.timesteps_proj(timestep)  # [B, sl, freq_dim]
         temb = self.condition_embedder.time_embedder(t_sinusoidal)  # [B, sl, dim]
-        # Force full batch sharding after time_embedder.  time_embedder weights
-        # have ("embed","mlp") partitioning where "embed" maps to [context,fsdp],
-        # so GSPMD may drop those axes from the batch sharding to avoid doubly-
-        # sharded axes.  This constraint restores the full batch sharding before
-        # the time_proj matmul.
-        # Include "context" only when context > 1 (e.g. TI2V with context=4):
-        # P(("data","fsdp","context"),...) with context=1 adds extra HLO
-        # reshape nodes that break op fusion (~20% overhead on ctrl_world).
-        # With context=1, P(("data","fsdp"),...) already gives 64-way sharding.
+        # Force full (data×fsdp×context)-way batch sharding after time_embedder,
+        # but only when context > 1 (e.g. TI2V with context=4).
+        # time_embedder weights have ("embed","mlp") partitioning where "embed"
+        # maps to [context,fsdp], so GSPMD may drop those axes from the batch
+        # sharding to avoid doubly-sharded axes.  This constraint restores the
+        # full batch sharding before the time_proj matmul.
+        # When context=1 the natural GSPMD sharding is already correct and
+        # adding any constraint here breaks op fusion (~20% overhead).
         _mesh = getattr(self.config, "mesh", None)
         _ctx = _mesh.shape.get("context", 1) if _mesh is not None else 1
-        _batch_axes = ("data", "fsdp", "context") if _ctx > 1 else ("data", "fsdp")
-        temb = jax.lax.with_sharding_constraint(temb, P(_batch_axes, None, None))
+        if _ctx > 1:
+          temb = jax.lax.with_sharding_constraint(temb, P(("data", "fsdp", "context"), None, None))
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]
         timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim]
