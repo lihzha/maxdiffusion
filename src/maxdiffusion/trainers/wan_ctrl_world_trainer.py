@@ -515,15 +515,19 @@ class WanCtrlWorldTrainer:
                     state, example_batch, rng, scheduler_state
                 )
 
-            # Prefetch next batch while the accelerator finishes step N.
-            # The host→device DMA in _next_batch overlaps with GPU/TPU compute.
-            example_batch = _next_batch(train_iter)
-
+            # Measure compute time before prefetching the next batch.
+            # _next_batch calls jax.device_put which allocates HBM buffers; on a
+            # busy TPU this forces an implicit sync with the ongoing step and
+            # inflates step_secs.  We measure first, then prefetch so that the
+            # load overlaps with logging / eval / checkpoint logic below.
             metrics["scalar"]["learning/loss"].block_until_ready()
-            recent_loss.append(float(metrics["scalar"]["learning/loss"]))
-            recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
             now = datetime.datetime.now()
             step_secs = (now - step_start).total_seconds()
+
+            example_batch = _next_batch(train_iter)
+
+            recent_loss.append(float(metrics["scalar"]["learning/loss"]))
+            recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
 
             if jax.process_index() == 0 and (step < 5 or (step + 1) % config.log_period == 0):
                 max_logging.log(f"step {step} s/step={step_secs:.2f}")
