@@ -666,6 +666,12 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         _ctx = _mesh.shape.get("context", 1) if _mesh is not None else 1
         if _ctx > 1:
           temb = jax.lax.with_sharding_constraint(temb, P(("data", "fsdp", "context"), None, None))
+        else:
+          # temb.ndim is static at trace time; rank varies with parallelism config.
+          batch_axes = ("data", "fsdp")
+          temb = jax.lax.with_sharding_constraint(
+              temb, P(batch_axes, *([None] * (temb.ndim - 1)))
+          )
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]
         timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim]
