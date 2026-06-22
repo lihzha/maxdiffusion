@@ -112,8 +112,8 @@ python src/maxdiffusion/train_wan.py \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
     ici_data_parallelism=16 \
-    ici_fsdp_parallelism=4 \
-    ici_tensor_parallelism=1 \
+    ici_fsdp_parallelism=2 \
+    ici_tensor_parallelism=2 \
     ici_context_parallelism=1 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
@@ -126,11 +126,12 @@ python src/maxdiffusion/train_wan.py \
     max_train_steps=100100 \
     checkpoint_every=100 \
     checkpoint_keep_period=10000 \
-    eval_every=50 \
+    eval_every=500 \
+    eval_max_batches=50 \
     height=480 \
     width=832 \
     num_frames=81 \
-    flash_min_seq_length=128 \
+    flash_min_seq_length=0 \
     hardware='tpu' \
     wandb_project='wan-ac-history'     
 
@@ -150,7 +151,7 @@ python src/maxdiffusion/train_wan.py \
     # ici_context_parallelism=2 \
     # per_device_batch_size=1.0 \
 
-    # 7.87 s/step  ← current best
+    # 7.5 s/step  
     # remat_policy=FULL \
     # ici_data_parallelism=16 \
     # ici_fsdp_parallelism=4 \

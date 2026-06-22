@@ -477,6 +477,23 @@ class WanCtrlWorldTrainer:
             donate_argnums=(0,),
         )
 
+        # Pre-build eval step and iterator once so _run_eval never re-JITs.
+        # Creating jax.jit inside _run_eval loses the compilation cache each call,
+        # causing a full XLA recompile every eval_every steps.
+        p_eval_step = None
+        eval_iter = None
+        if config.eval_every > 0 and config.eval_data_dir:
+            eval_data_shardings = {
+                k: NamedSharding(mesh, P(*config.data_sharding))
+                for k in ("latent", "action", "text_embeds")
+            }
+            p_eval_step = jax.jit(
+                functools.partial(_eval_step, scheduler=scheduler, config=config),
+                in_shardings=(state_shardings, eval_data_shardings, None, None),
+                out_shardings=None,
+            )
+            eval_iter = self._load_dataset(mesh, is_training=False)
+
         # 10. Training loop
         if jax.process_index() == 0:
             max_logging.log("***** Running WAN Ctrl-World training *****")
@@ -553,8 +570,8 @@ class WanCtrlWorldTrainer:
                 config.eval_every > 0
                 and (step + 1) % config.eval_every == 0
             ):
-                self._run_eval(mesh, train_iter, state, state_shardings,
-                               data_shardings, scheduler, scheduler_state, step + 1, rng)
+                self._run_eval(mesh, p_eval_step, eval_iter, state,
+                               scheduler_state, step + 1, rng)
 
             if (
                 config.checkpoint_every > 0
@@ -573,32 +590,19 @@ class WanCtrlWorldTrainer:
     def _run_eval(
         self,
         mesh,
-        train_iter,          # reuse training iterator for a quick eval sample
+        p_eval_step,         # pre-compiled jax.jit function (built once in start_training)
+        eval_iter,           # pre-built MultiHostDataLoadIterator (reset each call)
         state: TrainState,
-        state_shardings,
-        data_shardings,
-        scheduler,
         scheduler_state,
         step: int,
         rng: jax.Array,
     ):
         config = self.config
-        if not config.eval_data_dir:
+        if p_eval_step is None or eval_iter is None:
             max_logging.log("[wan_ctrl_world] eval_every>0 but eval_data_dir not set; skipping")
             return
 
-        eval_iter = self._load_dataset(mesh, is_training=False)
-
-        # Always use single-batch shardings for eval — no grad_accum leading dim.
-        eval_data_shardings = {
-            k: NamedSharding(mesh, P(*self.config.data_sharding))
-            for k in ("latent", "action", "text_embeds")
-        }
-        p_eval_step = jax.jit(
-            functools.partial(_eval_step, scheduler=scheduler, config=config),
-            in_shardings=(state_shardings, eval_data_shardings, None, None),
-            out_shardings=None,
-        )
+        eval_iter.reset()
 
         losses: list[float] = []
         for _ in range(max(1, int(getattr(config, "eval_max_batches", 50)))):
