@@ -131,7 +131,7 @@ python src/maxdiffusion/train_wan.py \
     height=480 \
     width=832 \
     num_frames=81 \
-    flash_min_seq_length=0 \
+    flash_min_seq_length=128 \
     hardware='tpu' \
     wandb_project='wan-ac-history'     
 
