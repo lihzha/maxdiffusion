@@ -173,7 +173,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
-        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
+        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data"),None , None, None))
 
         text_pooled = text_tokens.mean(axis=1)                           # (B, 4096)
         text_keep = (jax.random.uniform(td_rng, (b, 1)) >= 0.5).astype(text_pooled.dtype)
@@ -650,7 +650,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
-    timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
+    timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp"), None, None))
 
     text_pooled = text_tokens.mean(axis=1)
     action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)

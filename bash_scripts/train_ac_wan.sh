@@ -111,10 +111,10 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
-    ici_data_parallelism=16 \
-    ici_fsdp_parallelism=2 \
+    ici_data_parallelism=8 \
+    ici_fsdp_parallelism=8 \
     ici_tensor_parallelism=1 \
-    ici_context_parallelism=2 \
+    ici_context_parallelism=1 \
     dcn_data_parallelism=1 \
     dcn_fsdp_parallelism=1 \
     dcn_tensor_parallelism=1 \
