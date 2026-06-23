@@ -107,7 +107,7 @@ python src/maxdiffusion/train_wan.py \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres/stats.json \
     cache_latents_text_encoder_outputs=True \
-    attention=tokamax_flash \
+    attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=MATMUL_WITHOUT_BATCH \
