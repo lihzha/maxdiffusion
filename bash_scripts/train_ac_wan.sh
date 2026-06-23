@@ -107,7 +107,7 @@ python src/maxdiffusion/train_wan.py \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres/stats.json \
     cache_latents_text_encoder_outputs=True \
-    attention=flash \
+    attention=tokamax_flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
     remat_policy=FULL \
@@ -150,7 +150,7 @@ python src/maxdiffusion/train_wan.py \
     # ici_context_parallelism=2 \
     # per_device_batch_size=1.0 \
 
-    # 7.5 s/step  
+    # 9.5 s/step  
     # remat_policy=FULL \
     # ici_data_parallelism=16 \
     # ici_fsdp_parallelism=4 \
