@@ -110,7 +110,7 @@ python src/maxdiffusion/train_wan.py \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=FULL \
+    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
     ici_data_parallelism=16 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
@@ -132,7 +132,7 @@ python src/maxdiffusion/train_wan.py \
     num_frames=81 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    wandb_project='wan-ac-history'     
+    wandb_project='wan-ac-history'
 
     # 9.35 s/step
     # remat_policy=FULL \

@@ -380,15 +380,17 @@ class WanTransformerBlock(nnx.Module):
       # Support both global [B, 6, dim] and per-token [B, seq_len, 6, dim] temb.
       # Per-token temb is used by TI2V where first-frame tokens have timestep=0.
       if temb.ndim == 4:  # Per-token: [B, seq_len, 6, dim]
-        adaln = jnp.expand_dims(self.adaln_scale_shift_table, 0)  # [1, 1, 6, dim]
-        combined = adaln + temb.astype(jnp.float32)  # [B, seq_len, 6, dim]
-        parts = jnp.split(combined, 6, axis=2)
-        shift_msa = parts[0].squeeze(2)
-        scale_msa = parts[1].squeeze(2)
-        gate_msa = parts[2].squeeze(2)
-        c_shift_msa = parts[3].squeeze(2)
-        c_scale_msa = parts[4].squeeze(2)
-        c_gate_msa = parts[5].squeeze(2)
+        # Slice each AdaLN component independently rather than broadcasting
+        # adaln over the full [B, seq_len, 6, dim] tensor and then splitting.
+        # At 117k tokens × dim=5120 the intermediate would be ~14 GB fp32 —
+        # this formulation lets XLA fuse slice → cast → add into one kernel.
+        table = self.adaln_scale_shift_table[0]  # [6, dim]
+        shift_msa   = table[0] + temb[:, :, 0, :].astype(jnp.float32)  # [B, seq_len, dim]
+        scale_msa   = table[1] + temb[:, :, 1, :].astype(jnp.float32)
+        gate_msa    = table[2] + temb[:, :, 2, :].astype(jnp.float32)
+        c_shift_msa = table[3] + temb[:, :, 3, :].astype(jnp.float32)
+        c_scale_msa = table[4] + temb[:, :, 4, :].astype(jnp.float32)
+        c_gate_msa  = table[5] + temb[:, :, 5, :].astype(jnp.float32)
       else:  # Global: [B, 6, dim]
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = jnp.split(
             (self.adaln_scale_shift_table + temb.astype(jnp.float32)),
@@ -770,11 +772,12 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
     residual_x = hidden_states - hidden_states_before_blocks
 
     if per_token_t:
-      # temb: [B, seq_len, dim] — per-token modulation for final head
-      combined_head = jnp.expand_dims(self.scale_shift_table, 0) + jnp.expand_dims(temb, 2)  # [B, sl, 2, dim]
-      shift, scale = jnp.split(combined_head, 2, axis=2)
-      shift = shift.squeeze(2)  # [B, sl, dim]
-      scale = scale.squeeze(2)  # [B, sl, dim]
+      # temb: [B, seq_len, dim] — per-token modulation for final head.
+      # Index directly to avoid the [B, sl, 2, dim] fp32 intermediate.
+      temb_f32 = temb.astype(jnp.float32)
+      table_head = self.scale_shift_table[0]  # [2, dim]
+      shift = table_head[0] + temb_f32  # [B, sl, dim]
+      scale = table_head[1] + temb_f32  # [B, sl, dim]
     else:
       shift, scale = jnp.split(self.scale_shift_table + jnp.expand_dims(temb, axis=1), 2, axis=1)
     hidden_states = (self.norm_out(hidden_states.astype(jnp.float32)) * (1 + scale) + shift).astype(hidden_states.dtype)
