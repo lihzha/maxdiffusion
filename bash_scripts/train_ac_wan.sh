@@ -107,11 +107,10 @@ python src/maxdiffusion/train_wan.py \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres/stats.json \
     cache_latents_text_encoder_outputs=True \
-    attention=flash \
+    attention=tokamax_flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=CUSTOM \
-    names_which_can_be_saved='["hidden_states","self_attn","cross_attn","ffn_activation"]' \
+    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
     ici_data_parallelism=16 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
