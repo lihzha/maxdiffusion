@@ -110,7 +110,7 @@ python src/maxdiffusion/train_wan.py \
     attention=flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
+    remat_policy=FULL \
     ici_data_parallelism=16 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
