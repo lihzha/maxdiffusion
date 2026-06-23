@@ -129,7 +129,7 @@ python src/maxdiffusion/train_wan.py \
     eval_every=50 \
     height=480 \
     width=832 \
-    num_frames=41 \
+    num_frames=21 \
     flash_min_seq_length=128 \
     hardware='tpu' \
     wandb_project='wan-ac-history-fewer-frames'
