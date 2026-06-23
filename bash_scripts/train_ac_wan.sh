@@ -110,7 +110,8 @@ python src/maxdiffusion/train_wan.py \
     attention=tokamax_flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
+    remat_policy=CUSTOM \
+    names_which_can_be_offloaded='["hidden_states","self_attn","cross_attn","ffn_activation"]' \
     ici_data_parallelism=16 \
     ici_fsdp_parallelism=4 \
     ici_tensor_parallelism=1 \
@@ -162,6 +163,17 @@ python src/maxdiffusion/train_wan.py \
     # remat_policy=FULL \
     # ici_data_parallelism=1 \
     # ici_fsdp_parallelism=-1 \
+    # ici_tensor_parallelism=1 \
+    # ici_context_parallelism=1 \
+    # per_device_batch_size=1.0 \
+
+    # 8.8 s/step
+    # attention=tokamax_flash \
+    # weights_dtype=bfloat16 \
+    # activations_dtype=bfloat16 \
+    # remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
+    # ici_data_parallelism=16 \
+    # ici_fsdp_parallelism=4 \
     # ici_tensor_parallelism=1 \
     # ici_context_parallelism=1 \
     # per_device_batch_size=1.0 \
