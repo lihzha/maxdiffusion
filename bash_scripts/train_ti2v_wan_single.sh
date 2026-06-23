@@ -114,10 +114,10 @@ python src/maxdiffusion/train_wan.py \
     eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
     cache_latents_text_encoder_outputs=True \
     eval_every=100 \
-    attention=flash \
+    attention=tokamax_flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=MATMUL_WITHOUT_BATCH \
+    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
     ici_data_parallelism=1 \
     ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
