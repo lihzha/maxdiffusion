@@ -123,8 +123,8 @@ python src/maxdiffusion/train_wan.py \
     grad_accum_steps=1 \
     allow_split_physical_axes=True \
     scan_layers=False \
-    max_train_steps=101000 \
-    checkpoint_every=1000 \
+    max_train_steps=100100 \
+    checkpoint_every=100 \
     checkpoint_keep_period=10000 \
     eval_every=50 \
     height=480 \
