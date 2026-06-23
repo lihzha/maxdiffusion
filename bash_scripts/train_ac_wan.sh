@@ -99,7 +99,7 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-    run_name=ac_wan_droid_history \
+    run_name=ac_wan_droid_history_fewer_frames \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -110,7 +110,7 @@ python src/maxdiffusion/train_wan.py \
     attention=tokamax_flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
+    remat_policy=MATMUL_WITHOUT_BATCH \
     ici_data_parallelism=1 \
     ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
@@ -129,50 +129,18 @@ python src/maxdiffusion/train_wan.py \
     eval_every=50 \
     height=480 \
     width=832 \
-    num_frames=81 \
+    num_frames=41 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    wandb_project='wan-ac-history'
+    wandb_project='wan-ac-history-fewer-frames'
 
-    # 9.35 s/step
-    # remat_policy=FULL \
-    # ici_data_parallelism=8 \
-    # ici_fsdp_parallelism=4 \
-    # ici_tensor_parallelism=1 \
-    # ici_context_parallelism=2 \
-    # per_device_batch_size=1.0 \
-
-    # 9.89 s/step
-    # remat_policy=OFFLOAD_MATMUL_WITHOUT_BATCH \
-    # ici_data_parallelism=8 \
-    # ici_fsdp_parallelism=4 \
-    # ici_tensor_parallelism=1 \
-    # ici_context_parallelism=2 \
-    # per_device_batch_size=1.0 \
-
-    # 9.5 s/step  
-    # remat_policy=FULL \
-    # ici_data_parallelism=16 \
-    # ici_fsdp_parallelism=4 \
-    # ici_tensor_parallelism=1 \
-    # ici_context_parallelism=1 \
-    # per_device_batch_size=1.0 \
-
-    # 9.24 s/step
-    # remat_policy=FULL \
-    # ici_data_parallelism=1 \
-    # ici_fsdp_parallelism=-1 \
-    # ici_tensor_parallelism=1 \
-    # ici_context_parallelism=1 \
-    # per_device_batch_size=1.0 \
-
-    # 8.8 s/step
+    # 8.3 s/step
     # attention=tokamax_flash \
     # weights_dtype=bfloat16 \
     # activations_dtype=bfloat16 \
     # remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
-    # ici_data_parallelism=16 \
-    # ici_fsdp_parallelism=4 \
+    # ici_data_parallelism=1 \
+    # ici_fsdp_parallelism=-1 \
     # ici_tensor_parallelism=1 \
     # ici_context_parallelism=1 \
     # per_device_batch_size=1.0 \
