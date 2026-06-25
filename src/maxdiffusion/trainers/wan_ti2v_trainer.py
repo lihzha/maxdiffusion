@@ -314,11 +314,9 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         num_gen_steps = config.num_inference_steps if _cfg_gen_steps < 0 else _cfg_gen_steps
 
         # Discretized rollout schedule: T_max → 0 in num_gen_steps Euler steps,
-        # spaced according to the scheduler's shift to concentrate steps at high noise.
+        # linearly spaced in t so uniform k gives uniform training timestep.
         t_uniform = jnp.linspace(1.0, 0.0, num_gen_steps + 1)
-        shift = scheduler.config.shift
-        t_shifted = (t_uniform * shift) / (1.0 + (shift - 1.0) * t_uniform)
-        rollout_ts = (t_shifted * (num_train_t - 1)).astype(jnp.int32)
+        rollout_ts = (t_uniform * (num_train_t - 1)).astype(jnp.int32)
 
         # Per-sample: sample how many steps to take; the stopping timestep becomes
         # the training timestep t for that element.

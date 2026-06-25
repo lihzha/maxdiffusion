@@ -135,19 +135,6 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     wandb_project='wan-ac-history-fewer-frames'
 
-    # 8.3 s/step
-    # attention=tokamax_flash \
-    # weights_dtype=bfloat16 \
-    # activations_dtype=bfloat16 \
-    # remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
-    # ici_data_parallelism=1 \
-    # ici_fsdp_parallelism=-1 \
-    # ici_tensor_parallelism=1 \
-    # ici_context_parallelism=1 \
-    # per_device_batch_size=1.0 \
-
-
-
 # --- DROID path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 # python src/maxdiffusion/train_wan.py \

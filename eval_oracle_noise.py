@@ -24,6 +24,7 @@ import sys
 from collections import defaultdict
 
 import flax
+from flax import nnx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -287,9 +288,23 @@ def main():
     print("[eval] Loading model...")
     checkpoint_loader = WanCheckpointerTI2V_2_2(config=config)
     checkpoint_step = getattr(config, "checkpoint_step", -1)
-    pipeline, _, _, _ = checkpoint_loader.load_checkpoint(
+    pipeline, _, _, extra_state = checkpoint_loader.load_checkpoint(
         step=checkpoint_step if checkpoint_step > 0 else None
     )
+    student_params_from_ckpt = extra_state.get("student_params") if extra_state else None
+    if getattr(config, "distill", False) and student_params_from_ckpt is not None:
+        graphdef, teacher_params, rest_of_state = nnx.split(pipeline.transformer, nnx.Param, ...)
+        ema_leaves, ema_treedef = jax.tree_util.tree_flatten(teacher_params)
+        student_leaves, _ = jax.tree_util.tree_flatten(student_params_from_ckpt)
+        def _place_like(s, e):
+            full = np.asarray(s.addressable_data(0))
+            return jax.make_array_from_callback(s.shape, e.sharding, lambda idx: full[idx])
+        student_params = jax.tree_util.tree_unflatten(
+            ema_treedef,
+            [_place_like(s, e) for s, e in zip(student_leaves, ema_leaves)],
+        )
+        pipeline.transformer = nnx.merge(graphdef, student_params, rest_of_state)
+        print("[eval] Distillation checkpoint: using student model params.")
     print("[eval] Model loaded.")
 
     out_dir = os.path.join(getattr(config, "output_dir", "./outputs"), getattr(config, "run_name", "oracle_noise_eval"))
