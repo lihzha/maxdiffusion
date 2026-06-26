@@ -34,8 +34,6 @@ fi
 # --- 3. TI2V model path ---
 export WAN_TI2V_MODEL_DIR="$GCS_MOUNT/wan/Wan2.2-TI2V-5B-Diffusers"
 
-source ./maxdiffusion_venv/bin/activate
-
 # --- 4. XLA flags ---
 export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
 --xla_tpu_megacore_fusion_allow_ags=false \
@@ -155,5 +153,5 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # ici_context_parallelism=1 \
 # per_device_batch_size=1.0 \
 
-# tpu create v6 --name v6-64-02-catherine -n 64 --repo lihzha/maxdiffusion --branch catherine-dev --setup-cmd "git checkout origin/catherine-dev && bash bash_scripts/train_ti2v_wan_single.sh"
+# tpu create v6 --name wan_ti2v -n 64 --setup-cmd "export WANDB_API_KEY=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 && bash bash_scripts/train_ti2v_wan_single.sh"
 # tpu tmux v6-64-02-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_single.sh' Enter
