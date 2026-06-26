@@ -138,8 +138,6 @@ python src/maxdiffusion/train_wan.py \
     flash_min_seq_length=128 \
     num_privileged_frames=-1 \
     hardware='tpu' \
-    ema_decay=1.0 \
-    teacher_update_every=10010 \
     distill=True \
     oracle_noise_offset=-1 \
     wandb_project='wan-ti2v-self-distill-clean-single-view-no-ema-uniform' \

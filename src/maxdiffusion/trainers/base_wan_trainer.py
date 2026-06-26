@@ -44,7 +44,6 @@ from maxdiffusion.video_processor import VideoProcessor
 class TrainState(train_state.TrainState):
     graphdef: nnx.GraphDef
     rest_of_state: nnx.State
-    ema_params: Any = None  # EMA teacher params; None when self-distillation is disabled
 
 
 def _to_array(x):
@@ -53,32 +52,15 @@ def _to_array(x):
     return x
 
 
-
-def _distill_swap(state: TrainState, is_distill: bool) -> TrainState:
-    """Return state with params=teacher and ema_params=student for distillation checkpoints.
-
-    Swapping ensures the standard load path (which reads wan_state["params"]) loads
-    the teacher (EMA) for inference, while the student is preserved under ema_params
-    so training can be resumed correctly.
-    """
-    if not is_distill or state.ema_params is None:
-        return state
-    return state.replace(params=state.ema_params, ema_params=state.params)
-
-
-def _state_to_save_dict(state: TrainState, is_distill: bool) -> dict:
+def _state_to_save_dict(state: TrainState) -> dict:
     """Build a plain dict of serializable fields for checkpointing.
 
     Only array-bearing fields are included; non-serializable TrainState fields
     (apply_fn, tx, graphdef) are excluded so PyTreeSave doesn't choke on them.
-    The params/ema_params swap for distillation is applied here.
     """
-    s = _distill_swap(state, is_distill)
-    d = {"params": s.params, "step": s.step}
-    if s.opt_state is not None:
-        d["opt_state"] = s.opt_state
-    if s.ema_params is not None:
-        d["ema_params"] = s.ema_params
+    d = {"params": state.params, "step": state.step}
+    if state.opt_state is not None:
+        d["opt_state"] = state.opt_state
     return d
 
 
@@ -314,57 +296,8 @@ class BaseWanTrainer(abc.ABC):
         mesh = pipeline.mesh
         graphdef, loaded_params, rest_of_state = nnx.split(pipeline.transformer, nnx.Param, ...)
 
-        ema_decay = getattr(self.config, "ema_decay", 0.0)
-        distill = getattr(self.config, "distill", False)
-
-        # When resuming from a distillation checkpoint the pipeline was loaded with
-        # teacher weights (saved under "params" after the save-time swap).  The
-        # actual student weights are returned under "student_params" in restore_args.
-        student_params_from_ckpt = restore_args.pop("student_params", None)
-        if distill and ema_decay > 0.0 and student_params_from_ckpt is not None:
-            ema_params = loaded_params           # teacher → provides distillation targets (already on TPU)
-            # student_params come from the CPU checkpoint restore.  _to_tpu_if_cpu falls
-            # back to nnx.get_partition_spec for CPU arrays, which returns P() for plain
-            # array fields (no logical-axis annotations), causing every device to hold a
-            # full replica of the model and triggering HBM OOM on reload.  Explicitly
-            # shard to match the teacher's tensor-parallel layout instead.
-            # ema_params is nnx.State; student_params_from_ckpt is a plain dict (orbax
-            # restore loses container types), so tree structures differ.  Flatten both
-            # independently — leaf ordering is the same (both traverse dicts
-            # alphabetically) — then unflatten back into the student's dict structure.
-            # Use make_array_from_callback (same as _to_tpu_if_cpu) instead of
-            # device_put: the latter fails on multi-controller JAX when CPU and TPU
-            # have different device-set IDs.
-            ema_leaves, ema_treedef = jax.tree_util.tree_flatten(ema_params)
-            student_leaves, _ = jax.tree_util.tree_flatten(student_params_from_ckpt)
-            def _place_like(s, e):
-                full = np.asarray(s.addressable_data(0))
-                return jax.make_array_from_callback(s.shape, e.sharding, lambda idx: full[idx])
-            # Unflatten with ema_treedef (nnx.State), not the orbax dict treedef, so
-            # state.params and state.ema_params share the same pytree type.  tree_map
-            # in post_train_step's EMA update requires matching node types.
-            params = jax.tree_util.tree_unflatten(
-                ema_treedef,
-                [_place_like(s, e) for s, e in zip(student_leaves, ema_leaves)],
-            )
-        else:
-            params = loaded_params
-            if ema_decay > 0.0:
-                # Must copy inside jax.jit so the result has the correct GLOBAL array
-                # shape on multi-host setups.  jnp.copy called outside jit materialises
-                # only the local per-host shard, giving shard shape (e.g. [16, dim])
-                # instead of the global shape (e.g. [256, dim]), which causes
-                # dot_general shape mismatches on the first train step and corrupt
-                # shapes in saved checkpoints.  jit also ensures new buffer objects so
-                # p_train_step can donate state without the "donate same buffer twice"
-                # error that a plain identity copy (lambda x: x) would trigger.
-                ema_params = jax.jit(lambda p: jax.tree_util.tree_map(jnp.copy, p))(params)
-            else:
-                ema_params = None
-
-        # When distilling, always save the full TrainState so both student (params)
-        # and teacher (ema_params) are preserved.  Otherwise honour save_optimizer.
-        _save_full_state = distill and ema_params is not None
+        restore_args.pop("student_params", None)  # ignored: no teacher/student split
+        params = loaded_params
 
         with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
             state = TrainState.create(
@@ -373,7 +306,6 @@ class BaseWanTrainer(abc.ABC):
                 tx=optimizer,
                 graphdef=graphdef,
                 rest_of_state=rest_of_state,
-                ema_params=ema_params,
             )
             if restore_args:
                 step = restore_args.get("step", 0)
@@ -418,7 +350,7 @@ class BaseWanTrainer(abc.ABC):
             _state_spec = nnx.get_partition_spec(state)
             _state_shardings = nnx.get_named_sharding(state, mesh)
             # nnx.get_partition_spec returns P() for arrays without logical-axis
-            # annotations (optax mu/nu, ema_params copies). For arrays already on
+            # annotations (optax mu/nu). For arrays already on
             # TPU with a NamedSharding, use their actual sharding as the target so
             # that state_shardings is correct for p_train_step compilation and
             # _to_tpu_if_cpu does not try to reshard them. CPU arrays (from a
@@ -561,9 +493,7 @@ class BaseWanTrainer(abc.ABC):
 
                 if self.config.eval_every > 0 and (step + 1) % self.config.eval_every == 0:
                     if self.config.enable_generate_video_for_eval:
-                        # Use teacher weights for inference video when distilling.
-                        inference_params = state.ema_params if _save_full_state else state.params
-                        pipeline.transformer = nnx.merge(state.graphdef, inference_params, state.rest_of_state)
+                        pipeline.transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
                         inference_generate_video(self.config, pipeline, filename_prefix=f"{step + 1}-train_steps-")
                     # Re-create the iterator each time you start evaluation to reset it
                     # This assumes your data loading logic can be called to get a fresh iterator.
@@ -572,8 +502,8 @@ class BaseWanTrainer(abc.ABC):
                 example_batch = next_batch_future.result()
                 if step != 0 and self.config.checkpoint_every != -1 and step % self.config.checkpoint_every == 0:
                     max_logging.log(f"Saving checkpoint for step {step}")
-                    if self.config.save_optimizer or _save_full_state:
-                        self.checkpointer.save_checkpoint(step, pipeline, _state_to_save_dict(state, _save_full_state))
+                    if self.config.save_optimizer:
+                        self.checkpointer.save_checkpoint(step, pipeline, _state_to_save_dict(state))
                     else:
                         self.checkpointer.save_checkpoint(step, pipeline, {"params": state.params})
 
@@ -585,14 +515,12 @@ class BaseWanTrainer(abc.ABC):
                 self._wandb_run.finish()
             if self.config.save_final_checkpoint:
                 max_logging.log(f"Saving final checkpoint for step {step}")
-                if _save_full_state:
+                if self.config.save_optimizer:
                     self.checkpointer.save_checkpoint(
-                        self.config.max_train_steps - 1, pipeline, _state_to_save_dict(state, _save_full_state)
+                        self.config.max_train_steps - 1, pipeline, _state_to_save_dict(state)
                     )
                 else:
                     self.checkpointer.save_checkpoint(self.config.max_train_steps - 1, pipeline, {"params": state.params})
                 self.checkpointer.checkpoint_manager.wait_until_finished()
-            # Load trained transformer — use teacher (EMA) when distilling.
-            final_params = state.ema_params if _save_full_state else state.params
-            pipeline.transformer = nnx.merge(state.graphdef, final_params, state.rest_of_state)
+            pipeline.transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
             return pipeline

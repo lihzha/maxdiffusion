@@ -101,9 +101,6 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
       wan_state_keys = restored_checkpoint.wan_state.keys()
       if "opt_state" in wan_state_keys:
         opt_state = restored_checkpoint.wan_state["opt_state"]
-      if "ema_params" in wan_state_keys:
-        extra_state["student_params"] = restored_checkpoint.wan_state["ema_params"]
-        _log("Distillation checkpoint detected: restoring student params from ema_params field.")
     else:
       _log("No checkpoint found, loading default pipeline.")
       pipeline = self.load_diffusers_checkpoint()

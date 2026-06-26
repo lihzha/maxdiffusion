@@ -36,14 +36,9 @@ model_type: 'TI2V'
 # Training: n_hist = num_privileged_frames + 1 (frame 0 is always clean).
 # Inference: same value controls how many oracle future frames are prepended.
 
-# Self-distillation via EMA teacher with privileged (t=0) future conditioning.
-# ema_decay > 0  — maintain an EMA copy of the student weights (the teacher).
-# distill: true  — use distillation loss (requires ema_decay > 0).
-# distill: false — use standard flow-matching loss (EMA is still kept if ema_decay > 0).
-ema_decay: 0.0
+# distill: true  — on-policy rollout loss against GT velocity.
+# distill: false — standard off-policy flow-matching loss.
 distill: false
-# Update the EMA teacher every N training steps. Default 1 = every step.
-teacher_update_every: 50
 # Number of Euler steps in the on-policy generation rollout (distill=true only).
 # The student denoises from T_max for k ~ Uniform[0, num_online_gen_steps) steps;
 # the stopping timestep becomes the training timestep t for that batch element.
@@ -347,6 +342,12 @@ num_privileged_frames: -1
 # to t - oracle_noise_offset using the flow-matching forward process, and their
 # per-token timestep is set to max(0, t - oracle_noise_offset). -1 = clean (no noise).
 oracle_noise_offset: -1
+
+# Fraction of denoising steps to run without oracle before injecting privileged frames.
+# 0.0 = full oracle from step 0; 1.0 = never inject (no oracle). Used by generate_wan_late_oracle.py.
+t_switch_frac: 0.5
+# Maximum number of val samples to process (-1 = all). Used by generate_wan_late_oracle.py.
+max_samples: -1
 
 # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
 guidance_rescale: 0.0
