@@ -780,4 +780,4 @@ def maybe_initialize_jax_distributed_system(raw_keys):
     initialize_jax_for_gpu()
     max_logging.log("Jax distributed system initialized on GPU!")
   else:
-    jax.distributed.initialize(initialization_timeout=1800)
+    jax.distributed.initialize(initialization_timeout=600)
