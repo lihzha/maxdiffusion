@@ -155,13 +155,13 @@ class WanCtrlWorldDroidDataset:
 
         ds = tf.data.Dataset.from_tensor_slices(files)
         if shuffle and self._is_train:
-            ds = ds.shuffle(len(files), seed=seed, reshuffle_each_iteration=False)
+            ds = ds.shuffle(len(files), seed=seed, reshuffle_each_iteration=True)
         if shard_for_training:
             ds = ds.shard(jax.process_count(), jax.process_index())
 
         ds = ds.interleave(
             tf.data.TFRecordDataset,
-            cycle_length=AUTOTUNE,
+            cycle_length=32,
             num_parallel_calls=AUTOTUNE,
             deterministic=not self._is_train,
         )
@@ -174,12 +174,12 @@ class WanCtrlWorldDroidDataset:
         if self._is_train:
             ds = ds.repeat()
         if shuffle and self._is_train:
-            ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=False)
+            ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=True)
 
         ds = ds.flat_map(self._traj_to_windows)
 
         if shuffle and self._is_train:
-            ds = ds.shuffle(shuffle_buffer * batch_size, seed=seed, reshuffle_each_iteration=False)
+            ds = ds.shuffle(shuffle_buffer * batch_size, seed=seed, reshuffle_each_iteration=True)
 
         ds = ds.batch(batch_size, drop_remainder=True)
         ds = ds.prefetch(AUTOTUNE)

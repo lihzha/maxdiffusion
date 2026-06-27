@@ -153,12 +153,12 @@ class CtrlWorldDroidLatentDataset:
 
         ds = tf.data.Dataset.from_tensor_slices(files)
         if shuffle and self.is_train:
-            ds = ds.shuffle(len(files), seed=seed, reshuffle_each_iteration=False)
+            ds = ds.shuffle(len(files), seed=seed, reshuffle_each_iteration=True)
         if shard_for_training:
             ds = ds.shard(jax.process_count(), jax.process_index())
         ds = ds.interleave(
             lambda fname: tf.data.TFRecordDataset(fname),
-            cycle_length=AUTOTUNE,
+            cycle_length=32,
             num_parallel_calls=AUTOTUNE,
             deterministic=not self.is_train,
         )
@@ -172,7 +172,7 @@ class CtrlWorldDroidLatentDataset:
         if self.is_train:
             ds = ds.repeat()
         if shuffle and self.is_train:
-            ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=False)
+            ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=True)
         ds = ds.batch(batch_size, drop_remainder=True)
         ds = ds.prefetch(AUTOTUNE)
         self.dataset = ds

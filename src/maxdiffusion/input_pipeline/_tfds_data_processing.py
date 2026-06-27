@@ -168,7 +168,7 @@ def _make_tfrecord_iterator(
       max_logging.log(f"Padded evaluation dataset with {num_to_pad} samples.")
 
     total_eval_samples = num_eval_samples + (0 if remainder == 0 else global_batch_size - remainder)
-    ds = ds.shuffle(buffer_size=total_eval_samples, reshuffle_each_iteration=False)
+    ds = ds.shuffle(buffer_size=total_eval_samples, reshuffle_each_iteration=True)
 
     ds = ds.shard(num_shards=dataloading_host_count, index=dataloading_host_index)
     ds = ds.batch(global_batch_size // dataloading_host_count, drop_remainder=True).repeat(-1).prefetch(AUTOTUNE)
@@ -181,9 +181,9 @@ def _make_tfrecord_iterator(
     if filter_fn is not None:
       ds = ds.filter(filter_fn)
     ds = (
-        ds.repeat(-1)
-        .shuffle(global_batch_size * 10, seed=seed, reshuffle_each_iteration=False)
+        ds.shuffle(global_batch_size * 10, seed=seed)
         .batch(global_batch_size // dataloading_host_count, drop_remainder=True)
+        .repeat(-1)
         .prefetch(AUTOTUNE)
         .with_options(_tf_data_options())
     )
