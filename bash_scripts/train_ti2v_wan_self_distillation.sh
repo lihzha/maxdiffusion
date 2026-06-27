@@ -7,8 +7,9 @@ source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
 
 # --- 2. Bucket mount ---
-source ~/.zshrc
-: "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
+# source ~/.zshrc
+# : "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
+export WANDB_API_KEY=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
 export GCS_BUCKET=v6_east1d
 export GCS_MOUNT=/home/zheng/gcs-mount
 
@@ -195,5 +196,5 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # ici_context_parallelism=4 \
 # per_device_batch_size=1.0 \
 
-# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "export WANDB_API_KEY=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 && bash bash_scripts/train_ti2v_wan_self_distillation.sh"
+# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" -- export WANDB_API_KEY=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 && bash bash_scripts/train_ti2v_wan_self_distillation.sh
 # tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
