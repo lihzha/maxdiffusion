@@ -1,4 +1,6 @@
 # --- 1. Activate the training env ---
+set -e
+echo "[$(hostname)] Script started at $(date)"
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source "$HOME/.local/bin/env"   # add uv to PATH
 
@@ -20,7 +22,7 @@ if ! command -v gcsfuse >/dev/null; then
   echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
   sudo apt-get -o DPkg::Lock::Timeout=-1 update
-  sudo apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse
+  sudo apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse || { echo "gcsfuse install failed on $(hostname)"; exit 1; }
 fi
 
 mkdir -p "$GCS_MOUNT" /dev/shm/gcsfuse-cache
@@ -196,5 +198,5 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # ici_context_parallelism=4 \
 # per_device_batch_size=1.0 \
 
-# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" -- export WANDB_API_KEY=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 && bash bash_scripts/train_ti2v_wan_self_distillation.sh
+# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" -- bash bash_scripts/train_ti2v_wan_self_distillation.sh
 # tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
