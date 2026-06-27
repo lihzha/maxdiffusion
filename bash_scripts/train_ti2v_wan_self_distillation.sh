@@ -1,6 +1,6 @@
 # --- 1. Activate the training env ---
 curl -LsSf https://astral.sh/uv/install.sh | sh
-git checkout origin/catherine-dev
+source "$HOME/.local/bin/env"   # add uv to PATH
 
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
