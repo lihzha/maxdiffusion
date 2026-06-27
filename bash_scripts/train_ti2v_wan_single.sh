@@ -98,6 +98,8 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 #     flash_min_seq_length=128 \
 #     hardware='tpu'
 
+ulimit -n 65536
+
 # --- TFRecord path (DROID data converted via wan_convert.sh) ---
 # Cameras are stacked along H: effective latent height = 704/8 * 3 = 264.
 # Eval samples timesteps uniformly (no timesteps field in DROID records).
