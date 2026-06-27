@@ -136,7 +136,6 @@ python src/maxdiffusion/train_wan.py \
     flash_min_seq_length=128 \
     num_privileged_frames=0 \
     hardware='tpu' \
-    ema_decay=0.0 \
     distill=False \
     wandb_project='wan-ti2v-finetune_single_view_2' \
     single_camera=True
