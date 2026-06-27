@@ -143,7 +143,7 @@ def _make_tfrecord_iterator(
   filenames = tf.io.gfile.glob(os.path.join(dataset_path, "*"))
   if is_training and seed is not None:
     filenames = np.random.default_rng(seed).permutation(filenames).tolist()
-  ds = tf.data.TFRecordDataset(filenames, num_parallel_reads=AUTOTUNE)
+  ds = tf.data.TFRecordDataset(filenames, num_parallel_reads=32)
 
   used_prepare_sample = (
       prepare_sample_fn if (make_cached_tfrecord_iterator or config.dataset_type == "tfrecord") else prepare_sample
