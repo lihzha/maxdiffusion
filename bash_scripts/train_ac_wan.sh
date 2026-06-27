@@ -93,6 +93,8 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 #     num_frames=81 \
 #     flash_min_seq_length=0
 
+source ./maxdiffusion_venv/bin/activate
+
 # --- TFRecord path (uncomment to use) ---
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
