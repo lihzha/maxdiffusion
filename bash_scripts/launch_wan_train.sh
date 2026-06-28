@@ -89,12 +89,20 @@ COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 # needs the .venv that setup.sh creates.)
 SETUP_CMD="bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh ${MODEL_DIR}"
 
+# W&B key is forwarded from your shell env (export WANDB_API_KEY in ~/.zshrc).
+# NOTE: this writes the key into the job spec on GCS, readable by anyone with
+# bucket access. If the key is absent, disable W&B so the run doesn't crash.
+if [ -z "${WANDB_API_KEY:-}" ]; then
+  echo "[submit] WARNING: WANDB_API_KEY not set in your shell; disabling W&B for this run." >&2
+  WANDB_PROJECT=""
+fi
+
 # ---- Submit the job to the queue ----
 tpu create v6 -n "$TPU_CHIPS" \
   --name "$NAME" \
   --code-dir "$REPO_ROOT" \
   --setup-cmd "$SETUP_CMD" \
-  --secret WANDB_API_KEY=wandb-api-key \
+  --env WANDB_API_KEY="${WANDB_API_KEY:-}" \
   --env RUN_NAME="$RUN_NAME" \
   --env COMMIT="$COMMIT" \
   --env ACTION_ADAPTER_TYPE="$ACTION_ADAPTER_TYPE" \
