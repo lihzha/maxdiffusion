@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Raise the open-file limit. The queue worker's login shell defaults to 1024,
+# which the model + data pipeline exhaust (process 0 hit Errno 24 at import wandb).
+ulimit -n 1048576 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+
 # Run bash_scripts/setup.sh once on the TPU before this script:
 #   bash bash_scripts/setup.sh MODE=stable DEVICE=tpu
 
