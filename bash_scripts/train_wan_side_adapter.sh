@@ -99,8 +99,8 @@ echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
 echo "HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}"
 echo "HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT}"
 echo "HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT}"
-echo "COMMIT=$(git rev-parse HEAD)"
-git status --short --branch
+echo "COMMIT=${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+git status --short --branch 2>/dev/null || echo "(no git checkout; running from uploaded code)"
 
 python src/maxdiffusion/train_wan.py \
   src/maxdiffusion/configs/base_wan_5b_side_adapter.yml \

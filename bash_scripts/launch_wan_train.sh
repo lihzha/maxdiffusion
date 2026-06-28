@@ -79,6 +79,11 @@ fi
 
 NAME="${NAME:-wan-${ACTION_ADAPTER_TYPE}-yixun}"
 
+# Record the exact code commit for provenance. The worker has no .git, so we
+# capture it here and pass it via --env. Note: the queue uploads the
+# working tree, so this is only accurate when your tree is committed/clean.
+COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+
 # Runs on every worker before training: build the venv and prefetch the model.
 # (An empty setup_cmd is a no-op on the queue, and train_wan_side_adapter.sh
 # needs the .venv that setup.sh creates.)
@@ -91,6 +96,7 @@ tpu create v6 -n "$TPU_CHIPS" \
   --setup-cmd "$SETUP_CMD" \
   --secret WANDB_API_KEY=wandb-api-key \
   --env RUN_NAME="$RUN_NAME" \
+  --env COMMIT="$COMMIT" \
   --env ACTION_ADAPTER_TYPE="$ACTION_ADAPTER_TYPE" \
   --env TRAIN_DATA_DIR="$TRAIN_DATA_DIR" \
   --env EVAL_DATA_DIR="$EVAL_DATA_DIR" \
