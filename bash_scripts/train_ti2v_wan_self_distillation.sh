@@ -140,7 +140,6 @@ python src/maxdiffusion/train_wan.py \
     num_frames=80 \
     flash_min_seq_length=128 \
     num_privileged_frames=-1 \
-    skip_jax_distributed_system=True \
     hardware='tpu' \
     distill=True \
     oracle_noise_offset=-1 \
@@ -199,5 +198,5 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # ici_context_parallelism=4 \
 # per_device_batch_size=1.0 \
 
-# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" --priority 0 -- bash -c "bash bash_scripts/train_ti2v_wan_self_distillation.sh"
+# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" --priority 0 -- bash bash_scripts/train_ti2v_wan_self_distillation.sh
 # tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter

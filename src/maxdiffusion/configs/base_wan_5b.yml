@@ -354,6 +354,7 @@ guidance_rescale: 0.0
 num_inference_steps: 30
 fps: 16
 save_final_checkpoint: False
+use_gt_velocity: False
 
 # SDXL Lightning parameters
 lightning_from_pt: True
