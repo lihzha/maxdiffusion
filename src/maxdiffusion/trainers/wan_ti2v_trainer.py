@@ -253,7 +253,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
     future_latents = latents[:, :, n_hist:]
 
     if distill:
-        # ── On-policy path: Euler rollout from pure noise to timestep t ──────
+        # ── On-policy path: Euler rollout collecting all intermediate states ──
         F_future = F_lat - n_hist
         num_train_t = scheduler.config.num_train_timesteps
         _cfg_gen_steps = config.num_online_gen_steps
@@ -264,11 +264,6 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         t_uniform = jnp.linspace(1.0, 0.0, num_gen_steps + 1)
         rollout_ts = (t_uniform * (num_train_t - 1)).astype(jnp.int32)
 
-        # Per-sample: sample how many steps to take; the stopping timestep becomes
-        # the training timestep t for that element.
-        k_steps = jax.random.randint(gen_rng, (b,), 0, num_gen_steps)
-        timesteps = rollout_ts[k_steps]
-
         def _sigma(t_int):
             t_n = t_int.astype(jnp.float32) / num_train_t
             return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
@@ -276,11 +271,11 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
 
         # Build roll_model once outside the loop: nnx.merge is a Python/trace-time
-        # operation, but keeping it inside a fori_loop body would re-run it on
+        # operation, but keeping it inside a scan body would re-run it on
         # every JAX re-trace.  Moving it out is cleaner and saves trace overhead.
         roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
 
-        def rollout_body(step_idx, lat):
+        def rollout_scan_body(lat, step_idx):
             t_from = rollout_ts[step_idx]
             t_to   = rollout_ts[step_idx + 1]
             sig_from = _sigma(t_from)
@@ -303,22 +298,14 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             # Cast back to lat.dtype: _sigma computes in float32, which would
             # otherwise promote new_lat and break the carry type check.
             new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
+            # Output lat (state before this step) = on-policy latent at rollout_ts[step_idx].
+            return new_lat, lat
 
-            # Per-element: only commit this step if step_idx < k_steps[i].
-            should_update = (step_idx < k_steps)[:, None, None, None, None]
-            return jnp.where(should_update, new_lat, lat)
+        # Collect every intermediate latent state via scan:
+        # all_gen_latents[k] = on-policy noisy latent at rollout_ts[k], k ∈ [0, num_gen_steps).
+        _, all_gen_latents = jax.lax.scan(rollout_scan_body, gen_init, jnp.arange(num_gen_steps))
+        # shape: (num_gen_steps, B, C, F_future, H_lat, W_lat)
 
-        # fori_loop (fixed iteration count) lets XLA unroll and pipeline the
-        # rollout steps.  The per-sample masking via should_update above is
-        # equivalent to the old while_loop's dynamic max_k stopping condition.
-        gen_t = jax.lax.fori_loop(0, num_gen_steps, rollout_body, gen_init)
-
-        # GT velocity at (gen_t, t): invert the forward process to recover the
-        # implied noise, then target = eps_implied - x_0 = (gen_t - x_0) / sigma_t.
-        # Derivation: gen_t = (1-σ)*x_0 + σ*ε  →  ε - x_0 = (gen_t - x_0) / σ
-        sigma_t = _sigma(timesteps)[:, None, None, None, None].astype(gen_t.dtype)
-        target_future = (gen_t - future_latents) / sigma_t
-        noisy_latents = jnp.concatenate([latents[:, :, :n_hist], gen_t], axis=2)
         training_weight = None
 
     else:
@@ -330,28 +317,49 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         )
         noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
-    # Per-token timestep: history → 0, future → t.
-    timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
-    timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
+        # Per-token timestep: history → 0, future → t.
+        timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+        timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
     def loss_fn(params):
         model = nnx.merge(state.graphdef, params, state.rest_of_state)
 
-        with jax.named_scope("forward_pass"):
-            model_pred = model(
-                hidden_states=noisy_latents,
-                timestep=timestep_2d,
-                encoder_hidden_states=encoder_hidden_states,
-                deterministic=False,
-                rngs=nnx.Rngs(dropout=dropout_rng),
-            )
+        if distill:
+            # Accumulate MSE loss over every rollout timestep.
+            # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
+            # GT velocity: target = (x_t - x_0) / σ_t (flow-matching parameterisation).
+            def step_loss(_, k):
+                gen_t_k = all_gen_latents[k]  # (B, C, F_future, H, W)
+                ts_k = jnp.broadcast_to(rollout_ts[k], (b,))
+                sigma_k = _sigma(ts_k)[:, None, None, None, None].astype(gen_t_k.dtype)
+                target_k = (gen_t_k - future_latents) / sigma_k
+                noisy_k = jnp.concatenate([latents[:, :, :n_hist], gen_t_k], axis=2)
+                ts_2d_k = _build_per_token_timestep(ts_k, F_lat, H_lat, W_lat, n_hist)
+                ts_2d_k = jax.lax.with_sharding_constraint(ts_2d_k, P(("data", "fsdp", "context"), None))
+                with jax.named_scope("forward_pass"):
+                    pred_k = model(
+                        hidden_states=noisy_k,
+                        timestep=ts_2d_k,
+                        encoder_hidden_states=encoder_hidden_states,
+                        deterministic=False,
+                        rngs=nnx.Rngs(dropout=dropout_rng),
+                    )
+                diff_k = target_k - pred_k[:, :, n_hist:]
+                return None, jnp.mean(diff_k ** 2)
 
-        with jax.named_scope("loss"):
-            if distill:
-                # Distillation: student future predictions vs GT velocity (noise - x_0).
-                diff = target_future - model_pred[:, :, n_hist:]
-                loss = jnp.mean(diff ** 2)
-            else:
+            _, per_step_losses = jax.lax.scan(step_loss, None, jnp.arange(num_gen_steps))
+            loss = jnp.mean(per_step_losses)
+        else:
+            with jax.named_scope("forward_pass"):
+                model_pred = model(
+                    hidden_states=noisy_latents,
+                    timestep=timestep_2d,
+                    encoder_hidden_states=encoder_hidden_states,
+                    deterministic=False,
+                    rngs=nnx.Rngs(dropout=dropout_rng),
+                )
+
+            with jax.named_scope("loss"):
                 # Standard flow-matching loss against ground-truth velocity target.
                 diff = target_future - model_pred[:, :, n_hist:]
                 loss = diff ** 2
