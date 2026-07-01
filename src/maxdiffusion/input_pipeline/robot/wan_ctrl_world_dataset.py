@@ -293,29 +293,34 @@ class WanCtrlWorldDroidDataset:
         latent = tf.concat([cam0_w, cam1_w, cam2_w], axis=-2)
         latent = tf.transpose(latent, [1, 0, 2, 3])
 
-        # Actions: WAN VAE has non-uniform temporal compression — latent 0 is a
-        # single-frame anchor (raw frame 0); latent k>0 covers raw frames 4k-3..4k.
-        # Formula: action_start = 4*rgb_id[k] - 3, clipped to 0.
-        # This naturally repeats action[0] for the anchor ([-3,-2,-1,0] → all 0).
-        T_raw = tf.shape(traj["action_raw"])[0]
-        raw_indices = tf.clip_by_value(
-            tf.reshape(rgb_id[:, None] * 4 - 3 + tf.range(4)[None, :], [-1]),
-            0, T_raw - 1,
-        )                                                             # (4*W,)
-        action_raw = tf.gather(traj["action_raw"], raw_indices, axis=0)  # (4*W, 7)
+        # Normalise to [-1, 1], then insert 3 zero-padded slots after action[0]:
+        #   [a[0], 0, 0, 0, a[1], ..., a[T-1]]  — shape (T_raw+3, action_dim)
+        # Latent frame k indexes padded positions 4k..4k+3, giving:
+        #   k=0 → [a[0], 0, 0, 0];  k>0 → [a[4k-3], a[4k-2], a[4k-1], a[4k]]
+        action_norm = 2.0 * (traj["action_raw"] - self._p01) / (self._p99 - self._p01 + 1e-8) - 1.0
+        action_norm = tf.clip_by_value(action_norm, -1.0, 1.0)
 
-        # Normalise to [-1, 1].
-        action = 2.0 * (action_raw - self._p01) / (self._p99 - self._p01 + 1e-8) - 1.0
-        action = tf.clip_by_value(action, -1.0, 1.0)
+        action_padded = tf.concat([
+            action_norm[0:1],
+            tf.zeros([3, self.action_dim], dtype=tf.float32),
+            action_norm[1:],
+        ], axis=0)                                                    # (T_raw+3, action_dim)
+
+        padded_indices = tf.reshape(
+            rgb_id[:, None] * 4 + tf.range(4)[None, :], [-1]
+        )                                                             # (4*W,)
+        action = tf.gather(action_padded, padded_indices, axis=0)    # (4*W, action_dim)
 
         # Set static shapes for downstream tracing.
         latent.set_shape([None, W, None, None])
         action.set_shape([4 * W, self.action_dim])
+        rgb_id.set_shape([W])
 
         return {
-            "latent":      latent,
-            "action":      action,
-            "text_embeds": traj["text_embed"],
+            "latent":          latent,
+            "action":          action,
+            "text_embeds":     traj["text_embed"],
+            "frame_positions": rgb_id,
         }
 
     def __iter__(self):

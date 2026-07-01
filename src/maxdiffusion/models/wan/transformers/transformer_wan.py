@@ -70,25 +70,40 @@ class WanRotaryPosEmbed(nnx.Module):
     self.theta = theta
 
   def __call__(self, hidden_states: jax.Array, frame_positions=None) -> jax.Array:
-    _, num_frames, height, width, _ = hidden_states.shape
+    batch, num_frames, height, width, _ = hidden_states.shape
     p_t, p_h, p_w = self.patch_size
     ppf, pph, ppw = num_frames // p_t, height // p_h, width // p_w
 
     freqs_split = get_frequencies(self.max_seq_len, self.theta, self.attention_head_dim)
 
-    temporal_freqs = freqs_split[0][jnp.array(frame_positions)] if frame_positions is not None else freqs_split[0][:ppf]
-    freqs_f = jnp.expand_dims(jnp.expand_dims(temporal_freqs, axis=1), axis=1)
-    freqs_f = jnp.broadcast_to(freqs_f, (ppf, pph, ppw, freqs_split[0].shape[-1]))
+    if frame_positions is not None:
+      # frame_positions: (B, W) int array — per-batch-item latent frame indices.
+      # Produces (B, 1, ppf*pph*ppw, freq_dim) so each sample gets its own RoPE.
+      temporal_freqs = freqs_split[0][frame_positions]               # (B, ppf, freq_dim)
+      freqs_f = temporal_freqs[:, :, None, None, :]                  # (B, ppf, 1, 1, freq_dim)
+      freqs_f = jnp.broadcast_to(freqs_f, (batch, ppf, pph, ppw, freqs_split[0].shape[-1]))
 
-    freqs_h = jnp.expand_dims(jnp.expand_dims(freqs_split[1][:pph], axis=0), axis=2)
-    freqs_h = jnp.broadcast_to(freqs_h, (ppf, pph, ppw, freqs_split[1].shape[-1]))
+      freqs_h = freqs_split[1][:pph][None, None, :, None, :]         # (1, 1, pph, 1, freq_dim)
+      freqs_h = jnp.broadcast_to(freqs_h, (batch, ppf, pph, ppw, freqs_split[1].shape[-1]))
 
-    freqs_w = jnp.expand_dims(jnp.expand_dims(freqs_split[2][:ppw], axis=0), axis=1)
-    freqs_w = jnp.broadcast_to(freqs_w, (ppf, pph, ppw, freqs_split[2].shape[-1]))
+      freqs_w = freqs_split[2][:ppw][None, None, None, :, :]         # (1, 1, 1, ppw, freq_dim)
+      freqs_w = jnp.broadcast_to(freqs_w, (batch, ppf, pph, ppw, freqs_split[2].shape[-1]))
 
-    freqs_concat = jnp.concatenate([freqs_f, freqs_h, freqs_w], axis=-1)
-    freqs_final = jnp.reshape(freqs_concat, (1, 1, ppf * pph * ppw, -1))
-    return freqs_final
+      freqs_concat = jnp.concatenate([freqs_f, freqs_h, freqs_w], axis=-1)
+      return jnp.reshape(freqs_concat, (batch, 1, ppf * pph * ppw, -1))
+    else:
+      temporal_freqs = freqs_split[0][:ppf]
+      freqs_f = jnp.expand_dims(jnp.expand_dims(temporal_freqs, axis=1), axis=1)
+      freqs_f = jnp.broadcast_to(freqs_f, (ppf, pph, ppw, freqs_split[0].shape[-1]))
+
+      freqs_h = jnp.expand_dims(jnp.expand_dims(freqs_split[1][:pph], axis=0), axis=2)
+      freqs_h = jnp.broadcast_to(freqs_h, (ppf, pph, ppw, freqs_split[1].shape[-1]))
+
+      freqs_w = jnp.expand_dims(jnp.expand_dims(freqs_split[2][:ppw], axis=0), axis=1)
+      freqs_w = jnp.broadcast_to(freqs_w, (ppf, pph, ppw, freqs_split[2].shape[-1]))
+
+      freqs_concat = jnp.concatenate([freqs_f, freqs_h, freqs_w], axis=-1)
+      return jnp.reshape(freqs_concat, (1, 1, ppf * pph * ppw, -1))
 
 
 class WanTimeTextImageEmbedding(nnx.Module):

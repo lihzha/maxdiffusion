@@ -155,9 +155,10 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
     def compute_loss(params, micro_data, n_rng, t_rng, d_rng, td_rng):
         model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
 
-        latents = micro_data["latent"][:bsz].astype(weights_dtype)        # (B,C,F_lat,H,W)
-        actions = micro_data["action"][:bsz].astype(weights_dtype)        # (B,4*F_lat,7)
-        text_tokens = micro_data["text_embeds"][:bsz].astype(weights_dtype)  # (B,512,4096)
+        latents = micro_data["latent"][:bsz].astype(weights_dtype)               # (B,C,F_lat,H,W)
+        actions = micro_data["action"][:bsz].astype(weights_dtype)               # (B,4*F_lat,7)
+        text_tokens = micro_data["text_embeds"][:bsz].astype(weights_dtype)      # (B,512,4096)
+        frame_positions = micro_data["frame_positions"][:bsz]                    # (B, W) int32
 
         b, _, F_lat, H_lat, W_lat = latents.shape
 
@@ -188,6 +189,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             deterministic=False,
             rngs=nnx.Rngs(dropout=d_rng),
             frame_level_cond=True,
+            frame_positions=frame_positions,
         )
 
         diff = target_future - model_pred[:, :, n_hist:]
@@ -635,6 +637,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     latents = data["latent"][:bsz].astype(weights_dtype)
     actions = data["action"][:bsz].astype(weights_dtype)
     text_tokens = data["text_embeds"][:bsz].astype(weights_dtype)
+    frame_positions = data["frame_positions"][:bsz]                  # (B, W) int32
 
     b, _, F_lat, H_lat, W_lat = latents.shape
 
@@ -661,6 +664,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
         encoder_hidden_states=action_tokens,
         deterministic=True,
         frame_level_cond=True,
+        frame_positions=frame_positions,
     )
 
     diff = target_future - model_pred[:, :, n_hist:]
