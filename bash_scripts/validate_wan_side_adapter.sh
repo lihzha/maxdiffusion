@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Raise the open-file limit. The queue worker's login shell defaults to 1024,
+# which the 5B model + adapter + data pipeline + tensorstore checkpoint restore
+# exhaust (same Errno 24 / "Too many open files" that aborted the train smoke).
+ulimit -n 1048576 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+
 # Run bash_scripts/setup.sh once on the TPU before this script:
 #   bash bash_scripts/setup.sh MODE=stable DEVICE=tpu
 
@@ -84,8 +89,8 @@ echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
 echo "HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}"
 echo "HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT}"
 echo "HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT}"
-echo "COMMIT=$(git rev-parse HEAD)"
-git status --short --branch
+echo "COMMIT=${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+git status --short --branch 2>/dev/null || echo "(no git checkout; running from uploaded code)"
 
 python src/maxdiffusion/generate_wan_side_adapter.py \
   src/maxdiffusion/configs/base_wan_5b_side_adapter.yml \
