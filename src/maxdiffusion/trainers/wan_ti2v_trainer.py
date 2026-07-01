@@ -348,7 +348,11 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
                 return None, jnp.mean(diff_k ** 2)
 
             _, per_step_losses = jax.lax.scan(step_loss, None, jnp.arange(num_gen_steps))
-            loss = jnp.mean(per_step_losses)
+            # Weight step k by remaining future steps (K-k), normalised to sum to 1.
+            # Mirrors Q = Σ_{j≥k} r_j: earlier (high-noise) steps carry more credit.
+            q_weights = jnp.arange(num_gen_steps, 0, -1, dtype=per_step_losses.dtype)
+            q_weights = q_weights / q_weights.sum()
+            loss = jnp.dot(q_weights, per_step_losses)
         else:
             with jax.named_scope("forward_pass"):
                 model_pred = model(
