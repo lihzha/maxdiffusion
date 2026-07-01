@@ -96,11 +96,25 @@ class WanCheckpointerTI2V_2_2(WanCheckpointer):
     opt_state = None
     extra_state = {}
     if restored_checkpoint:
-      _log("Loading WAN TI2V pipeline from checkpoint")
-      pipeline = WanPipelineTI2V_2_2.from_checkpoint(self.config, restored_checkpoint)
-      wan_state_keys = restored_checkpoint.wan_state.keys()
+      wan_state = restored_checkpoint.wan_state
+      wan_state_keys = wan_state.keys()
+      distill = getattr(self.config, "distill", False)
+
+      if distill and "ema_params" in wan_state_keys:
+        # Old distillation checkpoints: teacher→"params", student→"ema_params" (via
+        # _distill_swap at save time).  Load student directly so teacher params never
+        # go to GPU — avoids 2× model memory that causes OOM.
+        student_wan_state = {k: v for k, v in wan_state.items() if k != "params"}
+        student_wan_state["params"] = wan_state["ema_params"]
+        modified_checkpoint = {"wan_config": restored_checkpoint.wan_config, "wan_state": student_wan_state}
+        _log("Distillation checkpoint: loading student (ema_params) directly as pipeline params")
+        pipeline = WanPipelineTI2V_2_2.from_checkpoint(self.config, modified_checkpoint)
+      else:
+        _log("Loading WAN TI2V pipeline from checkpoint")
+        pipeline = WanPipelineTI2V_2_2.from_checkpoint(self.config, restored_checkpoint)
+
       if "opt_state" in wan_state_keys:
-        opt_state = restored_checkpoint.wan_state["opt_state"]
+        opt_state = wan_state["opt_state"]
     else:
       _log("No checkpoint found, loading default pipeline.")
       pipeline = self.load_diffusers_checkpoint()

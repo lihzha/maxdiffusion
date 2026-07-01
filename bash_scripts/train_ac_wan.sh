@@ -168,5 +168,5 @@ python src/maxdiffusion/train_wan.py \
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name train_ac_wan -n 64 --setup-cmd "" -- bash bash_scripts/train_ac_wan.sh
+# tpu create v6 --name train_ac_wan -n 64 --setup-cmd "" --priority 0 -- bash bash_scripts/train_ac_wan.sh
 # tpu tmux v6-64-01-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ac_wan.sh' Enter

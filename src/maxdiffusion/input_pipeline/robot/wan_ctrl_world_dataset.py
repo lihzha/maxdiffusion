@@ -11,10 +11,10 @@ Each TFRecord example stores one full episode in pre-encoded form:
     episode_id:  int64
     traj_len:    int64                              — F_lat (number of latent frames)
 
-Each trajectory is flat_mapped into windows. History frames are picked with a
-random stride going backwards from ``frame_now`` (ctrl-world style); future frames
-are contiguous from ``frame_now``. Three camera latents are concatenated along H
-and transposed to channel-first.
+Each trajectory yields one window per pass: frame_now is sampled uniformly from
+valid positions. History frames are picked with a random stride going backwards
+from frame_now (ctrl-world style); future frames are contiguous from frame_now.
+Three camera latents are concatenated along H and transposed to channel-first.
 
 Actions are normalised to [-1, 1] using per-dimension percentile stats. Latent
 frame k uses raw actions at indices 4k..4k+3.
@@ -80,10 +80,10 @@ def _load_action_stats(stats_path: str) -> tuple[np.ndarray, np.ndarray]:
 class WanCtrlWorldDroidDataset:
     """Pre-encoded TFRecord dataset for action-conditioned WAN training.
 
-    Each trajectory is flat_mapped into per-frame windows. History frames are
-    sampled with a random stride ``skip_his`` going backwards from ``frame_now``;
-    future frames are contiguous from ``frame_now``. This matches the Ctrl-World
-    data-augmentation scheme.
+    Each trajectory yields one window per pass: frame_now is sampled uniformly
+    from valid positions. History frames are sampled with a random stride
+    ``skip_his`` going backwards from ``frame_now``; future frames are contiguous
+    from ``frame_now``. This matches the Ctrl-World data-augmentation scheme.
 
     Args:
         data_dir:           Directory of ``shard-*.tfrecord`` files.
@@ -122,6 +122,7 @@ class WanCtrlWorldDroidDataset:
         shuffle: bool = True,
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
+        first_window_only: bool = False,
     ):
         if max_latent_frames <= 0:
             raise ValueError("max_latent_frames must be > 0")
@@ -168,18 +169,21 @@ class WanCtrlWorldDroidDataset:
         ds = ds.with_options(_tf_options(deterministic=not self._is_train))
         ds = ds.map(self._parse, num_parallel_calls=AUTOTUNE)
 
-        # Keep only trajectories long enough to have at least one valid future window.
-        ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], self.n_fut))
+        # first_window_only requires the full window starting at frame 0 to fit;
+        # otherwise only the future portion needs to fit (original windowing logic).
+        min_traj_len = self.max_latent_frames if first_window_only else self.n_fut
+        ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], min_traj_len))
 
         if self._is_train:
             ds = ds.repeat()
         if shuffle and self._is_train:
             ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=True)
 
-        ds = ds.flat_map(self._traj_to_windows)
-
-        if shuffle and self._is_train:
-            ds = ds.shuffle(shuffle_buffer * batch_size, seed=seed, reshuffle_each_iteration=True)
+        if first_window_only:
+            # One window per episode: history = episode frame 0, actions indexed from 0.
+            ds = ds.map(self._first_window, num_parallel_calls=AUTOTUNE)
+        else:
+            ds = ds.map(self._random_window, num_parallel_calls=AUTOTUNE)
 
         ds = ds.batch(batch_size, drop_remainder=True)
         ds = ds.prefetch(AUTOTUNE)
@@ -221,15 +225,24 @@ class WanCtrlWorldDroidDataset:
 
     # ── Trajectory → windows ───────────────────────────────────────────────────
 
-    def _traj_to_windows(self, traj: dict) -> tf.data.Dataset:
+    def _first_window(self, traj: dict) -> dict:
+        """Return the single window anchored at the start of the episode.
+
+        frame_now = 1 so that all history frames clip to episode frame 0 —
+        simulating a real rollout start where only one initial observation is
+        available. For n_hist=2, skip_his=1: hist_offsets=[2,1], so
+        hist_frames = clip([1-2, 1-1], 0, T-1) = [0, 0] (frame 0 repeated).
+        Future frames are [1, ..., n_fut], giving a 0-based action tensor whose
+        row groups align with the AR slice offsets in run_ar_denoising.
+        """
+        frame_now = tf.constant(1, dtype=tf.int32)
+        return self._build_window(traj, frame_now)
+
+    def _random_window(self, traj: dict) -> dict:
+        """Return one window with frame_now sampled uniformly from valid range."""
         T = tf.cast(traj["traj_len"], tf.int32)
-        # frame_now in [0, T - n_fut]: future window frame_now..frame_now+n_fut-1 stays in bounds.
-        valid_starts = tf.range(0, T - self.n_fut + 1)
-        return tf.data.Dataset.from_tensor_slices(valid_starts).map(
-            lambda frame_now: self._build_window(traj, frame_now),
-            num_parallel_calls=AUTOTUNE,
-            deterministic=not self._is_train,
-        )
+        frame_now = tf.random.uniform([], minval=0, maxval=T - self.n_fut + 1, dtype=tf.int32)
+        return self._build_window(traj, frame_now)
 
     def _build_window(self, traj: dict, frame_now: tf.Tensor) -> dict:
         n_hist = self.n_hist

@@ -234,7 +234,14 @@ tensorboard_dir: ""
 enable_jax_named_scopes: False
 
 # ── Inference ──────────────────────────────────────────────────────────────────
-output_video_fps: 16            
+output_video_fps: 16
+
+# Auto-regressive generation: generate ar_num_chunks * ar_chunk_size future
+# latent frames by rolling the last n_hist generated frames as history.
+# ar_chunk_size defaults to the single-pass future window (num_frames-derived).
+autoregressive: False
+ar_chunk_size: 0   # 0 = auto-derive from num_frames
+ar_num_chunks: 1
 
 # ── Fields kept for pyconfig compat (unused by this trainer) ──────────────────
 unet_checkpoint: ''

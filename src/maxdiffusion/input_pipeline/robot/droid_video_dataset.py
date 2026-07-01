@@ -209,8 +209,8 @@ class DroidVideoDataset:
         # ── Per-trajectory image / instruction selection ─────────────────────
         dataset = dataset.map(self._select_camera_and_instruction, num_parallel_calls=num_parallel_calls)
 
-        # ── Windowing: trajectory → clips ────────────────────────────────────
-        dataset = dataset.flat_map(self._traj_to_clips)
+        # ── Windowing: one random clip per trajectory ────────────────────────
+        dataset = dataset.map(self._random_clip, num_parallel_calls=num_parallel_calls)
 
         # ── Per-clip image decoding & resizing ───────────────────────────────
         dataset = dataset.map(self._decode_clip, num_parallel_calls=num_parallel_calls)
@@ -261,6 +261,18 @@ class DroidVideoDataset:
         }
 
     # ── Windowing ────────────────────────────────────────────────────────────
+
+    def _random_clip(self, traj: dict) -> dict:
+        """Return one randomly sampled clip from a trajectory."""
+        images = traj["images"]
+        instructions = traj["instructions"]
+        traj_len = tf.shape(images)[0]
+        num_clips = (traj_len - self.clip_length) // self.stride + 1
+        start = tf.random.uniform([], minval=0, maxval=num_clips, dtype=tf.int32) * self.stride
+        return {
+            "frames": images[start : start + self.clip_length],
+            "language_instruction": instructions[start],
+        }
 
     def _traj_to_clips(self, traj: dict) -> tf.data.Dataset:
         """Convert one trajectory dict into a dataset of fixed-length clips."""

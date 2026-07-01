@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import functools
+import math
 import os
 from typing import Sequence
 
@@ -120,6 +121,69 @@ def _encode_actions(
 
 
 # ── Full denoising loop ───────────────────────────────────────────────────────
+
+
+def run_ar_denoising(
+    graphdef: nnx.GraphDef,
+    params: nnx.State,
+    rest_of_state: nnx.State,
+    initial_hist: jnp.ndarray,
+    all_actions: jnp.ndarray,
+    p_encode,
+    scheduler: FlaxFlowMatchScheduler,
+    num_inference_steps: int,
+    n_hist: int,
+    ar_chunk_size: int,
+    ar_num_chunks: int,
+    rng: jax.Array,
+    dtype,
+    mesh,
+    logical_axis_rules,
+    guidance_scale: float = 1.0,
+) -> jnp.ndarray:
+    """Auto-regressive denoising: generate ar_num_chunks * ar_chunk_size future frames.
+
+    At each step the last n_hist generated frames become the conditioning history
+    for the next step, so errors can compound but temporal consistency is maintained.
+
+    all_actions must cover the full trajectory window:
+        shape (B, 4 * (n_hist + ar_num_chunks * ar_chunk_size), 7)
+
+    Returns predicted future latents: (B, C, ar_num_chunks * ar_chunk_size, H, W).
+    """
+    window_F_lat = n_hist + ar_chunk_size
+    current_hist = initial_hist
+    generated_chunks = []
+
+    for chunk_i in range(ar_num_chunks):
+        max_logging.log(
+            f"[wan_ctrl_world_infer] AR chunk {chunk_i + 1}/{ar_num_chunks}"
+        )
+        # Slice the actions that correspond to the current window.
+        # Window covers latent frames [chunk_i*ar_chunk_size,
+        #                              chunk_i*ar_chunk_size + window_F_lat).
+        act_start = 4 * chunk_i * ar_chunk_size
+        act_end   = 4 * (chunk_i * ar_chunk_size + window_F_lat)
+        actions_chunk = all_actions[:, act_start:act_end, :]  # (B, 4*window_F_lat, 7)
+
+        action_tokens = p_encode(params, actions=actions_chunk, F_lat=window_F_lat)
+
+        rng, step_rng = jax.random.split(rng)
+        gen_chunk = run_denoising(
+            graphdef, params, rest_of_state,
+            current_hist, ar_chunk_size, action_tokens,
+            scheduler, num_inference_steps, n_hist,
+            step_rng, dtype, mesh, logical_axis_rules,
+            guidance_scale=guidance_scale,
+        )  # (B, C, ar_chunk_size, H, W)
+
+        generated_chunks.append(gen_chunk)
+
+        # Roll history forward: take last n_hist frames from [hist | generated].
+        full_window = jnp.concatenate([current_hist, gen_chunk], axis=2)
+        current_hist = full_window[:, :, -n_hist:, :, :]
+
+    return jnp.concatenate(generated_chunks, axis=2)  # (B, C, total_fut, H, W)
 
 
 def run_denoising(
@@ -242,13 +306,24 @@ def run(argv: Sequence[str]) -> None:
     guidance_scale = float(getattr(config, "guidance_scale", 1.0))
     n_hist = config.num_history_latent_frames
     weights_dtype = _dtype(config.weights_dtype)
+
+    autoregressive = bool(getattr(config, "autoregressive", False))
+    # Number of future latent frames generated per AR step (defaults to the
+    # single-pass window size derived from num_frames).
+    n_fut_single = 1 + (config.num_frames - 1) // 4
+    ar_chunk_size = int(getattr(config, "ar_chunk_size", 0))
+    if ar_chunk_size <= 0:
+        ar_chunk_size = n_fut_single
+    ar_num_chunks = int(getattr(config, "ar_num_chunks", 1))
     # DROID is 15 Hz; WAN VAE has 4× temporal compression → ~4 fps for real-time playback.
     # config.fps is the WAN model's internet-video fps (16), not the data rate.
     fps = int(getattr(config, "output_video_fps", 16))
 
     max_logging.log(
         f"[wan_ctrl_world_infer] num_inference_steps={num_inference_steps}  "
-        f"guidance_scale={guidance_scale}"
+        f"guidance_scale={guidance_scale}  "
+        f"autoregressive={autoregressive}  "
+        + (f"ar_chunk_size={ar_chunk_size}  ar_num_chunks={ar_num_chunks}" if autoregressive else "")
     )
 
     # ── Load WAN pipeline (keeps VAE for decoding) ────────────────────────────
@@ -306,7 +381,10 @@ def run(argv: Sequence[str]) -> None:
     from maxdiffusion.input_pipeline.robot.wan_ctrl_world_dataset import (
         WanCtrlWorldDroidDataset,
     )
-    max_latent_frames = 1 + (config.num_frames - 1) // 4 + config.num_history_latent_frames
+    if autoregressive:
+        max_latent_frames = n_hist + ar_num_chunks * ar_chunk_size
+    else:
+        max_latent_frames = 1 + (config.num_frames - 1) // 4 + config.num_history_latent_frames
     dataset = WanCtrlWorldDroidDataset(
         data_dir=config.eval_data_dir,
         stats_path=config.action_stats_path,
@@ -320,6 +398,7 @@ def run(argv: Sequence[str]) -> None:
         skip_his_zero_prob=0.0,
         shuffle=False,
         shard_for_training=False,
+        first_window_only=autoregressive,
     )
 
     # ── Precompile action encoding ─────────────────────────────────────────────
@@ -347,23 +426,36 @@ def run(argv: Sequence[str]) -> None:
         gt_future = latent[:, :, n_hist:, :, :]                         # (1, C, n_fut, H, Wl)
         n_fut = gt_future.shape[2]
 
-        # Encode actions (constant across denoising steps).
-        action_tokens = p_encode(
-            params, actions=actions,
-            F_lat=F_lat,
-        )  # (1, F_lat, 4096)
-
-        # Denoising.
+        # Denoising — single-pass or auto-regressive.
         rng, step_rng = jax.random.split(rng)
-        pred_future = run_denoising(
-            graphdef, params, rest_of_state,
-            clean_hist, n_fut, action_tokens,
-            scheduler, num_inference_steps,
-            n_hist, step_rng, weights_dtype,
-            mesh=pipeline.mesh,
-            logical_axis_rules=config.logical_axis_rules,
-            guidance_scale=guidance_scale,
-        )
+        if autoregressive:
+            pred_future = run_ar_denoising(
+                graphdef, params, rest_of_state,
+                clean_hist, actions,
+                p_encode,
+                scheduler, num_inference_steps,
+                n_hist, ar_chunk_size, ar_num_chunks,
+                step_rng, weights_dtype,
+                mesh=pipeline.mesh,
+                logical_axis_rules=config.logical_axis_rules,
+                guidance_scale=guidance_scale,
+            )
+        else:
+            # Encode actions (constant across denoising steps).
+            action_tokens = p_encode(
+                params, actions=actions,
+                F_lat=F_lat,
+            )  # (1, F_lat, 4096)
+
+            pred_future = run_denoising(
+                graphdef, params, rest_of_state,
+                clean_hist, n_fut, action_tokens,
+                scheduler, num_inference_steps,
+                n_hist, step_rng, weights_dtype,
+                mesh=pipeline.mesh,
+                logical_axis_rules=config.logical_axis_rules,
+                guidance_scale=guidance_scale,
+            )
 
         # Decode GT and predicted full sequences.
         gt_full = jnp.concatenate([clean_hist, gt_future], axis=2)
