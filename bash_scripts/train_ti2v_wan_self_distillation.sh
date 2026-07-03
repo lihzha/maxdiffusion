@@ -142,6 +142,7 @@ python src/maxdiffusion/train_wan.py \
     num_privileged_frames=-1 \
     hardware='tpu' \
     distill=True \
+    distill_bptt=True \
     cfg_dropout_prob=0.1 \
     oracle_noise_offset=-1 \
     wandb_project='wan-ti2v-gt-distill-single-view-uniform-collect-CFG' \

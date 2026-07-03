@@ -184,6 +184,7 @@ class WanTI2VTrainer(BaseWanTrainer):
     def get_train_step(self, pipeline, mesh, state_shardings, data_shardings):
         n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
         distill = getattr(self.config, "distill", False)
+        distill_bptt = getattr(self.config, "distill_bptt", False)
         oracle_noise_offset = getattr(self.config, "oracle_noise_offset", -1)
 
         # CFG training: encode the empty prompt once with UMT5 to use as the
@@ -203,6 +204,7 @@ class WanTI2VTrainer(BaseWanTrainer):
                 config=self.config,
                 n_hist=n_hist,
                 distill=distill,
+                distill_bptt=distill_bptt,
                 oracle_noise_offset=oracle_noise_offset,
                 cfg_dropout_prob=cfg_dropout_prob,
                 null_prompt_embeds=null_prompt_embeds,
@@ -253,7 +255,7 @@ class WanTI2VTrainer(BaseWanTrainer):
 
 def ti2v_train_step(
     state, data, rng, scheduler_state, scheduler, config, n_hist,
-    distill=False, oracle_noise_offset=-1, cfg_dropout_prob=0.0, null_prompt_embeds=None,
+    distill=False, distill_bptt=False, oracle_noise_offset=-1, cfg_dropout_prob=0.0, null_prompt_embeds=None,
 ):
     _, new_rng, timestep_rng, dropout_rng, oracle_rng, gen_rng, gen_noise_rng, cfg_rng = jax.random.split(rng, num=8)
 
@@ -297,41 +299,46 @@ def ti2v_train_step(
 
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
 
-        # Build roll_model once outside the loop: nnx.merge is a Python/trace-time
-        # operation, but keeping it inside a scan body would re-run it on
-        # every JAX re-trace.  Moving it out is cleaner and saves trace overhead.
-        roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+        if not distill_bptt:
+            # Forward-only rollout collecting intermediate states.  BPTT mode
+            # skips this: its trajectory is generated inside the loss so it
+            # can be differentiated through.
+            #
+            # Build roll_model once outside the loop: nnx.merge is a Python/trace-time
+            # operation, but keeping it inside a scan body would re-run it on
+            # every JAX re-trace.  Moving it out is cleaner and saves trace overhead.
+            roll_model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
 
-        def rollout_scan_body(lat, step_idx):
-            t_from = rollout_ts[step_idx]
-            t_to   = rollout_ts[step_idx + 1]
-            sig_from = _sigma(t_from)
-            sig_to   = _sigma(t_to)
+            def rollout_scan_body(lat, step_idx):
+                t_from = rollout_ts[step_idx]
+                t_to   = rollout_ts[step_idx + 1]
+                sig_from = _sigma(t_from)
+                sig_to   = _sigma(t_to)
 
-            roll_input = jnp.concatenate([latents[:, :, :n_hist], lat], axis=2)
-            roll_ts_2d = _build_per_token_timestep(
-                jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
-            )
-            with jax.named_scope("online_gen_rollout_step"):
-                v_pred = roll_model(
-                    hidden_states=roll_input,
-                    timestep=roll_ts_2d,
-                    encoder_hidden_states=encoder_hidden_states,
-                    deterministic=True,
+                roll_input = jnp.concatenate([latents[:, :, :n_hist], lat], axis=2)
+                roll_ts_2d = _build_per_token_timestep(
+                    jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
                 )
-            v_future = v_pred[:, :, n_hist:]
+                with jax.named_scope("online_gen_rollout_step"):
+                    v_pred = roll_model(
+                        hidden_states=roll_input,
+                        timestep=roll_ts_2d,
+                        encoder_hidden_states=encoder_hidden_states,
+                        deterministic=True,
+                    )
+                v_future = v_pred[:, :, n_hist:]
 
-            # Euler step: x_{t_to} = x_{t_from} + (σ_{t_to} - σ_{t_from}) * v
-            # Cast back to lat.dtype: _sigma computes in float32, which would
-            # otherwise promote new_lat and break the carry type check.
-            new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
-            # Output lat (state before this step) = on-policy latent at rollout_ts[step_idx].
-            return new_lat, lat
+                # Euler step: x_{t_to} = x_{t_from} + (σ_{t_to} - σ_{t_from}) * v
+                # Cast back to lat.dtype: _sigma computes in float32, which would
+                # otherwise promote new_lat and break the carry type check.
+                new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
+                # Output lat (state before this step) = on-policy latent at rollout_ts[step_idx].
+                return new_lat, lat
 
-        # Collect every intermediate latent state via scan:
-        # all_gen_latents[k] = on-policy noisy latent at rollout_ts[k], k ∈ [0, num_gen_steps).
-        _, all_gen_latents = jax.lax.scan(rollout_scan_body, gen_init, jnp.arange(num_gen_steps))
-        # shape: (num_gen_steps, B, C, F_future, H_lat, W_lat)
+            # Collect every intermediate latent state via scan:
+            # all_gen_latents[k] = on-policy noisy latent at rollout_ts[k], k ∈ [0, num_gen_steps).
+            _, all_gen_latents = jax.lax.scan(rollout_scan_body, gen_init, jnp.arange(num_gen_steps))
+            # shape: (num_gen_steps, B, C, F_future, H_lat, W_lat)
 
     else:
         # ── Off-policy path: single-step noising ─────────────────────────────
@@ -346,7 +353,63 @@ def ti2v_train_step(
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
         timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
-    if distill:
+    if distill and distill_bptt:
+        # ── Option B: exact BPTT through the on-policy Euler rollout ─────────
+        # The rollout runs inside the differentiated function, so each step's
+        # velocity loss backpropagates through every earlier Euler update
+        # (pathwise credit assignment through the dynamics), not just its own
+        # forward pass.  The velocity target (x_k - x0)/σ_k is NOT
+        # stop-gradiented: it depends on the on-policy state, so its gradient
+        # also steers earlier steps — this is the exact gradient of the same
+        # objective the per-step path optimizes.
+        #
+        # Memory: jax.checkpoint on the step body rematerializes transformer
+        # activations in the backward sweep, so only the (K, ...) latent
+        # carry stack is stored across steps.  FLOPs match the per-step path
+        # (K fwd on the forward sweep + K fwd + K bwd on the backward sweep).
+        q_weights = jnp.arange(num_gen_steps, 0, -1, dtype=jnp.float32)
+        q_weights = q_weights / q_weights.sum()
+
+        def bptt_loss_fn(params):
+            model = nnx.merge(state.graphdef, params, state.rest_of_state)
+
+            def step_body(carry, ts_pair):
+                lat, rng_c = carry
+                t_from, t_to = ts_pair
+                sig_from = _sigma(t_from)
+                sig_to = _sigma(t_to)
+                rng_c, step_rng = jax.random.split(rng_c)
+
+                roll_input = jnp.concatenate([latents[:, :, :n_hist], lat], axis=2)
+                ts_2d = _build_per_token_timestep(
+                    jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
+                )
+                ts_2d = jax.lax.with_sharding_constraint(ts_2d, P(("data", "fsdp", "context"), None))
+                with jax.named_scope("bptt_rollout_step"):
+                    v_pred = model(
+                        hidden_states=roll_input,
+                        timestep=ts_2d,
+                        encoder_hidden_states=encoder_hidden_states,
+                        deterministic=False,
+                        rngs=nnx.Rngs(dropout=step_rng),
+                    )
+                v_future = v_pred[:, :, n_hist:]
+
+                target_k = (lat - future_latents) / sig_from.astype(lat.dtype)
+                loss_k = jnp.mean((target_k - v_future) ** 2).astype(jnp.float32)
+
+                new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
+                return (new_lat, rng_c), loss_k
+
+            # prevent_cse=False is safe under scan and avoids slowdown.
+            step_body = jax.checkpoint(step_body, prevent_cse=False)
+            ts_pairs = (rollout_ts[:num_gen_steps], rollout_ts[1 : num_gen_steps + 1])
+            _, step_losses = jax.lax.scan(step_body, (gen_init, dropout_rng), ts_pairs)
+            return jnp.sum(q_weights * step_losses)
+
+        grad_fn = nnx.value_and_grad(bptt_loss_fn)
+        loss, grads = grad_fn(state.params)
+    elif distill:
         # ── Per-timestep grad accumulation over every rollout timestep ────────
         # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
         # GT velocity: target = (x_t - x_0) / σ_t (flow-matching parameterisation).

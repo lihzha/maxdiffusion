@@ -45,6 +45,16 @@ distill: false
 # -1 = use T_max (full rollout, i.e. num_train_timesteps - 1 steps).
 num_online_gen_steps: -1
 
+# Gradient mode for distill=true:
+#   false — per-step gradients: each on-policy rollout state is an independent
+#           training example; the rollout itself is not differentiated through.
+#   true  — exact BPTT: the Euler rollout runs inside the loss, so each step's
+#           velocity loss backpropagates through all earlier steps (pathwise
+#           credit assignment through the dynamics). Transformer activations
+#           are rematerialized (same FLOPs as per-step mode); the K-step
+#           latent trajectory is stored, so keep num_online_gen_steps modest.
+distill_bptt: false
+
 # Classifier-free guidance training: per-sample probability of replacing the
 # text embedding with the empty-prompt ("") UMT5 embedding during training.
 # 0.0 disables. 0.1 is the standard choice; required for guidance_scale > 1
