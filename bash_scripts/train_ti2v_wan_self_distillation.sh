@@ -120,9 +120,7 @@ python src/maxdiffusion/train_wan.py \
     attention=tokamax_flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=custom \
-    names_which_can_be_saved='["hidden_states","self_attn","cross_attn"]' \
-    names_which_can_be_offloaded='[]' \
+    remat_policy=MATMUL_WITHOUT_BATCH \
     ici_data_parallelism=8 \
     ici_fsdp_parallelism=8 \
     ici_tensor_parallelism=1 \
@@ -152,6 +150,7 @@ python src/maxdiffusion/train_wan.py \
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 # testing memory allocations 
 
+# 55
 #  remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
 #     ici_data_parallelism=8 \
 #     ici_fsdp_parallelism=8 \
@@ -167,5 +166,26 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 #     checkpoint_every=10 \
 #     checkpoint_keep_period=1000 \
 #     per_device_batch_size=1.0 \
+
+# 56
+# remat_policy=custom \
+#     names_which_can_be_saved='["hidden_states","self_attn","cross_attn"]' \
+#     names_which_can_be_offloaded='[]' \
+#     ici_data_parallelism=8 \
+#     ici_fsdp_parallelism=8 \
+#     ici_tensor_parallelism=1 \
+#     ici_context_parallelism=1 \
+#     dcn_data_parallelism=1 \
+#     dcn_fsdp_parallelism=1 \
+#     dcn_tensor_parallelism=1 \
+#     dcn_context_parallelism=1 \
+#     allow_split_physical_axes=True \
+#     scan_layers=True \
+#     max_train_steps=5000 \
+#     checkpoint_every=10 \
+#     checkpoint_keep_period=1000 \
+#     per_device_batch_size=1.0 \
+
+
 # tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" --priority 0 -- bash bash_scripts/train_ti2v_wan_self_distillation.sh
 # tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
