@@ -306,8 +306,6 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         _, all_gen_latents = jax.lax.scan(rollout_scan_body, gen_init, jnp.arange(num_gen_steps))
         # shape: (num_gen_steps, B, C, F_future, H_lat, W_lat)
 
-        training_weight = None
-
     else:
         # ── Off-policy path: single-step noising ─────────────────────────────
         timesteps = scheduler.sample_timesteps(timestep_rng, b)
@@ -321,53 +319,70 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
         timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
-    def loss_fn(params):
-        model = nnx.merge(state.graphdef, params, state.rest_of_state)
+    if distill:
+        # ── Per-timestep grad accumulation over every rollout timestep ────────
+        # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
+        # GT velocity: target = (x_t - x_0) / σ_t (flow-matching parameterisation).
+        #
+        # value_and_grad runs INSIDE the scan body so each step's forward+backward
+        # completes (and frees its activations) within the iteration.  Scanning the
+        # forward inside a single loss_fn instead would force XLA to stack the
+        # layer-scan's offloaded hidden-state residuals across all K steps for the
+        # outer backward — a (K, n_layers, B, seq, dim) host tensor whose bitcast
+        # to offload memory fails on TPU.  Same FLOPs either way (K fwd + K bwd).
+        def step_loss_fn(params, gen_t_k, ts_k_scalar, step_rng):
+            model = nnx.merge(state.graphdef, params, state.rest_of_state)
+            ts_k = jnp.broadcast_to(ts_k_scalar, (b,))
+            sigma_k = _sigma(ts_k)[:, None, None, None, None].astype(gen_t_k.dtype)
+            target_k = (gen_t_k - future_latents) / sigma_k
+            noisy_k = jnp.concatenate([latents[:, :, :n_hist], gen_t_k], axis=2)
+            ts_2d_k = _build_per_token_timestep(ts_k, F_lat, H_lat, W_lat, n_hist)
+            ts_2d_k = jax.lax.with_sharding_constraint(ts_2d_k, P(("data", "fsdp", "context"), None))
+            with jax.named_scope("forward_pass"):
+                pred_k = model(
+                    hidden_states=noisy_k,
+                    timestep=ts_2d_k,
+                    encoder_hidden_states=encoder_hidden_states,
+                    deterministic=False,
+                    rngs=nnx.Rngs(dropout=step_rng),
+                )
+            diff_k = target_k - pred_k[:, :, n_hist:]
+            return jnp.mean(diff_k ** 2)
 
-        if distill:
-            # Accumulate MSE loss over every rollout timestep.
-            # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
-            # GT velocity: target = (x_t - x_0) / σ_t (flow-matching parameterisation).
-            # Pass all large tensors as xs so XLA treats them as sequential inputs
-            # rather than closed-over activations.  The HIDDEN_STATE_WITH_OFFLOAD
-            # remat policy stacks closed-over tensors across K scan iterations and
-            # then bitcasts them to S(5) offload memory; that bitcast fails when the
-            # tiling layout is incompatible.  broadcast_to is zero-copy (stride-0 view).
-            enc_hs_xs = jnp.broadcast_to(
-                encoder_hidden_states[None],
-                (num_gen_steps,) + encoder_hidden_states.shape,
+        step_grad_fn = nnx.value_and_grad(step_loss_fn)
+
+        # Weight step k by remaining future steps (K-k), normalised to sum to 1.
+        # Mirrors Q = Σ_{j≥k} r_j: earlier (high-noise) steps carry more credit.
+        q_weights = jnp.arange(num_gen_steps, 0, -1, dtype=jnp.float32)
+        q_weights = q_weights / q_weights.sum()
+
+        def grad_scan_body(carry, inputs):
+            rng_c, loss_acc, grads_acc = carry
+            gen_t_k, ts_k_scalar, w_k = inputs
+            rng_c, step_rng = jax.random.split(rng_c)
+            loss_k, grads_k = step_grad_fn(state.params, gen_t_k, ts_k_scalar, step_rng)
+            loss_acc = loss_acc + w_k * loss_k.astype(jnp.float32)
+            # Accumulate in float32: per-step weights are small (~1/K) and bf16
+            # accumulation over K steps would lose precision.
+            grads_acc = jax.tree_util.tree_map(
+                lambda a, g: a + w_k * g.astype(jnp.float32), grads_acc, grads_k
             )
+            return (rng_c, loss_acc, grads_acc), None
 
-            def step_loss(carry_rng, inputs):
-                gen_t_k, ts_k_scalar, enc_hs_k = inputs
-                carry_rng, step_rng = jax.random.split(carry_rng)
-                ts_k = jnp.broadcast_to(ts_k_scalar, (b,))
-                sigma_k = _sigma(ts_k)[:, None, None, None, None].astype(gen_t_k.dtype)
-                target_k = (gen_t_k - future_latents) / sigma_k
-                noisy_k = jnp.concatenate([latents[:, :, :n_hist], gen_t_k], axis=2)
-                ts_2d_k = _build_per_token_timestep(ts_k, F_lat, H_lat, W_lat, n_hist)
-                ts_2d_k = jax.lax.with_sharding_constraint(ts_2d_k, P(("data", "fsdp", "context"), None))
-                with jax.named_scope("forward_pass"):
-                    pred_k = model(
-                        hidden_states=noisy_k,
-                        timestep=ts_2d_k,
-                        encoder_hidden_states=enc_hs_k,
-                        deterministic=False,
-                        rngs=nnx.Rngs(dropout=step_rng),
-                    )
-                diff_k = target_k - pred_k[:, :, n_hist:]
-                return carry_rng, jnp.mean(diff_k ** 2)
-
-            _, per_step_losses = jax.lax.scan(
-                step_loss, dropout_rng,
-                (all_gen_latents, rollout_ts[:num_gen_steps], enc_hs_xs),
-            )
-            # Weight step k by remaining future steps (K-k), normalised to sum to 1.
-            # Mirrors Q = Σ_{j≥k} r_j: earlier (high-noise) steps carry more credit.
-            q_weights = jnp.arange(num_gen_steps, 0, -1, dtype=per_step_losses.dtype)
-            q_weights = q_weights / q_weights.sum()
-            loss = jnp.dot(q_weights, per_step_losses)
-        else:
+        zero_grads = jax.tree_util.tree_map(
+            lambda p: jnp.zeros(p.shape, jnp.float32), state.params
+        )
+        (_, loss, grads_f32), _ = jax.lax.scan(
+            grad_scan_body,
+            (dropout_rng, jnp.zeros((), jnp.float32), zero_grads),
+            (all_gen_latents, rollout_ts[:num_gen_steps], q_weights),
+        )
+        grads = jax.tree_util.tree_map(
+            lambda g, p: g.astype(p.dtype), grads_f32, state.params
+        )
+    else:
+        def loss_fn(params):
+            model = nnx.merge(state.graphdef, params, state.rest_of_state)
             with jax.named_scope("forward_pass"):
                 model_pred = model(
                     hidden_states=noisy_latents,
@@ -385,10 +400,10 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
                     loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
                 loss = jnp.mean(loss)
 
-        return loss
+            return loss
 
-    grad_fn = nnx.value_and_grad(loss_fn)
-    loss, grads = grad_fn(state.params)
+        grad_fn = nnx.value_and_grad(loss_fn)
+        loss, grads = grad_fn(state.params)
     max_grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
     max_abs_grad = jax.tree_util.tree_reduce(
         lambda m, arr: jnp.maximum(m, jnp.max(jnp.abs(arr))), grads, initializer=-1.0
