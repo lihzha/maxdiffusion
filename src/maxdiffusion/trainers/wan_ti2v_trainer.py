@@ -328,10 +328,12 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             # Accumulate MSE loss over every rollout timestep.
             # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
             # GT velocity: target = (x_t - x_0) / σ_t (flow-matching parameterisation).
-            def step_loss(carry_rng, k):
+            # Pass (latent, timestep) slices as xs to avoid dynamic indexing into
+            # scan outputs, which triggers an XLA memory-space bitcast error on TPU.
+            def step_loss(carry_rng, inputs):
+                gen_t_k, ts_k_scalar = inputs
                 carry_rng, step_rng = jax.random.split(carry_rng)
-                gen_t_k = all_gen_latents[k]  # (B, C, F_future, H, W)
-                ts_k = jnp.broadcast_to(rollout_ts[k], (b,))
+                ts_k = jnp.broadcast_to(ts_k_scalar, (b,))
                 sigma_k = _sigma(ts_k)[:, None, None, None, None].astype(gen_t_k.dtype)
                 target_k = (gen_t_k - future_latents) / sigma_k
                 noisy_k = jnp.concatenate([latents[:, :, :n_hist], gen_t_k], axis=2)
@@ -348,7 +350,9 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
                 diff_k = target_k - pred_k[:, :, n_hist:]
                 return carry_rng, jnp.mean(diff_k ** 2)
 
-            _, per_step_losses = jax.lax.scan(step_loss, dropout_rng, jnp.arange(num_gen_steps))
+            _, per_step_losses = jax.lax.scan(
+                step_loss, dropout_rng, (all_gen_latents, rollout_ts[:num_gen_steps])
+            )
             # Weight step k by remaining future steps (K-k), normalised to sum to 1.
             # Mirrors Q = Σ_{j≥k} r_j: earlier (high-noise) steps carry more credit.
             q_weights = jnp.arange(num_gen_steps, 0, -1, dtype=per_step_losses.dtype)
