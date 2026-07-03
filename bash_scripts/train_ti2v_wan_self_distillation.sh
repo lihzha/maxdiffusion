@@ -120,9 +120,9 @@ python src/maxdiffusion/train_wan.py \
     attention=tokamax_flash \
     weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=MATMUL_WITHOUT_BATCH \
-    ici_data_parallelism=8 \
-    ici_fsdp_parallelism=8 \
+    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
+    ici_data_parallelism=4 \
+    ici_fsdp_parallelism=16 \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=1 \
     dcn_data_parallelism=1 \
@@ -132,7 +132,7 @@ python src/maxdiffusion/train_wan.py \
     allow_split_physical_axes=True \
     scan_layers=True \
     max_train_steps=5000 \
-    checkpoint_every=10 \
+    checkpoint_every=20 \
     checkpoint_keep_period=1000 \
     per_device_batch_size=1.0 \
     height=480 \
