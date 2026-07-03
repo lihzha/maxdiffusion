@@ -780,4 +780,11 @@ def maybe_initialize_jax_distributed_system(raw_keys):
     initialize_jax_for_gpu()
     max_logging.log("Jax distributed system initialized on GPU!")
   else:
-    jax.distributed.initialize(initialization_timeout=600)
+    for attempt in range(3):
+      try:
+        jax.distributed.initialize(initialization_timeout=1800)
+        break
+      except Exception as e:  # pylint: disable=broad-except
+        if attempt == 2:
+          raise
+        max_logging.log(f"JAX distributed init attempt {attempt+1} failed ({e}); retrying...")
