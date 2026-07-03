@@ -180,14 +180,15 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         text_keep = (jax.random.uniform(td_rng, (b, 1)) >= 0.5).astype(text_pooled.dtype)
         text_pooled = text_pooled * text_keep
         action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
-        action_tokens = _apply_cfg_dropout(d_rng, action_tokens, config.ctrl_cfg_drop_prob)
+        cfg_rng, do_rng = jax.random.split(d_rng)
+        action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
 
         model_pred = model.transformer(
             hidden_states=noisy_latents,
             timestep=timestep_2d,           # (B, seq_len) → per-token AdaLN
             encoder_hidden_states=action_tokens,
             deterministic=False,
-            rngs=nnx.Rngs(dropout=d_rng),
+            rngs=nnx.Rngs(dropout=do_rng),
             frame_level_cond=True,
             frame_positions=frame_positions,
         )
@@ -391,16 +392,17 @@ class WanCtrlWorldTrainer:
             state = jax.lax.with_sharding_constraint(state, state_spec)
         return state, state_shardings
 
-    def _data_shardings(self, mesh) -> dict:
-        if getattr(self.config, "grad_accum_steps", 1) > 1:
+    def _data_shardings(self, mesh, for_eval: bool = False) -> dict:
+        if not for_eval and getattr(self.config, "grad_accum_steps", 1) > 1:
             # Leading dim is the micro-batch index (local, not distributed).
             pspec = NamedSharding(mesh, P(None, *self.config.data_sharding))
         else:
             pspec = NamedSharding(mesh, P(*self.config.data_sharding))
         return {
-            "latent":      pspec,
-            "action":      pspec,
-            "text_embeds": pspec,
+            "latent":          pspec,
+            "action":          pspec,
+            "text_embeds":     pspec,
+            "frame_positions": pspec,
         }
 
     # ── Main training entry point ─────────────────────────────────────────────
@@ -555,7 +557,7 @@ class WanCtrlWorldTrainer:
                 config.eval_every > 0
                 and (step + 1) % config.eval_every == 0
             ):
-                self._run_eval(mesh, train_iter, state, state_shardings,
+                self._run_eval(mesh, state, state_shardings,
                                data_shardings, scheduler, scheduler_state, step + 1, rng)
 
             if (
@@ -575,7 +577,6 @@ class WanCtrlWorldTrainer:
     def _run_eval(
         self,
         mesh,
-        train_iter,          # reuse training iterator for a quick eval sample
         state: TrainState,
         state_shardings,
         data_shardings,
@@ -589,18 +590,18 @@ class WanCtrlWorldTrainer:
             max_logging.log("[wan_ctrl_world] eval_every>0 but eval_data_dir not set; skipping")
             return
 
-        eval_iter = self._load_dataset(mesh, is_training=False)
+        if not hasattr(self, "_eval_iter"):
+            self._eval_iter = self._load_dataset(mesh, is_training=False)
+        eval_iter = self._eval_iter
 
-        # Always use single-batch shardings for eval — no grad_accum leading dim.
-        eval_data_shardings = {
-            k: NamedSharding(mesh, P(*self.config.data_sharding))
-            for k in ("latent", "action", "text_embeds")
-        }
-        p_eval_step = jax.jit(
-            functools.partial(_eval_step, scheduler=scheduler, config=config),
-            in_shardings=(state_shardings, eval_data_shardings, None, None),
-            out_shardings=None,
-        )
+        if not hasattr(self, "_p_eval_step"):
+            eval_data_shardings = self._data_shardings(mesh, for_eval=True)
+            self._p_eval_step = jax.jit(
+                functools.partial(_eval_step, scheduler=scheduler, config=config),
+                in_shardings=(state_shardings, eval_data_shardings, None, None),
+                out_shardings=None,
+            )
+        p_eval_step = self._p_eval_step
 
         losses: list[float] = []
         for _ in range(max(1, int(getattr(config, "eval_max_batches", 50)))):

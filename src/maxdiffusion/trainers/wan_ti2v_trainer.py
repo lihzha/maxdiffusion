@@ -265,7 +265,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
         rollout_ts = (t_uniform * (num_train_t - 1)).astype(jnp.int32)
 
         def _sigma(t_int):
-            t_n = t_int.astype(jnp.float32) / num_train_t
+            t_n = t_int.astype(jnp.float32) / (num_train_t - 1)
             return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
 
         gen_init = jax.random.normal(gen_noise_rng, future_latents.shape, dtype=future_latents.dtype)
@@ -328,7 +328,8 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             # Accumulate MSE loss over every rollout timestep.
             # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
             # GT velocity: target = (x_t - x_0) / σ_t (flow-matching parameterisation).
-            def step_loss(_, k):
+            def step_loss(carry_rng, k):
+                carry_rng, step_rng = jax.random.split(carry_rng)
                 gen_t_k = all_gen_latents[k]  # (B, C, F_future, H, W)
                 ts_k = jnp.broadcast_to(rollout_ts[k], (b,))
                 sigma_k = _sigma(ts_k)[:, None, None, None, None].astype(gen_t_k.dtype)
@@ -342,12 +343,12 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
                         timestep=ts_2d_k,
                         encoder_hidden_states=encoder_hidden_states,
                         deterministic=False,
-                        rngs=nnx.Rngs(dropout=dropout_rng),
+                        rngs=nnx.Rngs(dropout=step_rng),
                     )
                 diff_k = target_k - pred_k[:, :, n_hist:]
-                return None, jnp.mean(diff_k ** 2)
+                return carry_rng, jnp.mean(diff_k ** 2)
 
-            _, per_step_losses = jax.lax.scan(step_loss, None, jnp.arange(num_gen_steps))
+            _, per_step_losses = jax.lax.scan(step_loss, dropout_rng, jnp.arange(num_gen_steps))
             # Weight step k by remaining future steps (K-k), normalised to sum to 1.
             # Mirrors Q = Σ_{j≥k} r_j: earlier (high-noise) steps carry more credit.
             q_weights = jnp.arange(num_gen_steps, 0, -1, dtype=per_step_losses.dtype)
