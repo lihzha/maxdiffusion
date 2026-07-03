@@ -328,10 +328,18 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             # Accumulate MSE loss over every rollout timestep.
             # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
             # GT velocity: target = (x_t - x_0) / σ_t (flow-matching parameterisation).
-            # Pass (latent, timestep) slices as xs to avoid dynamic indexing into
-            # scan outputs, which triggers an XLA memory-space bitcast error on TPU.
+            # Pass all large tensors as xs so XLA treats them as sequential inputs
+            # rather than closed-over activations.  The HIDDEN_STATE_WITH_OFFLOAD
+            # remat policy stacks closed-over tensors across K scan iterations and
+            # then bitcasts them to S(5) offload memory; that bitcast fails when the
+            # tiling layout is incompatible.  broadcast_to is zero-copy (stride-0 view).
+            enc_hs_xs = jnp.broadcast_to(
+                encoder_hidden_states[None],
+                (num_gen_steps,) + encoder_hidden_states.shape,
+            )
+
             def step_loss(carry_rng, inputs):
-                gen_t_k, ts_k_scalar = inputs
+                gen_t_k, ts_k_scalar, enc_hs_k = inputs
                 carry_rng, step_rng = jax.random.split(carry_rng)
                 ts_k = jnp.broadcast_to(ts_k_scalar, (b,))
                 sigma_k = _sigma(ts_k)[:, None, None, None, None].astype(gen_t_k.dtype)
@@ -343,7 +351,7 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
                     pred_k = model(
                         hidden_states=noisy_k,
                         timestep=ts_2d_k,
-                        encoder_hidden_states=encoder_hidden_states,
+                        encoder_hidden_states=enc_hs_k,
                         deterministic=False,
                         rngs=nnx.Rngs(dropout=step_rng),
                     )
@@ -351,7 +359,8 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
                 return carry_rng, jnp.mean(diff_k ** 2)
 
             _, per_step_losses = jax.lax.scan(
-                step_loss, dropout_rng, (all_gen_latents, rollout_ts[:num_gen_steps])
+                step_loss, dropout_rng,
+                (all_gen_latents, rollout_ts[:num_gen_steps], enc_hs_xs),
             )
             # Weight step k by remaining future steps (K-k), normalised to sum to 1.
             # Mirrors Q = Σ_{j≥k} r_j: earlier (high-noise) steps carry more credit.
