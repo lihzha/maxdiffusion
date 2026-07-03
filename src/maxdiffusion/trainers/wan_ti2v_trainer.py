@@ -185,6 +185,17 @@ class WanTI2VTrainer(BaseWanTrainer):
         n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
         distill = getattr(self.config, "distill", False)
         oracle_noise_offset = getattr(self.config, "oracle_noise_offset", -1)
+
+        # CFG training: encode the empty prompt once with UMT5 to use as the
+        # null embedding for text dropout. Matches the negative_prompt=""
+        # embedding CFG contrasts against at inference. 512 = TFRecord
+        # text_embed sequence length.
+        cfg_dropout_prob = float(getattr(self.config, "cfg_dropout_prob", 0.0))
+        null_prompt_embeds = None
+        if cfg_dropout_prob > 0.0:
+            embeds = pipeline._get_t5_prompt_embeds(prompt="", max_sequence_length=512)
+            null_prompt_embeds = jnp.array(embeds.detach().float().numpy()[0], dtype=jnp.float32)
+
         return jax.jit(
             functools.partial(
                 ti2v_train_step,
@@ -193,6 +204,8 @@ class WanTI2VTrainer(BaseWanTrainer):
                 n_hist=n_hist,
                 distill=distill,
                 oracle_noise_offset=oracle_noise_offset,
+                cfg_dropout_prob=cfg_dropout_prob,
+                null_prompt_embeds=null_prompt_embeds,
             ),
             in_shardings=(state_shardings, data_shardings, None, None),
             out_shardings=(state_shardings, None, None, None),
@@ -238,8 +251,11 @@ class WanTI2VTrainer(BaseWanTrainer):
 # ── Training step ─────────────────────────────────────────────────────────────
 
 
-def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist, distill=False, oracle_noise_offset=-1):
-    _, new_rng, timestep_rng, dropout_rng, oracle_rng, gen_rng, gen_noise_rng = jax.random.split(rng, num=7)
+def ti2v_train_step(
+    state, data, rng, scheduler_state, scheduler, config, n_hist,
+    distill=False, oracle_noise_offset=-1, cfg_dropout_prob=0.0, null_prompt_embeds=None,
+):
+    _, new_rng, timestep_rng, dropout_rng, oracle_rng, gen_rng, gen_noise_rng, cfg_rng = jax.random.split(rng, num=8)
 
     for k, v in data.items():
         if hasattr(v, "shape"):
@@ -250,6 +266,17 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
     encoder_hidden_states = data["encoder_hidden_states"].astype(config.weights_dtype)
 
     b, _, F_lat, H_lat, W_lat = latents.shape
+
+    # CFG training: per-sample, replace the text embedding with the null
+    # (empty-prompt) embedding. In the distill path this conditions both the
+    # on-policy rollout and the loss forward pass, keeping them consistent.
+    if cfg_dropout_prob > 0.0 and null_prompt_embeds is not None:
+        drop = jax.random.bernoulli(cfg_rng, cfg_dropout_prob, (b,))
+        encoder_hidden_states = jnp.where(
+            drop[:, None, None],
+            null_prompt_embeds[None].astype(encoder_hidden_states.dtype),
+            encoder_hidden_states,
+        )
     future_latents = latents[:, :, n_hist:]
 
     if distill:

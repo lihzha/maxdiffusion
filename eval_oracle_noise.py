@@ -210,6 +210,17 @@ def run_inference_tfrecord(pipeline, config, oracle_latents, text_embed, label, 
     safe_label = label.replace("=", "").replace(" ", "_")
     video_path = os.path.join(out_dir, f"sample{sample_idx:03d}__{safe_label}.mp4")
 
+    latents_np = np.asarray(latents)
+    print(
+        f"[eval] Final denoised latents: shape={latents_np.shape} dtype={latents_np.dtype} "
+        f"mean={latents_np.mean():.6f} std={latents_np.std():.6f} "
+        f"min={latents_np.min():.6f} max={latents_np.max():.6f}"
+    )
+    print(latents_np)
+    latents_path = os.path.join(out_dir, f"sample{sample_idx:03d}__{safe_label}_latents.npy")
+    np.save(latents_path, latents_np)
+    print(f"[eval] Final denoised latents saved to {latents_path}")
+
     if single_camera:
         # latents: (B, C, T, H_lat, W_lat) — decode directly as one camera.
         decoded = pipeline._decode_latents_to_video(latents)  # (B, T, H_pix, W_pix, C)

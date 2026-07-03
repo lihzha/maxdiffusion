@@ -109,7 +109,7 @@ ulimit -n 65536
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_5b.yml \
-    run_name=ti2v_wan_droid_gt_distill_single_view_uniform_collect \
+    run_name=ti2v_wan_droid_gt_distill_single_view_uniform_collect_CFG \
     output_dir=gs://v6_east1d/checkpoints/wan-ti2v-finetune \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -142,8 +142,9 @@ python src/maxdiffusion/train_wan.py \
     num_privileged_frames=-1 \
     hardware='tpu' \
     distill=True \
+    cfg_dropout_prob=0.1 \
     oracle_noise_offset=-1 \
-    wandb_project='wan-ti2v-gt-distill-single-view-uniform-collect' \
+    wandb_project='wan-ti2v-gt-distill-single-view-uniform-collect-CFG' \
     single_camera=True
 
 # --- 6. Unmount ---

@@ -45,6 +45,12 @@ distill: false
 # -1 = use T_max (full rollout, i.e. num_train_timesteps - 1 steps).
 num_online_gen_steps: -1
 
+# Classifier-free guidance training: per-sample probability of replacing the
+# text embedding with the empty-prompt ("") UMT5 embedding during training.
+# 0.0 disables. 0.1 is the standard choice; required for guidance_scale > 1
+# at inference to be meaningful on a fine-tuned model.
+cfg_dropout_prob: 0.0
+
 # Overrides the transformer from pretrained_model_name_or_path
 wan_transformer_pretrained_model_name_or_path: ''
 
