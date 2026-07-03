@@ -349,7 +349,10 @@ def ti2v_train_step(state, data, rng, scheduler_state, scheduler, config, n_hist
             diff_k = target_k - pred_k[:, :, n_hist:]
             return jnp.mean(diff_k ** 2)
 
-        step_grad_fn = nnx.value_and_grad(step_loss_fn)
+        # jax.value_and_grad, not nnx's: nnx's wrapper extracts graph nodes from
+        # state.params, which fails inside the scan trace ("different trace level").
+        # Plain jax treats the nnx.State as an ordinary pytree, which is all we need.
+        step_grad_fn = jax.value_and_grad(step_loss_fn)
 
         # Weight step k by remaining future steps (K-k), normalised to sum to 1.
         # Mirrors Q = Σ_{j≥k} r_j: earlier (high-noise) steps carry more credit.
