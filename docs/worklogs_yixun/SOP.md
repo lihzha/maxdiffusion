@@ -10,9 +10,9 @@ A generalizable standard operating procedure for AI-assisted research experiment
 |---|---|---|
 | **Planner / Analyst** | The main-session model (strongest reasoning tier; currently Claude Fable 5) | Writes plans, judges reliability, writes analyses. Does NOT write implementation code directly. |
 | **Coder** | A subagent on the strongest coding tier at max effort (currently Claude Opus 4.8, max effort) | Implements exactly what the approved plan specifies, **test-first** (see Test-driven development). |
-| **Reviewer** | **The opposite model family from the Coder** (mandatory cross-model review; see reciprocity note below). | Reviews all newly written code; the review is saved **under the reviewing model's name** (see artifact 4), not just read. If the reviewer is unavailable, say so — never silently substitute. |
+| **Reviewer** | **The opposite model family from the Coder** (mandatory cross-model review; see reciprocity note below). | Reviews **the plan and** all newly written code; each review is saved **under the reviewing model's name** (artifacts 3 and 5), not just read. If the reviewer is unavailable, say so — never silently substitute. |
 
-> **Reviewer reciprocity — no model reviews its own code.** If the main session (Planner/Coder) is **Claude**, the Reviewer is **OpenAI Codex** (`codex mcp-server`; CLI fallback `codex exec`). If the main session is **Codex**, the Reviewer is **Claude Opus 4.8 at max effort**, invoked via the `claude` CLI. The Coder and Reviewer must always be different model families, so review is genuinely independent.
+> **Reviewer reciprocity — no model reviews its own plan or code.** The Reviewer reviews **both the plan and the code**. If the main session (Planner/Coder) is **Claude**, the Reviewer is **OpenAI Codex** at its strongest setting — model `gpt-5.5`, reasoning effort **Extra High** (`model_reasoning_effort = "xhigh"`) — via `codex mcp-server` (CLI fallback `codex exec -m gpt-5.5 -c model_reasoning_effort=xhigh`). If the main session is **Codex**, the Reviewer is **Claude Opus 4.8 at max effort**, invoked via the `claude` CLI. The Coder and Reviewer must always be different model families, so review is genuinely independent.
 
 ## Directory layout
 
@@ -27,15 +27,16 @@ Inside `worklog/exp_<NN>_<exp name>_claude/`:
 
 1. `<exp name>_yixun_query.md` — the user's driving queries: each one verbatim, plus a summary, the user's assumption/hypothesis, and why the experiment needs to run. Started at scaffold time, appended as new queries arrive. (Rename the `yixun` part to the relevant user in other projects.)
 2. `plan_<exp name>.md` — written by the Planner BEFORE any code: the English plan AND the planned code laid out per file (each existing file to edit, each new file to create). Surfaced for user approval before implementation.
-3. *(the implementation itself)* — the code, written by the Coder subagent per the approved plan. No dedicated markdown artifact; this step is the source-code changes.
-4. `<exp name>_<reviewer>_code_review.md` — the Reviewer's verdict on the new code. The `<reviewer>` slug names the reviewing model (e.g. `codex` or `claude-opus-4.8`, per the reciprocity note), and the document's first line records that model's name + version. Record "N/A — no code written" for code-free experiments.
-5. `<exp name>_params_set_up.md` — full hyperparameters/configuration, written at launch.
-6. `<exp name>_command.md` — exact reproduction command(s), written at launch.
-7. `<exp name>_worklog.md` — an append-only, timestamped **lab notebook: one entry per action**, not per run. Started at scaffold, appended continuously through implementation, debugging, and every launch. This is where the validation ladder, parity audit, and failure triage (below) get recorded as they happen. Entry format in **Worklog entry template** below. Complements `_results.md` (final numbers) and `_analysis.md` (final judgment) by capturing the decision/debug trail in between.
-8. `<exp name>_<YYYY-MM-DD_HH:MM:SS>.log` — ALL terminal output, one timestamped log per run (tee/redirect every training/eval command into the folder). Aborted runs keep their log, renamed with an `_ABORTED_<reason>` suffix.
-9. `<exp name>_results.md` — results, appended as runs finish.
-10. `<exp name>_analysis.md` — written by the Planner after results land: analyze all code + configuration + results; judge whether the result is reliable; state the outcome and the recommended next step.
-11. `commits_<exp name>.md` — SHA + one-line description of every commit belonging to this experiment.
+3. `<exp name>_<reviewer>_plan_review.md` — the Reviewer's verdict on `plan_<exp name>.md` (soundness, parity with the reference, test coverage, risks/edge cases), produced **before user approval** so the user approves with the review in hand. Same `<reviewer>` naming as the code review (slug + first-line model name + version).
+4. *(the implementation itself)* — the code, written by the Coder subagent per the approved plan. No dedicated markdown artifact; this step is the source-code changes.
+5. `<exp name>_<reviewer>_code_review.md` — the Reviewer's verdict on the new code. The `<reviewer>` slug names the reviewing model (e.g. `codex` or `claude-opus-4.8`, per the reciprocity note), and the document's first line records that model's name + version. Record "N/A — no code written" for code-free experiments.
+6. `<exp name>_params_set_up.md` — full hyperparameters/configuration, written at launch.
+7. `<exp name>_command.md` — exact reproduction command(s), written at launch.
+8. `<exp name>_worklog.md` — an append-only, timestamped **lab notebook: one entry per action**, not per run. Started at scaffold, appended continuously through implementation, debugging, and every launch. This is where the validation ladder, parity audit, and failure triage (below) get recorded as they happen. Entry format in **Worklog entry template** below. Complements `_results.md` (final numbers) and `_analysis.md` (final judgment) by capturing the decision/debug trail in between.
+9. `<exp name>_<YYYY-MM-DD_HH:MM:SS>.log` — ALL terminal output, one timestamped log per run (tee/redirect every training/eval command into the folder). Aborted runs keep their log, renamed with an `_ABORTED_<reason>` suffix.
+10. `<exp name>_results.md` — results, appended as runs finish.
+11. `<exp name>_analysis.md` — written by the Planner after results land: analyze all code + configuration + results; judge whether the result is reliable; state the outcome and the recommended next step.
+12. `commits_<exp name>.md` — SHA + one-line description of every commit belonging to this experiment.
 
 ## Worklog entry template
 
@@ -113,4 +114,4 @@ Record the audit in `_worklog.md`; launch the full-scale run only from the audit
 
 ## Sequencing summary
 
-scaffold folder + `_yixun_query.md` + `_worklog.md` → `plan_*.md` (Planner) → user approves → **TDD** code (Coder, test-first) → **validation ladder** (static → smoke → probe) → `_<reviewer>_code_review.md` (Reviewer, filename names the model) → **parity audit** vs reference → `_params_set_up.md` + `_command.md` + **acceptance criteria** → launch with teed timestamped logs, triaging *infra-vs-bug* on failure → `_results.md` → `_analysis.md` (Planner) → commit(s) + `commits_*.md`. Log every action in `_worklog.md` as it happens.
+scaffold folder + `_yixun_query.md` + `_worklog.md` → `plan_*.md` (Planner) → `_<reviewer>_plan_review.md` (Reviewer) → user approves → **TDD** code (Coder, test-first) → **validation ladder** (static → smoke → probe) → `_<reviewer>_code_review.md` (Reviewer, filename names the model) → **parity audit** vs reference → `_params_set_up.md` + `_command.md` + **acceptance criteria** → launch with teed timestamped logs, triaging *infra-vs-bug* on failure → `_results.md` → `_analysis.md` (Planner) → commit(s) + `commits_*.md`. Log every action in `_worklog.md` as it happens.
