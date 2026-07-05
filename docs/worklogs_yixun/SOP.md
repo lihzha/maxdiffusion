@@ -9,7 +9,7 @@ A generalizable standard operating procedure for AI-assisted research experiment
 | Role | Who | Duty |
 |---|---|---|
 | **Planner / Analyst** | The main-session model (strongest reasoning tier; currently Claude Fable 5) | Writes plans, judges reliability, writes analyses. Does NOT write implementation code directly. |
-| **Coder** | A subagent on the strongest coding tier at max effort (currently Claude Opus 4.8, max effort) | Implements exactly what the approved plan specifies. |
+| **Coder** | A subagent on the strongest coding tier at max effort (currently Claude Opus 4.8, max effort) | Implements exactly what the approved plan specifies, **test-first** (see Test-driven development). |
 | **Reviewer** | **The opposite model family from the Coder** (mandatory cross-model review; see reciprocity note below). | Reviews all newly written code; the review is saved **under the reviewing model's name** (see artifact 4), not just read. If the reviewer is unavailable, say so — never silently substitute. |
 
 > **Reviewer reciprocity — no model reviews its own code.** If the main session (Planner/Coder) is **Claude**, the Reviewer is **OpenAI Codex** (`codex mcp-server`; CLI fallback `codex exec`). If the main session is **Codex**, the Reviewer is **Claude Opus 4.8 at max effort**, invoked via the `claude` CLI. The Coder and Reviewer must always be different model families, so review is genuinely independent.
@@ -59,11 +59,24 @@ Each `_worklog.md` entry is one action, headed by an ISO-8601 UTC timestamp and 
 - **Each commit generally < 200 changed lines of code.** Several small commits per experiment are preferred over one large one. Log every SHA in `commits_<exp name>.md`.
 - Superseded or exploratory code is archived (patch + files) under `worklog/archive_<reason>_<date>/` before being removed from the working tree — never destroyed.
 
+## Test-driven development (TDD)
+
+Write the test before the code, for every non-trivial function — red → green → refactor:
+
+1. **Determine the test first.** For each small function, fix its contract and write `test_<function>` — concrete inputs → expected outputs plus edge cases — *before* the implementation exists. Run it; it must fail (red) for the right reason (missing/incorrect behavior, not an import typo).
+2. **Implement to green.** Write the minimal function that makes its test pass, then run the test to confirm green.
+3. **Refactor** with the test as a safety net, keeping it green.
+4. **One small commit per function** — its test and implementation together (test written first in the working tree), so every commit ships with a passing test. Split a function that needs several tests into several commits; keep each within the < 200-LOC rule.
+
+**Location & naming.** Test files live in **`src/maxdiffusion/tests/worklogs_yixun/`**, one file per unit under test, named `test_<exp name>_<function>.py`. Run with `PYTHONPATH=src pytest src/maxdiffusion/tests/worklogs_yixun/ -v`.
+
+The passing pytest suite is **rung 1 of the validation ladder** below — the cheapest executable gate, run before any smoke/probe/full run. Per reviewer reciprocity, the Reviewer reviews the tests too, not just the implementation.
+
 ## Validation ladder (cheapest-first)
 
 Never jump straight to the expensive run. Climb this ladder; advance only when the current rung passes, and record each rung in `_worklog.md`.
 
-1. **Static checks** — `python -m py_compile <changed .py>`, config parse (`yaml.safe_load`), `bash -n <changed .sh>`, `git diff --check` (whitespace). Seconds, no accelerator.
+1. **Static checks + unit tests** — `python -m py_compile <changed .py>`, config parse (`yaml.safe_load`), `bash -n <changed .sh>`, `git diff --check` (whitespace), and the TDD pytest suite for the changed functions (`PYTHONPATH=src pytest src/maxdiffusion/tests/worklogs_yixun/`). Seconds–minutes, no accelerator.
 2. **Tiny synthetic forward** — smallest module instantiation + one forward/step on a small/cheap device with synthetic tensors. Catches graph/mesh/shape/dtype/timestep errors without loading full weights or data.
 3. **Small real-data readback** — parse a few real records; assert shapes, byte lengths, and min/max/std match the schema. Catches data-pipeline mismatches.
 4. **Bounded data build** — if the experiment produces a dataset, build the val split (or a bounded slice) first and read it back before the full build.
@@ -100,4 +113,4 @@ Record the audit in `_worklog.md`; launch the full-scale run only from the audit
 
 ## Sequencing summary
 
-scaffold folder + `_yixun_query.md` + `_worklog.md` → `plan_*.md` (Planner) → user approves → code (Coder) → **validation ladder** (static → smoke → probe) → `_<reviewer>_code_review.md` (Reviewer, filename names the model) → **parity audit** vs reference → `_params_set_up.md` + `_command.md` + **acceptance criteria** → launch with teed timestamped logs, triaging *infra-vs-bug* on failure → `_results.md` → `_analysis.md` (Planner) → commit(s) + `commits_*.md`. Log every action in `_worklog.md` as it happens.
+scaffold folder + `_yixun_query.md` + `_worklog.md` → `plan_*.md` (Planner) → user approves → **TDD** code (Coder, test-first) → **validation ladder** (static → smoke → probe) → `_<reviewer>_code_review.md` (Reviewer, filename names the model) → **parity audit** vs reference → `_params_set_up.md` + `_command.md` + **acceptance criteria** → launch with teed timestamped logs, triaging *infra-vs-bug* on failure → `_results.md` → `_analysis.md` (Planner) → commit(s) + `commits_*.md`. Log every action in `_worklog.md` as it happens.
