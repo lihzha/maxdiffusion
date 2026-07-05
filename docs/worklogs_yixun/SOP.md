@@ -29,16 +29,65 @@ Inside `worklog/exp_<NN>_<exp name>_claude/`:
 4. `<exp name>_codex_code_review.md` — the Reviewer's verdict on the new code (record "N/A — no code written" for code-free experiments).
 5. `<exp name>_params_set_up.md` — full hyperparameters/configuration, written at launch.
 6. `<exp name>_command.md` — exact reproduction command(s), written at launch.
-7. `<exp name>_<YYYY-MM-DD_HH:MM:SS>.log` — ALL terminal output, one timestamped log per run (tee/redirect every training/eval command into the folder). Aborted runs keep their log, renamed with an `_ABORTED_<reason>` suffix.
-8. `<exp name>_results.md` — results, appended as runs finish.
-9. `<exp name>_analysis.md` — written by the Planner after results land: analyze all code + configuration + results; judge whether the result is reliable; state the outcome and the recommended next step.
-10. `commits_<exp name>.md` — SHA + one-line description of every commit belonging to this experiment.
+7. `<exp name>_worklog.md` — an append-only, timestamped **lab notebook: one entry per action**, not per run. Started at scaffold, appended continuously through implementation, debugging, and every launch. This is where the validation ladder, parity audit, and failure triage (below) get recorded as they happen. Entry format in **Worklog entry template** below. Complements `_results.md` (final numbers) and `_analysis.md` (final judgment) by capturing the decision/debug trail in between.
+8. `<exp name>_<YYYY-MM-DD_HH:MM:SS>.log` — ALL terminal output, one timestamped log per run (tee/redirect every training/eval command into the folder). Aborted runs keep their log, renamed with an `_ABORTED_<reason>` suffix.
+9. `<exp name>_results.md` — results, appended as runs finish.
+10. `<exp name>_analysis.md` — written by the Planner after results land: analyze all code + configuration + results; judge whether the result is reliable; state the outcome and the recommended next step.
+11. `commits_<exp name>.md` — SHA + one-line description of every commit belonging to this experiment.
+
+## Worklog entry template
+
+Each `_worklog.md` entry is one action, headed by an ISO-8601 UTC timestamp and a short title, then these fields. Use the full set for substantive actions (code, launches, fixes); a lightweight **Goal / Result / Analysis / Next** is enough for routine monitoring checks.
+
+`## <YYYY-MM-DDThh:mm:ssZ> — <short title>`
+
+- **Goal** — what this action is for. *(every entry)*
+- **Hypothesis** — the belief being tested, stated *before* the evidence. *(only when testing something)*
+- **Change** — exact files/behavior touched. *(when code changed)*
+- **Version Control** — branch, `base_commit`, `implementation_commit`, push/pull, changed_files. Every SHA inline.
+- **Command / Validation** — exact commands (or static checks), job ids, run dirs, log + artifact paths.
+- **Acceptance criteria** — the exact conditions that count as success, written *before* a launch (see **Running & failure discipline**).
+- **Result** — status (`passed` / `partial` / `in_progress` / `launched` / `fix_ready`) + metrics/artifacts + key evidence.
+- **Analysis** — interpretation; in particular classify any failure as *infrastructure vs. real bug*.
+- **Next** — the immediate next step.
 
 ## Development discipline
 
 - Develop **commit by commit, experiment by experiment** from a known-good base commit. No long-lived uncommitted state: an experiment concludes by committing its code and its worklog folder.
 - **Each commit generally < 200 changed lines of code.** Several small commits per experiment are preferred over one large one. Log every SHA in `commits_<exp name>.md`.
 - Superseded or exploratory code is archived (patch + files) under `worklog/archive_<reason>_<date>/` before being removed from the working tree — never destroyed.
+
+## Validation ladder (cheapest-first)
+
+Never jump straight to the expensive run. Climb this ladder; advance only when the current rung passes, and record each rung in `_worklog.md`.
+
+1. **Static checks** — `python -m py_compile <changed .py>`, config parse (`yaml.safe_load`), `bash -n <changed .sh>`, `git diff --check` (whitespace). Seconds, no accelerator.
+2. **Tiny synthetic forward** — smallest module instantiation + one forward/step on a small/cheap device with synthetic tensors. Catches graph/mesh/shape/dtype/timestep errors without loading full weights or data.
+3. **Small real-data readback** — parse a few real records; assert shapes, byte lengths, and min/max/std match the schema. Catches data-pipeline mismatches.
+4. **Bounded data build** — if the experiment produces a dataset, build the val split (or a bounded slice) first and read it back before the full build.
+5. **Smoke run** — a few steps at the smallest batch on the target hardware, checkpointing/final-save **disabled** (storage-light), just to reach one completed optimizer step and produce logs.
+6. **Fit / batch-size probe** — find the max batch that fits, still storage-light (no checkpoints), before committing to the full run.
+7. **Full run** — only after 1–6 pass and the parity audit below is clean.
+
+## Parity audit before scaling
+
+Before spending real compute on a new method, audit the implementation **component by component against the reference** (paper code / upstream repo), and diff the *numbers*, not just the shapes:
+
+- **Numeric recipe defaults** — LayerNorm eps, weight decay, betas, LR schedule, loss type, sigma/noise schedule, CFG handling. Silent mismatches (e.g. eps `1e-6` vs `1e-5`, weight decay `0` vs `1e-2`) don't crash; they quietly corrupt results.
+- **Structural parity** — which params are trainable vs frozen, residual/injection points, stop-gradient boundaries, any pinning/masking.
+- **Data parity** — take one concrete source example and its processed/cached counterpart; confirm identical dtype, byte counts, and min/max/std.
+
+Record the audit in `_worklog.md`; launch the full-scale run only from the audited commit.
+
+## Running & failure discipline
+
+- **Pre-launch acceptance criteria.** Before every launch, write in `_worklog.md` the exact conditions that count as success: the commit SHA the worker must report, device/host count, per-device and global batch, parallelism axes, which params are trainable, and "reaches ≥1 optimizer step with no OOM / NaN / parse failure." Judge the run against these, not vibes.
+- **Infrastructure vs. real bug.** In every failure Analysis, classify the cause: *infrastructure* (spot preemption, host maintenance, download/network stall, launch-env/PATH, quota) vs. *real bug* (wrong shape/sharding, wrong objective, bad schedule). Only real bugs get a code fix; infra failures get retry/resume. Prevents thrashing on non-bugs.
+- **Commit + push before running remotely.** Any remote (TPU/cluster) run executes a *pushed* SHA; verify the SHA the worker actually checked out. Never run uncommitted code on a remote.
+- **Never edit a script while it is running.** Wait for a safe boundary, then patch; fix orchestration bugs separately from the data/model path.
+- **Resume from the last safe boundary.** On a mid-pipeline crash, find the last fully-committed unit (contiguous shard / checkpoint) and resume from the next; never duplicate or lose work, never reuse stale staging.
+- **Storage guardrail.** Long data/checkpoint jobs hold only a bounded working set (one batch/segment resident), clean up after each unit, and stay above an explicit free-space floor; contiguous coverage is the correctness check.
+- **Shared-resource etiquette.** Inspect a shared machine's processes before using it; don't interrupt others' jobs without approval; verify zero stale processes/watchers/queued-resources after a failed run before relaunching.
 
 ## Evaluation integrity
 
@@ -49,4 +98,4 @@ Inside `worklog/exp_<NN>_<exp name>_claude/`:
 
 ## Sequencing summary
 
-scaffold folder + `_yixun_query.md` → `plan_*.md` (Planner) → user approves → code (Coder) → `_codex_code_review.md` (Reviewer) → `_params_set_up.md` + `_command.md` → launch with teed timestamped logs → `_results.md` → `_analysis.md` (Planner) → commit(s) + `commits_*.md`.
+scaffold folder + `_yixun_query.md` + `_worklog.md` → `plan_*.md` (Planner) → user approves → code (Coder) → **validation ladder** (static → smoke → probe) → `_codex_code_review.md` (Reviewer) → **parity audit** vs reference → `_params_set_up.md` + `_command.md` + **acceptance criteria** → launch with teed timestamped logs, triaging *infra-vs-bug* on failure → `_results.md` → `_analysis.md` (Planner) → commit(s) + `commits_*.md`. Log every action in `_worklog.md` as it happens.
