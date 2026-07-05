@@ -14,6 +14,8 @@ A generalizable standard operating procedure for AI-assisted research experiment
 
 > **Reviewer reciprocity — no model reviews its own plan or code.** The Reviewer reviews **both the plan and the code**. If the main session (Planner/Coder) is **Claude**, the Reviewer is **OpenAI Codex** at its strongest setting — model `gpt-5.5`, reasoning effort **Extra High** (`model_reasoning_effort = "xhigh"`) — via `codex mcp-server` (CLI fallback `codex exec -m gpt-5.5 -c model_reasoning_effort=xhigh`). If the main session is **Codex**, the Reviewer is **Claude Opus 4.8 at max effort**, invoked via the `claude` CLI. The Coder and Reviewer must always be different model families, so review is genuinely independent.
 
+> **Reviewer briefing — load context before verdict.** The Reviewer starts cold; every review call (plan or code) must have it load context **before** it sees the thing under review: (1) this SOP, the experiment's `_yixun_query.md`, and the approved `plan_*.md`; (2) the experiment's `_worklog.md` so far; (3) the `_analysis.md` / results of prior related experiments, so it knows what has already been tried and learned; (4) a short statement of what the current Coder round is for — the function/TDD unit, its contract, and its `<marker>`. The Reviewer runs with repo access, so point it at file paths to read rather than pasting content. Each review file opens by listing the context it loaded; a verdict produced without the briefing is invalid — re-run it.
+
 ## Directory layout
 
 All experiment bookkeeping lives in `worklog/` at the repo root:
@@ -69,7 +71,7 @@ Write the test before the code, for every non-trivial function — red → green
 3. **Refactor** with the test as a safety net, keeping it green.
 4. **One small commit per function** — its test and implementation together (test written first in the working tree), so every commit ships with a passing test. Split a function that needs several tests into several commits; keep each within the < 200-LOC rule.
 
-**Review every round.** After each Coder round (each function / small commit), call the Reviewer (Codex `gpt-5.5` xhigh, per reciprocity) for a *small, focused* code review of just that change — never batch a whole experiment into one review. Save each as `<exp name>_<reviewer>_code_<marker>_review.md` (artifact 5), where `<marker>` is that round's TDD function name, code-snippet marker, or short commit name. Address the review before the next round.
+**Review every round.** After each Coder round (each function / small commit), call the Reviewer (Codex `gpt-5.5` xhigh, per reciprocity) — **briefed first** per the Reviewer briefing note (plan, worklog, prior experiments, what this round is for) — for a *small, focused* code review of just that change — never batch a whole experiment into one review. Save each as `<exp name>_<reviewer>_code_<marker>_review.md` (artifact 5), where `<marker>` is that round's TDD function name, code-snippet marker, or short commit name. Address the review before the next round.
 
 **Location & naming.** Test files live in **`src/maxdiffusion/tests/worklogs_yixun/`**, one file per unit under test, named `test_<exp name>_<function>.py`. Run with `PYTHONPATH=src pytest src/maxdiffusion/tests/worklogs_yixun/ -v`.
 
