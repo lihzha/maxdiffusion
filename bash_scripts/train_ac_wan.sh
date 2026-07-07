@@ -133,7 +133,7 @@ python src/maxdiffusion/train_wan.py \
     eval_every=1000 \
     height=480 \
     width=832 \
-    num_frames=21 \
+    num_frames=41 \
     num_history_latent_frames=2 \
     flash_min_seq_length=128 \
     hardware='tpu' \
