@@ -55,6 +55,7 @@ def _denoise_step(
     action_tokens: jnp.ndarray,
     uncond_action_tokens: jnp.ndarray,
     timestep: jnp.ndarray,
+    frame_positions: jnp.ndarray,
     n_hist: int,
     guidance_scale: float,
     scheduler: FlaxFlowMatchScheduler,
@@ -78,12 +79,14 @@ def _denoise_step(
         latents_2x = jnp.concatenate([latents, latents], axis=0)
         tokens_2x  = jnp.concatenate([uncond_action_tokens, action_tokens], axis=0)
         t_2d       = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
+        pos_2x     = jnp.concatenate([frame_positions, frame_positions], axis=0)
         pred_2x = model.transformer(
             hidden_states=latents_2x,
             timestep=t_2d,
             encoder_hidden_states=tokens_2x,
             deterministic=True,
             frame_level_cond=True,
+            frame_positions=pos_2x,
         )
         pred_uncond = pred_2x[:b]
         pred_cond   = pred_2x[b:]
@@ -95,6 +98,7 @@ def _denoise_step(
             encoder_hidden_states=action_tokens,
             deterministic=True,
             frame_level_cond=True,
+            frame_positions=frame_positions,
         )
 
     # Apply scheduler step to future frames only; restore clean history after.
@@ -129,6 +133,7 @@ def run_ar_denoising(
     rest_of_state: nnx.State,
     initial_hist: jnp.ndarray,
     all_actions: jnp.ndarray,
+    all_frame_positions: jnp.ndarray,
     p_encode,
     scheduler: FlaxFlowMatchScheduler,
     num_inference_steps: int,
@@ -148,6 +153,13 @@ def run_ar_denoising(
 
     all_actions must cover the full trajectory window:
         shape (B, 4 * (n_hist + ar_num_chunks * ar_chunk_size), 7)
+    all_frame_positions holds the temporal RoPE index of every latent frame in
+    the full trajectory window, shape (B, n_hist + ar_num_chunks * ar_chunk_size)
+    int32 — same tensor the dataset provides at training time. Each AR chunk's
+    window covers latent frames [chunk_i*ar_chunk_size, chunk_i*ar_chunk_size +
+    window_F_lat), so its positions are the matching contiguous slice: history
+    frames (the last n_hist previously generated frames) keep the positions they
+    were generated at, keeping RoPE consistent with training.
 
     Returns predicted future latents: (B, C, ar_num_chunks * ar_chunk_size, H, W).
     """
@@ -166,12 +178,15 @@ def run_ar_denoising(
         act_end   = 4 * (chunk_i * ar_chunk_size + window_F_lat)
         actions_chunk = all_actions[:, act_start:act_end, :]  # (B, 4*window_F_lat, 7)
 
+        pos_start = chunk_i * ar_chunk_size
+        positions_chunk = all_frame_positions[:, pos_start:pos_start + window_F_lat]
+
         action_tokens = p_encode(params, actions=actions_chunk, F_lat=window_F_lat)
 
         rng, step_rng = jax.random.split(rng)
         gen_chunk = run_denoising(
             graphdef, params, rest_of_state,
-            current_hist, ar_chunk_size, action_tokens,
+            current_hist, ar_chunk_size, action_tokens, positions_chunk,
             scheduler, num_inference_steps, n_hist,
             step_rng, dtype, mesh, logical_axis_rules,
             guidance_scale=guidance_scale,
@@ -193,6 +208,7 @@ def run_denoising(
     clean_hist: jnp.ndarray,
     n_fut: int,
     action_tokens: jnp.ndarray,
+    frame_positions: jnp.ndarray,
     scheduler: FlaxFlowMatchScheduler,
     num_inference_steps: int,
     n_hist: int,
@@ -203,6 +219,11 @@ def run_denoising(
     guidance_scale: float = 1.0,
 ) -> jnp.ndarray:
     """Denoise future latent frames from random noise, conditioned on history + actions.
+
+    frame_positions (B, n_hist + n_fut) int32 holds the per-frame temporal RoPE
+    indices for the window, matching what the dataset fed the model at training
+    time (absolute episode frame indices, history clipped/repeated at episode
+    start).
 
     When guidance_scale > 1, uses classifier-free guidance: the model runs with
     zeroed action tokens (unconditioned) and real action tokens (conditioned) in
@@ -228,6 +249,7 @@ def run_denoising(
             clean_hist=clean_hist,
             action_tokens=action_tokens,
             uncond_action_tokens=uncond_action_tokens,
+            frame_positions=frame_positions,
             n_hist=n_hist,
             guidance_scale=guidance_scale,
             scheduler=scheduler,
@@ -420,6 +442,9 @@ def run(argv: Sequence[str]) -> None:
 
         latent = jnp.array(batch["latent"]).astype(weights_dtype)       # (1, C, W, H, Wl)
         actions = jnp.array(batch["action"]).astype(weights_dtype)      # (1, 4*W, 7)
+        # Temporal RoPE indices for every latent frame in the window — same
+        # tensor training feeds the transformer (see wan_ctrl_world_trainer).
+        frame_positions = jnp.array(batch["frame_positions"]).astype(jnp.int32)  # (1, W)
 
         _, _, F_lat, _, _ = latent.shape
         clean_hist = latent[:, :, :n_hist, :, :]                        # (1, C, n_hist, H, Wl)
@@ -431,7 +456,7 @@ def run(argv: Sequence[str]) -> None:
         if autoregressive:
             pred_future = run_ar_denoising(
                 graphdef, params, rest_of_state,
-                clean_hist, actions,
+                clean_hist, actions, frame_positions,
                 p_encode,
                 scheduler, num_inference_steps,
                 n_hist, ar_chunk_size, ar_num_chunks,
@@ -449,7 +474,7 @@ def run(argv: Sequence[str]) -> None:
 
             pred_future = run_denoising(
                 graphdef, params, rest_of_state,
-                clean_hist, n_fut, action_tokens,
+                clean_hist, n_fut, action_tokens, frame_positions,
                 scheduler, num_inference_steps,
                 n_hist, step_rng, weights_dtype,
                 mesh=pipeline.mesh,
@@ -471,6 +496,14 @@ def run(argv: Sequence[str]) -> None:
 
         gt_video = _decode_latents(pipeline, gt_full.astype(jnp.float32))
         pred_video = _decode_latents(pipeline, pred_full.astype(jnp.float32))
+
+        # Drop the decoded history context: the n_hist history latents decode to
+        # 1 + 4*(n_hist - 1) leading frames (causal VAE: latent 0 → 1 frame,
+        # each later latent → 4 frames). They were only prepended so the first
+        # future latent decodes as a continuation rather than a first chunk.
+        n_ctx_frames = 1 + 4 * (n_hist - 1)
+        gt_video = gt_video[:, n_ctx_frames:]
+        pred_video = pred_video[:, n_ctx_frames:]
 
         path = os.path.join(output_dir, f"video_{vid_idx:04d}.mp4")
         _save_comparison_video(gt_video, pred_video, path, fps=fps)

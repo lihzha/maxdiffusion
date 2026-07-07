@@ -6,9 +6,9 @@ NNX action encoder, and fine-tunes both jointly on robot trajectory data.
 Architecture
 ------------
 ``WanCtrlWorldModel`` wraps the ``WanModel`` transformer together with
-``NNXWanActionEncoder``. Action tokens ``(B, T_act, 4096)`` are prepended to
-T5 text tokens before the WAN transformer's text projection — no changes to
-the transformer itself.
+``NNXWanActionEncoder``. Action tokens ``(B, T_act, 4096)`` are fed through
+the WAN transformer's text projection as the sole cross-attention sequence —
+no changes to the transformer itself.
 
 Training objective (per-token timestep)
 ----------------------------------------
@@ -25,10 +25,10 @@ Uses the same per-token timestep scheme introduced by WAN Ti2V:
 
 Conditioning
 ------------
-Action tokens are the sole cross-attention conditioning. T5 text tokens are
-mean-pooled to a single ``(B, 4096)`` vector and added inside the action
-encoder (same additive fusion as SVD Ctrl-World). 5 % of samples have their
-action tokens zeroed for classifier-free guidance.
+Action tokens are the sole cross-attention conditioning. Text is not used:
+the action encoder is called with ``text_embed=None``, matching the
+text-free inference path. 5 % of samples have their action tokens zeroed
+for classifier-free guidance.
 
 Checkpointing
 -------------
@@ -145,19 +145,18 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
     When grad_accum_steps > 1: data leaves have shape [grad_accum_steps, bsz, ...];
     gradients are accumulated via jax.lax.scan before a single optimizer update.
     """
-    _, noise_rng, timestep_rng, drop_rng, text_drop_rng, new_rng = jax.random.split(rng, 6)
+    _, noise_rng, timestep_rng, drop_rng, new_rng = jax.random.split(rng, 5)
 
     bsz = config.global_batch_size_to_train_on
     weights_dtype = _dtype(config.weights_dtype)
     n_hist = config.num_history_latent_frames
     grad_accum_steps = getattr(config, "grad_accum_steps", 1)
 
-    def compute_loss(params, micro_data, n_rng, t_rng, d_rng, td_rng):
+    def compute_loss(params, micro_data, n_rng, t_rng, d_rng):
         model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
 
         latents = micro_data["latent"][:bsz].astype(weights_dtype)               # (B,C,F_lat,H,W)
         actions = micro_data["action"][:bsz].astype(weights_dtype)               # (B,4*F_lat,7)
-        text_tokens = micro_data["text_embeds"][:bsz].astype(weights_dtype)      # (B,512,4096)
         frame_positions = micro_data["frame_positions"][:bsz]                    # (B, W) int32
 
         b, _, F_lat, H_lat, W_lat = latents.shape
@@ -176,10 +175,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
         timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
-        text_pooled = text_tokens.mean(axis=1)                           # (B, 4096)
-        text_keep = (jax.random.uniform(td_rng, (b, 1)) >= 0.5).astype(text_pooled.dtype)
-        text_pooled = text_pooled * text_keep
-        action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
+        action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat, 4096)
         cfg_rng, do_rng = jax.random.split(d_rng)
         action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
 
@@ -201,7 +197,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
 
     if grad_accum_steps == 1:
         def loss_fn(params):
-            return compute_loss(params, data, noise_rng, timestep_rng, drop_rng, text_drop_rng)
+            return compute_loss(params, data, noise_rng, timestep_rng, drop_rng)
 
         grad_fn = nnx.value_and_grad(loss_fn)
         loss, grads = grad_fn(state.params)
@@ -212,7 +208,6 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         noise_rngs = jax.random.split(noise_rng, grad_accum_steps)
         timestep_rngs = jax.random.split(timestep_rng, grad_accum_steps)
         drop_rngs = jax.random.split(drop_rng, grad_accum_steps)
-        text_drop_rngs = jax.random.split(text_drop_rng, grad_accum_steps)
 
         # Python loop: unrolled at JIT trace time, keeping nnx.value_and_grad at
         # JIT trace level (avoids the cross-trace-level NNX graph inspection error
@@ -222,10 +217,10 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
 
         for i in range(grad_accum_steps):
             micro_data = jax.tree_util.tree_map(lambda x, _i=i: x[_i], data)
-            n_i, t_i, d_i, td_i = noise_rngs[i], timestep_rngs[i], drop_rngs[i], text_drop_rngs[i]
+            n_i, t_i, d_i = noise_rngs[i], timestep_rngs[i], drop_rngs[i]
 
-            def loss_fn(params, _d=micro_data, _n=n_i, _t=t_i, _dr=d_i, _td=td_i):
-                return compute_loss(params, _d, _n, _t, _dr, _td)
+            def loss_fn(params, _d=micro_data, _n=n_i, _t=t_i, _dr=d_i):
+                return compute_loss(params, _d, _n, _t, _dr)
 
             grad_fn = nnx.value_and_grad(loss_fn)
             micro_loss, micro_grads = grad_fn(state.params)
@@ -637,7 +632,6 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
 
     latents = data["latent"][:bsz].astype(weights_dtype)
     actions = data["action"][:bsz].astype(weights_dtype)
-    text_tokens = data["text_embeds"][:bsz].astype(weights_dtype)
     frame_positions = data["frame_positions"][:bsz]                  # (B, W) int32
 
     b, _, F_lat, H_lat, W_lat = latents.shape
@@ -656,8 +650,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
     timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
-    text_pooled = text_tokens.mean(axis=1)
-    action_tokens = model.action_encoder(actions_grouped, text_pooled)  # (B, F_lat, 4096)
+    action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat, 4096)
 
     model_pred = model.transformer(
         hidden_states=noisy_latents,

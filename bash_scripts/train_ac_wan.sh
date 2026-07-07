@@ -103,7 +103,7 @@ ulimit -n 65536
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-    run_name=ac_wan_droid_history_fewer_frames \
+    run_name=ac_wan_droid_history_fewer_frames_no_text \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -126,7 +126,7 @@ python src/maxdiffusion/train_wan.py \
     per_device_batch_size=1.0 \
     grad_accum_steps=1 \
     allow_split_physical_axes=True \
-    scan_layers=True \
+    scan_layers=True \``
     max_train_steps=101000 \
     checkpoint_every=1000 \
     checkpoint_keep_period=10000 \
@@ -137,7 +137,7 @@ python src/maxdiffusion/train_wan.py \
     num_history_latent_frames=2 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    wandb_project='wan-ac-history-fewer-frames'
+    wandb_project='wan-ac-history-fewer-frames-no-text'
 
 # --- DROID path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
