@@ -1,6 +1,6 @@
 # Experiment SOP (portable)
 
-A generalizable standard operating procedure for AI-assisted research experiments. Drop this file into any project and reference it from that project's `CLAUDE.md` (e.g. "Follow `worklog/SOP.md` for all experiment work"). Written for Claude Code, but the roles are model-agnostic.
+A generalizable standard operating procedure for AI-assisted research experiments. Drop this file into any project and reference it from that project's `CLAUDE.md` (e.g. "Follow `worklog/experiment_SOP.md` for all experiment work"). Written for Claude Code, but the roles are model-agnostic.
 
 > **In this repository:** the portable `worklog/` root referenced throughout maps to `docs/worklogs_yixun/`. Read every path below as rooted there — e.g. `worklog/exp_01_foo_claude/` → `docs/worklogs_yixun/exp_01_foo_claude/`, and `worklog/announcement/` → `docs/worklogs_yixun/announcement/`.
 
@@ -38,7 +38,8 @@ Inside `worklog/exp_<NN>_<exp name>_claude/`:
 9. `<exp name>_<YYYY-MM-DD_HH:MM:SS>.log` — ALL terminal output, one timestamped log per run (tee/redirect every training/eval command into the folder). Aborted runs keep their log, renamed with an `_ABORTED_<reason>` suffix.
 10. `<exp name>_results.md` — results, appended as runs finish.
 11. `<exp name>_analysis.md` — written by the Planner after results land: analyze all code + configuration + results; judge whether the result is reliable; state the outcome and the recommended next step.
-12. `commits_<exp name>.md` — SHA + one-line description of every commit belonging to this experiment.
+12. `<exp name>_<idx>_results.html` — **human-readable HTML results report(s), produced after the experiment finishes** (once `_results.md` and `_analysis.md` have landed). One file per distinct part of the results; `<idx>` is a short ordered identifier the author chooses to separate the parts (e.g. `01-training-curves`, `02-rollout-gallery`, `03-ablations`). Every local file the HTML sources lives in a corresponding assets folder inside the experiment folder. Full spec in **Results visualization (HTML report)** below.
+13. `commits_<exp name>.md` — SHA + one-line description of every commit belonging to this experiment.
 
 ## Worklog entry template
 
@@ -123,6 +124,18 @@ Record the audit in `_worklog.md`; launch the full-scale run only from the audit
 - Match the baseline's aggregation convention (e.g. per-scene means) and its variance protocol (e.g. mean ± std over N generations/seeds).
 - If a run is launched and the code state then changes (revert, edit), kill and relaunch rather than mixing code states across a sweep; document the abort in `_params_set_up.md`.
 
+## Results visualization (HTML report)
+
+When an experiment finishes, the Planner turns its results into one or more **HTML report pages** inside the experiment folder (artifact 12). The markdown artifacts are the record; the HTML is the presentation layer — exploit HTML's full expressive range (styling, layout, media — everything markdown lacks) to make the results genuinely human-readable at a glance.
+
+- **Naming & splitting.** `<exp name>_<idx>_results.html`, where `<idx>` is a short ordered identifier separating different parts of the visualization — e.g. `sidewin_01-training-curves_results.html`, `sidewin_02-rollout-gallery_results.html`. Prefer several focused pages over one monolithic page when the results have distinct parts.
+- **Content blocks.** Use whatever renders each result best: styled metric tables (method vs. baseline side by side, best values highlighted), equations for the objective/metrics (MathML or embedded KaTeX), embedded images (`<img>` — loss curves, sample grids), `<video>` players for generated/comparison videos, collapsible `<details>` for long configs or logs, color/badge coding for pass–fail against the acceptance criteria.
+- **No new numbers.** Every number and figure shown must trace back to `_results.md` or the run artifacts — the HTML presents results; it never computes new ones.
+- **Assets folder.** Every local file the HTML sources (images, videos, CSS/JS, data extracts) lives in a corresponding folder inside `exp_<NN>_<exp name>_claude/` — `<exp name>_<idx>_results_assets/`, next to its page — and is referenced by **relative path only**, so the page + its folder stay portable as a pair.
+- **Opens from disk.** The page must render by double-clicking the file: no server required, no CDN dependency for core content (inline CSS/JS; equation rendering may degrade gracefully offline).
+
+This is a presentation artifact, not experiment code — the TDD/review cycle does not apply — but a wrong number in it is treated like any other error and fixed.
+
 ## Sequencing summary
 
-scaffold folder + `_yixun_query.md` + `_worklog.md` → `plan_*.md` (Planner) → `_<reviewer>_plan_review.md` (Reviewer) → user approves → **TDD** code in **closed cycles per patch: write (Coder, test-first) → briefed review (`_<reviewer>_code_<marker>_review.md`) → strengthen (resolutions appended) → commit** → **validation ladder** (static → smoke → probe) → **parity audit** vs reference → `_params_set_up.md` + `_command.md` + **acceptance criteria** → launch with teed timestamped logs (**every launch — including reruns and probes — appends its command to `_command.md` at launch time**), triaging *infra-vs-bug* on failure → `_results.md` → `_analysis.md` (Planner) → commit(s) + `commits_*.md`. Log every action in `_worklog.md` as it happens.
+scaffold folder + `_yixun_query.md` + `_worklog.md` → `plan_*.md` (Planner) → `_<reviewer>_plan_review.md` (Reviewer) → user approves → **TDD** code in **closed cycles per patch: write (Coder, test-first) → briefed review (`_<reviewer>_code_<marker>_review.md`) → strengthen (resolutions appended) → commit** → **validation ladder** (static → smoke → probe) → **parity audit** vs reference → `_params_set_up.md` + `_command.md` + **acceptance criteria** → launch with teed timestamped logs (**every launch — including reruns and probes — appends its command to `_command.md` at launch time**), triaging *infra-vs-bug* on failure → `_results.md` → `_analysis.md` (Planner) → **HTML results report(s)** (`<exp name>_<idx>_results.html` + `_results_assets/` folder) → commit(s) + `commits_*.md`. Log every action in `_worklog.md` as it happens.
