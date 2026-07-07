@@ -485,11 +485,16 @@ class BaseWanTrainer(abc.ABC):
                         writer, local_metrics_file, running_gcs_metrics, train_metric, step, self.config
                     )
                 if self._wandb_run is not None and step % self.config.log_period == 0:
-                    self._wandb_run.log({
+                    wandb_log = {
                         "train/loss": float(jax.device_get(train_metric["scalar"]["learning/loss"])),
                         "train/lr": float(train_metric["scalar"].get("learning/current_learning_rate", 0)),
                         "train/steps_per_sec": 1.0 / train_metric["scalar"].get("perf/step_time_seconds", 1),
-                    }, step=step)
+                    }
+                    if "learning/rollout_latent_mse" in train_metric["scalar"]:
+                        wandb_log["train/rollout_latent_mse"] = float(
+                            jax.device_get(train_metric["scalar"]["learning/rollout_latent_mse"])
+                        )
+                    self._wandb_run.log(wandb_log, step=step)
 
                 if self.config.eval_every > 0 and (step + 1) % self.config.eval_every == 0:
                     if self.config.enable_generate_video_for_eval:

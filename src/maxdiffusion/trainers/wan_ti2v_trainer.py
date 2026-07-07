@@ -216,12 +216,14 @@ class WanTI2VTrainer(BaseWanTrainer):
 
     def get_eval_step(self, pipeline, mesh, state_shardings, eval_data_shardings):
         n_hist = getattr(self.config, "num_privileged_frames", 0) + 1
+        distill = getattr(self.config, "distill", False)
         return jax.jit(
             functools.partial(
                 ti2v_eval_step,
                 scheduler=pipeline.scheduler,
                 config=self.config,
                 n_hist=n_hist,
+                distill=distill,
             ),
             in_shardings=(state_shardings, eval_data_shardings, None, None),
             out_shardings=(None, None),
@@ -241,13 +243,26 @@ class WanTI2VTrainer(BaseWanTrainer):
         gathered = multihost_utils.process_allgather(losses, tiled=True)
         all_losses = jax.device_get(gathered).flatten().tolist()
 
+        all_latent_mse = None
+        latent_mse = metrics["scalar"].get("learning/eval_rollout_latent_mse")
+        if latent_mse is not None:
+            gathered_mse = multihost_utils.process_allgather(latent_mse, tiled=True)
+            all_latent_mse = jax.device_get(gathered_mse).flatten().tolist()
+
         if all_losses and jax.process_index() == 0:
             final_eval_loss = float(jnp.mean(jnp.array(all_losses)))
             max_logging.log(f"Step {step}, Eval loss: {final_eval_loss:.4f}")
+            wandb_metrics = {"eval/loss": final_eval_loss}
             if writer:
                 writer.add_scalar("learning/eval_loss", final_eval_loss, step)
+            if all_latent_mse:
+                final_latent_mse = float(jnp.mean(jnp.array(all_latent_mse)))
+                max_logging.log(f"Step {step}, Eval rollout latent MSE: {final_latent_mse:.4f}")
+                wandb_metrics["eval/rollout_latent_mse"] = final_latent_mse
+                if writer:
+                    writer.add_scalar("learning/eval_rollout_latent_mse", final_latent_mse, step)
             if getattr(self, "_wandb_run", None) is not None:
-                self._wandb_run.log({"eval/loss": final_eval_loss}, step=step)
+                self._wandb_run.log(wandb_metrics, step=step)
 
 
 # ── Training step ─────────────────────────────────────────────────────────────
@@ -337,8 +352,11 @@ def ti2v_train_step(
 
             # Collect every intermediate latent state via scan:
             # all_gen_latents[k] = on-policy noisy latent at rollout_ts[k], k ∈ [0, num_gen_steps).
-            _, all_gen_latents = jax.lax.scan(rollout_scan_body, gen_init, jnp.arange(num_gen_steps))
+            final_gen_lat, all_gen_latents = jax.lax.scan(rollout_scan_body, gen_init, jnp.arange(num_gen_steps))
             # shape: (num_gen_steps, B, C, F_future, H_lat, W_lat)
+            rollout_latent_mse = jnp.mean(
+                (final_gen_lat.astype(jnp.float32) - future_latents.astype(jnp.float32)) ** 2
+            )
 
     else:
         # ── Off-policy path: single-step noising ─────────────────────────────
@@ -404,11 +422,14 @@ def ti2v_train_step(
             # prevent_cse=False is safe under scan and avoids slowdown.
             step_body = jax.checkpoint(step_body, prevent_cse=False)
             ts_pairs = (rollout_ts[:num_gen_steps], rollout_ts[1 : num_gen_steps + 1])
-            _, step_losses = jax.lax.scan(step_body, (gen_init, dropout_rng), ts_pairs)
-            return jnp.sum(q_weights * step_losses)
+            (final_lat, _), step_losses = jax.lax.scan(step_body, (gen_init, dropout_rng), ts_pairs)
+            return jnp.sum(q_weights * step_losses), jax.lax.stop_gradient(final_lat)
 
-        grad_fn = nnx.value_and_grad(bptt_loss_fn)
-        loss, grads = grad_fn(state.params)
+        grad_fn = nnx.value_and_grad(bptt_loss_fn, has_aux=True)
+        (loss, final_lat), grads = grad_fn(state.params)
+        rollout_latent_mse = jnp.mean(
+            (final_lat.astype(jnp.float32) - future_latents.astype(jnp.float32)) ** 2
+        )
     elif distill:
         # ── Per-timestep grad accumulation over every rollout timestep ────────
         # all_gen_latents[k]: on-policy latent at timestep rollout_ts[k].
@@ -510,6 +531,8 @@ def ti2v_train_step(
         },
         "scalars": {},
     }
+    if distill:
+        metrics["scalar"]["learning/rollout_latent_mse"] = rollout_latent_mse
 
     new_state = state.apply_gradients(grads=grads)
     return new_state, scheduler_state, metrics, new_rng
@@ -518,7 +541,83 @@ def ti2v_train_step(
 # ── Eval step ─────────────────────────────────────────────────────────────────
 
 
-def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist):
+def _ti2v_eval_step_onpolicy(state, data, rng, scheduler, config, n_hist):
+    """On-policy rollout eval: same objective as ti2v_train_step's distill path.
+
+    Rolls out the model's own Euler trajectory from pure noise and scores the
+    Q-weighted GT-velocity error (x_k - x0)/sigma_k at every rollout timestep,
+    deterministically and without gradients. Not comparable in scale to the
+    off-policy flow-matching eval loss.
+    """
+    latents = data["latents"][: config.global_batch_size_to_train_on].astype(config.weights_dtype)
+    encoder_hidden_states = data["encoder_hidden_states"][: config.global_batch_size_to_train_on].astype(
+        config.weights_dtype
+    )
+    b, _, F_lat, H_lat, W_lat = latents.shape
+    future_latents = latents[:, :, n_hist:]
+
+    num_train_t = scheduler.config.num_train_timesteps
+    _cfg_gen_steps = config.num_online_gen_steps
+    num_gen_steps = config.num_inference_steps if _cfg_gen_steps < 0 else _cfg_gen_steps
+
+    t_uniform = jnp.linspace(1.0, 0.0, num_gen_steps + 1)
+    rollout_ts = (t_uniform * (num_train_t - 1)).astype(jnp.int32)
+
+    def _sigma(t_int):
+        t_n = t_int.astype(jnp.float32) / (num_train_t - 1)
+        return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
+
+    rng, noise_rng = jax.random.split(rng)
+    gen_init = jax.random.normal(noise_rng, future_latents.shape, dtype=future_latents.dtype)
+
+    q_weights = jnp.arange(num_gen_steps, 0, -1, dtype=jnp.float32)
+    q_weights = q_weights / q_weights.sum()
+
+    model = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+
+    def rollout_body(lat, inputs):
+        t_from, t_to, w_k = inputs
+        sig_from = _sigma(t_from)
+        sig_to = _sigma(t_to)
+        roll_input = jnp.concatenate([latents[:, :, :n_hist], lat], axis=2)
+        ts_2d = _build_per_token_timestep(
+            jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
+        )
+        ts_2d = jax.lax.with_sharding_constraint(ts_2d, P(("data", "fsdp", "context"), None))
+        v_pred = model(
+            hidden_states=roll_input,
+            timestep=ts_2d,
+            encoder_hidden_states=encoder_hidden_states,
+            deterministic=True,
+        )
+        v_future = v_pred[:, :, n_hist:]
+
+        target_k = (lat - future_latents) / sig_from.astype(lat.dtype)
+        loss_k = jnp.mean((target_k - v_future).astype(jnp.float32) ** 2, axis=(1, 2, 3, 4))
+
+        new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
+        return new_lat, w_k * loss_k
+
+    ts_inputs = (rollout_ts[:num_gen_steps], rollout_ts[1 : num_gen_steps + 1], q_weights)
+    final_lat, step_losses = jax.lax.scan(rollout_body, gen_init, ts_inputs)
+    losses = jnp.sum(step_losses, axis=0)  # (b,) Q-weighted per-sample rollout loss
+
+    # End-to-end rollout error: fully denoised latents vs GT future latents.
+    latent_mse = jnp.mean(
+        (final_lat.astype(jnp.float32) - future_latents.astype(jnp.float32)) ** 2,
+        axis=(1, 2, 3, 4),
+    )  # (b,)
+
+    metrics = {"scalar": {
+        "learning/eval_loss": losses,
+        "learning/eval_rollout_latent_mse": latent_mse,
+    }}
+    return metrics, rng
+
+
+def ti2v_eval_step(state, data, rng, scheduler_state, scheduler, config, n_hist, distill=False):
+    if distill:
+        return _ti2v_eval_step_onpolicy(state, data, rng, scheduler, config, n_hist)
 
     def loss_fn(params, latents, encoder_hidden_states, timesteps, rng):
         model = nnx.merge(state.graphdef, params, state.rest_of_state)
