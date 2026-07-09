@@ -112,7 +112,7 @@ python src/maxdiffusion/train_wan.py \
     action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=tokamax_flash \
-    weights_dtype=bfloat16 \
+    weights_dtype=float32 \
     activations_dtype=bfloat16 \
     remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
     ici_data_parallelism=1 \
@@ -168,5 +168,5 @@ python src/maxdiffusion/train_wan.py \
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name train_ac_wan -n 64 --setup-cmd "" --priority 0 -- bash bash_scripts/train_ac_wan.sh
+# tpu create v6 --name train_ac_wan -n 64 --setup-cmd "" --priority 0 --max-attempts 100 -- bash bash_scripts/train_ac_wan.sh
 # tpu tmux v6-64-01-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ac_wan.sh' Enter

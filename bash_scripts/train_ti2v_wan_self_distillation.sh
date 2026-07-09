@@ -189,5 +189,5 @@ fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 #     per_device_batch_size=1.0 \
 
 
-# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" --priority 0 -- bash bash_scripts/train_ti2v_wan_self_distillation.sh
+# tpu create v6 --name train_ti2v_on_policy -n 64 --setup-cmd "" --priority 0 --max-attempts 100 -- bash bash_scripts/train_ti2v_wan_self_distillation.sh
 # tpu tmux v6-64-03-catherine -- 'cd maxdiffusion && git checkout origin/catherine-dev && git pull origin catherine-dev && bash bash_scripts/train_ti2v_wan_self_distillation.sh' Enter
