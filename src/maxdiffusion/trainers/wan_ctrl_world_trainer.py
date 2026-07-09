@@ -281,8 +281,6 @@ class WanCtrlWorldTrainer:
             batch_size=per_host_batch,
             split=split,
             seed=seed if seed is not None else config.seed,
-            max_skip_his=config.max_skip_his,
-            skip_his_zero_prob=config.skip_his_zero_prob,
             shuffle=is_training,
             shard_for_training=jax.process_count() > 1,
         )

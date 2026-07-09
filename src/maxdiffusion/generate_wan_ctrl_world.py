@@ -416,8 +416,6 @@ def run(argv: Sequence[str]) -> None:
         batch_size=1,
         split="val",
         seed=config.seed,
-        max_skip_his=getattr(config, "max_skip_his", 1),
-        skip_his_zero_prob=0.0,
         shuffle=False,
         shard_for_training=False,
         first_window_only=autoregressive,

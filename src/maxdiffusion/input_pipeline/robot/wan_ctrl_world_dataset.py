@@ -81,9 +81,10 @@ class WanCtrlWorldDroidDataset:
     """Pre-encoded TFRecord dataset for action-conditioned WAN training.
 
     Each trajectory yields one window per pass: frame_now is sampled uniformly
-    from valid positions. History frames are sampled with a random stride
-    ``skip_his`` going backwards from ``frame_now``; future frames are contiguous
-    from ``frame_now``. This matches the Ctrl-World data-augmentation scheme.
+    from valid positions. History is the ``n_hist`` frames immediately before
+    ``frame_now`` (indices clipped to episode start, so frame 0 and its actions
+    repeat when there isn't enough past); future frames are contiguous from
+    ``frame_now``.
 
     Args:
         data_dir:           Directory of ``shard-*.tfrecord`` files.
@@ -95,12 +96,6 @@ class WanCtrlWorldDroidDataset:
         batch_size:         Per-host batch size.
         split:              ``"train"`` or ``"val"``.
         seed:               Shuffle seed.
-        max_skip_his:       Maximum stride for history frame sampling. At train
-                            time ``skip_his`` is drawn uniformly from
-                            ``[1, max_skip_his]`` (or forced to 0 with probability
-                            ``skip_his_zero_prob``). At val time ``skip_his=1``.
-        skip_his_zero_prob: Probability of collapsing all history to repeats of
-                            ``frame_now`` (``skip_his=0``). Train only.
         shuffle:            Whether to shuffle.
         shuffle_buffer:     Trajectory-level shuffle buffer size.
         shard_for_training: Shard files across JAX processes.
@@ -117,8 +112,6 @@ class WanCtrlWorldDroidDataset:
         batch_size: int,
         split: str = "train",
         seed: int = 0,
-        max_skip_his: int = 1,
-        skip_his_zero_prob: float = 0.0,
         shuffle: bool = True,
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
@@ -135,9 +128,6 @@ class WanCtrlWorldDroidDataset:
         self.n_fut = max_latent_frames - n_hist
         self.max_latent_frames = max_latent_frames
         self.action_dim = action_dim
-        self.max_skip_his = max_skip_his
-        self.skip_his_zero_prob = skip_his_zero_prob
-        self._seed = seed
 
         p01, p99 = _load_action_stats(stats_path)
         if p01.shape != (action_dim,) or p99.shape != (action_dim,):
@@ -230,8 +220,8 @@ class WanCtrlWorldDroidDataset:
 
         frame_now = 1 so that all history frames clip to episode frame 0 —
         simulating a real rollout start where only one initial observation is
-        available. For n_hist=2, skip_his=1: hist_offsets=[2,1], so
-        hist_frames = clip([1-2, 1-1], 0, T-1) = [0, 0] (frame 0 repeated).
+        available. For n_hist=2: hist ids = clip([-1, 0], 0, T-1) = [0, 0]
+        (frame 0 repeated).
         Future frames are [1, ..., n_fut], giving a 0-based action tensor whose
         row groups align with the AR slice offsets in run_ar_denoising.
         """
@@ -250,37 +240,12 @@ class WanCtrlWorldDroidDataset:
         W = n_hist + n_fut
         T = tf.cast(traj["traj_len"], tf.int32)
 
-        # Stateless RNG keyed on (episode_id, frame_now) for reproducibility.
-        episode = tf.cast(traj["episode_id"], tf.int64)
-        seed_a = tf.stack([
-            tf.cast(self._seed, tf.int32) + tf.cast(episode % 2147483647, tf.int32),
-            tf.cast(frame_now, tf.int32),
-        ])
-        seed_b = tf.stack([
-            tf.cast(self._seed, tf.int32) + tf.cast(episode % 2147483647, tf.int32),
-            tf.cast(frame_now, tf.int32) + 7919,
-        ])
-
-        if self._is_train:
-            zero_skip = tf.random.stateless_uniform([], seed=seed_b) < self.skip_his_zero_prob
-            skip_his = tf.where(
-                zero_skip,
-                tf.constant(0, tf.int32),
-                tf.random.stateless_uniform(
-                    [], seed=seed_a, minval=1, maxval=self.max_skip_his + 1, dtype=tf.int32
-                ),
-            )
-        else:
-            skip_his = tf.constant(1, dtype=tf.int32)
-
-        # History: n_hist frames going back at stride skip_his from frame_now.
-        hist_offsets = tf.range(n_hist, 0, -1) * skip_his          # (n_hist,)
+        # History: the n_hist frames immediately before frame_now; clipping to 0
+        # repeats frame 0 (and its actions) when there isn't enough past.
         # Future: n_fut contiguous frames starting at frame_now.
-        fut_offsets = tf.range(n_fut)                                # (n_fut,)
-
         rgb_id = tf.concat([
-            tf.cast(frame_now, tf.int32) - hist_offsets,
-            tf.cast(frame_now, tf.int32) + fut_offsets,
+            tf.cast(frame_now, tf.int32) - tf.range(n_hist, 0, -1),
+            tf.cast(frame_now, tf.int32) + tf.range(n_fut),
         ], axis=0)                                                   # (W,)
         rgb_id = tf.clip_by_value(rgb_id, 0, T - 1)
 
