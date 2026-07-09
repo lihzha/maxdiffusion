@@ -9,7 +9,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=150G
-#SBATCH --time=36:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=slurm_outputs/%x/out_%x_%A_%a.out
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=zz8976@princeton.edu
@@ -43,9 +43,9 @@ python src/maxdiffusion/data_preprocessing/wan2.2_txt2vid_data_preprocessing.py 
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
     pretrained_model_name_or_path=model/Wan2.2-TI2V-5B-Diffusers \
     raw_data_root=/n/fs/iromdata/droid_raw/1.0.1 \
-    data_root=/n/fs/iromdata/droid_wan2.2_lowres \
-    video_index_path=/n/fs/iromdata/droid_wan2.2_lowres/video_index.json \
-    action_stats_path=/n/fs/iromdata/droid_wan2.2_lowres/stats.json \
+    data_root=/n/fs/iromdata/droid_wan_2.2_lowres_downsampled \
+    video_index_path=/n/fs/iromdata/droid_wan_2.2_lowres_downsampled/video_index.json \
+    action_stats_path=/n/fs/iromdata/droid_wan_2.2_lowres_downsampled/stats.json \
     no_records_per_shard=${NO_RECORDS_PER_SHARD} \
     max_frames=300 \
     max_episodes=${MAX_EP} \

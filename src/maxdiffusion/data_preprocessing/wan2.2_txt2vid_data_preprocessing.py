@@ -22,6 +22,17 @@ Each TFRecord example stores one full episode as a latent sequence:
 Latents are time-first (F_lat on axis 0) for easy windowing at read time.
 Actions are stored raw; normalisation is applied at read time by the dataset.
 
+Temporal downsampling: rgb_skip keeps every Nth frame AND every Nth action
+(e.g. rgb_skip=3 turns 15Hz DROID into 5Hz), so frames and actions stay
+aligned. max_frames counts kept (post-skip) frames. Action stats are computed
+from full-rate states, which is fine — subsampling doesn't change percentiles.
+
+Length bucketing (encode-time only): frames are padded to the next bucket
+length by repeating the last frame, and latents sliced back to the true F_lat
+before writing — the causal VAE makes them independent of the padding, so
+nothing padded is stored. This keeps the set of tensor shapes reaching JAX
+small; per-episode shapes fragment host memory until the job is OOM-killed.
+
 Episode ordering
 ----------------
 The script first builds (or loads) a stable id→video-path index from raw_data_root.
@@ -47,7 +58,9 @@ Usage:
 
 from __future__ import annotations
 
+import ctypes
 import functools
+import gc
 import json
 import os
 import queue
@@ -78,6 +91,24 @@ from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 NUM_CAMERAS = 3
 T5_SEQ_LEN = 512
 ACTION_DIM = 7  # cartesian (6) + gripper (1)
+BUCKET_STEP = 60   # kept-frame bucket granularity; must be a multiple of 4
+T5_CACHE_MAX = 1000  # ~4 MB per cached embed → ≤ ~4 GB
+
+
+def _bucket_len(t: int) -> int:
+    """Round t up to the next bucket length: a multiple of BUCKET_STEP, plus 1
+    (4k+1, so the VAE's 1-then-4 temporal chunking consumes every frame)."""
+    return ((max(t - 1, 0) + BUCKET_STEP - 1) // BUCKET_STEP) * BUCKET_STEP + 1
+
+
+def _reclaim_host_memory() -> None:
+    """Return accumulated host memory to the OS. Long runs otherwise creep to
+    the cgroup --mem limit and get OOM-killed: XLA caches per-shape executables
+    and buffers, and glibc retains freed arena memory rather than releasing it.
+    Costs a few seconds of VAE recompilation per call."""
+    gc.collect()
+    jax.clear_caches()
+    ctypes.CDLL("libc.so.6").malloc_trim(0)
 
 
 # ── TFRecord helpers ──────────────────────────────────────────────────────────
@@ -269,19 +300,31 @@ def load_video_index(index_path: str) -> list[dict]:
 # ── Video loading ─────────────────────────────────────────────────────────────
 
 
-def load_video_frames(video_path: str, *, height: int, width: int, max_frames: int = 0) -> np.ndarray | None:
-    """Load frames, resize to (height, width). Returns (T, H, W, 3) uint8.
+def load_video_frames(
+    video_path: str, *, height: int, width: int, max_frames: int = 0, rgb_skip: int = 1
+) -> np.ndarray | None:
+    """Load every rgb_skip-th frame, resize to (height, width). Returns (T, H, W, 3) uint8.
 
-    Stops early after max_frames if set, avoiding decoding unused tail frames.
+    max_frames counts kept (post-skip) frames. Stops early once reached,
+    avoiding decoding unused tail frames. Skipped frames use grab() only,
+    so they are never converted or resized.
     """
+    rgb_skip = max(rgb_skip, 1)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return None
     frames = []
+    raw_idx = 0
     while True:
+        if raw_idx % rgb_skip != 0:
+            if not cap.grab():
+                break
+            raw_idx += 1
+            continue
         ok, frame = cap.read()
         if not ok:
             break
+        raw_idx += 1
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
         frames.append(frame)
@@ -314,16 +357,26 @@ def vae_encode(video: jax.Array, rng: jax.Array, vae, vae_cache) -> jax.Array:
 
 
 def encode_episode(
-    frames_per_cam: list[np.ndarray],  # 3 × (T_ep, H, W, 3) uint8
+    frames_per_cam: list[np.ndarray],  # 3 × (T_pad, H, W, 3) uint8, bucket-padded
     p_vae_encode,
+    ep_id: int,
+    f_true: int,
 ) -> list[np.ndarray]:
-    """Encode each camera separately to keep peak GPU memory at 1× episode size."""
+    """Encode each camera separately to keep peak GPU memory at 1× episode size.
+
+    Frames arrive padded to a bucket length; the returned latents are sliced
+    back to f_true (the causal VAE makes the first f_true latent frames
+    independent of the padding), so nothing padded is written out.
+    """
     results = []
-    for cam_frames in frames_per_cam:
-        x = jnp.array(cam_frames.astype(np.float32) / 127.5 - 1.0)[None]  # (1, T_ep, H, W, 3)
-        latent = p_vae_encode(video=x, rng=jax.random.key(0))              # (1, C, F_lat, H_lat, W_lat)
-        latent = jnp.transpose(latent, (0, 2, 1, 3, 4))                    # (1, F_lat, C, H_lat, W_lat)
-        results.append(np.array(latent[0], dtype=np.float16))
+    for cam, cam_frames in enumerate(frames_per_cam):
+        # Independent latent-noise draw per (episode, camera); episode id (not
+        # loop position) keeps it stable across reruns and job chunking.
+        rng = jax.random.fold_in(jax.random.key(0), ep_id * NUM_CAMERAS + cam)
+        x = jnp.array(cam_frames.astype(np.float32) / 127.5 - 1.0)[None]  # (1, T_pad, H, W, 3)
+        latent = p_vae_encode(video=x, rng=rng)                            # (1, C, F_pad, H_lat, W_lat)
+        latent = jnp.transpose(latent, (0, 2, 1, 3, 4))                    # (1, F_pad, C, H_lat, W_lat)
+        results.append(np.array(latent[0], dtype=np.float16)[:f_true].copy())
         del x, latent  # release GPU buffers before next camera
     return results
 
@@ -348,9 +401,16 @@ def _load_one_episode(index_entry, annotations, config, pipeline, t5_lock, t5_ca
     if states is None:
         return None
 
+    # Subsample actions with the same stride as the video so kept frame k
+    # (raw frame k*rgb_skip) stays paired with state k*rgb_skip.
+    rgb_skip = max(config.rgb_skip, 1)
+    states = states[::rgb_skip]
+
     text = annotations.get(index_entry["uuid"], "")
 
-    load_fn = functools.partial(load_video_frames, height=config.height, width=config.width, max_frames=config.max_frames)
+    load_fn = functools.partial(
+        load_video_frames, height=config.height, width=config.width, max_frames=config.max_frames, rgb_skip=rgb_skip
+    )
     with ThreadPoolExecutor(max_workers=NUM_CAMERAS) as ex:
         all_cam_frames = list(ex.map(load_fn, video_paths))
 
@@ -364,13 +424,23 @@ def _load_one_episode(index_entry, annotations, config, pipeline, t5_lock, t5_ca
     if T_ep < 1:
         return None
 
+    # Pad frames to the bucket length by repeating the last frame, so the VAE
+    # only ever sees a few distinct shapes. Latents are sliced back to the true
+    # F_lat after encoding; actions are stored at true length (never encoded).
+    pad = _bucket_len(T_ep) - T_ep
+    frames_per_cam = [
+        np.pad(f[:T_ep], ((0, pad), (0, 0), (0, 0), (0, 0)), mode="edge") for f in all_cam_frames
+    ]
+
     with t5_lock:
         if text not in t5_cache:
+            if len(t5_cache) >= T5_CACHE_MAX:
+                t5_cache.clear()  # unbounded growth OOMs multi-hour jobs
             text_embed_pt = pipeline._get_t5_prompt_embeds(text, max_sequence_length=T5_SEQ_LEN)
             t5_cache[text] = text_embed_pt[0].detach().float().numpy().astype(np.float16)
     text_embed = t5_cache[text]  # (512, 4096)
 
-    return (ep_id, text_embed, states[:T_ep], [f[:T_ep] for f in all_cam_frames])
+    return (ep_id, text_embed, states[:T_ep], frames_per_cam, T_ep)
 
 
 def _loader_worker(work_queue, out_queue, annotations, config, pipeline, t5_lock, t5_cache):
@@ -446,10 +516,11 @@ def _write_split(
             ep_idx += 1
             continue
 
-        ep_id, text_embed, raw_action, frames_per_cam = item
+        ep_id, text_embed, raw_action, frames_per_cam, T_true = item
 
         t0 = time.perf_counter()
-        latents_per_cam = encode_episode(frames_per_cam, p_vae_encode)
+        f_true = 1 + (T_true - 1) // 4  # latent frames covered by real (unpadded) input
+        latents_per_cam = encode_episode(frames_per_cam, p_vae_encode, ep_id, f_true)
         jax.effects_barrier()
         t_encode_sum += time.perf_counter() - t0
         t_window     += 1
@@ -470,11 +541,15 @@ def _write_split(
             shard_count = 0
 
         if ep_idx % 100 == 0:
+            _reclaim_host_memory()
             avg_s = t_encode_sum / t_window if t_window else 0.0
+            with open("/proc/self/statm") as fh:
+                rss_gb = int(fh.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1e9
             print(
                 f"  [{ep_idx}/{len(index_slice)}] {total_episodes} written, "
                 f"{skipped_episodes} skipped | "
-                f"vae encode {avg_s:.2f}s/traj (last {t_window})",
+                f"vae encode {avg_s:.2f}s/traj (last {t_window}) | "
+                f"rss {rss_gb:.1f} GB",
                 flush=True,
             )
             t_encode_sum = 0.0

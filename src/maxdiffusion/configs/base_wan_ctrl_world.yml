@@ -306,6 +306,7 @@ start_episode: 0
 action_stats_only: False
 setup_only: False
 max_frames: -1
+rgb_skip: 3  # temporal downsampling: keep every Nth frame/action (15Hz DROID -> 5Hz); 1 = no skip
 enable_eval_timesteps: False
 timesteps_list: []
 num_eval_samples: 0
