@@ -139,11 +139,19 @@ class WanTimeTextImageEmbedding(nnx.Module):
         dtype=jnp.float32,
         param_dtype=weights_dtype,
         precision=precision,
+        # Sharding this kernel ("embed" -> fsdp) requires the explicit batch
+        # sharding constraint on timestep_proj in the per-token path (see
+        # WanModel.__call__): without it GSPMD resolves the batch/contracting
+        # fsdp conflict by dropping fsdp from the batch sharding, blowing up
+        # the per-device [B, seq, 6*dim] f32 activation.
         kernel_init=nnx.with_partitioning(
             nnx.initializers.xavier_uniform(),
-            (None, None),
+            (
+                "embed",
+                "mlp",
+            ),
         ),
-        bias_init=nnx.with_partitioning(nnx.initializers.zeros, (None,)),
+        bias_init=nnx.with_partitioning(nnx.initializers.zeros, ("mlp",)),
     )
     self.text_embedder = NNXPixArtAlphaTextProjection(
         rngs=rngs,
@@ -680,15 +688,21 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         _mesh = getattr(self.config, "mesh", None)
         _ctx = _mesh.shape.get("context", 1) if _mesh is not None else 1
         if _ctx > 1:
-          temb = jax.lax.with_sharding_constraint(temb, P(("data", "fsdp", "context"), None, None))
+          batch_axes = ("data", "fsdp", "context")
         else:
-          # temb.ndim is static at trace time; rank varies with parallelism config.
           batch_axes = ("data", "fsdp")
-          temb = jax.lax.with_sharding_constraint(
-              temb, P(batch_axes, *([None] * (temb.ndim - 1)))
-          )
+        # temb.ndim is static at trace time; rank varies with parallelism config.
+        temb = jax.lax.with_sharding_constraint(
+            temb, P(batch_axes, *([None] * (temb.ndim - 1)))
+        )
         with jax.named_scope("time_proj"):
           timestep_proj = self.condition_embedder.time_proj(self.condition_embedder.act_fn(temb))  # [B, sl, dim*6]
+        # time_proj's kernel is fsdp-sharded on its contracting ("embed") dim,
+        # which conflicts with the fsdp-sharded batch here.  Pin the output's
+        # batch sharding so GSPMD must all-gather the weight (standard FSDP)
+        # instead of dropping fsdp from the batch, which would materialize the
+        # full [B, sl, 6*dim] f32 activation on every device.
+        timestep_proj = jax.lax.with_sharding_constraint(timestep_proj, P(batch_axes, None, None))
         timestep_proj = timestep_proj.reshape(bt, sl, 6, -1)  # [B, sl, 6, dim]
         # Text processing
         encoder_hidden_states = self.condition_embedder.text_embedder(encoder_hidden_states)
