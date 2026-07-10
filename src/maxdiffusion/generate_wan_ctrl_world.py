@@ -406,7 +406,11 @@ def run(argv: Sequence[str]) -> None:
     )
 
     # ── Scheduler ─────────────────────────────────────────────────────────────
-    scheduler = FlaxFlowMatchScheduler(dtype=jnp.float32)
+    # Inference-only scheduler: shift shapes the sigma schedule in set_timesteps;
+    # 5.0 matches the official Wan2.2 TI2V-5B sample_shift.
+    scheduler = FlaxFlowMatchScheduler(
+        shift=float(getattr(config, "inference_sigma_shift", 5.0)), dtype=jnp.float32
+    )
 
     # ── Eval dataset ──────────────────────────────────────────────────────────
     from maxdiffusion.input_pipeline.robot.wan_ctrl_world_dataset import (

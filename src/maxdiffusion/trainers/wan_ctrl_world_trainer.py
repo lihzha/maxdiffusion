@@ -816,12 +816,13 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
     action_tokens = model.action_encoder(actions_grouped, None)
 
     num_train_t = scheduler.config.num_train_timesteps
+    # Shift-warped sigma schedule — the same warp FlaxFlowMatchScheduler.set_timesteps
+    # applies at inference; official Wan2.2 TI2V-5B ships sample_shift=5.0.
+    shift = float(getattr(config, "inference_sigma_shift", 5.0))
     t_uniform = jnp.linspace(1.0, 0.0, num_steps + 1)
-    rollout_ts = (t_uniform * (num_train_t - 1)).astype(jnp.int32)
-
-    def _sigma(t_int):
-        t_n = t_int.astype(jnp.float32) / (num_train_t - 1)
-        return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
+    sigmas = scheduler.config.sigma_min + (scheduler.config.sigma_max - scheduler.config.sigma_min) * t_uniform
+    sigmas = shift * sigmas / (1.0 + (shift - 1.0) * sigmas)
+    rollout_ts = (sigmas * num_train_t).astype(jnp.int32)
 
     history = latents[:, :, :n_hist]
     future_gt = latents[:, :, n_hist:]
@@ -829,8 +830,8 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
 
     def scan_body(lat, step_idx):
         t_from = rollout_ts[step_idx]
-        t_to = rollout_ts[step_idx + 1]
-        sig_from, sig_to = _sigma(t_from), _sigma(t_to)
+        sig_from = sigmas[step_idx]
+        sig_to = sigmas[step_idx + 1]
 
         roll_input = jnp.concatenate([history, lat], axis=2)
         ts_2d = _build_per_token_timestep(

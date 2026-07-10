@@ -332,7 +332,7 @@ height: 704
 width: 1280
 num_frames: 80
 guidance_scale: 5.0
-flow_shift: 3.0
+flow_shift: 5.0
 
 # Input image URL for TI2V conditioning (first frame anchor)
 image_url: "model/Wan2.2-TI2V-5B-Diffusers/examples/i2v_input.JPG"
