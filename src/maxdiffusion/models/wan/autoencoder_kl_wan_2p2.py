@@ -657,13 +657,13 @@ class WanDupUp3D(nnx.Module):
     # x: (N, D, H, W, C)
     n, d, h, w, c_total = x.shape
     c = c_total // self.factor
-    jax.debug.print(
-        "DEBUG DupUp: c_total={ct}, factor={f}, c={c}, d={d}",
-        ct=c_total,
-        f=self.factor,
-        c=c,
-        d=d,
-    )
+    # The rank-8 interleave reshape below trips an XLA TPU compiler bug when
+    # lowered with a bf16 tile layout (RET_CHECK in reshape_emitter.cc:
+    # num_chunks_per_pipeline > 1). Run it in f32 behind optimization
+    # barriers so XLA can neither fold the converts away nor re-fuse the
+    # reshape into a bf16 op. Pure data movement — exact in any dtype.
+    orig_dtype = x.dtype
+    x = jax.lax.optimization_barrier(x.astype(jnp.float32))
     # Interleave logic: (N, D, H, W, C_out, f_t, f_s, f_s)
     x = x.reshape(n, d, h, w, c, self.factor_t, self.factor_s, self.factor_s)
     # Permute to (N, D, f_t, H, f_s, W, f_s, C_out)
@@ -676,6 +676,7 @@ class WanDupUp3D(nnx.Module):
         w * self.factor_s,
         c,
     )
+    x = jax.lax.optimization_barrier(x).astype(orig_dtype)
     if first_chunk:
       x = x[:, self.factor_t - 1 :, :, :, :]
     return x, feat_cache, feat_idx
