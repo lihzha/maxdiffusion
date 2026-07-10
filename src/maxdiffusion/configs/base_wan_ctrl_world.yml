@@ -195,6 +195,18 @@ action_stats_path: 'droid_wan_tfrecords_test/stats.json'
 # CFG dropout probability on action tokens (zeroed for 5% of samples).
 ctrl_cfg_drop_prob: 0.05
 
+# ── History noise augmentation ─────────────────────────────────────────────────
+# Corrupt history latent frames with flow-matching noise at a small per-sample
+# timestep t_hist ~ Uniform(0, history_noise_max_timestep), and condition their
+# tokens at t_hist instead of 0. Teaches the model to tolerate imperfect
+# history, so AR inference can renoise generated history to the same level
+# instead of presenting it as (falsely) clean. 0 = disabled (history always
+# clean at t=0). Typical value: 100-200 (out of 1000 train timesteps).
+history_noise_max_timestep: 0
+# Fraction of samples whose history stays exactly clean (t_hist = 0), keeping
+# the cold-start / ground-truth-history case in-distribution.
+history_noise_clean_prob: 0.2
+
 # ── Video resolution ───────────────────────────────────────────────────────────
 height: 704 #576
 width:  1280 #1024

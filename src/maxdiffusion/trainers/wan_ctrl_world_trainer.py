@@ -14,10 +14,14 @@ Training objective (per-token timestep)
 ----------------------------------------
 Uses the same per-token timestep scheme introduced by WAN Ti2V:
 
-* History latent frames are kept **clean** (no noise added).
+* History latent frames are kept **clean** (no noise added) — unless history
+  noise augmentation is enabled (``history_noise_max_timestep > 0``), in which
+  case they are corrupted at a small per-sample ``t_hist`` so the model
+  tolerates imperfect (AR-generated) history at inference.
 * Future latent frames receive flow-matching noise at a sampled global ``t``.
 * A ``(B, seq_len)`` timestep array is passed to the transformer: history
-  frame tokens get ``t=0``, future frame tokens get the sampled ``t``.
+  frame tokens get ``t=0`` (or ``t_hist``), future frame tokens get the
+  sampled ``t``.
 * The WAN model's AdaLN modulation therefore tells each block whether it is
   looking at a clean reference frame (history) or a frame being denoised
   (future), exactly as in Ti2V inference.
@@ -120,10 +124,12 @@ def _build_per_token_timestep(
     H_lat: int,
     W_lat: int,
     n_hist_lat: int,
+    hist_timesteps: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """Build ``(B, seq_len)`` timestep array for per-token Ti2V training.
 
-    History frame tokens receive ``t=0`` (treated as clean by AdaLN);
+    History frame tokens receive ``t=0`` (treated as clean by AdaLN), or the
+    per-sample ``hist_timesteps`` when history noise augmentation is active;
     future frame tokens receive the sampled global timestep ``t``.
 
     WAN patches spatially at 2×2, so tokens_per_frame = (H_lat//2)*(W_lat//2).
@@ -132,7 +138,44 @@ def _build_per_token_timestep(
     seq_len = F_lat * tokens_per_frame
     n_hist_tokens = n_hist_lat * tokens_per_frame
     is_future = jnp.arange(seq_len)[None, :] >= n_hist_tokens   # (1, seq_len)
-    return jnp.where(is_future, timesteps[:, None], 0)
+    hist_t = 0 if hist_timesteps is None else hist_timesteps[:, None]
+    return jnp.where(is_future, timesteps[:, None], hist_t)
+
+
+def _apply_history_noise(
+    rng: jax.Array,
+    hist_latents: jnp.ndarray,
+    scheduler,
+    config,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """History noise augmentation (GameNGen / diffusion-forcing style).
+
+    Corrupts history latent frames with flow-matching noise at a small
+    per-sample timestep t_hist ~ Uniform(0, history_noise_max_timestep), with
+    a history_noise_clean_prob chance of staying exactly clean (t_hist=0).
+    The model is told the level via the per-token timestep, so at AR inference
+    generated history can be renoised to the same level instead of being
+    presented as (falsely) clean.
+
+    Returns (noised_hist, hist_timesteps) with hist_timesteps shaped (B,).
+    """
+    b = hist_latents.shape[0]
+    t_rng, clean_rng, noise_rng = jax.random.split(rng, 3)
+
+    max_t = float(config.history_noise_max_timestep)
+    t_hist = jax.random.uniform(t_rng, (b,), minval=0.0, maxval=max_t)
+    clean = jax.random.bernoulli(
+        clean_rng, float(getattr(config, "history_noise_clean_prob", 0.2)), (b,)
+    )
+    t_hist = jnp.where(clean, 0.0, t_hist)
+
+    noise = jax.random.normal(noise_rng, hist_latents.shape, dtype=hist_latents.dtype)
+    noised, _, _ = scheduler.apply_flow_match(noise, hist_latents, t_hist)
+    # apply_flow_match adds sigma_min noise even at t=0; keep t_hist=0 samples
+    # exactly clean so the cold-start (GT history) case stays in-distribution.
+    keep_clean = (t_hist == 0.0).reshape(-1, 1, 1, 1, 1)
+    noised = jnp.where(keep_clean, hist_latents, noised).astype(hist_latents.dtype)
+    return noised, t_hist
 
 
 # ── Training step ─────────────────────────────────────────────────────────────
@@ -166,13 +209,23 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         timesteps = scheduler.sample_timesteps(t_rng, b)
 
         future_latents = latents[:, :, n_hist:]
+        n_rng, hist_rng = jax.random.split(n_rng)
         noise = jax.random.normal(n_rng, future_latents.shape, dtype=future_latents.dtype)
         noisy_future, target_future, training_weight = scheduler.apply_flow_match(
             noise, future_latents, timesteps
         )
-        noisy_latents = jnp.concatenate([latents[:, :, :n_hist], noisy_future], axis=2)
 
-        timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
+        hist_latents = latents[:, :, :n_hist]
+        hist_timesteps = None
+        if getattr(config, "history_noise_max_timestep", 0) > 0:
+            hist_latents, hist_timesteps = _apply_history_noise(
+                hist_rng, hist_latents, scheduler, config
+            )
+        noisy_latents = jnp.concatenate([hist_latents, noisy_future], axis=2)
+
+        timestep_2d = _build_per_token_timestep(
+            timesteps, F_lat, H_lat, W_lat, n_hist, hist_timesteps=hist_timesteps
+        )
         timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
         action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat*K, 4096)
@@ -284,6 +337,9 @@ class WanCtrlWorldTrainer:
             seed=seed if seed is not None else config.seed,
             shuffle=is_training,
             shard_for_training=jax.process_count() > 1,
+            # Eval windows are anchored at the episode start (history = frame 0
+            # repeated), matching a deployment-style cold-start rollout.
+            first_window_only=not is_training,
         )
         return MultiHostDataLoadIterator(ds.dataset, mesh)
 
