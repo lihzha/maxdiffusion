@@ -16,8 +16,10 @@ Uses the same per-token timestep scheme introduced by WAN Ti2V:
 
 * History latent frames are kept **clean** (no noise added) — unless history
   noise augmentation is enabled (``history_noise_max_timestep > 0``), in which
-  case they are corrupted at a small per-sample ``t_hist`` so the model
-  tolerates imperfect (AR-generated) history at inference.
+  case each history frame is corrupted at its own small ``t_hist`` so the
+  model tolerates imperfect (AR-generated) history at inference. By default
+  the corruption is *blind* (history tokens stay declared t=0); set
+  ``history_noise_conditioned: True`` to expose ``t_hist`` to AdaLN instead.
 * Future latent frames receive flow-matching noise at a sampled global ``t``.
 * A ``(B, seq_len)`` timestep array is passed to the transformer: history
   frame tokens get ``t=0`` (or ``t_hist``), future frame tokens get the
@@ -128,18 +130,23 @@ def _build_per_token_timestep(
 ) -> jnp.ndarray:
     """Build ``(B, seq_len)`` timestep array for per-token Ti2V training.
 
-    History frame tokens receive ``t=0`` (treated as clean by AdaLN), or the
-    per-sample ``hist_timesteps`` when history noise augmentation is active;
-    future frame tokens receive the sampled global timestep ``t``.
+    History frame tokens receive ``t=0`` (treated as clean by AdaLN), or
+    ``hist_timesteps`` — ``(B,)`` shared or ``(B, n_hist_lat)`` per-frame —
+    when conditioned history noise augmentation is active; future frame
+    tokens receive the sampled global timestep ``t``.
 
     WAN patches spatially at 2×2, so tokens_per_frame = (H_lat//2)*(W_lat//2).
     """
     tokens_per_frame = (H_lat // 2) * (W_lat // 2)
-    seq_len = F_lat * tokens_per_frame
-    n_hist_tokens = n_hist_lat * tokens_per_frame
-    is_future = jnp.arange(seq_len)[None, :] >= n_hist_tokens   # (1, seq_len)
-    hist_t = 0 if hist_timesteps is None else hist_timesteps[:, None]
-    return jnp.where(is_future, timesteps[:, None], hist_t)
+    b = timesteps.shape[0]
+    n_fut = F_lat - n_hist_lat
+    if hist_timesteps is None:
+        hist_t = jnp.zeros((b, n_hist_lat), dtype=timesteps.dtype)
+    else:
+        hist_t = jnp.broadcast_to(hist_timesteps, (b, n_hist_lat)).astype(timesteps.dtype)
+    fut_t = jnp.broadcast_to(timesteps[:, None], (b, n_fut))
+    per_frame = jnp.concatenate([hist_t, fut_t], axis=1)          # (B, F_lat)
+    return jnp.repeat(per_frame, tokens_per_frame, axis=1)        # (B, seq_len)
 
 
 def _apply_history_noise(
@@ -150,31 +157,36 @@ def _apply_history_noise(
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """History noise augmentation (GameNGen / diffusion-forcing style).
 
-    Corrupts history latent frames with flow-matching noise at a small
-    per-sample timestep t_hist ~ Uniform(0, history_noise_max_timestep), with
-    a history_noise_clean_prob chance of staying exactly clean (t_hist=0).
-    The model is told the level via the per-token timestep, so at AR inference
-    generated history can be renoised to the same level instead of being
-    presented as (falsely) clean.
+    Corrupts each history latent frame with flow-matching noise at its own
+    independently sampled timestep t_hist ~ Uniform(0, history_noise_max_timestep).
+    A history_noise_clean_prob fraction of samples keeps the entire history
+    window exactly clean (t_hist=0), so the cold-start / ground-truth-history
+    case stays in-distribution.
 
-    Returns (noised_hist, hist_timesteps) with hist_timesteps shaped (B,).
+    Returns (noised_hist, hist_timesteps) with hist_timesteps shaped
+    (B, F_hist) — one level per (sample, history frame).
     """
-    b = hist_latents.shape[0]
+    b, _, f_hist = hist_latents.shape[:3]
     t_rng, clean_rng, noise_rng = jax.random.split(rng, 3)
 
     max_t = float(config.history_noise_max_timestep)
-    t_hist = jax.random.uniform(t_rng, (b,), minval=0.0, maxval=max_t)
+    t_hist = jax.random.uniform(t_rng, (b, f_hist), minval=0.0, maxval=max_t)
     clean = jax.random.bernoulli(
-        clean_rng, float(getattr(config, "history_noise_clean_prob", 0.2)), (b,)
+        clean_rng, float(getattr(config, "history_noise_clean_prob", 0.2)), (b, 1)
     )
     t_hist = jnp.where(clean, 0.0, t_hist)
 
+    # Same formula as scheduler.apply_flow_match, but with an independent
+    # noise level per history frame (its timesteps arg is per-sample only).
+    t_norm = t_hist / float(scheduler.config.num_train_timesteps)
+    sigma = (1.0 - t_norm) * scheduler.config.sigma_min + t_norm * scheduler.config.sigma_max
+    sigma = sigma[:, None, :, None, None].astype(hist_latents.dtype)   # (B,1,F_hist,1,1)
     noise = jax.random.normal(noise_rng, hist_latents.shape, dtype=hist_latents.dtype)
-    noised, _, _ = scheduler.apply_flow_match(noise, hist_latents, t_hist)
-    # apply_flow_match adds sigma_min noise even at t=0; keep t_hist=0 samples
-    # exactly clean so the cold-start (GT history) case stays in-distribution.
-    keep_clean = (t_hist == 0.0).reshape(-1, 1, 1, 1, 1)
-    noised = jnp.where(keep_clean, hist_latents, noised).astype(hist_latents.dtype)
+    noised = (1.0 - sigma) * hist_latents + sigma * noise
+    # The sigma formula has a sigma_min floor even at t=0; keep t_hist=0 frames
+    # exactly clean instead.
+    exact_clean = (t_hist == 0.0)[:, None, :, None, None]
+    noised = jnp.where(exact_clean, hist_latents, noised).astype(hist_latents.dtype)
     return noised, t_hist
 
 
@@ -218,9 +230,15 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         hist_latents = latents[:, :, :n_hist]
         hist_timesteps = None
         if getattr(config, "history_noise_max_timestep", 0) > 0:
-            hist_latents, hist_timesteps = _apply_history_noise(
+            hist_latents, hist_t = _apply_history_noise(
                 hist_rng, hist_latents, scheduler, config
             )
+            # Conditioned: AdaLN is told each history frame's noise level.
+            # Blind (default): history stays declared clean (t=0) — the model
+            # learns to mildly distrust "clean" history, matching AR inference
+            # where the true corruption level is unknown.
+            if getattr(config, "history_noise_conditioned", False):
+                hist_timesteps = hist_t
         noisy_latents = jnp.concatenate([hist_latents, noisy_future], axis=2)
 
         timestep_2d = _build_per_token_timestep(

@@ -196,16 +196,22 @@ action_stats_path: 'droid_wan_tfrecords_test/stats.json'
 ctrl_cfg_drop_prob: 0.05
 
 # ── History noise augmentation ─────────────────────────────────────────────────
-# Corrupt history latent frames with flow-matching noise at a small per-sample
-# timestep t_hist ~ Uniform(0, history_noise_max_timestep), and condition their
-# tokens at t_hist instead of 0. Teaches the model to tolerate imperfect
-# history, so AR inference can renoise generated history to the same level
-# instead of presenting it as (falsely) clean. 0 = disabled (history always
-# clean at t=0). Typical value: 100-200 (out of 1000 train timesteps).
+# Corrupt history latent frames with flow-matching noise, each frame at its own
+# independently sampled timestep t_hist ~ Uniform(0, history_noise_max_timestep).
+# Teaches the model to tolerate imperfect (AR-generated) history.
+# 0 = disabled (history always clean). Typical value: 100-200 (of 1000 train
+# timesteps).
 history_noise_max_timestep: 0
-# Fraction of samples whose history stays exactly clean (t_hist = 0), keeping
-# the cold-start / ground-truth-history case in-distribution.
+# Fraction of samples whose entire history window stays exactly clean
+# (t_hist = 0), keeping the cold-start / ground-truth-history case
+# in-distribution.
 history_noise_clean_prob: 0.2
+# False (blind, default): history tokens stay declared clean (t=0) — the model
+#   learns to mildly distrust "clean" history, matching AR inference where the
+#   true corruption level is unknown. No inference-side changes needed.
+# True (conditioned): AdaLN is told each history frame's t_hist; AR inference
+#   must then renoise generated history and declare the injected level.
+history_noise_conditioned: False
 
 # ── Video resolution ───────────────────────────────────────────────────────────
 height: 704 #576

@@ -135,10 +135,11 @@ python src/maxdiffusion/train_wan.py \
     width=832 \
     num_predicted_latents=10 \
     num_history_latent_frames=10 \
+    history_noise_max_timestep=200 \
     flash_min_seq_length=128 \
     hardware='tpu' \
     wandb_project='wan-ac-history-fewer-frames-no-text' \
-    wandb_video_every=1000 \
+    wandb_video_every=500 \
     wandb_video_samples=2 \
     wandb_video_inference_steps=20
 
