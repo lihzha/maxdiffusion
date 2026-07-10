@@ -178,4 +178,5 @@ fi
 
 # Install maxdiffusion
 uv pip install --no-deps -e .
-uv pip install wandb
+# moviepy/imageio(-ffmpeg) are needed by wandb.Video to encode numpy frames (W&B video logging)
+uv pip install wandb moviepy imageio imageio-ffmpeg

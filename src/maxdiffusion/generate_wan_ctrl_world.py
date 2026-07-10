@@ -60,6 +60,7 @@ def _denoise_step(
     guidance_scale: float,
     scheduler: FlaxFlowMatchScheduler,
     scheduler_state,
+    cond_tokens_per_frame: int = 1,
 ):
     """One Euler flow-matching step with optional classifier-free guidance.
 
@@ -86,6 +87,7 @@ def _denoise_step(
             encoder_hidden_states=tokens_2x,
             deterministic=True,
             frame_level_cond=True,
+            cond_tokens_per_frame=cond_tokens_per_frame,
             frame_positions=pos_2x,
         )
         pred_uncond = pred_2x[:b]
@@ -98,6 +100,7 @@ def _denoise_step(
             encoder_hidden_states=action_tokens,
             deterministic=True,
             frame_level_cond=True,
+            cond_tokens_per_frame=cond_tokens_per_frame,
             frame_positions=frame_positions,
         )
 
@@ -145,6 +148,7 @@ def run_ar_denoising(
     mesh,
     logical_axis_rules,
     guidance_scale: float = 1.0,
+    cond_tokens_per_frame: int = 1,
 ) -> jnp.ndarray:
     """Auto-regressive denoising: generate ar_num_chunks * ar_chunk_size future frames.
 
@@ -190,6 +194,7 @@ def run_ar_denoising(
             scheduler, num_inference_steps, n_hist,
             step_rng, dtype, mesh, logical_axis_rules,
             guidance_scale=guidance_scale,
+            cond_tokens_per_frame=cond_tokens_per_frame,
         )  # (B, C, ar_chunk_size, H, W)
 
         generated_chunks.append(gen_chunk)
@@ -217,6 +222,7 @@ def run_denoising(
     mesh,
     logical_axis_rules,
     guidance_scale: float = 1.0,
+    cond_tokens_per_frame: int = 1,
 ) -> jnp.ndarray:
     """Denoise future latent frames from random noise, conditioned on history + actions.
 
@@ -254,6 +260,7 @@ def run_denoising(
             guidance_scale=guidance_scale,
             scheduler=scheduler,
             scheduler_state=sched_state,
+            cond_tokens_per_frame=cond_tokens_per_frame,
         ),
     )
 
@@ -331,8 +338,8 @@ def run(argv: Sequence[str]) -> None:
 
     autoregressive = bool(getattr(config, "autoregressive", False))
     # Number of future latent frames generated per AR step (defaults to the
-    # single-pass window size derived from num_frames).
-    n_fut_single = 1 + (config.num_frames - 1) // 4
+    # single-pass window size, num_predicted_latents).
+    n_fut_single = config.num_predicted_latents
     ar_chunk_size = int(getattr(config, "ar_chunk_size", 0))
     if ar_chunk_size <= 0:
         ar_chunk_size = n_fut_single
@@ -354,12 +361,14 @@ def run(argv: Sequence[str]) -> None:
         pipeline = WanPipelineTI2V_2_2.from_pretrained(config)
 
     # ── Build combined model (same architecture as training) ──────────────────
+    action_tokens_per_frame = int(getattr(config, "action_tokens_per_latent_frame", 1))
     action_encoder = NNXWanActionEncoder(
         rngs=nnx.Rngs(jax.random.key(config.seed)),
         action_dim=config.action_dim,
         num_actions=4,
         hidden_dim=config.wan_action_encoder_hidden_dim,
         out_dim=config.wan_text_dim,
+        tokens_per_frame=action_tokens_per_frame,
         dtype=weights_dtype,
         weights_dtype=weights_dtype,
     )
@@ -406,7 +415,7 @@ def run(argv: Sequence[str]) -> None:
     if autoregressive:
         max_latent_frames = n_hist + ar_num_chunks * ar_chunk_size
     else:
-        max_latent_frames = 1 + (config.num_frames - 1) // 4 + config.num_history_latent_frames
+        max_latent_frames = config.num_predicted_latents + config.num_history_latent_frames
     dataset = WanCtrlWorldDroidDataset(
         data_dir=config.eval_data_dir,
         stats_path=config.action_stats_path,
@@ -462,13 +471,14 @@ def run(argv: Sequence[str]) -> None:
                 mesh=pipeline.mesh,
                 logical_axis_rules=config.logical_axis_rules,
                 guidance_scale=guidance_scale,
+                cond_tokens_per_frame=action_tokens_per_frame,
             )
         else:
             # Encode actions (constant across denoising steps).
             action_tokens = p_encode(
                 params, actions=actions,
                 F_lat=F_lat,
-            )  # (1, F_lat, 4096)
+            )  # (1, F_lat*K, 4096)
 
             pred_future = run_denoising(
                 graphdef, params, rest_of_state,
@@ -478,6 +488,7 @@ def run(argv: Sequence[str]) -> None:
                 mesh=pipeline.mesh,
                 logical_axis_rules=config.logical_axis_rules,
                 guidance_scale=guidance_scale,
+                cond_tokens_per_frame=action_tokens_per_frame,
             )
 
         # Decode GT and predicted full sequences.

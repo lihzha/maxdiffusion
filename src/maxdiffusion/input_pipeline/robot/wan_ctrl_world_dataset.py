@@ -160,8 +160,9 @@ class WanCtrlWorldDroidDataset:
         ds = ds.map(self._parse, num_parallel_calls=AUTOTUNE)
 
         # first_window_only requires the full window starting at frame 0 to fit;
-        # otherwise only the future portion needs to fit (original windowing logic).
-        min_traj_len = self.max_latent_frames if first_window_only else self.n_fut
+        # otherwise the future portion plus the anchor frame (frame_now >= 1,
+        # so the anchor latent is never predicted) needs to fit.
+        min_traj_len = self.max_latent_frames if first_window_only else self.n_fut + 1
         ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], min_traj_len))
 
         if self._is_train:
@@ -229,9 +230,14 @@ class WanCtrlWorldDroidDataset:
         return self._build_window(traj, frame_now)
 
     def _random_window(self, traj: dict) -> dict:
-        """Return one window with frame_now sampled uniformly from valid range."""
+        """Return one window with frame_now sampled uniformly from valid range.
+
+        minval=1 keeps the episode anchor latent (frame 0: encodes 1 raw frame,
+        zero-padded actions) out of the predicted window — it can only appear
+        as history, so every predicted latent is a full 4-raw-frame chunk.
+        """
         T = tf.cast(traj["traj_len"], tf.int32)
-        frame_now = tf.random.uniform([], minval=0, maxval=T - self.n_fut + 1, dtype=tf.int32)
+        frame_now = tf.random.uniform([], minval=1, maxval=T - self.n_fut + 1, dtype=tf.int32)
         return self._build_window(traj, frame_now)
 
     def _build_window(self, traj: dict, frame_now: tf.Tensor) -> dict:

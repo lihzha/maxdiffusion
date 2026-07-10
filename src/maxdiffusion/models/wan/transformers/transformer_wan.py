@@ -398,6 +398,7 @@ class WanTransformerBlock(nnx.Module):
       rngs: nnx.Rngs = None,
       encoder_attention_mask: Optional[jax.Array] = None,
       frame_level_cond: bool = False,
+      cond_tokens_per_frame: int = 1,
   ):
     with self.conditional_named_scope("transformer_block"):
       # Support both global [B, 6, dim] and per-token [B, seq_len, 6, dim] temb.
@@ -448,12 +449,15 @@ class WanTransformerBlock(nnx.Module):
         with self.conditional_named_scope("cross_attn_attn"):
           if frame_level_cond:
             # SVD-style per-frame locking: each latent frame's patches attend only
-            # to that frame's single action token.
-            # hidden_states: (B, F_lat*Sp, D), encoder: (B, F_lat, D)
+            # to that frame's own cond_tokens_per_frame action tokens.
+            # hidden_states: (B, F_lat*Sp, D), encoder: (B, F_lat*K, D) frame-major.
+            # With K=1 softmax over a single key is constant (additive injection);
+            # K>1 makes the attention weights query-dependent.
             B, L, D = norm_hidden_states.shape
-            F = encoder_hidden_states.shape[1]
+            K = cond_tokens_per_frame
+            F = encoder_hidden_states.shape[1] // K
             hs_r = norm_hidden_states.reshape(B * F, L // F, D)
-            enc_r = encoder_hidden_states.reshape(B * F, 1, D)
+            enc_r = encoder_hidden_states.reshape(B * F, K, D)
             attn_output = self.attn2(
                 hidden_states=hs_r,
                 encoder_hidden_states=enc_r,
@@ -653,6 +657,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       cached_residual: Optional[jax.Array] = None,
       return_residual: bool = False,
       frame_level_cond: bool = False,
+      cond_tokens_per_frame: int = 1,
       frame_positions: Optional[tuple] = None,
   ) -> Union[jax.Array, Tuple[jax.Array, jax.Array], Dict[str, jax.Array]]:
     hidden_states = nn.with_logical_constraint(hidden_states, ("batch", None, None, None, None))
@@ -751,6 +756,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
               rngs_carry,
               encoder_attention_mask,
               frame_level_cond=frame_level_cond,
+              cond_tokens_per_frame=cond_tokens_per_frame,
           )
           new_carry = (hidden_states, rngs_carry)
           return new_carry, None
@@ -776,6 +782,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
                 rngs,
                 encoder_attention_mask=encoder_attention_mask,
                 frame_level_cond=frame_level_cond,
+                cond_tokens_per_frame=cond_tokens_per_frame,
             )
 
           rematted_layer_forward = self.gradient_checkpoint.apply(

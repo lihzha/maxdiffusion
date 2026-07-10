@@ -1,14 +1,24 @@
 """Action encoder for action-conditioned WAN video generation.
 
-Per-latent-frame 3-layer SiLU MLP: the 4 raw-frame actions that correspond
-to one latent frame are concatenated into a single 28-dim vector and encoded
-into the WAN cross-attention space.
+Per-latent-frame 3-layer SiLU MLP encoding the 4 raw-frame actions that
+correspond to one latent frame into the WAN cross-attention space.
 
-    action (B, F_lat, 4, action_dim) → (B, F_lat, out_dim=4096)
+``tokens_per_frame`` controls the granularity:
 
-Concatenating preserves temporal ordering across the 4 frames so the network
-can learn velocity and trajectory-shape features. The output token is used as
-K/V in the WAN transformer's per-frame cross-attention (frame_level_cond=True),
+* ``tokens_per_frame=1`` (legacy): the 4 raw actions are concatenated into a
+  single 28-dim vector and encoded as ONE token per latent frame. With a
+  single K/V token, per-frame cross-attention softmax is identically 1 — the
+  conditioning is a query-independent additive injection.
+* ``tokens_per_frame=4``: each raw action is encoded as its OWN token
+  (4 tokens per latent frame). A learned slot embedding distinguishes the 4
+  temporal positions. Cross-attention now runs over 4 keys, so attention
+  weights become query/content-dependent and the transformer's pretrained
+  Q/K cross-attention weights participate in training.
+
+    action (B, F_lat, 4, action_dim) → (B, F_lat * tokens_per_frame, out_dim)
+
+The output tokens are used as K/V in the WAN transformer's per-frame
+cross-attention (frame_level_cond=True, cond_tokens_per_frame=tokens_per_frame),
 where the image latent's spatial patches are the queries.
 """
 
@@ -18,16 +28,19 @@ from flax import nnx
 
 
 class NNXWanActionEncoder(nnx.Module):
-    """3-layer SiLU MLP encoding 4 concatenated raw-frame actions per latent frame.
+    """3-layer SiLU MLP encoding raw-frame actions into per-latent-frame tokens.
 
     Args:
-        rngs:         NNX Rngs for parameter initialisation.
-        action_dim:   Width of a single raw-frame action vector (7 for DROID EEF).
-        num_actions:  Number of raw frames concatenated per latent frame (4 for WAN 4× temporal compression).
-        hidden_dim:   Width of hidden layers.
-        out_dim:      Output width — must equal wan_text_dim (4096).
-        dtype:        Activation dtype.
-        weights_dtype: Parameter storage dtype.
+        rngs:             NNX Rngs for parameter initialisation.
+        action_dim:       Width of a single raw-frame action vector (7 for DROID EEF).
+        num_actions:      Number of raw frames per latent frame (4 for WAN 4× temporal compression).
+        hidden_dim:       Width of hidden layers.
+        out_dim:          Output width — must equal wan_text_dim (4096).
+        tokens_per_frame: Output tokens per latent frame. Must divide num_actions.
+                          1 = concat all actions into one token (legacy);
+                          num_actions = one token per raw action.
+        dtype:            Activation dtype.
+        weights_dtype:    Parameter storage dtype.
     """
 
     def __init__(
@@ -37,14 +50,21 @@ class NNXWanActionEncoder(nnx.Module):
         num_actions: int = 4,
         hidden_dim: int = 1024,
         out_dim: int = 4096,
+        tokens_per_frame: int = 1,
         dtype: jnp.dtype = jnp.bfloat16,
         weights_dtype: jnp.dtype = jnp.bfloat16,
     ):
+        if num_actions % tokens_per_frame != 0:
+            raise ValueError(
+                f"tokens_per_frame ({tokens_per_frame}) must divide num_actions ({num_actions})"
+            )
         self.dtype = dtype
+        self.tokens_per_frame = tokens_per_frame
+        self.actions_per_token = num_actions // tokens_per_frame
         kaiming = nnx.initializers.he_normal()
 
         self.linear_1 = nnx.Linear(
-            in_features=action_dim * num_actions,   # 28 for 4×7
+            in_features=action_dim * self.actions_per_token,  # 28 for 1 token, 7 for 4 tokens
             out_features=hidden_dim,
             rngs=rngs,
             dtype=dtype,
@@ -66,29 +86,45 @@ class NNXWanActionEncoder(nnx.Module):
             dtype=dtype,
             param_dtype=weights_dtype,
         )
+        # Learned slot embedding: attention over keys is permutation-invariant,
+        # so without this the model couldn't tell which of the tokens_per_frame
+        # sub-steps a token encodes. Omitted for the single-token (legacy)
+        # layout to keep old checkpoints loadable.
+        if tokens_per_frame > 1:
+            self.slot_embed = nnx.Param(
+                jax.random.normal(rngs.params(), (tokens_per_frame, hidden_dim), dtype=weights_dtype)
+                * (hidden_dim**-0.5)
+            )
+        else:
+            self.slot_embed = None
 
     def __call__(
         self,
         action: jax.Array,
         text_embed: jax.Array | None = None,
     ) -> jax.Array:
-        """Encode 4 concatenated raw-frame actions per latent frame.
+        """Encode raw-frame actions into per-latent-frame tokens.
 
         Args:
-            action:     ``(B, F_lat, 4, action_dim)`` normalised action sequence.
+            action:     ``(B, F_lat, num_actions, action_dim)`` normalised actions.
             text_embed: ``(B, out_dim)`` pooled T5 embedding, broadcast-added
                         as a per-sample bias.
 
         Returns:
-            ``(B, F_lat, out_dim)`` — one action token per latent frame.
+            ``(B, F_lat * tokens_per_frame, out_dim)`` — tokens_per_frame
+            action tokens per latent frame, frame-major.
         """
         B, F, T_a, A = action.shape
-        # Flatten frames into batch and concatenate the 4 actions into one vector.
-        x = action.reshape(B * F, T_a * A).astype(self.dtype)  # (B*F, 4*action_dim)
-        x = jax.nn.silu(self.linear_1(x))  # (B*F, hidden_dim)
-        x = jax.nn.silu(self.linear_2(x))  # (B*F, hidden_dim)
-        x = self.linear_3(x)               # (B*F, out_dim)
+        K = self.tokens_per_frame
+        # Group actions_per_token consecutive raw actions into each token.
+        x = action.reshape(B * F * K, self.actions_per_token * A).astype(self.dtype)
+        x = jax.nn.silu(self.linear_1(x))  # (B*F*K, hidden_dim)
+        if self.slot_embed is not None:
+            slot = jnp.tile(self.slot_embed.value.astype(x.dtype), (B * F, 1))
+            x = x + slot
+        x = jax.nn.silu(self.linear_2(x))  # (B*F*K, hidden_dim)
+        x = self.linear_3(x)               # (B*F*K, out_dim)
         if text_embed is not None:
-            # Tile (B, out_dim) → (B*F, out_dim): repeat each sample F times.
-            x = x + jnp.repeat(text_embed, F, axis=0).astype(x.dtype)
-        return x.reshape(B, F, -1)         # (B, F_lat, out_dim)
+            # Tile (B, out_dim) → (B*F*K, out_dim): repeat each sample F*K times.
+            x = x + jnp.repeat(text_embed, F * K, axis=0).astype(x.dtype)
+        return x.reshape(B, F * K, -1)     # (B, F_lat * tokens_per_frame, out_dim)

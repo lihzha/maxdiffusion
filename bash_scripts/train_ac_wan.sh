@@ -133,11 +133,14 @@ python src/maxdiffusion/train_wan.py \
     eval_every=1000 \
     height=480 \
     width=832 \
-    num_frames=41 \
-    num_history_latent_frames=2 \
+    num_predicted_latents=20 \
+    num_history_latent_frames=10 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    wandb_project='wan-ac-history-fewer-frames-no-text'
+    wandb_project='wan-ac-history-fewer-frames-no-text' \
+    wandb_video_every=1000 \
+    wandb_video_samples=1 \
+    wandb_video_inference_steps=20
 
 # --- DROID path (uncomment to use) ---
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \

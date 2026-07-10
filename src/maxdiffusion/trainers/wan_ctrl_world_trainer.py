@@ -175,7 +175,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
         timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
-        action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat, 4096)
+        action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat*K, 4096)
         cfg_rng, do_rng = jax.random.split(d_rng)
         action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
 
@@ -186,6 +186,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             deterministic=False,
             rngs=nnx.Rngs(dropout=do_rng),
             frame_level_cond=True,
+            cond_tokens_per_frame=getattr(config, "action_tokens_per_latent_frame", 1),
             frame_positions=frame_positions,
         )
 
@@ -270,7 +271,7 @@ class WanCtrlWorldTrainer:
         from maxdiffusion.multihost_dataloading import MultiHostDataLoadIterator
         config = self.config
         split = "train" if is_training else "val"
-        max_latent_frames = 1 + (config.num_frames - 1) // 4 + config.num_history_latent_frames
+        max_latent_frames = config.num_predicted_latents + config.num_history_latent_frames
         per_host_batch = max(1, config.global_batch_size_to_load // jax.process_count())
         ds = WanCtrlWorldDroidDataset(
             data_dir=config.train_data_dir if is_training else config.eval_data_dir,
@@ -301,6 +302,7 @@ class WanCtrlWorldTrainer:
             num_actions=4,  # WAN 4× temporal compression → 4 raw frames per latent frame
             hidden_dim=self.config.wan_action_encoder_hidden_dim,
             out_dim=self.config.wan_text_dim,
+            tokens_per_frame=getattr(self.config, "action_tokens_per_latent_frame", 1),
             dtype=_dtype(self.config.activations_dtype),
             weights_dtype=_dtype(self.config.weights_dtype),
         )
@@ -407,11 +409,16 @@ class WanCtrlWorldTrainer:
         pipeline = self._load_wan_pipeline()
         mesh = pipeline.mesh
 
-        # Free VAE — we use pre-encoded latents
-        if hasattr(pipeline, "vae"):
-            del pipeline.vae
-        if hasattr(pipeline, "vae_cache"):
-            del pipeline.vae_cache
+        # Free VAE — we use pre-encoded latents. When W&B video logging is
+        # enabled, keep only the decoder weights (in bf16) for rollout decode.
+        self._pipeline = pipeline
+        if getattr(config, "wandb_video_every", 0) > 0:
+            self._slim_vae_for_video_logging(pipeline)
+        else:
+            if hasattr(pipeline, "vae"):
+                del pipeline.vae
+            if hasattr(pipeline, "vae_cache"):
+                del pipeline.vae_cache
 
         # 2. Build combined model
         action_encoder = self._build_action_encoder()
@@ -554,6 +561,13 @@ class WanCtrlWorldTrainer:
                                data_shardings, scheduler, scheduler_state, step + 1, rng)
 
             if (
+                getattr(config, "wandb_video_every", 0) > 0
+                and getattr(config, "wandb_project", "")
+                and (step + 1) % config.wandb_video_every == 0
+            ):
+                self._run_video_log(mesh, state, state_shardings, scheduler, step + 1, rng)
+
+            if (
                 config.checkpoint_every > 0
                 and (step + 1) % config.checkpoint_every == 0
             ):
@@ -617,6 +631,114 @@ class WanCtrlWorldTrainer:
             if getattr(self, "_wandb_run", None) is not None:
                 self._wandb_run.log({"eval/loss": mean_loss}, step=step)
 
+    # ── W&B video logging ─────────────────────────────────────────────────────
+
+    def _slim_vae_for_video_logging(self, pipeline):
+        """Keep only the VAE weights video logging needs.
+
+        Video logging only calls ``vae.decode``, which touches
+        ``post_quant_conv`` and ``decoder`` — the encoder and ``quant_conv``
+        weights (~150M params) are dropped, and the remaining ~555M decoder
+        params are cast to bf16 (plenty for preview videos). Cuts the VAE
+        footprint from ~2.8 GB fp32 to ~1.1 GB across the mesh.
+        """
+        vae = pipeline.vae
+        vae.encoder = None
+        vae.quant_conv = None
+        graphdef, state = nnx.split(vae)
+        # Cast inside jit: eager ops on multi-host globally-sharded arrays
+        # are unsafe.
+        state = jax.jit(
+            functools.partial(
+                jax.tree_util.tree_map,
+                lambda x: x.astype(jnp.bfloat16) if jnp.issubdtype(x.dtype, jnp.floating) else x,
+            )
+        )(state)
+        pipeline.vae = nnx.merge(graphdef, state)
+        # The cache only uses its conv counts after construction; repoint its
+        # module ref so the old fp32 VAE can be garbage-collected.
+        pipeline.vae_cache.module = pipeline.vae
+        max_logging.log("[wan_ctrl_world] VAE slimmed for video logging: encoder dropped, decoder cast to bf16")
+
+    def _run_video_log(
+        self,
+        mesh,
+        state: TrainState,
+        state_shardings,
+        scheduler,
+        step: int,
+        rng: jax.Array,
+    ):
+        """Rollout one eval batch, VAE-decode gen vs GT, log videos to W&B.
+
+        Runs on every host (the rollout and decode are collective ops);
+        only process 0 writes to W&B.
+        """
+        config = self.config
+        pipeline = self._pipeline
+        if not config.eval_data_dir:
+            max_logging.log("[wan_ctrl_world] wandb_video_every>0 but eval_data_dir not set; skipping")
+            return
+
+        if not hasattr(self, "_eval_iter"):
+            self._eval_iter = self._load_dataset(mesh, is_training=False)
+        try:
+            batch = next(self._eval_iter)
+        except StopIteration:
+            self._eval_iter = self._load_dataset(mesh, is_training=False)
+            batch = next(self._eval_iter)
+
+        if not hasattr(self, "_p_video_rollout"):
+            lat_mean = jnp.array(pipeline.vae.latents_mean).reshape(1, -1, 1, 1, 1)
+            lat_std = jnp.array(pipeline.vae.latents_std).reshape(1, -1, 1, 1, 1)
+            self._p_video_rollout = jax.jit(
+                functools.partial(
+                    _video_rollout,
+                    scheduler=scheduler,
+                    config=config,
+                    num_steps=int(getattr(config, "wandb_video_inference_steps", 20)),
+                    guidance_scale=float(getattr(config, "wandb_video_guidance_scale", 1.0)),
+                    num_samples=int(getattr(config, "wandb_video_samples", 1)),
+                    lat_mean=lat_mean,
+                    lat_std=lat_std,
+                ),
+                in_shardings=(state_shardings, self._data_shardings(mesh, for_eval=True), None),
+                out_shardings=None,
+            )
+
+        rng, sub = jax.random.split(rng)
+        with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+            gen_lat, gt_lat, future_mse = self._p_video_rollout(state, batch, sub)
+            gen_lat.block_until_ready()
+
+        # Spatially-sharded VAE decode + cross-host allgather → host numpy
+        # (B*3cams, T, H, W, C) in [0, 1].
+        gen_np = np.asarray(pipeline._decode_latents_to_video(gen_lat))
+        gt_np = np.asarray(pipeline._decode_latents_to_video(gt_lat))
+
+        if jax.process_index() != 0 or getattr(self, "_wandb_run", None) is None:
+            return
+
+        import wandb
+
+        n = gen_np.shape[0] // 3
+        t, h, w, c = gen_np.shape[1:]
+        gen_np = gen_np.reshape(n, 3, t, h, w, c)
+        gt_np = gt_np.reshape(n, 3, t, h, w, c)
+
+        logs = {"eval/video_rollout_latent_mse": float(future_mse)}
+        for i in range(n):
+            gen_grid = np.concatenate(list(gen_np[i]), axis=1)              # cameras stacked on H
+            gt_grid = np.concatenate(list(gt_np[i]), axis=1)
+            side_by_side = np.concatenate([gen_grid, gt_grid], axis=2)      # gen | GT on W
+            # wandb.Video expects uint8 (T, C, H, W)
+            frames = (side_by_side * 255).clip(0, 255).astype(np.uint8).transpose(0, 3, 1, 2)
+            logs[f"eval/video/sample_{i}"] = wandb.Video(
+                frames, fps=config.output_video_fps, format="mp4"
+            )
+        self._wandb_run.log(logs, step=step)
+        max_logging.log(f"[wan_ctrl_world] logged {n} rollout video(s) to W&B at step {step}")
+
 
 def _eval_step(state: TrainState, data: dict, rng: jax.Array,
                scheduler_state, scheduler, config) -> jax.Array:
@@ -648,7 +770,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
     timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
-    action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat, 4096)
+    action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat*K, 4096)
 
     model_pred = model.transformer(
         hidden_states=noisy_latents,
@@ -656,6 +778,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
         encoder_hidden_states=action_tokens,
         deterministic=True,
         frame_level_cond=True,
+        cond_tokens_per_frame=getattr(config, "action_tokens_per_latent_frame", 1),
         frame_positions=frame_positions,
     )
 
@@ -664,3 +787,93 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     if not config.disable_training_weights:
         loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
     return jnp.mean(loss)
+
+
+def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
+                   scheduler, config, num_steps: int, guidance_scale: float,
+                   num_samples: int, lat_mean: jnp.ndarray, lat_std: jnp.ndarray) -> tuple:
+    """Euler rollout for W&B video logging.
+
+    History latent frames stay clean; future frames are denoised from pure
+    noise conditioned on action tokens (same per-token timestep scheme as
+    training). Returns ``(gen, gt, future_mse)`` where gen/gt are
+    denormalized VAE latents of shape (num_samples*3, C, F_lat, H_cam, W) —
+    the 3 H-stacked cameras unstacked into the batch axis (sample-major) so
+    they can be VAE-decoded in one call.
+    """
+    bsz = config.global_batch_size_to_train_on
+    weights_dtype = _dtype(config.weights_dtype)
+    n_hist = config.num_history_latent_frames
+
+    model: WanCtrlWorldModel = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+
+    latents = data["latent"][:bsz].astype(weights_dtype)          # (B,C,F_lat,3H,W)
+    actions = data["action"][:bsz].astype(weights_dtype)
+    frame_positions = data["frame_positions"][:bsz]
+
+    b, _, F_lat, H_lat, W_lat = latents.shape
+    actions_grouped = _group_actions(actions, F_lat)
+    action_tokens = model.action_encoder(actions_grouped, None)
+
+    num_train_t = scheduler.config.num_train_timesteps
+    t_uniform = jnp.linspace(1.0, 0.0, num_steps + 1)
+    rollout_ts = (t_uniform * (num_train_t - 1)).astype(jnp.int32)
+
+    def _sigma(t_int):
+        t_n = t_int.astype(jnp.float32) / (num_train_t - 1)
+        return (1.0 - t_n) * scheduler.config.sigma_min + t_n * scheduler.config.sigma_max
+
+    history = latents[:, :, :n_hist]
+    future_gt = latents[:, :, n_hist:]
+    gen_init = jax.random.normal(rng, future_gt.shape, dtype=latents.dtype)
+
+    def scan_body(lat, step_idx):
+        t_from = rollout_ts[step_idx]
+        t_to = rollout_ts[step_idx + 1]
+        sig_from, sig_to = _sigma(t_from), _sigma(t_to)
+
+        roll_input = jnp.concatenate([history, lat], axis=2)
+        ts_2d = _build_per_token_timestep(
+            jnp.broadcast_to(t_from, (b,)), F_lat, H_lat, W_lat, n_hist
+        )
+        ts_2d = jax.lax.with_sharding_constraint(ts_2d, P(("data", "fsdp", "context"), None))
+
+        def _velocity(tokens):
+            return model.transformer(
+                hidden_states=roll_input,
+                timestep=ts_2d,
+                encoder_hidden_states=tokens,
+                deterministic=True,
+                frame_level_cond=True,
+                cond_tokens_per_frame=getattr(config, "action_tokens_per_latent_frame", 1),
+                frame_positions=frame_positions,
+            )
+
+        v_pred = _velocity(action_tokens)
+        if guidance_scale > 1.0:
+            v_uncond = _velocity(jnp.zeros_like(action_tokens))
+            v_pred = v_uncond + guidance_scale * (v_pred - v_uncond)
+
+        # Euler step: x_{t_to} = x_{t_from} + (σ_{t_to} - σ_{t_from}) * v
+        v_future = v_pred[:, :, n_hist:]
+        new_lat = (lat + (sig_to - sig_from) * v_future).astype(lat.dtype)
+        return new_lat, None
+
+    final_future, _ = jax.lax.scan(scan_body, gen_init, jnp.arange(num_steps))
+
+    future_mse = jnp.mean(
+        (final_future.astype(jnp.float32) - future_gt.astype(jnp.float32)) ** 2
+    )
+    gen = jnp.concatenate([history, final_future], axis=2)
+
+    def _prep_for_decode(lat):
+        # Denormalize with VAE stats, then unstack the 3 cameras from the H
+        # axis into the batch axis. Done inside jit: eager ops on multi-host
+        # globally-sharded arrays are unsafe.
+        lat = lat[:num_samples].astype(jnp.float32) * lat_std + lat_mean
+        n, c, f, h3, w = lat.shape
+        lat = lat.reshape(n, c, f, 3, h3 // 3, w)
+        lat = jnp.transpose(lat, (0, 3, 1, 2, 4, 5))          # (n, cam, C, F, H, W)
+        return lat.reshape(n * 3, c, f, h3 // 3, w)
+
+    return _prep_for_decode(gen), _prep_for_decode(latents), future_mse

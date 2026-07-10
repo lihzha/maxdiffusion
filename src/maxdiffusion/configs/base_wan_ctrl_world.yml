@@ -34,6 +34,17 @@ log_period: 100
 wandb_project: ''   # set to enable W&B logging (e.g. 'wan-ctrl-world')
 wandb_entity: ''    # W&B team/user; empty = personal account
 
+# W&B video logging: every N steps run an Euler rollout on one eval batch,
+# decode generated vs ground-truth futures with the VAE, and log side-by-side
+# videos (cameras stacked vertically, gen | GT horizontally). 0 = disabled.
+# Requires wandb_project and eval_data_dir. Note: keeps the VAE decoder
+# resident in device memory for the whole run (bf16, ~1.1 GB across the mesh;
+# the encoder weights are dropped at startup).
+wandb_video_every: 0
+wandb_video_samples: 1           # eval samples to decode and log per video step
+wandb_video_inference_steps: 20  # Euler denoising steps for the rollout
+wandb_video_guidance_scale: 1.0  # >1.0 enables action CFG (doubles rollout compute)
+
 # WAN 2.2 Ti2V 5B: source of UNet/transformer weights. The action encoder is
 # always initialised from scratch (no pretrained action encoder assumed).
 pretrained_model_name_or_path: 'model/Wan2.2-TI2V-5B-Diffusers'
@@ -160,9 +171,18 @@ attention_head_dim: 128  # inner_dim = 40 * 128 = 5120
 action_dim: 7             # cartesian (6) + gripper (1)
 wan_text_dim: 4096        # must equal pretrained T5 output dim
 wan_action_encoder_hidden_dim: 1024
+# Cross-attention K/V tokens per latent frame. 1 = legacy: the 4 raw actions are
+# concatenated into one token (softmax over a single key is constant, so the
+# conditioning is a query-independent additive injection and the transformer's
+# cross-attn Q/K weights receive no gradient). 4 = one token per raw action with
+# a learned slot embedding; attention becomes content-dependent.
+# NOTE: changing this changes the action-encoder architecture — checkpoints are
+# not compatible across values.
+action_tokens_per_latent_frame: 4
 
 # Windowing in latent space. Each latent frame corresponds to 4 raw frames.
-# num_frames = number of future (generated) latent frames; total window = num_history_latent_frames + num_frames.
+# num_predicted_latents = number of future (predicted) latent frames;
+# total window = num_history_latent_frames + num_predicted_latents.
 num_history_latent_frames: 1
 # Strided history sampling (ctrl-world style). skip_his is drawn uniformly from [1, max_skip_his]
 # at train time; val always uses skip_his=1. skip_his_zero_prob collapses all history to frame_now.
@@ -178,7 +198,8 @@ ctrl_cfg_drop_prob: 0.05
 # ── Video resolution ───────────────────────────────────────────────────────────
 height: 704 #576
 width:  1280 #1024
-num_frames: 81   # 3 latent frames (1 hist + 2 fut) at 704x1280 fits in 32G HBM; raise to 13/17 with lower res
+num_predicted_latents: 21   # future latent frames per window, exactly 4 raw frames each — the 1-frame
+                            # anchor latent (episode frame 0) always falls in history, never predicted.
 
 # ── Training loop ──────────────────────────────────────────────────────────────
 learning_rate: 1.e-5
@@ -238,9 +259,9 @@ output_video_fps: 16
 
 # Auto-regressive generation: generate ar_num_chunks * ar_chunk_size future
 # latent frames by rolling the last n_hist generated frames as history.
-# ar_chunk_size defaults to the single-pass future window (num_frames-derived).
+# ar_chunk_size defaults to the single-pass future window (num_predicted_latents).
 autoregressive: False
-ar_chunk_size: 0   # 0 = auto-derive from num_frames
+ar_chunk_size: 0   # 0 = auto-derive from num_predicted_latents
 ar_num_chunks: 1
 
 # ── Fields kept for pyconfig compat (unused by this trainer) ──────────────────
