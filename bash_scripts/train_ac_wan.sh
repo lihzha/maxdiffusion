@@ -115,8 +115,8 @@ python src/maxdiffusion/train_wan.py \
     weights_dtype=float32 \
     activations_dtype=bfloat16 \
     remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
-    ici_data_parallelism=8 \
-    ici_fsdp_parallelism=8 \
+    ici_data_parallelism=1 \
+    ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=1 \
     dcn_data_parallelism=1 \
