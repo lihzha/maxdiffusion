@@ -331,6 +331,15 @@ def load_video_frames(
         if max_frames > 0 and len(frames) >= max_frames:
             break
     cap.release()
+    # Drop this file's pages from the page cache (per-inode, so a fresh fd
+    # covers cv2's reads). Streaming MP4s otherwise pins the job's cgroup at
+    # the --mem ceiling and allocation bursts get OOM-killed.
+    try:
+        fd = os.open(video_path, os.O_RDONLY)
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        os.close(fd)
+    except OSError:
+        pass
     if not frames:
         return None
     return np.stack(frames)  # uint8 (T, H, W, 3) — normalized to float32 at encode time
@@ -466,6 +475,7 @@ def _write_split(
     pipeline,
 ) -> None:
     """Encode and write one split (train or val) to TFRecord shards."""
+    _reclaim_host_memory()  # start each split from a trimmed baseline
     os.makedirs(out_dir, exist_ok=True)
     print(f"Processing {len(index_slice)} episodes ({split} split) …", flush=True)
 
