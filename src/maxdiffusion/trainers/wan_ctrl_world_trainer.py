@@ -581,11 +581,25 @@ class WanCtrlWorldTrainer:
         recent_grad: list[float] = []
         last_step_time = datetime.datetime.now()
 
+        profiler = None
+        first_profiling_step = config.skip_first_n_steps_for_profiler
+        if max_utils.profiler_enabled(config) and first_profiling_step >= config.max_train_steps:
+            raise ValueError("Profiling requested but initial profiling step set past training final step")
+        last_profiling_step = np.clip(
+            first_profiling_step + config.profiler_steps - 1,
+            first_profiling_step,
+            config.max_train_steps - 1,
+        )
+
         example_batch = _next_batch(train_iter)
 
         for step in range(start_step, config.max_train_steps):
+            if max_utils.profiler_enabled(config) and step == first_profiling_step:
+                profiler = max_utils.Profiler(config)
+                profiler.start()
             step_start = datetime.datetime.now()
             with (
+                jax.profiler.StepTraceAnnotation("train", step_num=step),
                 mesh,
                 nn_partitioning.axis_rules(config.logical_axis_rules),
             ):
@@ -601,6 +615,10 @@ class WanCtrlWorldTrainer:
             metrics["scalar"]["learning/loss"].block_until_ready()
             now = datetime.datetime.now()
             step_secs = (now - step_start).total_seconds()
+
+            if profiler is not None and step == last_profiling_step:
+                profiler.stop()
+                profiler = None
 
             example_batch = _next_batch(train_iter)
 
