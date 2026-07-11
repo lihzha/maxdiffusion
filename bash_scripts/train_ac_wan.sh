@@ -128,7 +128,7 @@ python src/maxdiffusion/train_wan.py \
     allow_split_physical_axes=True \
     scan_layers=True \
     max_train_steps=101000 \
-    checkpoint_every=1000 \
+    checkpoint_every=100 \
     checkpoint_keep_period=10000 \
     eval_every=1000 \
     height=480 \
@@ -139,8 +139,8 @@ python src/maxdiffusion/train_wan.py \
     flash_min_seq_length=128 \
     hardware='tpu' \
     wandb_project='wan-ac-history-fewer-frames-no-text' \
-    wandb_video_every=500 \
-    wandb_video_samples=2 \
+    wandb_video_every=10 \
+    wandb_video_samples=1 \
     wandb_video_inference_steps=20
 
 # --- DROID path (uncomment to use) ---
