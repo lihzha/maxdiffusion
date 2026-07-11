@@ -107,9 +107,9 @@ python src/maxdiffusion/train_wan.py \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
-    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/train \
-    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres/val \
-    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres/stats.json \
+    train_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres_downsampled/train \
+    eval_data_dir=gs://v6_east1d/wan2.2_tfr_dataset_lowres_downsampled/val \
+    action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres_downsampled/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=tokamax_flash \
     weights_dtype=bfloat16 \
@@ -141,7 +141,7 @@ python src/maxdiffusion/train_wan.py \
     enable_profiler=True \
     skip_first_n_steps_for_profiler=10 \
     profiler_steps=5 \
-    wandb_project='wan-ac-history-fewer-frames-no-text' \
+    wandb_project='wan-ac-history-fewer-frames-no-text-downsampled' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=20
