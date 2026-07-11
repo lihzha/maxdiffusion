@@ -114,7 +114,9 @@ python src/maxdiffusion/train_wan.py \
     attention=tokamax_flash \
     weights_dtype=float32 \
     activations_dtype=bfloat16 \
-    remat_policy=MATMUL_WITHOUT_BATCH \
+    remat_policy=CUSTOM \
+    'names_which_can_be_saved=["hidden_states","self_attn","cross_attn"]' \
+    'names_which_can_be_offloaded=[]' \
     ici_data_parallelism=1 \
     ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
@@ -139,7 +141,7 @@ python src/maxdiffusion/train_wan.py \
     flash_min_seq_length=128 \
     hardware='tpu' \
     wandb_project='wan-ac-history-fewer-frames-no-text' \
-    wandb_video_every=1000 \
+    wandb_video_every=10 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=20
 
