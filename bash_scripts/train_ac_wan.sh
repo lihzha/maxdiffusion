@@ -112,11 +112,9 @@ python src/maxdiffusion/train_wan.py \
     action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=tokamax_flash \
-    weights_dtype=float32 \
+    weights_dtype=bfloat16 \
     activations_dtype=bfloat16 \
-    remat_policy=CUSTOM \
-    'names_which_can_be_saved=["hidden_states","self_attn","cross_attn"]' \
-    'names_which_can_be_offloaded=[]' \
+    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
     ici_data_parallelism=1 \
     ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
@@ -141,7 +139,7 @@ python src/maxdiffusion/train_wan.py \
     flash_min_seq_length=128 \
     hardware='tpu' \
     wandb_project='wan-ac-history-fewer-frames-no-text' \
-    wandb_video_every=10 \
+    wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=20
 
