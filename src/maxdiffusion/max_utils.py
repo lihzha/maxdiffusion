@@ -137,10 +137,16 @@ class Profiler:
 
     if _jax_profiler_enabled(self.config):
       log_dir = self.config.tensorboard_dir
+      self.gcs_upload_dir = None
       if log_dir.startswith("gs://"):
+        # jax.profiler can't write to GCS directly; write locally, upload on stop().
+        self.gcs_upload_dir = log_dir
         log_dir = os.path.join("/tmp/profiler_traces", self.config.run_name)
       if self.session_name:
         log_dir = os.path.join(log_dir, self.session_name)
+        if self.gcs_upload_dir:
+          self.gcs_upload_dir = os.path.join(self.gcs_upload_dir, self.session_name)
+      self.local_log_dir = log_dir
       os.makedirs(log_dir, exist_ok=True)
       max_logging.log(f"Starting profiler trace in: {log_dir}")
       jax.profiler.start_trace(log_dir)
@@ -153,6 +159,24 @@ class Profiler:
 
     if _jax_profiler_enabled(self.config):
       jax.profiler.stop_trace()
+      if getattr(self, "gcs_upload_dir", None):
+        self._upload_trace_to_gcs()
+
+  def _upload_trace_to_gcs(self):
+    max_logging.log(f"Uploading profiler traces from {self.local_log_dir} to {self.gcs_upload_dir}...")
+    try:
+      client = storage.Client()
+      bucket_name, prefix = parse_gcs_bucket_and_prefix(self.gcs_upload_dir)
+      bucket = client.bucket(bucket_name)
+      for root, _, files in os.walk(self.local_log_dir):
+        for file in files:
+          local_file = os.path.join(root, file)
+          rel_path = os.path.relpath(local_file, self.local_log_dir)
+          blob_name = os.path.join(prefix, rel_path)
+          bucket.blob(blob_name).upload_from_filename(local_file)
+      max_logging.log(f"Profiler trace uploaded to: {self.gcs_upload_dir}")
+    except Exception as e:  # keep training alive if the upload fails
+      max_logging.log(f"Profiler trace upload failed ({e}); trace remains at {self.local_log_dir}")
 
   def __enter__(self):
     self.start()
@@ -160,24 +184,6 @@ class Profiler:
 
   def __exit__(self, exc_type, exc_val, exc_tb):
     self.stop()
-
-    trace_dir = self.config.tensorboard_dir
-    if trace_dir.startswith("gs://"):
-      local_dir = os.path.join("/tmp/profiler_traces", self.config.run_name)
-      if os.path.exists(local_dir):
-        max_logging.log(f"Uploading profiler traces from {local_dir} to {trace_dir}...")
-        client = storage.Client()
-        bucket_name, prefix = parse_gcs_bucket_and_prefix(trace_dir)
-        bucket = client.bucket(bucket_name)
-
-        for root, _, files in os.walk(local_dir):
-          for file in files:
-            local_file = os.path.join(root, file)
-            rel_path = os.path.relpath(local_file, local_dir)
-            blob_name = os.path.join(prefix, rel_path)
-            blob = bucket.blob(blob_name)
-            blob.upload_from_filename(local_file)
-            max_logging.log(f"Uploaded {local_file} to gs://{bucket_name}/{blob_name}")
 
 
 def initialize_summary_writer(config):
