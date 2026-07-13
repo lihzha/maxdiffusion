@@ -572,17 +572,47 @@ def setup_initial_state(
 # -----------------------------------------------------------------------------
 
 
-def create_learning_rate_schedule(learning_rate, learning_rate_schedule_steps, warmup_steps_fraction, max_train_steps):
-  """Creates a warmup to constant learning rate schedule:
-  We take inspiration from WarmupHoldPolicy used in stable diffusion
-    see https://github.com/NVIDIA/NeMo/blob/dbc8a6ee490355bfa0cb1e10b8d199dcc47482e0/nemo/core/optim/lr_scheduler.py#L142
-  Learning rate schedule has either two parts:
-  1) Linear warmup from 0 to [learning_rate] over steps 0 to [learning_rate_schedule_steps * warmup_steps_fraction]
-  2) Constant learning rate of 0 afterwards.
+def create_learning_rate_schedule(
+    learning_rate,
+    learning_rate_schedule_steps,
+    warmup_steps_fraction,
+    max_train_steps,
+    schedule_type="constant",
+    end_value=0.0,
+):
+  """Creates a warmup learning-rate schedule with a selectable decay tail.
+
+  Every schedule linearly warms up from 0 to [learning_rate] over the first
+  int(learning_rate_schedule_steps * warmup_steps_fraction) steps. After warmup:
+
+  1) schedule_type="constant": hold at [learning_rate] indefinitely. This is the
+     original behavior, inspired by the NeMo WarmupHoldPolicy
+     (https://github.com/NVIDIA/NeMo/blob/dbc8a6ee490355bfa0cb1e10b8d199dcc47482e0/nemo/core/optim/lr_scheduler.py#L142).
+  2) schedule_type="cosine": cosine-decay from [learning_rate] down to [end_value]
+     over the remaining (learning_rate_schedule_steps - warmup) steps, then hold
+     at [end_value] for any step beyond learning_rate_schedule_steps. The decay
+     horizon is learning_rate_schedule_steps, so set it to the step at which you
+     intend training to end.
   """
   lr = learning_rate
-
   warmup_steps = int(learning_rate_schedule_steps * warmup_steps_fraction)
+
+  if schedule_type == "cosine":
+    # warmup_cosine_decay_schedule's decay_steps is the TOTAL horizon (warmup +
+    # cosine); the cosine phase runs for decay_steps - warmup_steps and holds at
+    # end_value afterward. The LR is driven by the optimizer-state step count,
+    # which is restored from checkpoints, so decay resumes correctly on preempt.
+    return optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=lr,
+        warmup_steps=warmup_steps,
+        decay_steps=learning_rate_schedule_steps,
+        end_value=end_value,
+    )
+
+  if schedule_type != "constant":
+    raise ValueError(f"Unknown learning_rate_schedule_type: {schedule_type!r} (expected 'constant' or 'cosine')")
+
   constant_zero_steps = max_train_steps - warmup_steps
 
   warmup_schedule = optax.linear_schedule(init_value=0.0, end_value=lr, transition_steps=warmup_steps)

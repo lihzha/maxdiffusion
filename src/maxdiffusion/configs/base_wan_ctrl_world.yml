@@ -234,7 +234,16 @@ global_batch_size_to_load: 1
 grad_accum_steps: 1  # number of micro-batches to accumulate before an optimizer update
 
 warmup_steps_fraction: 0.05
-learning_rate_schedule_steps: -1
+learning_rate_schedule_steps: -1   # decay horizon; -1 => use max_train_steps
+# Learning-rate decay tail after warmup:
+#   constant — hold at learning_rate forever (legacy). Past convergence this lets
+#              Adam's effective step grow as the 2nd moment decays, which slowly
+#              walks the weights out of the minimum (loss creeps up, grads spike).
+#   cosine   — cosine-decay learning_rate -> learning_rate * learning_rate_end_ratio
+#              over learning_rate_schedule_steps (or max_train_steps if -1), then
+#              hold at that floor. Set the horizon to where you intend to stop.
+learning_rate_schedule_type: cosine
+learning_rate_end_ratio: 0.0       # final LR = learning_rate * this (0.0 => decay to 0)
 save_optimizer: True
 
 adam_b1: 0.9

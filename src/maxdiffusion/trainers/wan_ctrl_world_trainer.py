@@ -443,11 +443,15 @@ class WanCtrlWorldTrainer:
             if self.config.learning_rate_schedule_steps > 0
             else num_steps
         )
+        schedule_type = getattr(self.config, "learning_rate_schedule_type", "constant")
+        end_ratio = getattr(self.config, "learning_rate_end_ratio", 0.0)
         lr_schedule = max_utils.create_learning_rate_schedule(
             self.config.learning_rate,
             schedule_steps,
             self.config.warmup_steps_fraction,
             num_steps,
+            schedule_type=schedule_type,
+            end_value=self.config.learning_rate * end_ratio,
         )
         tx = max_utils.create_optimizer(self.config, lr_schedule)
         return tx, lr_schedule
