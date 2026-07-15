@@ -14,7 +14,7 @@ A generalizable standard operating procedure for AI-assisted research experiment
 
 > **Reviewer reciprocity — no model reviews its own plan or code.** The Reviewer reviews **both the plan and the code**. If the main session (Planner/Coder) is **Claude**, the Reviewer is **OpenAI Codex** at its strongest setting — currently model `gpt-5.6-sol`, reasoning effort **Extra High** (`model_reasoning_effort = "xhigh"`) — via `codex mcp-server` (CLI fallback `codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh`). When Codex ships a stronger model/effort tier, upgrade the reviewer to it and update this line. If the main session is **Codex**, the Reviewer is **Claude Opus 4.8 at max effort**, invoked via the `claude` CLI. The Coder and Reviewer must always be different model families, so review is genuinely independent.
 
-> **Reviewer briefing — load context before verdict.** The Reviewer starts cold; every review call (plan or code) must have it load context **before** it sees the thing under review: (1) this SOP, the experiment's `_yixun_query.md`, and the approved `plan_*.md`; (2) the experiment's `_worklog.md` so far; (3) the `_analysis.md` / results of prior related experiments, so it knows what has already been tried and learned; (4) a short statement of what the current Coder round is for — the function/TDD unit, its contract, and its `<marker>`. The Reviewer runs with repo access, so point it at file paths to read rather than pasting content. Each review file opens by listing the context it loaded; a verdict produced without the briefing is invalid — re-run it.
+> **Reviewer briefing — load context before verdict.** The Reviewer starts cold; every review call (plan or code) must have it load context **before** it sees the thing under review: (1) this SOP, the experiment's `_yixun_query.md`, and the plan — for a plan review, the candidate `plan_*.md` under review; for a code review, the user-approved `plan_*.md`; (2) the experiment's `_worklog.md` so far; (3) the `_analysis.md` / results of prior related experiments, so it knows what has already been tried and learned; (4) a short statement of what the current Coder round is for — the function/TDD unit, its contract, and its `<marker>`. The Reviewer runs with repo access, so point it at file paths to read rather than pasting content. Each review file opens by listing the context it loaded; a verdict produced without the briefing is invalid — re-run it.
 
 ## Directory layout
 
@@ -23,9 +23,11 @@ All experiment bookkeeping lives in `worklog/` at the repo root:
 - `worklog/announcement/<NN>_<topic>.md` — standing directives from the user. **Read every announcement before planning or running anything.** New standing instructions get the next number.
 - `worklog/exp_<NN>_<exp name>_<primary_agent>/` — one folder per experiment, `<NN>` zero-padded and sequential; `<primary_agent>` = `claude` | `codex` (so `exp_<NN>_<exp name>_claude/` for Claude Code, `exp_<NN>_<exp name>_codex/` for Codex). **`<primary_agent>` is fixed when the experiment is scaffolded** — it does not change when a Coder or Reviewer is invoked, nor when another agent later resumes the experiment; record any such handoff in `_worklog.md` instead.
 
+**Assigning `<NN>`.** Before assigning `<NN>`, inspect the integration branch and all active experiment worktrees. Reserve the next number by committing the initial experiment scaffold before planning begins. Never reuse an experiment number, including for failed or abandoned experiments.
+
 ## Experiment isolation (branch + worktree)
 
-1. **New experiment = one branch + one worktree.** Each experiment `exp_<NN>_<exp name>_<primary_agent>` is developed in its own git worktree on its own branch, named `<primary_agent>-exp_<NN>_<exp name>-<YYYYMMDD>` — e.g. `claude-exp_01_sidewin-20260714` (Claude Code) or `codex-exp_01_sidewin-20260714` (Codex). The integration branch is **`yixun-dev`**. Keep using the same agent session; open/switch to that worktree to work on the experiment.
+1. **New experiment = one branch + one worktree.** Each experiment `exp_<NN>_<exp name>_<primary_agent>` is developed in its own git worktree on its own branch, named `<primary_agent>-exp_<NN>_<exp name>-<YYYYMMDD>` — e.g. `claude-exp_01_sidewin-20260714` (Claude Code) or `codex-exp_01_sidewin-20260714` (Codex). The integration branch is **`yixun-dev`**. Keep using the same agent session; open/switch to that worktree. Run every experiment command with the experiment worktree as its working directory. If the client cannot persistently switch working directories, start or resume a session rooted at that worktree. Record the absolute worktree path in `_worklog.md`.
 2. **During the experiment: commit only on the experiment branch.** All code and ALL experiment docs (plan / reviews / worklog / results / analysis / HTML — every file inside `docs/worklogs_yixun/exp_<NN>_<exp name>_<primary_agent>/`) are committed on the experiment branch only — never commit experiment code or those docs directly on `yixun-dev`.
 3. **Docs live on both branches, synced by git hook.** After any commit that touches `docs/worklogs_yixun/exp_<NN>_<exp name>_<primary_agent>/`, a git hook syncs that folder onto `yixun-dev` with `git restore --source=<exp-branch> -- <folder>` + a commit whose message includes the experiment-branch tip SHA. Never sync with filesystem `cp`. (This repo ships the hook as `.githooks/post-commit`, activated once per clone with `git config core.hooksPath .githooks`.)
 4. **Code promotes only on confirmed success.** Before merging experiment code into the integration branch (`yixun-dev`), ask Yixun whether the experiment succeeded. Merge the experiment code only if Yixun confirms success; a failed run's code stays unmerged on its branch — its docs are already on `yixun-dev` via the hook.
@@ -72,12 +74,14 @@ Each `_worklog.md` entry is one action, headed by an ISO-8601 UTC timestamp and 
 
 ## Test-driven development (TDD)
 
-Write the test before the code, for every non-trivial function — red → green → refactor:
+Write the test before the code, for every non-trivial behavior or contract — red → green → refactor:
 
 1. **Determine the test first.** For each small function, fix its contract and write `test_<function>` — concrete inputs → expected outputs plus edge cases — *before* the implementation exists. Run it; it must fail (red) for the right reason (missing/incorrect behavior, not an import typo).
 2. **Implement to green.** Write the minimal function that makes its test pass, then run the test to confirm green.
 3. **Refactor** with the test as a safety net, keeping it green.
-4. **One small commit per function** — its test and implementation together (test written first in the working tree), so every commit ships with a passing test. Split a function that needs several tests into several commits; keep each within the < 200-LOC rule.
+4. **One cohesive TDD unit per commit** — include all tests needed to establish that unit's contract together with its implementation (tests written first in the working tree), so every commit ships with its passing tests. Keep each commit within the < 200-LOC rule.
+
+**Red is mandatory where it means something.** A failing red test is mandatory for new behavior and bug fixes. For a behavior-preserving refactor, first add or confirm characterization tests; those tests may already pass before the refactor.
 
 **Close the cycle every round: write → review → strengthen.** Each patch (function / TDD unit) is a complete three-phase cycle, and the cycle must be **finished before the next patch starts**:
 
