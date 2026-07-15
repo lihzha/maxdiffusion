@@ -85,6 +85,13 @@ class NNXWanActionEncoder(nnx.Module):
             rngs=rngs,
             dtype=dtype,
             param_dtype=weights_dtype,
+            # Zero-init the output projection so the encoder starts as a no-op:
+            # action tokens are all-zero at step 0, so the pretrained cross-attention
+            # contributes ~nothing and training begins at the pretrained operating
+            # point (a true finetune) instead of being knocked off it by random
+            # conditioning — this removes the large initial loss + exponential drop.
+            # Bias defaults to zeros in nnx.Linear, so the output is exactly 0.
+            kernel_init=nnx.initializers.zeros,
         )
         # Learned slot embedding: attention over keys is permutation-invariant,
         # so without this the model couldn't tell which of the tokens_per_frame
