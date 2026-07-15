@@ -33,6 +33,9 @@ if [ -z "$int_wt" ]; then
 fi
 
 (
+  # Git exports GIT_DIR/GIT_INDEX_FILE to hooks; drop them so git commands
+  # below act on the integration worktree we cd into, not the exp worktree.
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
   cd "$int_wt" || exit 1
   # shellcheck disable=SC2086  # exp folder names are slugs, no spaces
   git restore --source="$branch" --worktree -- $folders || exit 1
