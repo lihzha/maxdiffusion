@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Experiment-isolation docs sync (experiment_SOP.md, "Experiment isolation" rule 3).
+#
+# On any commit to an experiment branch (<agent>-exp_*) that touches
+# docs/worklogs_yixun/exp_*/, mirror those folder(s) onto the integration
+# branch (yixun-dev) via `git restore --source=<exp-branch>` + commit.
+# Git-only sync — never filesystem cp. Activate once per clone with:
+#   git config core.hooksPath .githooks
+set -u
+
+INTEGRATION=yixun-dev
+DOCS_PREFIX='docs/worklogs_yixun/exp_'
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+case "$branch" in
+  claude-exp_* | codex-exp_*) ;;
+  *) exit 0 ;;
+esac
+
+# Exp-docs folders touched by the commit just made (top folder per path).
+folders=$(git diff-tree --no-commit-id --name-only -r HEAD -- "${DOCS_PREFIX}*" \
+  | sed -n "s|^\(${DOCS_PREFIX}[^/]*\)/.*|\1|p" | sort -u)
+[ -z "$folders" ] && exit 0
+
+tip=$(git rev-parse --short HEAD)
+
+# Find the worktree that has the integration branch checked out.
+int_wt=$(git worktree list --porcelain | awk -v ref="branch refs/heads/${INTEGRATION}" '
+  /^worktree /{wt=substr($0,10)} $0==ref{print wt; exit}')
+if [ -z "$int_wt" ]; then
+  echo "[exp-docs-sync] WARNING: ${INTEGRATION} not checked out in any worktree; docs NOT synced for: ${folders}" >&2
+  exit 0
+fi
+
+(
+  cd "$int_wt" || exit 1
+  # shellcheck disable=SC2086  # exp folder names are slugs, no spaces
+  git restore --source="$branch" --worktree -- $folders || exit 1
+  if git status --porcelain -- $folders | grep -q .; then
+    git add -A -- $folders
+    git commit --no-verify -m "docs(sync): $(echo $folders) from ${branch} @ ${tip}" -- $folders \
+      && echo "[exp-docs-sync] synced onto ${INTEGRATION}: ${folders}"
+  else
+    echo "[exp-docs-sync] ${INTEGRATION} already up to date for: ${folders}"
+  fi
+)
