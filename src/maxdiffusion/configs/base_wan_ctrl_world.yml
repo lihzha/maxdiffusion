@@ -58,7 +58,12 @@ unet_checkpoint: ''
 revision: ''
 
 from_pt: True
-weights_dtype: 'bfloat16'
+# fp32 master weights + fp32 Adam moments (moments inherit the param dtype in
+# create_optimizer). At lr=1e-5 a bf16 update (~1e-5) rounds away against bf16's
+# ~2^-8 relative resolution for weights >~2.6e-3, so bf16 params barely update —
+# fatal for the from-scratch action encoder. Compute stays bf16 via
+# activations_dtype below (mixed precision).
+weights_dtype: 'float32'
 activations_dtype: 'bfloat16'
 precision: "DEFAULT"
 scan_layers: True
@@ -248,8 +253,13 @@ save_optimizer: True
 
 adam_b1: 0.9
 adam_b2: 0.999
-adam_eps: 1.e-8
-adam_weight_decay: 0.0
+# Raised from 1e-8: past convergence, grads shrink → Adam's 2nd moment v decays →
+# effective step lr/(√v+eps) grows and walks weights out of the minimum. A larger
+# eps floors √v+eps and caps that effective-LR growth (the late-run loss climb).
+adam_eps: 1.e-6
+# Raised from 0.0: restoring force toward 0, matters with the normalization layers;
+# further damps the post-convergence drift.
+adam_weight_decay: 0.01
 opt_enable_grad_clipping: False
 max_grad_value: 1.0
 opt_enable_grad_global_norm_clipping: True

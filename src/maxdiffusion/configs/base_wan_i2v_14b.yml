@@ -383,6 +383,12 @@ enable_ssim: False
 # URL or local path to the conditioning image
 image_url: "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/astronaut.jpg"
 
+# JSONL of {"video", "prompt", "negative_prompt"} entries for generate_wan_droid.py.
+# Each entry's video first frame is used as the I2V image anchor. Empty = disabled.
+prompts_jsonl: ""
+# Maximum number of prompts_jsonl entries to generate (-1 = all).
+max_samples: -1
+
 # ML Diagnostics settings
 enable_ml_diagnostics: False
 profiler_gcs_path: ""

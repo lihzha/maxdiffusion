@@ -112,7 +112,7 @@ python src/maxdiffusion/train_wan.py \
     action_stats_path=gs://v6_east1d/wan2.2_tfr_dataset_lowres_downsampled/stats.json \
     cache_latents_text_encoder_outputs=True \
     attention=tokamax_flash \
-    weights_dtype=bfloat16 \
+    weights_dtype=float32 \
     activations_dtype=bfloat16 \
     remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
     ici_data_parallelism=1 \

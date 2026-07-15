@@ -341,6 +341,9 @@ conditioning_video: "" #"test_droid_inference.mp4"
 # Directory containing val TFRecords (same format as training: latent_cam0/1/2 + text_embed).
 # When set, bypasses image_url/conditioning_video and loads pre-encoded latents directly.
 val_data_dir: ""
+# JSONL of {"video", "prompt", "negative_prompt"} entries for generate_wan_droid.py.
+# Each entry's video first frame is used as the TI2V image anchor. Empty = disabled.
+prompts_jsonl: ""
 # Which sample index to use from the val dataset (0-indexed).
 val_sample_index: 0
 
