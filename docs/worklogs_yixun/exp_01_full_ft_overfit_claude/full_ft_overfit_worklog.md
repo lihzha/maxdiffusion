@@ -21,3 +21,13 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `in_progress` — plan drafted, Codex review being invoked next.
 - **Analysis** — Subclassing the side-adapter trainer maximizes parity (same iterator/sigmas/noise/mask by imported code, not re-implementation), which is the whole point of a diagnostic.
 - **Next** — Briefed Codex `gpt-5.6-sol` xhigh plan review → `full_ft_overfit_codex_plan_review.md` → resolve findings → re-review if material → surface to Yixun for approval.
+
+## 2026-07-16T03:35:00Z — Codex plan review round 1: REQUEST-REVISION → plan v2
+
+- **Goal** — Close the plan-review cycle: verdict, resolutions, revision.
+- **Change** — Saved `full_ft_overfit_codex_plan_review.md` (Codex gpt-5.6-sol xhigh; REQUEST-REVISION; 1 BLOCKER / 7 MAJOR / 2 MINOR). Accepted all 10 findings; rewrote `plan_full_ft_overfit.md` to v2; appended per-finding resolutions to the review file.
+- **Version Control** — exp branch `claude-exp_01_full_ft_overfit-20260715`; prior tip `ce5fc4f`.
+- **Command / Validation** — Reviewer's factual claims spot-verified against `docs/side_adaptor.md`: train set = 1,440,554 windows (10k@512 = 3.55 passes, NOT "many epochs"); fresh side-adapter val SSIM 0.615–0.664 (my 0.29 "threshold" was the pre-context number and cross-split — both my errors, both real.
+- **Result** — `fix_ready` — v2 keys: fresh-noise enforced at wrapper+trainer (BLOCKER F1); CFG wording corrected (5× pre-optimizer gradient, not 5× LR); shared objective helpers so both trainers run the same code; cohort-based memorization metric vs pretrained step-0 baseline; §2.4 escalation (30k → LR control → fp32-opt-state control) gates any negative verdict; 5 focused Coder rounds.
+- **Analysis** — Review caught one launch-path landmine (wrapper fixed-noise default) that the config-level parity audit would likely have missed until a broken run: cross-model review paying for itself before any code exists.
+- **Next** — Re-review of plan v2 (material revision), then surface plan + review + resolutions to Yixun for approval.
