@@ -33,3 +33,15 @@ A full finetune removes the adapter + frozen-backbone variable. If a fully-train
 2. **Conditioning** — the DROID cache carries `actions [32,7]`, but plain Wan TI2V does not consume actions. Does the probe condition on first-frame latent only (`z_i0`), first-frame + text, or also actions? (For pure memorization, first-frame + video target likely suffices; adding actions changes what "overfit" means.)
 3. **Overfit protocol** — tiny fixed subset (e.g. 1–8 clips) vs. full DROID; step budget; LR / schedule / optimizer for full-FT of a 5B model; batch size that fits on the target TPU (and whether FSDP is still needed with the whole backbone trainable).
 4. **Success metric** — train-loss curve **plus** reconstruction of the *exact training clips* (latent MSE / pixel MSE / SSIM on the memorized set) — this is a memorization probe, so held-out generalization is explicitly not the target.
+
+## Query 2 — 2026-07-16 (design decisions, from Yixun)
+
+**Verbatim:**
+
+> Planner use Fable as the planner, the same architecture as I have mentioned in @docs/worklogs_yixun/experiment_SOP.md . for design, make this no adapter, purely unfreeze backbone of wan (fin tune), wan transformer trainable, and contition the overfit probe on just first-frame + video. Overfit on full DROID.
+
+**Decisions locked:**
+- **Planner** = Claude Fable 5 (max effort), per the SOP roles table (session switched to Fable 5 for planning).
+- **Architecture** = NO adapter; the Wan2.2 TI2V 5B **transformer backbone is fully unfrozen and trainable** (full finetune). Answers open question 1's direction: plain backbone, no adapter modules at all.
+- **Conditioning** = first-frame latent (`z_i0` pinning) + video target only. **No action conditioning.** (Text stays the fixed null-prompt embedding the pipeline already uses — it is a constant, not a per-sample condition.) Answers open question 2.
+- **Data** = overfit on **full DROID** train split (not a tiny subset). Answers the subset half of open question 3; step budget / LR / batch resolved in the plan.
