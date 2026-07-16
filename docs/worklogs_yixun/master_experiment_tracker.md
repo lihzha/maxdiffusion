@@ -4,6 +4,15 @@ Cross-experiment status index — one section per experiment/run, newest first. 
 
 Last updated: 2026-07-15
 
+## exp_01 `full_ft_overfit` — full-FT overfit diagnostic
+
+- **What:** Plain Wan TI2V **full finetune** (backbone unfrozen, **no adapter**) overfit sanity check on DROID. Diagnostic to separate **(A)** "data/loss/pipeline broken" from **(B)** "frozen-backbone + adapter optimization too hard". Explicitly **NOT** the long-term method.
+- **Status:** SCAFFOLDED (2026-07-16) — bookkeeping only; plan not yet written.
+- **Branch / worktree:** `claude-exp_01_full_ft_overfit-20260715` off `yixun-dev` @ `8258965`; worktree `/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_01_full_ft_overfit`. Exp-docs auto-sync to `yixun-dev` via `.githooks/post-commit`.
+- **Docs:** `docs/worklogs_yixun/exp_01_full_ft_overfit_claude/` — `_yixun_query.md`, `_worklog.md`.
+- **Decision rule:** overfits fast → pipeline OK, continue adapter work; can't overfit after substantial steps → debug data / loss / noise / CFG / latent alignment first.
+- **Next:** `plan_full_ft_overfit.md` (Planner) → Codex `gpt-5.6-sol` xhigh plan review → user approval. Open questions: trainer path (`WanTI2VTrainer` vs. adapter-trainer-with-adapter-off), action conditioning, overfit subset/steps/LR, success metric.
+
 ## Run: wan-pre_context-v6e64-full-gbs512-fresh-20260629-034110
 
 - **What:** `pre_context` adapter (~128M trainable) on frozen Wan2.2 TI2V 5B; DROID first-frame + 32×7 actions → video latents. v6e-64, global batch 512, pure FSDP, `side_adapter_noise_mode=fresh`, 30k steps.
@@ -25,4 +34,4 @@ Side-adapter (~240M) and earlier pre-context history: see `docs/side_adaptor.md`
 - Codex reviewer: CLI 0.144.1 (`codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh`), MCP server `codex` wired at user scope; verified working 2026-07-12.
 - Submodule: `third_party/Wan2.2` = lihzha/Wan2.2 @ `f370228`.
 - Handoff automation: `.claude/settings.local.json` + `.claude/hooks/handoff_snapshot.sh` (both gitignored, local-only) fire on `ConfigChange` / `PreCompact` / `SessionEnd` — they append a git-state breadcrumb to `docs/worklogs_yixun/_handoff_events.log` and nudge to refresh the handoff docs. No hook exists for a model exhausting its quota, so that trigger is proactive-only. Full protocol in `CLAUDE.md`. To re-create on a fresh clone: recreate those two files (gitignored) and open `/hooks` once.
-- Branch: `yixun-dev`; no experiment folders (`exp_<NN>_…`) created yet — the next experiment starts at `exp_01`.
+- Branch: `yixun-dev` (integration). Experiments so far: `exp_01_full_ft_overfit` (scaffolded, on branch `claude-exp_01_full_ft_overfit-20260715`). Next experiment number is `exp_02`.
