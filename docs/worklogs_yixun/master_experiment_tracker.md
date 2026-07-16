@@ -2,7 +2,7 @@
 
 Cross-experiment status index — one section per experiment/run, newest first. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`. Per-experiment detail lives in `exp_<NN>_<name>_claude/` folders per `experiment_SOP.md`; this file is the at-a-glance map.
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 ## Run: wan-pre_context-v6e64-full-gbs512-fresh-20260629-034110
 
@@ -24,4 +24,5 @@ Side-adapter (~240M) and earlier pre-context history: see `docs/side_adaptor.md`
 - SOP: `docs/worklogs_yixun/experiment_SOP.md` — three-role separation (Planner Fable 5 / Coder Opus 4.8 max / Reviewer Codex `gpt-5.6-sol` xhigh), closed write→review→strengthen cycles, TDD tests in `src/maxdiffusion/tests/worklogs_yixun/`, every launch logged in `_command.md` at launch time.
 - Codex reviewer: CLI 0.144.1 (`codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh`), MCP server `codex` wired at user scope; verified working 2026-07-12.
 - Submodule: `third_party/Wan2.2` = lihzha/Wan2.2 @ `f370228`.
+- Handoff automation: `.claude/settings.local.json` + `.claude/hooks/handoff_snapshot.sh` (both gitignored, local-only) fire on `ConfigChange` / `PreCompact` / `SessionEnd` — they append a git-state breadcrumb to `docs/worklogs_yixun/_handoff_events.log` and nudge to refresh the handoff docs. No hook exists for a model exhausting its quota, so that trigger is proactive-only. Full protocol in `CLAUDE.md`. To re-create on a fresh clone: recreate those two files (gitignored) and open `/hooks` once.
 - Branch: `yixun-dev`; no experiment folders (`exp_<NN>_…`) created yet — the next experiment starts at `exp_01`.

@@ -192,3 +192,8 @@ slurm_outputs
 *tfrecords*
 wan-ctrl-world-output
 CLAUDE.md
+
+# Claude Code personal/local config + handoff hook (Yixun)
+.claude/settings.local.json
+.claude/hooks/
+docs/worklogs_yixun/_handoff_events.log
