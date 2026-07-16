@@ -45,3 +45,11 @@ A full finetune removes the adapter + frozen-backbone variable. If a fully-train
 - **Architecture** = NO adapter; the Wan2.2 TI2V 5B **transformer backbone is fully unfrozen and trainable** (full finetune). Answers open question 1's direction: plain backbone, no adapter modules at all.
 - **Conditioning** = first-frame latent (`z_i0` pinning) + video target only. **No action conditioning.** (Text stays the fixed null-prompt embedding the pipeline already uses — it is a constant, not a per-sample condition.) Answers open question 2.
 - **Data** = overfit on **full DROID** train split (not a tiny subset). Answers the subset half of open question 3; step budget / LR / batch resolved in the plan.
+
+## Query 3 — 2026-07-16 (pre-approval, from Yixun)
+
+**Verbatim:**
+
+> Pre-approve conditional on APPROVE verdict, start coder round 1 immediately
+
+**Interpretation:** plan v2 is approved by Yixun **conditional on the pending Codex re-review returning APPROVE**. On APPROVE: start Coder round 1 (shared-objective-helpers) immediately, no further ask. On any other verdict (APPROVE-WITH-CHANGES / REQUEST-REVISION): the conditional does NOT trigger — resolve findings and return to Yixun.

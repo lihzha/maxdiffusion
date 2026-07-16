@@ -31,3 +31,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `fix_ready` — v2 keys: fresh-noise enforced at wrapper+trainer (BLOCKER F1); CFG wording corrected (5× pre-optimizer gradient, not 5× LR); shared objective helpers so both trainers run the same code; cohort-based memorization metric vs pretrained step-0 baseline; §2.4 escalation (30k → LR control → fp32-opt-state control) gates any negative verdict; 5 focused Coder rounds.
 - **Analysis** — Review caught one launch-path landmine (wrapper fixed-noise default) that the config-level parity audit would likely have missed until a broken run: cross-model review paying for itself before any code exists.
 - **Next** — Re-review of plan v2 (material revision), then surface plan + review + resolutions to Yixun for approval.
+
+## 2026-07-16T04:05:00Z — Conditional user approval recorded
+
+- **Goal** — Record the approval gate state before the re-review verdict lands.
+- **Change** — Query 3 appended to `_yixun_query.md`: plan v2 pre-approved conditional on the Codex re-review verdict being APPROVE; Coder round 1 (shared-objective-helpers) to start immediately on that verdict. Any other verdict returns to Yixun.
+- **Result** — `in_progress` — re-review (Codex gpt-5.6-sol xhigh) still running.
+- **Next** — On APPROVE: append re-review to the review file, commit, launch Coder round 1 (Opus 4.8 max subagent, test-first, in the exp worktree, no commits — commit happens at cycle close after review+strengthen).
