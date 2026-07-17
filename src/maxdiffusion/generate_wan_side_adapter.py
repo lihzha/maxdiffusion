@@ -36,12 +36,15 @@ from maxdiffusion.models.wan.side_adapter_wan import (
     rollout_timesteps_from_sigmas,
     wan_action_adapter_forward,
 )
+from maxdiffusion.trainers.wan_ti2v_full_ft_trainer import (
+    FullFTTrainState,
+    WanTI2VFullFTTrainer,
+)
 from maxdiffusion.trainers.wan_ti2v_side_adapter_trainer import (
     TrainState,
     WanTI2VSideAdapterTrainer,
 )
 from maxdiffusion.utils import export_to_video
-
 
 jax.config.update("jax_use_shardy_partitioner", True)
 
@@ -65,7 +68,37 @@ def _tfrecord_files(data_dir: str) -> list[str]:
     return files
 
 
-def _read_eval_samples(config, count: int, start_index: int) -> list[EvalSample]:
+def _parse_ordinals(text) -> list[int]:
+    """Parse the comma-separated ``validation_ordinals`` config value into positions.
+
+    Empty / whitespace-only -> ``[]`` (the reader then uses the contiguous
+    ``validation_start_index`` read). Non-integer or negative tokens are rejected with
+    an actionable error.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    out: list[int] = []
+    for token in text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError as exc:
+            raise ValueError(f"validation_ordinals must be comma-separated integers; got token {token!r}") from exc
+        if value < 0:
+            raise ValueError(f"validation_ordinals entries must be non-negative dataset positions; got {value}")
+        out.append(value)
+    return out
+
+
+def _iter_parsed_records(config):
+    """Yield parsed (numpy-decoded) records from the eval TFRecord shards, in order.
+
+    The single TFRecord iteration seam: tests monkeypatch this to feed a fake record
+    sequence without constructing any tf.data graph.
+    """
     feature_description = {
         "name": tf.io.FixedLenFeature([], tf.string, default_value=b""),
         "ordinal": tf.io.FixedLenFeature([], tf.int64, default_value=-1),
@@ -74,6 +107,58 @@ def _read_eval_samples(config, count: int, start_index: int) -> list[EvalSample]
         "actions": tf.io.FixedLenFeature([], tf.string),
         "meta_json": tf.io.FixedLenFeature([], tf.string, default_value=b"{}"),
     }
+    ds = tf.data.TFRecordDataset(_tfrecord_files(config.eval_data_dir))
+    ds = ds.map(lambda raw: tf.io.parse_single_example(raw, feature_description))
+    return ds.as_numpy_iterator()
+
+
+def _select_eval_records(record_iter, *, ordinals, start_index, count, source=""):
+    """Select ``(position, raw)`` pairs from a forward iterator of parsed records.
+
+    CONTRACT (plan §2.3 cohort protocol):
+      * ``ordinals`` non-empty: the records at exactly those 0-based dataset POSITIONS
+        (the same coordinate as ``validation_start_index`` -- NOT the stored ``ordinal``
+        field), returned IN THE LISTED ORDER (duplicates preserved), so the per-sample
+        rollout seed that ``run()`` derives in iteration order is user-controlled. The
+        iterator is consumed only up to the largest requested position (early stop). A
+        position past the end raises an actionable error naming the offending ordinal(s)
+        and the number of records seen.
+      * ``ordinals`` empty: the contiguous ``skip(start_index).take(count)`` read --
+        byte-identical to the pre-cohort behavior -- also early-stopping at
+        ``start_index + count``.
+    """
+    if ordinals:
+        wanted = set(ordinals)
+        max_ordinal = max(ordinals)
+        found: dict[int, object] = {}
+        seen = 0
+        for position, raw in enumerate(record_iter):
+            seen = position + 1
+            if position in wanted:
+                found[position] = raw
+            if position >= max_ordinal:
+                break
+        missing = [o for o in ordinals if o not in found]
+        if missing:
+            where = f" in {source}" if source else ""
+            raise ValueError(
+                f"validation_ordinals out of range{where}: {missing} not found; the dataset yielded only "
+                f"{seen} records, so every ordinal must be in [0, {seen})."
+            )
+        return [(o, found[o]) for o in ordinals]
+
+    selected: list[tuple[int, object]] = []
+    stop = start_index + count
+    for position, raw in enumerate(record_iter):
+        if position < start_index:
+            continue
+        if position >= stop:
+            break
+        selected.append((position, raw))
+    return selected
+
+
+def _read_eval_samples(config, count: int, start_index: int) -> list[EvalSample]:
     c = int(config.latent_channels)
     f = int(config.latent_frames)
     h = int(config.latent_height)
@@ -81,13 +166,18 @@ def _read_eval_samples(config, count: int, start_index: int) -> list[EvalSample]
     action_len = int(config.action_len)
     action_dim = int(config.action_dim)
 
-    ds = tf.data.TFRecordDataset(_tfrecord_files(config.eval_data_dir))
-    ds = ds.map(lambda raw: tf.io.parse_single_example(raw, feature_description))
-    ds = ds.skip(max(0, int(start_index))).take(max(1, int(count)))
+    ordinals = _parse_ordinals(getattr(config, "validation_ordinals", ""))
+    selected = _select_eval_records(
+        _iter_parsed_records(config),
+        ordinals=ordinals,
+        start_index=max(0, int(start_index)),
+        count=max(1, int(count)),
+        source=config.eval_data_dir,
+    )
 
     samples: list[EvalSample] = []
-    for fallback_idx, raw in enumerate(ds.as_numpy_iterator()):
-        name = raw["name"].decode("utf-8") or f"sample_{start_index + fallback_idx:06d}"
+    for position, raw in selected:
+        name = raw["name"].decode("utf-8") or f"sample_{position:06d}"
         meta_bytes = raw["meta_json"] or b"{}"
         try:
             meta = json.loads(meta_bytes.decode("utf-8"))
@@ -108,10 +198,17 @@ def _read_eval_samples(config, count: int, start_index: int) -> list[EvalSample]
     return samples
 
 
-def _rollout_sample(state: TrainState, data: dict, rng: jax.Array, scheduler, config):
+def _rollout_sample(state, data: dict, rng: jax.Array, scheduler, config):
     weights_dtype = _dtype(config.weights_dtype)
-    adapters = nnx.merge(state.graphdef, state.params, state.rest_of_state)
-    transformer = nnx.merge(state.transformer_graphdef, state.transformer_params, state.transformer_rest)
+    is_full_ft = getattr(config, "model_type", "") == "FULL_FT_TI2V"
+    if is_full_ft:
+        # full-FT: the transformer IS the trainable module (``params``/``rest_of_state``
+        # are its own); no adapter is merged and the body issues one plain forward.
+        transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+        adapters = None
+    else:
+        adapters = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+        transformer = nnx.merge(state.transformer_graphdef, state.transformer_params, state.transformer_rest)
 
     z_i0 = data["z_i0"].astype(weights_dtype)
     z_video = data["z_video"].astype(weights_dtype)
@@ -136,25 +233,36 @@ def _rollout_sample(state: TrainState, data: dict, rng: jax.Array, scheduler, co
     def _body(i, current):
         step_t = jnp.broadcast_to(timesteps[i], (b,))
         timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
-        v_cond = wan_action_adapter_forward(
-            transformer,
-            adapters,
-            hidden_states=current,
-            timestep=timestep_2d,
-            encoder_hidden_states=null_context,
-            actions=actions,
-            deterministic=True,
-        )
-        if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
-            v_uncond = transformer(
+        if is_full_ft:
+            # one plain transformer forward: no adapter, no actions, no CFG (plan §3).
+            # Structurally the same call as the adapter path's frozen v_uncond branch
+            # below, but here it is the trainable prediction itself.
+            v = transformer(
                 hidden_states=current,
                 timestep=timestep_2d,
                 encoder_hidden_states=null_context,
                 deterministic=True,
             )
-            v = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
         else:
-            v = v_cond
+            v_cond = wan_action_adapter_forward(
+                transformer,
+                adapters,
+                hidden_states=current,
+                timestep=timestep_2d,
+                encoder_hidden_states=null_context,
+                actions=actions,
+                deterministic=True,
+            )
+            if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
+                v_uncond = transformer(
+                    hidden_states=current,
+                    timestep=timestep_2d,
+                    encoder_hidden_states=null_context,
+                    deterministic=True,
+                )
+                v = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
+            else:
+                v = v_cond
         return apply_first_frame_pin(current + (sigmas[i + 1] - sigmas[i]).astype(current.dtype) * v, z_i0)
 
     z_pred = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), _body, z)
@@ -169,7 +277,7 @@ def _rollout_sample(state: TrainState, data: dict, rng: jax.Array, scheduler, co
     return z_pred, metrics
 
 
-def _restore_validation_state(config):
+def _build_side_adapter_validation_state(config):
     trainer = WanTI2VSideAdapterTrainer(config)
     pipeline = trainer._load_wan_pipeline()
     mesh = pipeline.mesh
@@ -198,8 +306,67 @@ def _restore_validation_state(config):
     )
     del pipeline.transformer
     state, state_shardings = trainer._shard_state(mesh, state)
+    return trainer, pipeline, mesh, state, state_shardings
 
-    ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, config.run_name, "checkpoints")
+
+def _build_full_ft_validation_state(config):
+    """Build the full-FT validation state: the transformer IS the trainable module.
+
+    Mirrors the side-adapter builder but splits the transformer as the trainable
+    ``params`` (no adapter is built), reusing the full-FT trainer's pipeline load,
+    null-context, optimizer, and (keep-computed-FSDP) ``_shard_state`` -- so the state
+    layout matches what training checkpointed.
+    """
+    trainer = WanTI2VFullFTTrainer(config)
+    pipeline = trainer._load_wan_pipeline()
+    mesh = pipeline.mesh
+    null_context = trainer._compute_null_context(pipeline, mesh)
+    if hasattr(pipeline, "text_encoder"):
+        del pipeline.text_encoder
+    if hasattr(pipeline, "tokenizer"):
+        del pipeline.tokenizer
+
+    with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+        transformer_graphdef, transformer_params, transformer_rest = nnx.split(pipeline.transformer, nnx.Param, ...)
+
+    tx, _ = trainer._build_optimizer(config.max_train_steps)
+    state = FullFTTrainState.create(
+        apply_fn=transformer_graphdef.apply,
+        params=transformer_params,
+        tx=tx,
+        graphdef=transformer_graphdef,
+        rest_of_state=transformer_rest,
+        null_context=null_context,
+    )
+    del pipeline.transformer
+    state, state_shardings = trainer._shard_state(mesh, state)
+    return trainer, pipeline, mesh, state, state_shardings
+
+
+def _restore_checkpoint_state(config, state, ckpt_dir, *, cohort_mode=False):
+    """Restore params/opt_state/step from the Orbax Composite checkpoint into ``state``.
+
+    Shared by the side-adapter and full-FT validation paths: the Composite layout
+    (params + opt_state via ``StandardCheckpointHandler``, step via JSON, read-only
+    manager) matches the trainers' ``_save_checkpoint``. Returns ``(restored_state, step)``.
+
+    ``cohort_mode`` (full-FT cohort evaluation, plan §2.3) enables two behaviors:
+      * ``checkpoint_step == 0`` -> roll out the freshly-loaded pretrained weights: Orbax
+        is NOT consulted (no manager built) and ``state`` is returned unchanged with
+        step 0 (the within-cohort baseline needs no checkpoint).
+      * ``checkpoint_step == N > 0`` must name an existing checkpoint; a missing N raises
+        an actionable error listing the available steps (the cohort evaluates specific
+        steps 2500/5000/7500/10000, so a bare Orbax failure would be unhelpful).
+    In cohort mode the restored JSON step is also written into ``state.step`` (F1: the
+    generic restore covers params/opt_state/STEP per the round-3 binding note), and the
+    empty-directory error names the full-FT mode (F4). With ``cohort_mode=False`` the
+    step resolution, state fields, and error message are byte-identical to the original
+    side-adapter path (``requested if requested > 0 else latest_step()``).
+    """
+    requested = int(getattr(config, "checkpoint_step", -1))
+    if cohort_mode and requested == 0:
+        max_logging.log("[wan_side_adapter_val] checkpoint_step=0: pretrained baseline, skipping Orbax restore")
+        return state, 0
     manager = ocp.CheckpointManager(
         ckpt_dir,
         item_names=("params", "opt_state", "step"),
@@ -210,10 +377,20 @@ def _restore_validation_state(config):
         },
         options=ocp.CheckpointManagerOptions(read_only=True),
     )
-    requested = int(getattr(config, "checkpoint_step", -1))
-    step = requested if requested > 0 else manager.latest_step()
-    if step is None:
-        raise ValueError(f"No adapter checkpoints found in {ckpt_dir}")
+    if cohort_mode and requested > 0:
+        available = list(manager.all_steps())
+        if requested not in available:
+            raise ValueError(
+                f"checkpoint_step={requested} not found in {ckpt_dir}; available steps: {sorted(available)}"
+            )
+        step = requested
+    else:
+        step = requested if requested > 0 else manager.latest_step()
+        if step is None:
+            # F4: name the actual mode -- outside cohort mode this stays byte-identical
+            # to the historical adapter message.
+            kind = "full-FT" if cohort_mode else "adapter"
+            raise ValueError(f"No {kind} checkpoints found in {ckpt_dir}")
     restored = manager.restore(
         step,
         args=ocp.args.Composite(
@@ -224,8 +401,59 @@ def _restore_validation_state(config):
     )
     state = state.replace(params=restored["params"], opt_state=restored["opt_state"])
     restored_step = int(restored["step"]["step"])
+    if cohort_mode:
+        # F1: the generic restore covers params/opt_state/STEP -- the restored step goes
+        # into the state itself, not only the returned scalar (round-3 binding note).
+        # Full-FT-only: the adapter path's state.step stays exactly as before.
+        state = state.replace(step=restored_step)
     max_logging.log(f"[wan_side_adapter_val] restored step={restored_step} from {ckpt_dir}")
+    return state, restored_step
+
+
+def _restore_validation_state(config):
+    is_full_ft = getattr(config, "model_type", "") == "FULL_FT_TI2V"
+    if is_full_ft:
+        trainer, pipeline, mesh, state, state_shardings = _build_full_ft_validation_state(config)
+    else:
+        trainer, pipeline, mesh, state, state_shardings = _build_side_adapter_validation_state(config)
+
+    ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, config.run_name, "checkpoints")
+    state, restored_step = _restore_checkpoint_state(config, state, ckpt_dir, cohort_mode=is_full_ft)
     return trainer, pipeline, mesh, state, state_shardings, restored_step
+
+
+def _validation_config_artifact(config, checkpoint_step: int, num_samples: int, seed: int) -> dict:
+    """The provenance dict ``run()`` writes to ``<step_root>/config.json``.
+
+    Adapter modes: byte-identical to the historical artifact. FULL_FT_TI2V (F3):
+    ``action_adapter_type`` is dropped (no adapter exists in a full-FT run),
+    ``model_type`` and the RESOLVED ``validation_ordinals`` (ordered dataset positions,
+    plan §2.3 cohort) are recorded -- that list order IS the per-sample seed-assignment
+    order, because ``run()`` splits the rollout rng sequentially over samples in exactly
+    this order. When ordinals select the cohort, the contiguous
+    ``validation_start_index`` is ignored and therefore omitted; with no ordinals the
+    contiguous selector is in effect and the index stays on record.
+    """
+    artifact = {
+        "run_name": config.run_name,
+        "checkpoint_dir": config.checkpoint_dir,
+        "checkpoint_step": checkpoint_step,
+        "eval_data_dir": config.eval_data_dir,
+        "num_eval_videos": num_samples,
+        "validation_start_index": int(getattr(config, "validation_start_index", 0)),
+        "seed": seed,
+        "side_adapter_sampling_steps": int(config.side_adapter_sampling_steps),
+        "side_adapter_guide_scale": float(config.side_adapter_guide_scale),
+        "action_adapter_type": getattr(config, "action_adapter_type", "side_adapter"),
+    }
+    if getattr(config, "model_type", "") == "FULL_FT_TI2V":
+        del artifact["action_adapter_type"]
+        ordinals = _parse_ordinals(getattr(config, "validation_ordinals", ""))
+        artifact["model_type"] = config.model_type
+        artifact["validation_ordinals"] = ordinals
+        if ordinals:
+            del artifact["validation_start_index"]
+    return artifact
 
 
 def _write_json(path: str, value: dict):
@@ -319,19 +547,7 @@ def run(argv: Sequence[str]) -> None:
     if jax.process_index() == 0:
         tf.io.gfile.makedirs(step_root)
         _write_json(
-            f"{step_root}/config.json",
-            {
-                "run_name": config.run_name,
-                "checkpoint_dir": config.checkpoint_dir,
-                "checkpoint_step": checkpoint_step,
-                "eval_data_dir": config.eval_data_dir,
-                "num_eval_videos": len(samples),
-                "validation_start_index": int(getattr(config, "validation_start_index", 0)),
-                "seed": seed,
-                "side_adapter_sampling_steps": int(config.side_adapter_sampling_steps),
-                "side_adapter_guide_scale": float(config.side_adapter_guide_scale),
-                "action_adapter_type": getattr(config, "action_adapter_type", "side_adapter"),
-            },
+            f"{step_root}/config.json", _validation_config_artifact(config, checkpoint_step, len(samples), seed)
         )
 
     rows = []

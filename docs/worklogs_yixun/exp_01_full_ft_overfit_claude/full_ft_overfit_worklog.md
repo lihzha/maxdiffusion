@@ -119,3 +119,19 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Command / Validation** — 50/50 green (Coder run + orchestrator's independent rerun, 11.6s); 7/7 revert-mutants caught, sha256-verified restorations; ruff/py_compile clean. Safety-classifier-unavailable note on the subagent run → orchestrator manually verified touched-file scope + suite before commit.
 - **Result** — `passed` — strengthening record appended; cycle-3 commit is this commit.
 - **Next** — Round 4 `ckpt-generation` per plan §3 + the round-3 review's gate note: behavioral proof of params/opt_state/step restore into `FullFTTrainState`, `checkpoint_step: 0` bypass, `validation_ordinals` reader, plain-transformer rollout branch. No round-5 config/launcher work.
+
+## 2026-07-17T21:25:00Z — Coder round 4 (ckpt-generation): write phase complete
+
+- **Goal** — Round 4 of 5: validation-side plumbing — restore into `FullFTTrainState`, step-0 baseline bypass, `validation_ordinals` cohort reader, plain-transformer rollout branch.
+- **Change** — `generate_wan_side_adapter.py` +212/−29 (net +183): `_restore_validation_state` → thin dispatcher over `_build_side_adapter_validation_state` (original body moved verbatim) / `_build_full_ft_validation_state`; shared `_restore_checkpoint_state` with full-FT-only (`cohort_mode`) step-0 bypass + actionable missing-step error; `_iter_parsed_records`/`_select_eval_records` seam honoring `validation_ordinals` (0-based dataset POSITIONS, listed order, duplicates preserved, out-of-range ValueError, empty → contiguous fallback byte-identical); `_rollout_sample` full-FT branch (no adapter fields, plain transformer). 15 new tests across 2 files.
+- **Command / Validation** — RED: missing names/branches (14 failed, 1 guard green) → GREEN: 65/65 in ~13s; py_compile/black/ruff clean; 5 revert-mutants (restore→init, step-0-no-bypass, ordinals-sorted, contiguous off-by-one, forward-branch-off) all caught, sha256-verified restores.
+- **Result** — `passed` (write phase). Coder-flagged for review: step-0/missing-N gating to full-FT-only (protects adapter semantics); +183 LOC vs plan's ~60 (relocation + docstrings + testability seams); `validation_ordinals` NOT added to the shared `config.json` artifact (would touch adapter output; cohort recorded in `_command.md` per §2.3).
+- **Next** — Briefed Codex review (marker `ckpt-generation`) → strengthen → cycle-4 commit.
+
+## 2026-07-17T23:05:00Z — Coder round 4: strengthen complete → cycle 4 CLOSED
+
+- **Goal** — Resolve round-4 findings F1–F4; close the cycle.
+- **Change** — Restored step written into `FullFTTrainState` (cohort mode); production dispatcher/builder behavioral tests (cohort_mode=False and builder-swap production mutants killed); honest full-FT artifact provenance via `_validation_config_artifact` (model_type + resolved ordinals; adapter artifact byte-identical); correctly-labeled cohort error message. 8 new tests → 73/73 green (orchestrator-verified).
+- **Version Control** — cycle-close commit (this commit). Review attempt 1 died on OpenAI capacity (infra, logged); retry produced the full verdict + the exhaustive round-5 requirements list.
+- **Result** — `passed` — strengthening record appended to `full_ft_overfit_codex_code_ckpt-generation_review.md`.
+- **Next** — Round 5 `configs-launchers` (final): `base_wan_5b_full_ft.yml`, `train_wan_full_ft.sh`, `launch_wan_train.sh` full_ft arm, full-FT validation wrapper — built exactly to the reviewer's Notes-for-round-5 list (incl. the launcher common-override pitfalls). Then local ladder rungs 1–4 → smoke-run approval ask to Yixun.
