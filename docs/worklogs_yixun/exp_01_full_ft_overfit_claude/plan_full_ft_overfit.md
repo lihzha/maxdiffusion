@@ -1,6 +1,6 @@
 # plan_full_ft_overfit — Wan TI2V full-finetune overfit diagnostic
 
-Planner: Claude Fable 5 (max effort). **v2 — revised per Codex plan review** (`full_ft_overfit_codex_plan_review.md`, verdict REQUEST-REVISION; all 10 findings accepted, resolutions appended there). Status: awaiting re-review, then user approval. Base: exp branch `claude-exp_01_full_ft_overfit-20260715` @ `ce5fc4f`.
+Planner: Claude Fable 5 (max effort). **v3 — revised per Codex re-review** (`full_ft_overfit_codex_plan_review.md`: round 1 REQUEST-REVISION → v2 resolved F1–F10; re-review REQUEST-REVISION → v3 closes the partials F4/F5/F6/F9 and new finding G1). Status: awaiting focused re-review #2; Yixun pre-approval (Query 3) armed on APPROVE. Base: exp branch `claude-exp_01_full_ft_overfit-20260715` @ `03e55ac`.
 
 ## 1. Objective
 
@@ -35,23 +35,28 @@ With no adapter, both CFG branches are the same trainable network on the same in
 
 - `learning_rate: 1e-5` (AdamW, warmup fraction 0.05, then the reference schedule shape — warmup-to-constant per `max_utils.create_learning_rate_schedule`). Reference parity holds for the Adam coefficients, clipping, and wd 1e-2; the LR itself is a full-FT choice, not a parity value (review F6 wording).
 - `max_train_steps: 10000` @ GBS 512 ⇒ 5.12M samples ⇒ **≈3.55 passes** over the 1,440,554-window train set (review F4). Enough for a *positive* memorization signal; explicitly **not** enough to conclude failure (§2.4).
-- `checkpoint_every: 2500`, keep 3 — bf16 full-FT checkpoint ≈ 10 GB params + ≈ 20 GB Adam moments.
+- `checkpoint_every: 2500` **and `checkpoint_keep_period: 2500`** (finding G1): Orbax keeps every step that is a multiple of `keep_period` regardless of `max_to_keep=3`, so 2500/5000/7500/10000 all survive for the cohort evaluation (the copied yml's `5000` would have evicted step 2500). bf16 checkpoint ≈ 10 GB params + ≈ 20 GB Adam moments; 4 kept ≈ 120 GB on GCS — acceptable.
 - In-training eval on TRAIN shards: config yml sets **`eval_data_dir: gs://v6_east1d/datasets/droid_wan_side_adapter/train`** and the `full_ft` launcher arm sets `EVAL_DATA_DIR="$TRAIN_DATA_DIR"` (review F7 — the current queue launcher would otherwise force the val dir). The startup log records the resolved eval path; acceptance criteria check it.
 - `side_adapter_noise_mode: fresh` — asserted in the trainer; wrapper default `fresh` (review F1).
 
-### 2.3 Memorization validation (review F5 — cohort protocol)
+### 2.3 Memorization validation (review F5 — cohort protocol, execution path specified)
 
-- **Fixed train cohort:** N=16 training windows at predeclared, diverse shard/record ordinals + fixed rollout seeds, recorded in `_params_set_up.md` before the full run starts.
-- **Evaluate on the same cohort:** the **pretrained backbone (step 0)** and checkpoints **2500 / 5000 / 7500 / 10000** — 25-step rollout conditioned on frame 0; latent MSE, pixel MSE, SSIM + comparison videos, via the extended no-adapter `generate_wan_side_adapter.py`.
-- **Success metric is within-cohort:** the memorization *delta* over the pretrained baseline (step-0 rollouts on the identical cohort/seeds). No cross-split, cross-method numeric threshold. Context only (never thresholds): fresh side-adapter r20 reached val-clip SSIM ≈0.664 @ 2k / ≈0.615 @ 10k; pre-context reached ≈0.30 (review F5 corrected my earlier 0.29-as-threshold).
-- Validation command records its dataset path + cohort spec in `_command.md`.
+- **Fixed train cohort:** N=16 training windows at predeclared, diverse, **noncontiguous** dataset ordinals + fixed rollout seeds, recorded in `_params_set_up.md` before the full run starts.
+- **Cohort selection mechanism (code):** new config key **`validation_ordinals`** (comma-separated dataset ordinals, e.g. `"0,90000,180000,…"`); the generate-script sample reader skips/selects to exactly those records (replacing the contiguous `validation_start_index` read for this mode). CPU-testable.
+- **Step-0 baseline mechanism (code):** **`checkpoint_step: 0` bypasses Orbax restore entirely** and rolls out the freshly-loaded pretrained weights — a first-class, tested path (no checkpoint required for the baseline).
+- **Evaluate on the same cohort:** pretrained step-0 baseline and checkpoints **2500 / 5000 / 7500 / 10000** — 25-step rollout conditioned on frame 0; latent MSE, pixel MSE, SSIM + comparison videos, via the extended no-adapter `generate_wan_side_adapter.py`. Checkpoint retention is guaranteed by `checkpoint_keep_period: 2500` (§2.2, finding G1).
+- **Success metric is within-cohort:** the memorization *delta* over the step-0 baseline on identical cohort/seeds. No cross-split, cross-method thresholds. Context only: fresh side-adapter r20 val SSIM ≈0.664 @ 2k / ≈0.615 @ 10k; pre-context ≈0.30.
+- Validation command records its dataset path + `validation_ordinals` + seeds in `_command.md`.
 
-### 2.4 Escalation protocol before any negative verdict (reviews F4 + F6)
+### 2.4 Escalation protocol before any negative verdict (reviews F4 + F6, fully specified)
 
-A "pipeline suspect" conclusion requires ALL of, in order, each logged in `_command.md`/`_worklog.md`:
-1. **Extended budget:** continue to 30k steps (≈10.7 passes) if 10k shows no memorization trend.
-2. **LR control:** one run/segment at `learning_rate: 2e-5` (R2).
-3. **Optimizer-precision control:** one run with **fp32 optimizer state** (`optax.adamw(mu_dtype=fp32)` + fp32 nu if needed, or fp32 master params if optax's accumulator default proves insufficient — optax is pinned only `>=0.2.8`, so accumulator dtype is an uncontrolled default; the trainer logs actual param/moment dtypes at startup so the primary run's precision is on record). Memory delta ≈ +40 GB sharded over 64 chips — fits; checkpoints grow to ≈70 GB.
+A "pipeline suspect" conclusion requires ALL of, in order, each with its command in `_command.md` and its acceptance criteria in `_worklog.md`:
+1. **Extended budget — RESUME, 20k more steps.** Resume the primary run in place (same `run_name`; Orbax restores params/opt_state/step; input iterator reseeded `seed + start_step` per the repo's resume convention) to `max_train_steps: 30000` (≈10.7 passes). Cohort evaluation at **20000 and 30000** (both multiples of `keep_period=2500`, so retained).
+2. **LR control — FRESH run, 10k steps.** New `run_name` suffix `-lr2e5`, from pretrained (never resumed from the primary — mixing optimizer states would confound), `learning_rate: 2e-5`, all else identical. Cohort evaluation at 2500/5000/7500/10000.
+3. **Optimizer-precision control — FRESH run, 10k steps.** New `run_name` suffix `-fp32state`, from pretrained, **mechanism: `weights_dtype: float32` override** — the loader casts transformer params to `weights_dtype`, and optax's Adam moments are created with the param dtype, so params + both moments become fp32 while activations stay bf16 via `activations_dtype` (one config knob, no new optimizer code). The startup dtype log line must show `params=float32, mu=float32, nu=float32` — that log is the control's precondition, and the wiring test asserts moments follow param dtype. State ≈ 60 GB sharded over 64 chips — fits; checkpoints ≈ 70 GB. Cohort evaluation at 2500/5000/7500/10000.
+
+Optax note (context for #3): the dependency is pinned only `>=0.2.8`, so accumulator dtype is an uncontrolled default in the primary bf16 run — which is exactly why the primary run's startup dtype log line is an acceptance criterion (§6), putting the actual precision on record.
+
 Only if memorization fails across 1–3 does the experiment conclude "debug data/loss/noise/CFG/latent alignment first."
 
 ## 3. Planned code, per file
@@ -67,13 +72,14 @@ Only if memorization fails across 1–3 does the experiment conclude "debug data
 - `_denoising_loss`: same skeleton via shared helpers + imported `build_rollout_sigmas`/`_sample_step_indices`/`_build_noise`/`_build_per_token_timestep`; forward = **one** plain `transformer(...)` call; no adapter, no actions, no CFG.
 - `_train_step`/`_eval_step` over `FullFTTrainState`.
 - `WanTI2VFullFTTrainer`: `start_training` override — **asserts** `guide_scale == 1.0` (§2.1) and `side_adapter_noise_mode == "fresh"` (F1); logs trainable-param count (≈5B expected), **param dtype and Adam moment dtypes** (F6), and resolved train/eval data dirs (F7).
-- `_shard_state` override: keep computed FSDP shardings for `params`/`opt_state` (no replicate override), **retain `_apply_actual_sharding_for_tpu`**, and log global + per-host addressable byte totals for params and opt_state (F9). Fit treated as provisional until the v6e-64 probe passes.
+- `_shard_state` override: keep computed FSDP shardings for `params`/`opt_state` (no replicate override), **retain `_apply_actual_sharding_for_tpu`**, and log global + per-host addressable byte totals for params and opt_state (F9).
+- **Large-leaf sharding audit (F9, on target hardware):** at startup, log the **8 largest param leaves and their opt-state twins** — path, shape, dtype, global bytes, addressable bytes, and resolved `PartitionSpec` — and **assert no leaf > 100 MB global resolves to a fully-replicated spec** on a multi-device mesh. The selection + assertion logic is a pure function over (tree, specs) → CPU-testable with fake trees; the real-hardware log lines are acceptance criteria at smoke (§6). Fit treated as provisional until the v6e-64 probe passes.
 
 **Edit `src/maxdiffusion/train_wan.py`** (+3 lines): `FULL_FT_TI2V` dispatch.
 
-**New file `src/maxdiffusion/configs/base_wan_5b_full_ft.yml`**: copy of the side-adapter yml with deltas — `model_type: FULL_FT_TI2V`, `side_adapter_guide_scale: 1.0`, `learning_rate: 1.e-5`, `max_train_steps: 10000`, `checkpoint_every: 2500`, **`eval_data_dir: …/train`** (F7), `output_dir: gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft`, header comment on purpose + inert adapter keys.
+**New file `src/maxdiffusion/configs/base_wan_5b_full_ft.yml`**: copy of the side-adapter yml with deltas — `model_type: FULL_FT_TI2V`, `side_adapter_guide_scale: 1.0`, `learning_rate: 1.e-5`, `max_train_steps: 10000`, `checkpoint_every: 2500`, **`checkpoint_keep_period: 2500`** (G1), **`eval_data_dir: …/train`** (F7), **`validation_ordinals: ''`** (new key so the cohort spec is CLI-overridable), `output_dir: gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft`, header comment on purpose + inert adapter keys.
 
-**Edit `src/maxdiffusion/generate_wan_side_adapter.py`** (~40 LOC, review F8): explicit full-FT branches in BOTH `_restore_validation_state` (build `FullFTTrainState`, restore transformer params/opt_state/step from the full-FT checkpoint) and `_rollout_sample` (state merge without adapter fields; body calls plain `transformer(...)`). Checkpoint symmetry proven by test, not asserted (below).
+**Edit `src/maxdiffusion/generate_wan_side_adapter.py`** (~60 LOC, reviews F5 + F8): (a) explicit full-FT branches in BOTH `_restore_validation_state` (build `FullFTTrainState`, restore transformer params/opt_state/step) and `_rollout_sample` (state merge without adapter fields; body calls plain `transformer(...)`); (b) **cohort reader honors `validation_ordinals`** — selects exactly the listed noncontiguous dataset ordinals (falls back to the contiguous `validation_start_index` read when empty); (c) **`checkpoint_step: 0` skips Orbax restore** and rolls out the loaded pretrained weights (step-0 baseline). Checkpoint symmetry proven by test, not asserted (below).
 
 **New file `bash_scripts/train_wan_full_ft.sh`**: copy of the side-adapter wrapper pointing at the new yml; **`SIDE_ADAPTER_NOISE_MODE` defaults to `fresh`** (F1 — the reference wrapper's `fixed` default is the documented foot-gun); `EVAL_DATA_DIR` defaults to `$TRAIN_DATA_DIR` (F7); env knobs `LEARNING_RATE`, `MAX_TRAIN_STEPS`, batch sizes.
 
@@ -82,9 +88,9 @@ Only if memorization fails across 1–3 does the experiment conclude "debug data
 **Tests in `src/maxdiffusion/tests/worklogs_yixun/`** (CPU-only, no 5B weights):
 - `test_full_ft_overfit_shared_objective.py` — helpers: exact values, pin correctness, mask excludes frame 0, normalization; **characterization**: fixed-RNG equality of refactored side-adapter loss vs pre-refactor formula (transcribed reference equations).
 - `test_full_ft_overfit_denoising_loss.py` — fixed-RNG integration on a stub transformer (F3): fresh per-example noise (row-distinct), t/σ selection matches `build_rollout_sigmas` indexing, target `eps − z_video`, frame-0 pin present, null context used, **exactly one** transformer call (call-counting stub), actions absent from the call, and one optimizer step changes transformer params.
-- `test_full_ft_overfit_trainer_wiring.py` — guide-scale assert fires at 5.0 / passes at 1.0; noise-mode assert fires at `fixed`; shard-selection keeps computed (non-replicated) specs on fake trees; dispatch maps `FULL_FT_TI2V`.
-- `test_full_ft_overfit_ckpt_roundtrip.py` — tiny CPU Orbax round trip (F8): save deliberately-modified params/opt_state/step → reconstruct validation state → restore → assert rollout path consumes the restored (not initial) params.
-- `test_full_ft_overfit_generate_forward.py` — forward-selection returns plain-transformer callable for `FULL_FT_TI2V`; adapter path untouched otherwise.
+- `test_full_ft_overfit_trainer_wiring.py` — guide-scale assert fires at 5.0 / passes at 1.0; noise-mode assert fires at `fixed`; shard-selection keeps computed (non-replicated) specs on fake trees; **large-leaf audit: selection of 8 largest leaves + the >100 MB-replicated assertion on fake trees** (F9); moments-follow-param-dtype check (fp32 control mechanism, F6); dispatch maps `FULL_FT_TI2V`.
+- `test_full_ft_overfit_ckpt_roundtrip.py` — tiny CPU Orbax round trip (F8): save deliberately-modified params/opt_state/step → reconstruct validation state → restore → assert rollout path consumes the restored (not initial) params; **`checkpoint_step: 0` path bypasses restore and uses the initial (pretrained-stand-in) params** (F5).
+- `test_full_ft_overfit_generate_forward.py` — forward-selection returns plain-transformer callable for `FULL_FT_TI2V`; adapter path untouched otherwise; **`validation_ordinals` reader selects exactly the listed noncontiguous ordinals** (F5).
 
 ## 4. Coder rounds (closed cycles; restructured per review F10)
 
@@ -108,7 +114,7 @@ Each round: write (Opus 4.8 max, test-first) → briefed Codex `gpt-5.6-sol` xhi
 
 ## 6. Launch acceptance criteria (copied into `_worklog.md` at launch)
 
-Worker reports the exp-branch SHA; 64 devices; GBS 512; startup log shows: `trainable transformer params: ~5.0B` and **no** adapter-param line; `guide scale: 1.0`; `noise mode: fresh` (assert passed); **resolved eval_data_dir ends in `/train`**; **param dtype + Adam moment dtypes logged**; params/opt-state byte totals logged; ≥1 optimizer step, loss finite, no OOM/NaN; wandb live with `train/loss` descending over the first 500 steps.
+Worker reports the exp-branch SHA; 64 devices; GBS 512; startup log shows: `trainable transformer params: ~5.0B` and **no** adapter-param line; `guide scale: 1.0`; `noise mode: fresh` (assert passed); **resolved eval_data_dir ends in `/train`**; **param dtype + Adam moment dtypes logged** (primary run expected bf16 — on record per §2.4); **large-leaf audit lines present (8 leaves + opt twins, spec + bytes) and the no-replicated->100 MB assertion passed**; `checkpoint_keep_period=2500` in the resolved config; ≥1 optimizer step, loss finite, no OOM/NaN; wandb live with `train/loss` descending over the first 500 steps.
 
 ## 7. Risks / knobs
 
