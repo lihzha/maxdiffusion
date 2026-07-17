@@ -15,7 +15,7 @@
 #   bash bash_scripts/launch_wan_train.sh             # full run
 #
 # Optional overrides (env vars):
-#   WAN_EXPERIMENT=pre_context|side_adapter   (default pre_context)
+#   WAN_EXPERIMENT=pre_context|side_adapter|full_ft   (default pre_context)
 #   TPU_CHIPS=64                              (v6e chip count)
 #   NAME=<job name>                           (default wan-<type>-yixun)
 
@@ -32,6 +32,10 @@ MODEL_DIR="Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 TRAIN_DATA_DIR="gs://v6_east1d/datasets/droid_wan_side_adapter/train"
 EVAL_DATA_DIR="gs://v6_east1d/datasets/droid_wan_side_adapter/val"
 
+# The queue runs this training wrapper on each worker. The full_ft arm overrides it to the
+# full-finetune wrapper; pre_context / side_adapter keep the side-adapter wrapper.
+TRAIN_SCRIPT="bash_scripts/train_wan_side_adapter.sh"
+
 # ---- Choose exactly one experiment ----
 case "$WAN_EXPERIMENT" in
   pre_context)
@@ -46,8 +50,20 @@ case "$WAN_EXPERIMENT" in
     WANDB_PROJECT="maxdiffusion-wan-side-adapter"
     MAX_TRAIN_STEPS="10000"
     ;;
+  full_ft)
+    # Diagnostic full-finetune overfit probe (docs/worklogs_yixun/
+    # exp_01_full_ft_overfit_claude/plan_full_ft_overfit.md). No adapter exists, so
+    # ACTION_ADAPTER_TYPE is a run-name / provenance tag ONLY here -- train_wan_full_ft.sh
+    # never reads it (model_type: FULL_FT_TI2V comes from the yml). The 2500 checkpoint
+    # cadence + train-split eval are re-applied AFTER the common defaults below so they win.
+    ACTION_ADAPTER_TYPE="full-ft"
+    OUTPUT_DIR="gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft"
+    WANDB_PROJECT="maxdiffusion-wan-full-ft"
+    MAX_TRAIN_STEPS="10000"
+    TRAIN_SCRIPT="bash_scripts/train_wan_full_ft.sh"
+    ;;
   *)
-    echo "WAN_EXPERIMENT must be pre_context or side_adapter" >&2
+    echo "WAN_EXPERIMENT must be pre_context, side_adapter, or full_ft" >&2
     exit 1
     ;;
 esac
@@ -64,6 +80,17 @@ GLOBAL_BATCH_SIZE_TO_TRAIN_ON="512"
 GLOBAL_BATCH_SIZE_TO_LOAD="512"
 TFRECORD_SHUFFLE_BUFFER_SIZE="1024"
 RUN_NAME="wan-${ACTION_ADAPTER_TYPE}-v6e${TPU_CHIPS}-full-gbs512-fresh-$(date -u +%Y%m%d-%H%M%S)"
+
+# ---- Full-FT overrides ----
+# Applied AFTER the shared defaults above so the common CHECKPOINT_EVERY=100 /
+# CHECKPOINT_KEEP_PERIOD=1000 / val-split EVAL_DATA_DIR do NOT clobber the probe's 2500
+# cohort cadence + train-split evaluation (plan §2.2/§2.3, finding G1). Placed BEFORE the
+# SMOKE block so a full_ft smoke still disables checkpointing.
+if [ "$WAN_EXPERIMENT" = "full_ft" ]; then
+  CHECKPOINT_EVERY="2500"
+  CHECKPOINT_KEEP_PERIOD="2500"
+  EVAL_DATA_DIR="$TRAIN_DATA_DIR"
+fi
 
 # ---- Optional one-step smoke (SMOKE=1) ----
 if [ "${SMOKE:-0}" = "1" ]; then
@@ -85,7 +112,7 @@ NAME="${NAME:-wan-${ACTION_ADAPTER_TYPE}-yixun}"
 COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 
 # Runs on every worker before training: build the venv and prefetch the model.
-# (An empty setup_cmd is a no-op on the queue, and train_wan_side_adapter.sh
+# (An empty setup_cmd is a no-op on the queue, and the train wrapper
 # needs the .venv that setup.sh creates.)
 SETUP_CMD="bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh ${MODEL_DIR}"
 
@@ -127,7 +154,7 @@ tpu create v6 -n "$TPU_CHIPS" \
   --env WANDB_PROJECT="$WANDB_PROJECT" \
   --env HF_HUB_DISABLE_XET="1" \
   --env HF_HUB_ENABLE_HF_TRANSFER="0" \
-  -- bash bash_scripts/train_wan_side_adapter.sh
+  -- bash "$TRAIN_SCRIPT"
 
 # Note: visual validation (the old v6e-8 watcher) is a separate concern in the
 # queue model. Submit it as its own `tpu create v6 -n 8 ... -- <validation cmd>`
