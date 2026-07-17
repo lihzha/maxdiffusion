@@ -52,3 +52,9 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — Plan → v3: §2.4 controls fully specified (resume-vs-fresh semantics, durations, eval checkpoints; fp32 mechanism = `weights_dtype: float32` override); §2.3 execution path (`validation_ordinals` key + `checkpoint_step: 0` restore-bypass); §3/§6 large-leaf sharding audit + `checkpoint_keep_period: 2500`. Resolutions appended to review file.
 - **Result** — `fix_ready` — re-review #2 (focused on the 5 items) launched with the `< /dev/null` fix.
 - **Next** — On APPROVE: Coder round 1 auto-starts per Query 3 conditional (extended by Yixun's momentum intent to this verdict); otherwise back to Yixun.
+
+## 2026-07-17T03:40:00Z — Re-review #2: APPROVE-WITH-CHANGES → plan APPROVED, Coder round 1 starts
+
+- **Goal** — Close the plan gate.
+- **Result** — `passed` — F4/F5/F6/F9/G1 all CLOSED (reviewer verified keep-period OR-policy in Orbax v0.11.33 source and mu/nu dtype behavior in Optax v0.2.8 source). One MINOR H1 (aggregate retention ≈760 GB) resolved: budgeted + post-eval pruning rule in R4. Per Query-3 conditional approval, plan v3 is **APPROVED**.
+- **Next** — Coder round 1 `shared-objective-helpers` (Opus 4.8 max, test-first, in this worktree, no commits): extract `build_noisy_pinned_latents` + `masked_velocity_mse` into `side_adapter_wan.py`, refactor reference `_denoising_loss` to call them, characterization tests in `src/maxdiffusion/tests/worklogs_yixun/test_full_ft_overfit_shared_objective.py`.
