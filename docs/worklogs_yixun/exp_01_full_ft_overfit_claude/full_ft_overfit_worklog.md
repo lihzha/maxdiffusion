@@ -103,3 +103,19 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Version Control** — cycle-close commit on `claude-exp_01_full_ft_overfit-20260715` (this commit).
 - **Result** — `passed` — strengthening record appended to `full_ft_overfit_codex_code_full-ft-loss_review.md`.
 - **Next** — Round 3 `trainer-wiring`: `WanTI2VFullFTTrainer` class (start_training with guide-scale + fresh-noise asserts, dtype/dir logging), `_shard_state` override + large-leaf audit, `FULL_FT_TI2V` dispatch, wiring tests — honoring the reviewer's Notes for round 3.
+
+## 2026-07-17T18:55:00Z — Coder round 3 (trainer-wiring): write phase complete
+
+- **Goal** — Round 3 of 5: the `WanTI2VFullFTTrainer` class + guards + sharding + dispatch.
+- **Change** — `wan_ti2v_full_ft_trainer.py` +384: `_validate_probe_config` (guide-scale §2.1 + fresh-noise F1 asserts, run before any load), `start_training` mirroring the parent shell (121/146 lines byte-identical; 9 enumerated deviations, each constraint-commented), `_shard_state` override keeping computed FSDP shardings (+ retained `_apply_actual_sharding_for_tpu`), `audit_large_leaves` (top-8 + full-tree >100MB-replicated raise), startup dtype logging (params/mu/nu/activations). `train_wan.py` +3 (FULL_FT_TI2V dispatch). New `test_full_ft_overfit_trainer_wiring.py` (213 lines, 14 tests incl. real-optimizer moments-follow-param-dtype).
+- **Command / Validation** — RED: AttributeError on all missing names → GREEN: 38/38 in 13.5s; py_compile OK; ruff clean; black deviations limited to one parent-byte-identical 120-char line + pre-existing train_wan style (documented).
+- **Result** — `passed` (write phase). Coder-flagged for review: source LOC over target (mandated parity mirror + audit block), by-magnitude opt-twin association in the audit top-k (raise scans ALL leaves), `_full_ft_state_shardings` written as explicit no-op `.replace` for line-parity with the parent.
+- **Next** — Briefed Codex review (marker `trainer-wiring`) → strengthen → cycle-3 commit.
+
+## 2026-07-17T20:10:00Z — Coder round 3: strengthen complete → cycle 3 CLOSED
+
+- **Goal** — Resolve round-3 findings F1–F5, close the cycle.
+- **Change** — Per-dtype param/mu/nu startup summaries (primary-vs-fp32-control now machine-distinguishable — the §2.4/§6 precondition); per-host PHYSICAL byte accounting (replicas counted); path-matched labeled opt twins; four behavioral wiring tests (validate-before-load, shard-dataflow object identity, audit-raise propagation, executed dispatch); NaN-proof exact guide-scale guard. Strengthen delta ≈ +69 trainer lines + test growth to 26 wiring tests.
+- **Command / Validation** — 50/50 green (Coder run + orchestrator's independent rerun, 11.6s); 7/7 revert-mutants caught, sha256-verified restorations; ruff/py_compile clean. Safety-classifier-unavailable note on the subagent run → orchestrator manually verified touched-file scope + suite before commit.
+- **Result** — `passed` — strengthening record appended; cycle-3 commit is this commit.
+- **Next** — Round 4 `ckpt-generation` per plan §3 + the round-3 review's gate note: behavioral proof of params/opt_state/step restore into `FullFTTrainState`, `checkpoint_step: 0` bypass, `validation_ordinals` reader, plain-transformer rollout branch. No round-5 config/launcher work.
