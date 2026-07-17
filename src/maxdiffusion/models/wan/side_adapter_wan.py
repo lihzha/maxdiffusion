@@ -534,6 +534,52 @@ def apply_first_frame_pin(latents: jax.Array, z_i0: jax.Array) -> jax.Array:
     return latents.at[:, :, :1].set(anchor)
 
 
+def build_noisy_pinned_latents(
+    z_video_f32: jax.Array,
+    z_i0_f32: jax.Array,
+    eps: jax.Array,
+    sigma_t: jax.Array,
+) -> jax.Array:
+    """Flow-matching noisy latents ``z_t`` with latent frame 0 pinned.
+
+    THE shared objective construction used by both ``WanTI2VSideAdapterTrainer``
+    and the full-finetune trainer, so the two runs stay in numerical parity by
+    sharing code rather than re-implementing the math. Computes
+    ``z_t = (1 - sigma_t) * z_video + sigma_t * eps`` in float32, then pins frame 0
+    to the image-conditioning latent via :func:`apply_first_frame_pin`. ``eps`` is
+    an explicit argument so the caller owns the noise policy (``fresh``/``fixed``).
+
+    Shapes: ``z_video_f32``/``eps`` ``[B, C, F, H, W]``, ``z_i0_f32``
+    ``[B, C, 1, H, W]``, ``sigma_t`` ``[B]``; returns float32 like ``z_video_f32``.
+    """
+    b = z_video_f32.shape[0]
+    sigma_b = sigma_t.astype(jnp.float32).reshape((b, 1, 1, 1, 1))
+    z_t_f32 = (1.0 - sigma_b) * z_video_f32.astype(jnp.float32) + sigma_b * eps.astype(jnp.float32)
+    return apply_first_frame_pin(z_t_f32, z_i0_f32.astype(jnp.float32))
+
+
+def masked_velocity_mse(v_pred: jax.Array, v_target: jax.Array, batch_size: int) -> jax.Array:
+    """Frame-0-masked flow-matching velocity MSE (THE shared objective).
+
+    Both ``WanTI2VSideAdapterTrainer`` and the full-finetune trainer call this so
+    their training losses are identical by construction. Latent frame 0 is pinned
+    to the image condition and carries no learning signal, so it is masked out.
+    ``n_valid`` counts the non-frame-0 elements of one example times ``batch_size``
+    (floored at 1), giving the mean squared velocity error over unmasked positions;
+    the reduction is float32. ``v_pred``/``v_target`` are ``[B, C, F, H, W]`` and
+    must have identical shapes (a broadcastable-but-malformed prediction is
+    rejected rather than silently mis-normalized); the mask is built from
+    ``v_target``, matching the pre-refactor reference. Returns a float32 scalar.
+    """
+    if v_pred.shape != v_target.shape:
+        raise ValueError(f"masked_velocity_mse: v_pred shape {v_pred.shape} != v_target shape {v_target.shape}")
+    mask = jnp.ones((1, *v_target.shape[1:]), dtype=jnp.float32)
+    mask = mask.at[:, :, :1, :, :].set(0.0)
+    diff = (v_pred.astype(jnp.float32) - v_target.astype(jnp.float32)) * mask
+    n_valid = jnp.maximum(jnp.sum(mask) * batch_size, 1.0)
+    return jnp.sum(diff**2) / n_valid
+
+
 def _patchify_and_time_embed(
     transformer,
     hidden_states: jax.Array,
