@@ -6,14 +6,10 @@ Last updated: 2026-07-14
 
 ## OPEN / STANDING
 
-### 1. `git push` over SSH fails (infra, standing workaround)
+### 1. `git push` over SSH fails (infra) — RESOLVED 2026-07-17 by HTTPS origin
 - **Symptom:** `git@github.com: Permission denied (publickey)` — the SSH agent holds no identities on this machine.
-- **Workaround:** `gh auth setup-git` is done; push with the explicit HTTPS URL, then sync the tracking ref:
-  ```bash
-  git push https://github.com/lihzha/maxdiffusion.git yixun-dev
-  git update-ref refs/remotes/origin/yixun-dev $(git rev-parse HEAD)
-  ```
-- **Status:** standing pattern; every push in this repo uses it.
+- **Old workaround (RETIRED):** pushing via explicit HTTPS URL + hand-updating `refs/remotes/origin/yixun-dev`. This caused a false "diverged 15/9" `git status` on 2026-07-17: the hand-update once ran from the experiment-worktree cwd and recorded the exp-branch tip as `origin/yixun-dev` (no real divergence existed — remote was verified byte-identical to local).
+- **Fix:** `git remote set-url origin https://github.com/lihzha/maxdiffusion.git` (gh credential helper authenticates). Plain `git push origin <branch>` now works and maintains tracking refs automatically. Never hand-edit `refs/remotes/*` again.
 
 ### 2. TPU queue spot preemptions are frequent (infra)
 - **Symptom:** IROM TPU-queue jobs die with `failure_type: INFRASTRUCTURE_PREEMPTION`; the step-30000 validation job needed 6 attempts.
