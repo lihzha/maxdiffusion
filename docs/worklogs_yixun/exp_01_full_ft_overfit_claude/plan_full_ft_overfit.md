@@ -121,7 +121,7 @@ Worker reports the exp-branch SHA; 64 devices; GBS 512; startup log shows: `trai
 - **R1 (silent ×5 pre-optimizer gradients)** — hard assert on guide scale (§2.1).
 - **R2 (LR wrong)** — 1e-5 primary; 2e-5 is escalation control #2 (§2.4).
 - **R3 (bf16 Adam accumulators)** — uncontrolled optax default (F6): dtypes logged at startup; fp32-state control predeclared as escalation #3; never conclude "pipeline suspect" from a bf16-only stall.
-- **R4 (checkpoint size)** — ~30 GB/save bf16, ~70 GB under the fp32 control; `checkpoint_every: 2500`, keep 3.
+- **R4 (checkpoint size / aggregate retention, re-review-2 H1)** — ~30 GB/save bf16, ~70 GB fp32-control; `keep_period=2500` retains every save ⇒ worst case across primary-to-30k + both controls ≈ **760 GB** (360+120+280). Budgeted on `gs://v6_east1d`; **prune each segment's non-terminal checkpoints once its cohort evals are recorded in `_results.md`** (keep segment finals), pruning commands logged in `_command.md`.
 - **R5 (throughput)** — full-FT step est. 1.3–1.8× the adapter step; measured at smoke; budget re-estimated then.
 - **R6 (fixed-noise foot-gun)** — reference wrapper defaults `SIDE_ADAPTER_NOISE_MODE=fixed` (F1); new wrapper defaults fresh AND the trainer rejects non-fresh, so neither launch path can regress.
 

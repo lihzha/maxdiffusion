@@ -156,3 +156,48 @@ Re-review verdict REQUEST-REVISION: F1/F2/F3/F7/F8/F10 RESOLVED (no further acti
 - **G1 (checkpoint 2500 evicted by keep_period 5000 + max_to_keep 3)** — FIXED: yml delta `checkpoint_keep_period: 2500` (Orbax keeps every multiple of keep_period regardless of max_to_keep ⇒ 2500/5000/7500/10000 retained; ≈120 GB on GCS accepted); §2.2/§2.3/§6 updated.
 
 Revision is targeted (no design change) → focused re-review #2 requested on exactly F4/F5/F6/F9/G1 + any new issues.
+
+---
+
+# Plan re-review #2: exp_01 full_ft_overfit (v3)
+Reviewer: OpenAI Codex gpt-5.6-sol (xhigh), 2026-07-16
+
+## Context loaded
+
+- `full_ft_overfit_codex_plan_review.md` — prior findings, re-review status, and v3 resolution claims.
+- `plan_full_ft_overfit.md` — v3 control protocol, validation paths, sharding audit, and retention policy.
+- `wan_ti2v_side_adapter_trainer.py` — checkpoint-manager wiring and resume behavior.
+- `wan_pipeline.py` — pretrained parameter casting through `weights_dtype`.
+- `generate_wan_side_adapter.py` — current contiguous reader, restore path, and `checkpoint_step` handling.
+- `max_utils.py` — repository AdamW construction.
+- `generated_requirements/requirements.txt` — minimum Orbax and Optax versions.
+- [Orbax v0.11.33 checkpoint-manager source](https://raw.githubusercontent.com/google/orbax/v0.11.33/checkpoint/orbax/checkpoint/checkpoint_manager.py) — preservation-policy composition.
+- [Optax v0.2.8 Adam source](https://raw.githubusercontent.com/google-deepmind/optax/v0.2.8/optax/_src/transform.py) — moment initialization and dtype behavior.
+
+## Focus-finding check
+
+F4: CLOSED — §2.4 now fixes durations, restart-versus-resume semantics, and evaluation checkpoints, matching `_maybe_restore` restoring latest params/opt_state and returning the saved loop step while the iterator uses `seed + start_step`.
+
+F5: CLOSED — v3 explicitly replaces the current contiguous-only reader with exact noncontiguous ordinal selection and adds a tested `checkpoint_step: 0` restore bypass using freshly loaded pretrained parameters.
+
+F6: CLOSED — `wan_pipeline.py` casts transformer parameters to `weights_dtype`, and Optax initializes both `mu` and `nu` from parameter-shaped zeros, so `weights_dtype: float32` genuinely produces fp32 parameters and moments.
+
+F9: CLOSED — v3 adds the requested target-hardware audit of eight large parameter leaves and optimizer twins, including resolved specs and byte counts, with a >100 MB replication assertion and CPU-tested selection logic.
+
+G1: CLOSED — `_build_checkpoint_manager` forwards `keep_period=2500`, and Orbax combines `EveryNSteps(2500)` with `LatestN(3)` using an OR policy, preserving saved steps 2500/5000/7500/10000 regardless of `max_to_keep=3`.
+
+## New issues in v3
+
+H1 — MINOR. Because every periodic save is a multiple of 2500, the policy retains all 12 primary checkpoints through 30k; including the LR and fp32 controls gives approximately 760 GB worst-case retention (360 + 120 + 280 GB), so §2.2/R4 should budget this or specify narrower preservation.
+
+## Verdict
+
+APPROVE-WITH-CHANGES. All five scoped findings are closed; correct the aggregate checkpoint-retention budget or narrow the preservation policy before launch.
+
+---
+
+# Resolution of H1 (Planner, 2026-07-17)
+
+- **H1 (MINOR, aggregate retention ≈760 GB)** — ACCEPTED + budgeted, with pruning: worst case = primary-to-30k 12×30 GB (360) + LR control 4×30 (120) + fp32 control 4×70 (280) ≈ **760 GB on `gs://v6_east1d`** — tolerable transiently, not worth keeping. Rule added to plan R4: **after a run segment's cohort evaluations complete and `_results.md` records them, prune that segment's non-terminal checkpoints** (keep the segment-final: 10000, 30000, and each control's 10000). Pruning commands logged in `_command.md` like any other run-affecting action. Escalation runs are conditional, so the peak is likely never reached.
+
+**Gate state:** verdict APPROVE-WITH-CHANGES with all F/G findings CLOSED and H1 resolved above → per Yixun's Query-3 conditional approval, the plan is APPROVED and Coder round 1 starts.
