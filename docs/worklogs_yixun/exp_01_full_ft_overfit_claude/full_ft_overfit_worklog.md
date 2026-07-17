@@ -38,3 +38,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — Query 3 appended to `_yixun_query.md`: plan v2 pre-approved conditional on the Codex re-review verdict being APPROVE; Coder round 1 (shared-objective-helpers) to start immediately on that verdict. Any other verdict returns to Yixun.
 - **Result** — `in_progress` — re-review (Codex gpt-5.6-sol xhigh) still running.
 - **Next** — On APPROVE: append re-review to the review file, commit, launch Coder round 1 (Opus 4.8 max subagent, test-first, in the exp worktree, no commits — commit happens at cycle close after review+strengthen).
+
+## 2026-07-17T02:45:00Z — Re-review relaunched (infra: codex stdin hang)
+
+- **Goal** — Unblock the plan-v2 re-review gate.
+- **Result** — `fix_ready→launched` — first re-review invocation never started: `codex exec` in a background shell blocked on open stdin (`Reading additional input from stdin...`, ~0 CPU, no version header; stuck ~10 h). Killed PID 4692; relaunched identically **with `< /dev/null`**; header printed within seconds this time.
+- **Analysis** — **Infrastructure**, not a bug: round-1 review had worked because its stdin happened to close, masking the hazard. Standing workaround recorded in `issue_report.md` (#5): every non-interactive `codex exec` gets `< /dev/null`.
+- **Next** — On APPROVE verdict: append to review file, commit, launch Coder round 1 per Query 3's conditional approval (still armed).
