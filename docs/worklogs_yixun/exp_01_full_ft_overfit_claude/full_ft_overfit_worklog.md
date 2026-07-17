@@ -81,3 +81,25 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Version Control** — cycle-close commit on `claude-exp_01_full_ft_overfit-20260715` (this commit); >200 LOC justified: review-mandated tests only.
 - **Result** — `passed` — strengthening record appended to `full_ft_overfit_codex_code_shared-objective-helpers_review.md`; no behavior change beyond findings → no follow-up review.
 - **Next** — Coder round 2 `full-ft-loss`: `FullFTTrainState` + full-FT `_denoising_loss`/`_train_step`/`_eval_step` + fixed-RNG integration test, honoring the reviewer's Notes for round 2.
+
+## 2026-07-17T16:20:00Z — Coder round 2 (full-ft-loss): write phase complete
+
+- **Goal** — Round 2 of 5: `FullFTTrainState` + full-FT `_denoising_loss` + `_train_step`/`_eval_step` on the shared helpers.
+- **Change** — New `trainers/wan_ti2v_full_ft_trainer.py` (+176; state/loss/steps only, trainer class is round 3; no CFG branch per plan §2.1; `_sample_step_indices`/`_build_noise` imported, zero objective-math re-implementation). New `test_full_ft_overfit_denoising_loss.py` (+325, 9 strict integration tests: one-transformer-call/no-actions, null-context identity, fresh per-example noise, σ/t indexing vs transcribed grid, target=eps−z_video, frame-0 pin, sliced batch size, train-step updates params, f32-under-bf16). Grain stub hoisted to shared `conftest.py` (+29; round-1 file −19/+3, its 14 tests re-verified green post-hoist).
+- **Command / Validation** — RED: ModuleNotFoundError on the new trainer module (right reason) → GREEN: 23/23 in 10.4s; py_compile OK; black-119 + ruff clean. Coder-flagged deviation for review: null-context cast uses `activations_dtype` (reference text: `weights_dtype`; value-identical in all shipped configs).
+- **Result** — `passed` (write phase). Interruption note: Coder agent died once mid-wrap-up on an API connection drop (infrastructure) and was resumed; work verified complete.
+- **Next** — Briefed Codex review (marker `full-ft-loss`) → strengthen → cycle-2 commit.
+
+## 2026-07-17T16:25:00Z — Infra: false yixun-dev divergence diagnosed; origin switched to HTTPS
+
+- **Goal** — Explain Yixun's `git status` showing yixun-dev "diverged 15/9" from origin.
+- **Result** — `passed` — NO real divergence: fresh fetch proved remote == local (`1edc16f`) exactly. Cause: the manual `refs/remotes/origin/yixun-dev` update (part of the old SSH-broken push workaround) once ran from the exp-worktree cwd and recorded the exp-branch tip `bf36900` as the tracking ref. Fix: `origin` set to HTTPS; full `git fetch --prune` rebuilt all tracking refs from truth (`+ bf36900...1edc16f (forced update)` confirmed); plain `git push origin` now standard. `issue_report.md` #1 updated (workaround retired).
+- **Analysis** — Infrastructure/bookkeeping, no repo damage; classic hazard of hand-maintained refs — eliminated by removing the need for them.
+
+## 2026-07-17T17:40:00Z — Coder round 2: strengthen complete → cycle 2 CLOSED
+
+- **Goal** — Resolve round-2 findings F1/F2 and close the cycle.
+- **Change** — Test-only: timestep_2d bitwise + structural (helper-independent) assertions killing the reviewer's `n_hist=0` mutant; split-dtype null-context test (f32 weights / bf16 activations) killing the revert mutant. Production trainer sha256-identical to the reviewed artifact. 24/24 green; style clean.
+- **Version Control** — cycle-close commit on `claude-exp_01_full_ft_overfit-20260715` (this commit).
+- **Result** — `passed` — strengthening record appended to `full_ft_overfit_codex_code_full-ft-loss_review.md`.
+- **Next** — Round 3 `trainer-wiring`: `WanTI2VFullFTTrainer` class (start_training with guide-scale + fresh-noise asserts, dtype/dir logging), `_shard_state` override + large-leaf audit, `FULL_FT_TI2V` dispatch, wiring tests — honoring the reviewer's Notes for round 3.
