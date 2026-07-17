@@ -45,3 +45,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `fix_ready→launched` — first re-review invocation never started: `codex exec` in a background shell blocked on open stdin (`Reading additional input from stdin...`, ~0 CPU, no version header; stuck ~10 h). Killed PID 4692; relaunched identically **with `< /dev/null`**; header printed within seconds this time.
 - **Analysis** — **Infrastructure**, not a bug: round-1 review had worked because its stdin happened to close, masking the hazard. Standing workaround recorded in `issue_report.md` (#5): every non-interactive `codex exec` gets `< /dev/null`.
 - **Next** — On APPROVE verdict: append to review file, commit, launch Coder round 1 per Query 3's conditional approval (still armed).
+
+## 2026-07-17T03:05:00Z — Re-review: REQUEST-REVISION (converging) → plan v3
+
+- **Goal** — Close re-review round: 6/10 RESOLVED, 4 partial (F4/F5/F6/F9), 1 new MAJOR (G1: keep_period 5000 would evict ckpt 2500 needed by the cohort protocol).
+- **Change** — Plan → v3: §2.4 controls fully specified (resume-vs-fresh semantics, durations, eval checkpoints; fp32 mechanism = `weights_dtype: float32` override); §2.3 execution path (`validation_ordinals` key + `checkpoint_step: 0` restore-bypass); §3/§6 large-leaf sharding audit + `checkpoint_keep_period: 2500`. Resolutions appended to review file.
+- **Result** — `fix_ready` — re-review #2 (focused on the 5 items) launched with the `< /dev/null` fix.
+- **Next** — On APPROVE: Coder round 1 auto-starts per Query 3 conditional (extended by Yixun's momentum intent to this verdict); otherwise back to Yixun.

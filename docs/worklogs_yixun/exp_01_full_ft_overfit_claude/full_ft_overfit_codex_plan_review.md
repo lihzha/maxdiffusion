@@ -95,3 +95,64 @@ All 10 findings **accepted**; none rejected. Plan revised in place (`plan_full_f
 - **F10 (unit C too broad)** — FIXED. Rounds restructured into 5 focused cycles: shared-objective-helpers / full-ft-loss / trainer-wiring / ckpt-generation / configs-launchers (§4).
 
 Material revision → **re-review requested** (this file will gain the re-review verdict below).
+
+---
+
+# Plan re-review: exp_01 full_ft_overfit (v2)
+Reviewer: OpenAI Codex gpt-5.6-sol (xhigh), 2026-07-16
+
+## Context loaded
+
+- `full_ft_overfit_codex_plan_review.md` — round-1 findings and the Planner’s claimed resolutions.
+- `plan_full_ft_overfit.md` — revised design, validation protocol, implementation rounds, and acceptance criteria.
+- `full_ft_overfit_yixun_query.md` — experiment intent, locked architecture, and conditional approval.
+- `full_ft_overfit_worklog.md` — planning history and current review gate.
+- `wan_ti2v_side_adapter_trainer.py` — objective, noise generation, state sharding, checkpointing, and training loop.
+- `train_wan_side_adapter.sh` — current wrapper defaults and configuration forwarding.
+- `launch_wan_train.sh` — current experiment dispatch and queue environment wiring.
+- `max_utils.py` — AdamW construction, clipping order, and learning-rate schedule.
+- `generate_wan_side_adapter.py` — current contiguous cohort reader, checkpoint restoration, and adapter rollout path.
+
+## Per-finding resolution check
+
+F1: RESOLVED — v2 defaults and explicitly passes fresh noise, hard-rejects other modes in the trainer, and tests both trainer and shell wiring.
+
+F2: RESOLVED — v2 accurately describes the CFG effect as a pre-optimizer gradient multiplier and retains the single-forward bypass and guide-scale assertion.
+
+F3: RESOLVED — v2 specifies shared objective helpers used by both trainers, includes `eps`, and adds characterization plus fixed-RNG denoising/update coverage.
+
+F4: PARTIALLY-RESOLVED — the 3.55-pass correction, asymmetric decision rule, and 30k extension are sound, but the LR and FP32 controls still lack fixed durations, restart-versus-resume semantics, and evaluation checkpoints.
+
+F5: PARTIALLY-RESOLVED — the within-cohort comparator is corrected, but the planned generator work does not add selection of arbitrary noncontiguous ordinals or a checkpoint-free step-0 pretrained-baseline path.
+
+F6: PARTIALLY-RESOLVED — dtype logging and conservative storage budgeting are present, but the FP32 control remains a choice among mechanisms with no planned configuration, implementation, or test proving FP32 moments or master weights.
+
+F7: RESOLVED — v2 sets the training split in the YAML, wrapper, and launcher, then logs and records the resolved validation dataset path.
+
+F8: RESOLVED — v2 explicitly separates full-FT restoration and rollout state assembly and requires an Orbax round trip proving restored parameters drive inference.
+
+F9: PARTIALLY-RESOLVED — v2 retains actual TPU shardings, adds byte totals, and gates the fit claim, but omits the requested target-hardware logging/assertions for representative large parameter and optimizer leaves.
+
+F10: RESOLVED — the implementation is split into five focused write-review-strengthen cycles with localized tests.
+
+## New issues in v2
+
+1. **G1 — MAJOR.** The required 2500/5000/7500/10000 evaluations conflict with `max_to_keep=3` and the copied `checkpoint_keep_period: 5000`, so checkpoint 2500 is not guaranteed to survive for post-run cohort evaluation.
+
+## Verdict
+
+REQUEST-REVISION. The core experiment design is now sound, but the negative-control protocol, cohort/baseline execution path, FP32-control mechanism, and large-leaf sharding checks remain underspecified, while checkpoint retention directly conflicts with the required evaluation set.
+
+---
+
+# Resolutions (Planner, plan v3 — 2026-07-17)
+
+Re-review verdict REQUEST-REVISION: F1/F2/F3/F7/F8/F10 RESOLVED (no further action); F4/F5/F6/F9 PARTIALLY-RESOLVED and G1 MAJOR — all five **accepted** and closed in v3:
+
+- **F4 (controls underspecified)** — FIXED in §2.4: control #1 = RESUME primary to 30k (Orbax params/opt/step restore, iterator reseeded `seed+start_step`), cohort eval at 20000/30000; control #2 = FRESH 10k run `-lr2e5` from pretrained (never resumed — optimizer-state mixing would confound), eval 2500/5000/7500/10000; control #3 = FRESH 10k run `-fp32state`, same eval schedule.
+- **F5 (cohort/baseline execution path missing)** — FIXED in §2.3 + §3: new `validation_ordinals` config key + generate-reader support for exact noncontiguous ordinal selection (CPU-tested); `checkpoint_step: 0` is a first-class restore-bypass path rolling out the loaded pretrained weights (CPU-tested via the round-trip test's step-0 case).
+- **F6 (fp32-control mechanism unchosen/untested)** — FIXED in §2.4(#3): mechanism committed — `weights_dtype: float32` override (loader casts params; optax moments are created in param dtype ⇒ params+mu+nu all fp32; activations stay bf16 via `activations_dtype`); zero new optimizer code; wiring test asserts moments follow param dtype; the run's precondition is the startup dtype log line `params=float32, mu=float32, nu=float32`.
+- **F9 (large-leaf hardware checks missing)** — FIXED in §3 + §6: startup large-leaf audit — 8 largest param leaves + opt-state twins with path/shape/dtype/global-bytes/addressable-bytes/PartitionSpec, plus an assertion that no leaf >100 MB resolves fully replicated; pure selection/assert logic CPU-tested on fake trees; real log lines are smoke acceptance criteria.
+- **G1 (checkpoint 2500 evicted by keep_period 5000 + max_to_keep 3)** — FIXED: yml delta `checkpoint_keep_period: 2500` (Orbax keeps every multiple of keep_period regardless of max_to_keep ⇒ 2500/5000/7500/10000 retained; ≈120 GB on GCS accepted); §2.2/§2.3/§6 updated.
+
+Revision is targeted (no design change) → focused re-review #2 requested on exactly F4/F5/F6/F9/G1 + any new issues.
