@@ -29,6 +29,11 @@ Last updated: 2026-07-14
 - **Workaround:** `bash_scripts/prefetch_hf_snapshot.sh` (robust retrying prefetch before JAX startup) — keep it in every launch path.
 - **Status:** mitigated; re-check if a launch script bypasses the prefetch.
 
+### 5. Background `codex exec` hangs on open stdin (infra, standing workaround)
+- **Symptom:** `codex exec "prompt" > log 2>&1` launched as a background job blocks forever at `Reading additional input from stdin...` with ~0 CPU — codex waits for stdin EOF that never comes (the plan-v2 re-review sat stuck ~10 h; an earlier identical invocation happened to inherit a closed stdin and worked, which masked the bug).
+- **Workaround:** ALWAYS append `< /dev/null` to non-interactive `codex exec` invocations. Detect recurrence by: log stuck at 1 line + process CPU ≈ 0 + no `OpenAI Codex vX.Y.Z` header line.
+- **Status:** standing rule for every reviewer call; classified infrastructure (launch-env), no code change.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
@@ -36,8 +41,3 @@ Last updated: 2026-07-14
 
 ### R2. Codex CLI too old for `gpt-5.6-sol` (infra, fixed 2026-07-12)
 - 0.142.5 rejected the model ("requires a newer version"); upgraded via `brew upgrade --cask codex` to 0.144.1. Reviewer invocation verified: `codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh`.
-
-### 5. Background `codex exec` hangs on open stdin (infra, standing workaround)
-- **Symptom:** `codex exec "prompt" > log 2>&1` launched as a background job blocks forever at `Reading additional input from stdin...` with ~0 CPU — codex waits for stdin EOF that never comes (the plan-v2 re-review sat stuck ~10 h; an earlier identical invocation happened to inherit a closed stdin and worked, which masked the bug).
-- **Workaround:** ALWAYS append `< /dev/null` to non-interactive `codex exec` invocations. Detect recurrence by: log stuck at 1 line + process CPU ≈ 0 + no `OpenAI Codex vX.Y.Z` header line.
-- **Status:** standing rule for every reviewer call; classified infrastructure (launch-env), no code change.
