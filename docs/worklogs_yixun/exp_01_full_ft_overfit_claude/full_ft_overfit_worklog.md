@@ -65,3 +65,19 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — `announcement/02_tpu_run_requires_approval.md` + SOP Running-discipline bullet. For this experiment: validation-ladder rungs 5 (v6e-8 smoke), 6 (v6e-64 fit probe), 7 (full run), all escalation controls, and all cohort-validation jobs each require Yixun's go-ahead, requested with the pre-launch package. Rungs 1–4 (local CPU) unaffected; Coder rounds proceed.
 - **Result** — `passed` (bookkeeping).
 - **Next** — Coder round 1 in progress; first approval ask will be the v6e-8 smoke run after rounds 1–5 + local ladder rungs pass.
+
+## 2026-07-17T04:45:00Z — Coder round 1 (shared-objective-helpers): write phase complete
+
+- **Goal** — Round 1 of 5: extract the shared objective math (parity-by-shared-code, plan §3).
+- **Change** — Coder (Opus 4.8 max): `build_noisy_pinned_latents` + `masked_velocity_mse` added to `models/wan/side_adapter_wan.py` (+42); side-adapter `_denoising_loss` refactored to call them (+4/−9, behavior-preserving); new `tests/worklogs_yixun/test_full_ft_overfit_shared_objective.py` (+143, 7 tests). Total +189/−9 (<200 LOC). Uncommitted by design (commit at cycle close).
+- **Command / Validation** — TDD: RED = ImportError on the two new names (right reason) → GREEN = 7/7 passed in 2.10s (CPU venv, jax 0.11.0). Characterization tests assert atol=0 equality against verbatim-transcribed pre-refactor equations. `py_compile` OK ×3; new lines black-119/ruff clean.
+- **Result** — `passed` (write phase). Notable deltas for review: trainer's `apply_first_frame_pin` import removed (moved into helper; ruff F401), mask shape now derived from `v_pred.shape[1:]` (≡ `z_video` shape), defensive f32 casts in helpers (no-op on f32 inputs, proven bit-identical).
+- **Next** — Review phase: briefed Codex `gpt-5.6-sol` xhigh on this diff → `full_ft_overfit_codex_code_shared-objective-helpers_review.md` → strengthen → commit closes the cycle.
+
+## 2026-07-17T05:30:00Z — Coder round 1: strengthen complete → cycle 1 CLOSED
+
+- **Goal** — Resolve review findings F1/F2/F3 and close the round.
+- **Change** — Trainer-level fixed-RNG characterization (guide 1.0 + 5.0, all aux, helper-call spies, mutant-validated); `masked_velocity_mse` mask source → `v_target` + shape-mismatch `ValueError` (RED-first regression); bf16 + explicit-batch-size contract tests. Source +46/−9, tests +411; 14/14 green. Darwin grain-segfault stub documented in test header (linux loads real grain).
+- **Version Control** — cycle-close commit on `claude-exp_01_full_ft_overfit-20260715` (this commit); >200 LOC justified: review-mandated tests only.
+- **Result** — `passed` — strengthening record appended to `full_ft_overfit_codex_code_shared-objective-helpers_review.md`; no behavior change beyond findings → no follow-up review.
+- **Next** — Coder round 2 `full-ft-loss`: `FullFTTrainState` + full-FT `_denoising_loss`/`_train_step`/`_eval_step` + fixed-RNG integration test, honoring the reviewer's Notes for round 2.
