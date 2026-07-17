@@ -11,7 +11,7 @@ Last updated: 2026-07-18
 - **Branch / worktree:** `claude-exp_01_full_ft_overfit-20260715` off `yixun-dev` @ `8258965`; worktree `/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_01_full_ft_overfit`. Exp-docs auto-sync to `yixun-dev` via `.githooks/post-commit`.
 - **Docs:** `docs/worklogs_yixun/exp_01_full_ft_overfit_claude/` — `_yixun_query.md`, `_worklog.md`.
 - **Decision rule:** overfits fast → pipeline OK, continue adapter work; can't overfit after substantial steps → debug data / loss / noise / CFG / latent alignment first.
-- **Next:** `plan_full_ft_overfit.md` (Planner) → Codex `gpt-5.6-sol` xhigh plan review → user approval. Open questions: trainer path (`WanTI2VTrainer` vs. adapter-trainer-with-adapter-off), action conditioning, overfit subset/steps/LR, success metric.
+- **Next:** Yixun approves → v6e-8 smoke (≈20 steps, storage-light) → v6e-64 fit probe → full run (10k steps, GBS 512, LR 1e-5, fresh noise, guide 1.0) → cohort validation at steps 0/2500/5000/7500/10000 (16 fixed train ordinals). Escalation on negative: §2.4 (30k resume → LR 2e-5 → fp32 `weights_dtype` control).
 
 ## Run: wan-pre_context-v6e64-full-gbs512-fresh-20260629-034110
 
