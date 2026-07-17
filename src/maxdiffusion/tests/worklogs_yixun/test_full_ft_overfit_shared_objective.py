@@ -12,25 +12,9 @@ model weights, no TPU.
 
 from __future__ import annotations
 
-import sys
-import types
-
-if sys.platform == "darwin" and "grain" not in sys.modules:
-    # The tensorflow and grain macOS-arm64 wheels segfault when imported into one
-    # process (native symbol clash; reproduced with TF 2.21 + grain 0.2.16/17/18,
-    # both import orders: `python -c "import tensorflow, grain.python"` exits 139).
-    # Importing the trainer module pulls both via input_pipeline_interface, though
-    # the side-adapter tfrecord path never executes grain code. Stub just enough of
-    # ``grain.python`` for those module-level imports (two class bases). On linux
-    # (TPU / CI) the real grain imports fine and no stub is installed.
-    _grain = types.ModuleType("grain")
-    _grain_python = types.ModuleType("grain.python")
-    _grain_python.MapTransform = type("MapTransform", (), {})
-    _grain_python.RandomAccessDataSource = type("RandomAccessDataSource", (), {})
-    _grain.python = _grain_python
-    sys.modules["grain"] = _grain
-    sys.modules["grain.python"] = _grain_python
-
+# The darwin-only grain import stub (installed before importing the trainer, which
+# pulls tensorflow + grain via input_pipeline_interface) now lives in conftest.py so
+# both worklog test files share one copy.
 from types import SimpleNamespace
 
 import jax
