@@ -150,3 +150,18 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — yml ships the primary recipe standalone (per_device 8.0 → GBS 512 on v6e-64; wandb project = launcher's, single source of truth behaviorally tested); batch-derivation semantics executed against real pyconfig and test-bound; wrapper smoke-contract documented+tested. 95/95 green.
 - **Result** — `passed`. Five closed cycles: shared-objective-helpers → full-ft-loss → trainer-wiring → ckpt-generation → configs-launchers. 22 findings total across 5 reviews + 2 plan reviews; every finding fixed or rejected-with-reason on the record; 21+ mutants killed.
 - **Next** — Validation ladder rungs 1–4 locally, parity-audit worklog entry, then the v6e-8 smoke-run approval package to Yixun (announcement 02 gate).
+
+## 2026-07-18T02:20:00Z — Validation ladder rungs 1–4 + parity audit: PASS
+
+- **Goal** — Clear the pre-TPU gates (plan §5, SOP ladder + parity audit).
+- **Command / Validation** —
+  - **Rung 1 (static+unit):** 95/95 pytest; py_compile ×5 touched modules; yaml.safe_load; bash -n ×3; git diff --check. All clean on committed tree `d7bfd49`.
+  - **Rung 2 (tiny synthetic forward):** satisfied by the stub-transformer integration tests (fixed-RNG loss-path, train-step-updates-params, rollout tests) per plan §5.2.
+  - **Rung 3 (real-data readback):** parsed records 0–1 of `train-00000-of-00704.tfrecord` (3MB partial fetch): z_i0 f16 [48,1,12,20] 23040 B, z_video f16 [48,9,12,20] 207360 B, actions f32 [32,7] 896 B — byte-exact vs schema; finite; stats plausible (latent std ≈0.60/0.91, actions ±0.65). Dataset `summary.json` independently confirms 1,440,554 examples / 704 shards / 2048 per shard (matches review-F4 numbers).
+  - **Rung 4:** n/a (no dataset build).
+- **Parity audit (plan "Parity audit before scaling"):**
+  - **Numeric:** objective math shared BY CODE (round-1 helpers, atol=0 characterization vs pre-refactor equations; trainer-level fixed-RNG characterization incl. guide-5.0 CFG path); sigmas/t-sampling/noise imported not copied; AdamW b1/b2/eps/wd + clipping + warmup retained-key-tested equal to the reference yml; LR 1e-5 is the one deliberate numeric departure (recorded §2.2).
+  - **Structural:** trainable set = whole transformer (wiring tests + startup param-count log); no adapter modules constructible in the path (booby-trapped in tests); CFG bypassed with NaN-proof assert; frame-0 pin verified bitwise into the transformer call; fresh-noise enforced at trainer AND both launch surfaces (mutants killed).
+  - **Data:** same TFRecord loader code path (inherited `_load_dataset`), rung-3 byte-level readback above.
+- **Result** — `passed` — all pre-TPU gates green. Implementation totals: 5 closed cycles, 2 plan reviews + 5 code reviews (Codex gpt-5.6-sol xhigh), 23 findings all resolved on the record, 25+ mutants killed, 95 tests.
+- **Next** — Smoke-run approval package to Yixun (announcement 02). No TPU action until approval.
