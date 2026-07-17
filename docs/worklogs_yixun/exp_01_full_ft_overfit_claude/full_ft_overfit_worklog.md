@@ -58,3 +58,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Goal** — Close the plan gate.
 - **Result** — `passed` — F4/F5/F6/F9/G1 all CLOSED (reviewer verified keep-period OR-policy in Orbax v0.11.33 source and mu/nu dtype behavior in Optax v0.2.8 source). One MINOR H1 (aggregate retention ≈760 GB) resolved: budgeted + post-eval pruning rule in R4. Per Query-3 conditional approval, plan v3 is **APPROVED**.
 - **Next** — Coder round 1 `shared-objective-helpers` (Opus 4.8 max, test-first, in this worktree, no commits): extract `build_noisy_pinned_latents` + `masked_velocity_mse` into `side_adapter_wan.py`, refactor reference `_denoising_loss` to call them, characterization tests in `src/maxdiffusion/tests/worklogs_yixun/test_full_ft_overfit_shared_objective.py`.
+
+## 2026-07-17T04:15:00Z — TPU launch gate added (announcement 02)
+
+- **Goal** — Record Yixun's standing directive: explicit approval required before ANY TPU run.
+- **Change** — `announcement/02_tpu_run_requires_approval.md` + SOP Running-discipline bullet. For this experiment: validation-ladder rungs 5 (v6e-8 smoke), 6 (v6e-64 fit probe), 7 (full run), all escalation controls, and all cohort-validation jobs each require Yixun's go-ahead, requested with the pre-launch package. Rungs 1–4 (local CPU) unaffected; Coder rounds proceed.
+- **Result** — `passed` (bookkeeping).
+- **Next** — Coder round 1 in progress; first approval ask will be the v6e-8 smoke run after rounds 1–5 + local ladder rungs pass.
