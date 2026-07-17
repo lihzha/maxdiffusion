@@ -135,3 +135,18 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Version Control** — cycle-close commit (this commit). Review attempt 1 died on OpenAI capacity (infra, logged); retry produced the full verdict + the exhaustive round-5 requirements list.
 - **Result** — `passed` — strengthening record appended to `full_ft_overfit_codex_code_ckpt-generation_review.md`.
 - **Next** — Round 5 `configs-launchers` (final): `base_wan_5b_full_ft.yml`, `train_wan_full_ft.sh`, `launch_wan_train.sh` full_ft arm, full-FT validation wrapper — built exactly to the reviewer's Notes-for-round-5 list (incl. the launcher common-override pitfalls). Then local ladder rungs 1–4 → smoke-run approval ask to Yixun.
+
+## 2026-07-18T00:35:00Z — Coder round 5 (configs-launchers): write phase complete
+
+- **Goal** — Final round: launchable configuration per the round-4 reviewer's requirements list.
+- **Change** — `base_wan_5b_full_ft.yml` (288 lines; cp-of-base + 7 deltas + `validation_ordinals` + rationale header; 34 retained keys byte-identical by construction); `train_wan_full_ft.sh` (fresh-noise default, EVAL_DATA_DIR→TRAIN_DATA_DIR, LR/steps/ckpt knobs); `launch_wan_train.sh` full_ft arm (common-defaults block byte-unchanged; post-common override block sets 2500/2500/train-split AFTER commons, BEFORE smoke; TRAIN_SCRIPT dispatch variable); `validate_wan_full_ft.sh` (cohort passthroughs). 21 new tests (executed launcher goldens, not text greps) → 94/94.
+- **Command / Validation** — RED 17-failed (4 harness-sanity greens) → GREEN 94/94 in 13.9s; bash -n ×3, yaml parses (float-LR trap avoided: `1.e-5`), black/ruff clean. 4 mutants (noise→fixed, dispatch→side-adapter script, keep_period drop, EVAL_DATA_DIR clobber) caught, restores sha-verified.
+- **Result** — `passed` (write phase). Deviations for review: train wrapper omits `validation_ordinals` (training never reads it — generate-script concept); `ACTION_ADAPTER_TYPE="full-ft"` in the arm as inert run-name tag; inert adapter CLI overrides dropped from wrappers (yml keeps keys).
+- **Next** — Briefed Codex review (marker `configs-launchers`; includes end-of-implementation check vs plan §6) → strengthen → cycle-5 commit → ladder rungs 1–4 → smoke approval ask.
+
+## 2026-07-18T01:40:00Z — Coder round 5: strengthen complete → cycle 5 CLOSED → IMPLEMENTATION COMPLETE
+
+- **Goal** — Resolve the final finding; close the last cycle.
+- **Change** — yml ships the primary recipe standalone (per_device 8.0 → GBS 512 on v6e-64; wandb project = launcher's, single source of truth behaviorally tested); batch-derivation semantics executed against real pyconfig and test-bound; wrapper smoke-contract documented+tested. 95/95 green.
+- **Result** — `passed`. Five closed cycles: shared-objective-helpers → full-ft-loss → trainer-wiring → ckpt-generation → configs-launchers. 22 findings total across 5 reviews + 2 plan reviews; every finding fixed or rejected-with-reason on the record; 21+ mutants killed.
+- **Next** — Validation ladder rungs 1–4 locally, parity-audit worklog entry, then the v6e-8 smoke-run approval package to Yixun (announcement 02 gate).
