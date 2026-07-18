@@ -198,3 +198,11 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — Launcher batch trio env-overridable (defaults 8/512/512 unchanged; globals overridable for worker-log echo honesty — inert to training per round-5 pyconfig proof); 2 new executed-golden tests incl. the exact smoke-attempt-2 recipe; default-submission regressions on all three arms. 97/97 green.
 - **Result** — `passed` — reviewer confirmed triage, 1/8/8 recipe, and the provisional v6e-64 headroom argument; stray-env sensitivity accepted as documented interface.
 - **Next** — Awaiting Yixun's smoke-attempt-2 approval (announcement 02; config-changed relaunch). On approval: launch with `SMOKE=1 PER_DEVICE_BATCH_SIZE=1 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=8 GLOBAL_BATCH_SIZE_TO_LOAD=8 TPU_CHIPS=8`.
+
+## 2026-07-18T21:22:09Z — SMOKE attempt 2 LAUNCH (approved) + acceptance criteria
+
+- **Goal** — Rung-5 smoke at the plan-§5.5 recipe (per-device 1, GBS 8) from post-fix commit `0405a30`.
+- **Command / Validation** — `WAN_EXPERIMENT=full_ft SMOKE=1 PER_DEVICE_BATCH_SIZE=1 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=8 GLOBAL_BATCH_SIZE_TO_LOAD=8 TPU_CHIPS=8 NAME=wan-full-ft-smoke2-yixun bash bash_scripts/launch_wan_train.sh` (worktree cwd; matches the cycle-6 test golden). Entry 2 in `_command.md`.
+- **Acceptance criteria** — as attempt 1's, re-scoped: COMMIT=0405a30; 8 devices; guide-1.0 + fresh asserts pass; ~5.0B trainable, no adapter line; per-dtype param/mu/nu lines (mixed bf16+f32); large-leaf audit + no-replicated assert pass; eval dir ends /train; **echoed batch 1/8/8**; reaches step 1, finite loss, no OOM/NaN; zero checkpoints. (Per-device-8 memory claim moved to the fit probe.)
+- **Result** — `launched` — job `20260718-212209-ff679a2a-wan-full-ft-smoke2-yixun` (v6e-8, 21:22:09Z; teed log `full_ft_overfit_2026-07-18_21:22:09.log`).
+- **Next** — On log-verified PASS: auto-launch the v6e-64 fit probe per Query 4's conditional (1 step, per-device 8/GBS 512, storage-light, NAME=wan-full-ft-fitprobe-yixun). On failure: triage; any config change returns for approval.

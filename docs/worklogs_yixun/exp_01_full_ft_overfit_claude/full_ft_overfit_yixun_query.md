@@ -53,3 +53,9 @@ A full finetune removes the adapter + frozen-backbone variable. If a fully-train
 > Pre-approve conditional on APPROVE verdict, start coder round 1 immediately
 
 **Interpretation:** plan v2 is approved by Yixun **conditional on the pending Codex re-review returning APPROVE**. On APPROVE: start Coder round 1 (shared-objective-helpers) immediately, no further ask. On any other verdict (APPROVE-WITH-CHANGES / REQUEST-REVISION): the conditional does NOT trigger — resolve findings and return to Yixun.
+
+## Query 4 — 2026-07-18 (launch approvals, from Yixun)
+
+**Verbatim:** "Approve smoke" → attempt 1 (per-device 8) OOM'd on v6e-8 by 44MB; then, after the reviewed launcher fix: "Approve smoke 2 + fit probe conditional on pass".
+
+**Scope:** smoke attempt 2 (v6e-8, per-device 1 / GBS 8, 1 step, storage-light) approved unconditionally; the v6e-64 fit probe (per-device 8 / GBS 512, 1 step, storage-light) is pre-approved **conditional on smoke 2 passing its worklog acceptance criteria** (log-verified, not merely queue-SUCCEEDED). The 10k full run remains a separate future approval.
