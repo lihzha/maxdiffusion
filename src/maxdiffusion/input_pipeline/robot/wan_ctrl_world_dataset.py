@@ -292,6 +292,9 @@ class WanCtrlWorldDroidDataset:
             "action":          action,
             "text_embeds":     traj["text_embed"],
             "frame_positions": rgb_id,
+            # Sequential episode index from preprocessing (int32-safe); threaded
+            # through the batch so grad-spike steps can be attributed to episodes.
+            "episode_id":      tf.cast(traj["episode_id"], tf.int32),
         }
 
     def __iter__(self):

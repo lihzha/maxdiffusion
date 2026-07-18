@@ -306,12 +306,41 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
     grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
     new_state = state.apply_gradients(grads=grads)
 
+    # Bad-batch guard: if the raw (pre-clip) global grad norm is non-finite or
+    # exceeds grad_norm_skip_threshold, revert the whole update (params,
+    # opt_state, step) so one bad batch can't poison Adam's moments — even
+    # clipped, a spike's direction lingers in m/v for ~1/(1-b2) steps.
+    skip_threshold = float(getattr(config, "grad_norm_skip_threshold", 0.0) or 0.0)
+    update_skipped = jnp.zeros((), dtype=jnp.float32)
+    if skip_threshold > 0.0:
+        is_bad = jnp.logical_or(jnp.logical_not(jnp.isfinite(grad_norm)), grad_norm > skip_threshold)
+        keep = lambda new, old: jax.tree_util.tree_map(lambda n, o: jnp.where(is_bad, o, n), new, old)
+        new_state = new_state.replace(
+            step=jnp.where(is_bad, state.step, new_state.step),
+            params=keep(new_state.params, state.params),
+            opt_state=keep(new_state.opt_state, state.opt_state),
+        )
+        update_skipped = is_bad.astype(jnp.float32)
+
+    # Data diagnostics: per-sample latent |max| and episode ids, replicated so
+    # every host can attribute a grad spike to specific batch samples. Leading
+    # dims ((accum,) B) are flattened.
+    lat_abs = jnp.abs(data["latent"])
+    latent_absmax_per_sample = jnp.max(lat_abs, axis=tuple(range(lat_abs.ndim - 4, lat_abs.ndim))).reshape(-1)
+    latent_absmax_per_sample = jax.lax.with_sharding_constraint(latent_absmax_per_sample, P())
+    episode_ids = jax.lax.with_sharding_constraint(data["episode_id"].reshape(-1), P())
+
     metrics = {
         "scalar": {
             "learning/loss": total_loss,
             "learning/grad_norm": grad_norm,
+            "learning/latent_absmax": jnp.max(latent_absmax_per_sample),
+            "learning/update_skipped": update_skipped,
         },
-        "scalars": {},
+        "scalars": {
+            "learning/latent_absmax_per_sample": latent_absmax_per_sample,
+            "learning/episode_ids": episode_ids,
+        },
     }
     return new_state, scheduler_state, metrics, new_rng
 
@@ -476,6 +505,7 @@ class WanCtrlWorldTrainer:
             "action":          pspec,
             "text_embeds":     pspec,
             "frame_positions": pspec,
+            "episode_id":      pspec,
         }
 
     # ── Main training entry point ─────────────────────────────────────────────
@@ -583,6 +613,9 @@ class WanCtrlWorldTrainer:
         rng = jax.random.key(config.seed + 1)
         recent_loss: list[float] = []
         recent_grad: list[float] = []
+        recent_absmax: list[float] = []
+        skipped_count = 0
+        skip_threshold = float(getattr(config, "grad_norm_skip_threshold", 0.0) or 0.0)
         last_step_time = datetime.datetime.now()
 
         profiler = None
@@ -628,6 +661,23 @@ class WanCtrlWorldTrainer:
 
             recent_loss.append(float(metrics["scalar"]["learning/loss"]))
             recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
+            recent_absmax.append(float(metrics["scalar"]["learning/latent_absmax"]))
+            skipped_count += int(float(metrics["scalar"]["learning/update_skipped"]))
+
+            # Grad-spike attribution: on a skipped step, name the batch's
+            # episodes sorted by latent |max| so bad data can be tracked down.
+            grad_val = recent_grad[-1]
+            if skip_threshold > 0.0 and (not np.isfinite(grad_val) or grad_val > skip_threshold):
+                eids = np.asarray(metrics["scalars"]["learning/episode_ids"])
+                absmax = np.asarray(metrics["scalars"]["learning/latent_absmax_per_sample"])
+                if jax.process_index() == 0:
+                    order = np.argsort(-absmax)
+                    offenders = ", ".join(f"ep{int(eids[i])}:{absmax[i]:.3e}" for i in order)
+                    max_logging.log(
+                        f"[wan_ctrl_world] GRAD SPIKE step {step}: raw grad_norm={grad_val:.3e} "
+                        f"(threshold {skip_threshold:g}) — update skipped. "
+                        f"Batch episode_id:latent_absmax (desc): {offenders}"
+                    )
 
             if jax.process_index() == 0 and (step < 5 or (step + 1) % config.log_period == 0):
                 max_logging.log(f"step {step} s/step={step_secs:.2f}")
@@ -644,9 +694,14 @@ class WanCtrlWorldTrainer:
                 )
                 if wandb_run is not None:
                     wandb_run.log({"train/loss": avg_loss, "train/grad_norm": avg_grad,
+                                   "train/grad_norm_max": max(recent_grad),
+                                   "train/latent_absmax": max(recent_absmax),
+                                   "train/updates_skipped": skipped_count,
                                    "train/lr": lr, "train/steps_per_sec": sps}, step=step + 1)
                 recent_loss.clear()
                 recent_grad.clear()
+                recent_absmax.clear()
+                skipped_count = 0
                 last_step_time = now
 
             if (
