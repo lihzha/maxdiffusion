@@ -69,3 +69,11 @@ WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 NAME=wan-full-ft-fitprobe-yixun \
 - **Job id:** `20260718-225754-87cbd078-wan-full-ft-fitprobe-yixun`
 
 - **Outcome (appended to entry 5):** FAILED — same coordination-deadline class (worker-12 first abort; stuck host in unsampled ranks). 3/3 pre-fix failures → launch freeze until the cycle-7 post-fix commit; probe #4 will be entry 6.
+
+## 6. Fit probe #4 (rung 6, POST-FIX) — 2026-07-18T23:38:00Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `0ffd950` (cycle-7 setup hardening; reviewed APPROVE)
+- **Approval:** Query 6 (post-fix launches blessed)
+- **Command (exp worktree):** identical to entry 3 (`WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 NAME=wan-full-ft-fitprobe-yixun bash bash_scripts/launch_wan_train.sh`)
+- **Job id:** `20260718-233800-5d773c8b-wan-full-ft-fitprobe-yixun`
