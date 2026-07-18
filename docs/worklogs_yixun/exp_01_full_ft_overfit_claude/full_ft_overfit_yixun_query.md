@@ -65,3 +65,9 @@ A full finetune removes the adapter + frozen-backbone variable. If a fully-train
 **Verbatim:** "Approve full run conditional on fit probe pass"
 
 **Scope:** the primary 10k-step full run (v6e-64, GBS 512, LR 1e-5, fresh noise, guide 1.0, checkpoints every 2500 with keep-period 2500) is pre-approved, **conditional on the fit probe passing its acceptance criteria log-verified** (not merely queue-SUCCEEDED). Escalation-protocol runs (§2.4: 30k resume, LR control, fp32 control) and cohort-validation jobs remain separate future approvals.
+
+## Query 6 — 2026-07-19 (post-fix full-run blessing, from Yixun)
+
+**Verbatim:** "Approve full run from post-fix commit"
+
+**Scope:** supersedes Query 5's implicit SHA — the 10k full run launches from the commit containing the reviewed setup.sh apt-hardening (mini-cycle 7), once BOTH hold: fit probe passed (any attempt) AND cycle 7 closed. All other full-run parameters unchanged from `_params_set_up.md`.
