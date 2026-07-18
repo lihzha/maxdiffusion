@@ -4,7 +4,7 @@ Every launch appended AT LAUNCH TIME (SOP artifact 7). Failed/superseded runs st
 
 ## 1. Smoke run (rung 5) — 2026-07-18T20:39:58Z
 
-- **Status:** LAUNCHED (job id below)
+- **Status:** FAILED (attempt 1, APPLICATION_ERROR) — v6e-8 CompileTimeHbmOom, over by 44.29MB at per-device batch 8. Kept for the record; retry (config-changed: per-device 1) requires fresh approval — entry 2 below when approved.
 - **Commit:** `07eb5b2` on `claude-exp_01_full_ft_overfit-20260715` (pushed; worker verifies via COMMIT env)
 - **Approval:** Yixun, "Approve smoke", 2026-07-18 (announcement 02)
 - **Command (from the exp worktree):**
