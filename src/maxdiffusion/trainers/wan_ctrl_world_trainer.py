@@ -461,8 +461,16 @@ class WanCtrlWorldTrainer:
                 step=ocp.args.JsonRestore(),
             ),
         )
-        new_state = state.replace(params=restored["params"], opt_state=restored["opt_state"])
-        return new_state, int(restored["step"]["step"])
+        restored_step = int(restored["step"]["step"])
+        # step isn't consumed by the optimizer (bias correction and the LR
+        # schedule run off counts inside opt_state, restored above) but keep it
+        # consistent for anything that reads state.step.
+        new_state = state.replace(
+            params=restored["params"],
+            opt_state=restored["opt_state"],
+            step=jnp.asarray(restored_step, dtype=jnp.int32),
+        )
+        return new_state, restored_step
 
     # ── Optimiser ─────────────────────────────────────────────────────────────
 
