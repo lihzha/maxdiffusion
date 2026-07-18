@@ -15,3 +15,19 @@ WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=8 NAME=wan-full-ft-smoke-yixun \
 ```
 - **Effective config:** v6e-8 us-east1-d; smoke run-name `smoke-full-ft-<utc-ts>`; MAX_TRAIN_STEPS=1; CHECKPOINT_EVERY=0; SAVE_FINAL_CHECKPOINT=False; EVAL_EVERY=0; per-device batch 8 (GBS 64 on 8 chips); fresh noise; EVAL_DATA_DIR=train split (full_ft override block); yml `base_wan_5b_full_ft.yml` via `train_wan_full_ft.sh`.
 - **Job id:** `20260718-204019-6aad21e8-wan-full-ft-smoke-yixun` (queue: `tpu status 20260718-204019-6aad21e8-wan-full-ft-smoke-yixun`; authoritative state: `gs://v6_east1d/tpu-job-queue/jobs/20260718-204019-6aad21e8-wan-full-ft-smoke-yixun/status.json`)
+
+## 2. Smoke attempt 2 (rung 5, post-fix) — 2026-07-18T21:22:09Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `0405a30` (cycle-6: env-overridable batch trio; reviewed APPROVE/no-findings)
+- **Approval:** Yixun, "Approve smoke 2 + fit probe conditional on pass", 2026-07-18
+- **Command (exp worktree):**
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_01_full_ft_overfit
+WAN_EXPERIMENT=full_ft SMOKE=1 PER_DEVICE_BATCH_SIZE=1 \
+  GLOBAL_BATCH_SIZE_TO_TRAIN_ON=8 GLOBAL_BATCH_SIZE_TO_LOAD=8 \
+  TPU_CHIPS=8 NAME=wan-full-ft-smoke2-yixun \
+  bash bash_scripts/launch_wan_train.sh
+```
+- **Effective config:** v6e-8; 1 step; checkpoints/eval/final-save off; per-device 1 (GBS 8); fresh noise; train-split eval dir; yml `base_wan_5b_full_ft.yml`.
+- **Job id:** `20260718-212209-ff679a2a-wan-full-ft-smoke2-yixun` (state: `gs://v6_east1d/tpu-job-queue/jobs/20260718-212209-ff679a2a-wan-full-ft-smoke2-yixun/status.json`)
