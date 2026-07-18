@@ -241,3 +241,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `fix_ready` — same signature: worker-12 first to abort on DEADLINE_EXCEEDED during jax.distributed init; sampled healthy workers show zero apt-lock lines (stuck host among unsampled ranks). Three consecutive 16-host provisions killed by the same setup-starvation class ⇒ per-attempt clean odds far worse than estimated; blind resubmits are waste.
 - **Analysis** — Infrastructure (provisioning), with the in-repo hardening (cycle 7, strengthening in progress) as the mitigation. Decision: NO further launches from pre-fix SHAs. Per Query 6, both the fit-probe resubmit and the full run go from the post-fix commit once cycle 7 closes.
 - **Next** — Cycle-7 strengthen → follow-up review → commit → fit probe #4 from post-fix SHA → on PASS, full run.
+
+## 2026-07-19T01:55:00Z — Cycle 7 CLOSED (final APPROVE) → launch freeze lifted
+
+- **Goal** — Close the hardening cycle; resume launches from the post-fix commit.
+- **Change** — setup.sh: jammy-safe timer/service stops, bounded PID-exact escalation with exit-after-KILL, global 420s budget over apt+curl execution, EPHEMERAL_WORKER-gated persistence (launcher sets it); tests comment-insensitive, zero skips. 100/100 green.
+- **Result** — `passed` — reviewer re-derived the timing arithmetic and approved with zero launch-blocking issues.
+- **Next** — Fit probe #4 from this commit (entry 6); on PASS → full run (Queries 5+6).

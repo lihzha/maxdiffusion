@@ -39,6 +39,26 @@ The tests exercise these five concerns:
       SMOKE-SCALED but are always passed as explicit CLI overrides (bare wrapper = dev
       smoke; the launcher exports 8/512/512 for real runs) -- that contract is pinned too.
 
+  (F) SETUP.SH APT HARDENING (mini-cycle 7, strengthened x2 per Codex reviews) -- static
+      checks pinning the fix for the 2026-07-18 v6e-64 fit-probe failures (workers stuck
+      forever on the dpkg lock held by Ubuntu's post-boot auto-update; healthy hosts then
+      died at the ~10-min JAX distributed-init deadline). Contract, with EVERY structural
+      assertion evaluated on COMMAND text (comment lines stripped -- round-2 F3): one
+      GLOBAL 420s wall-clock budget for the whole apt-critical section with apt/curl
+      EXECUTION bounded via ``timeout <remaining>`` (round-2 F1), timeout-30-bounded
+      systemctl calls (both apt-daily timers stopped synchronously first, then the
+      service units), a jammy-safe escalation on the actual ``unattended-upgrade``
+      process (KillMode=process means unit stops cannot kill it, Launchpad #1690980)
+      using pgrep-captured exact PIDs -- never pattern-kill (round-2 MINOR) -- with
+      60s per-apt lock bounds after verified release, the SIGKILL path DISCARDING the
+      worker via loud exit instead of installing on unverifiable dpkg state (round-2
+      MAJOR), the persistent ``systemctl disable`` gated behind ``EPHEMERAL_WORKER=1``
+      (queue SETUP_CMD; the general TPU/GPU/dev installer stays current-boot-only), and
+      the failure-swallowing ``(sudo bash || bash)`` wrapper replaced by
+      ``$SUDO env ... bash`` so errors propagate through the outer ``set -e``. On
+      bash < 4.2 the ``bash -n`` check runs against a copy with only the PRE-EXISTING
+      ``[[ ! -v MODE ]]`` neutralized (real syntax coverage on darwin, not a skip).
+
 CPU-only: no pipeline loads, no 5B weights. Concern (E) imports ``maxdiffusion.pyconfig``
 (hence jax, on CPU) inside the test solely to execute its pure batch-derivation formula.
 Shell files are validated with ``bash -n`` via subprocess. The darwin grain import stub in
@@ -70,6 +90,7 @@ TRAIN_WRAPPER = BASH / "train_wan_full_ft.sh"
 VALIDATE_WRAPPER = BASH / "validate_wan_full_ft.sh"
 LAUNCHER = BASH / "launch_wan_train.sh"
 SIDE_VALIDATE = BASH / "validate_wan_side_adapter.sh"
+SETUP_SH = REPO_ROOT / "setup.sh"  # root setup; the queue's --setup-cmd runs it on every worker
 
 # Canonical DROID / output locations (plan §2.2/§2.3, §3).
 TRAIN_PATH = "gs://v6_east1d/datasets/droid_wan_side_adapter/train"
@@ -462,6 +483,9 @@ def test_launcher_full_ft_arm_semantics(tmp_path):
     # ...and it dispatches the full-FT train wrapper, NOT the hard-coded adapter script.
     assert "bash_scripts/train_wan_full_ft.sh" in lines
     assert "bash_scripts/train_wan_side_adapter.sh" not in lines
+    # F2: the queue SETUP_CMD marks workers ephemeral so root setup.sh may persistently
+    # disable auto-updates there (and ONLY there).
+    assert any(ln.startswith("EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh") for ln in lines)
 
 
 def test_launcher_side_adapter_arm_byte_identical(tmp_path):
@@ -479,6 +503,8 @@ def test_launcher_side_adapter_arm_byte_identical(tmp_path):
     assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
     assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "512"
     assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_LOAD") == "512"
+    # F2: SETUP_CMD is arm-common -- adapter queue workers are ephemeral too.
+    assert any(ln.startswith("EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh") for ln in lines)
     assert "bash_scripts/train_wan_side_adapter.sh" in lines
     assert "bash_scripts/train_wan_full_ft.sh" not in lines
 
@@ -597,13 +623,143 @@ def test_launcher_rejects_unknown_experiment(tmp_path):
 
 
 # =======================================================================================
+# (F) setup.sh apt hardening (mini-cycle 7) -- static text contract.
+# =======================================================================================
+
+
+def _command_text(txt: str) -> str:
+    """The file with comment lines removed. F3 (round 2): EVERY structural assertion in
+    the setup tests must hold on COMMAND text, so neither a comment nor a commented-out
+    line can ever satisfy one."""
+    return "\n".join(ln for ln in txt.splitlines() if not ln.strip().startswith("#"))
+
+
+def _systemctl_commands(cmd_txt: str) -> list[str]:
+    """systemctl invocations from COMMAND text, normalized to start at ``systemctl``
+    (each is wrapped in ``timeout 30`` for the global-deadline proof)."""
+    out = []
+    for ln in cmd_txt.splitlines():
+        s = ln.strip()
+        if "systemctl " in s:
+            out.append(s[s.index("systemctl") :])
+    return out
+
+
+def test_setup_sh_stops_apt_daily_machinery_before_first_apt():
+    # Unit set, ordering, and the F2 gate -- all asserted on COMMAND text only.
+    cmd = _command_text(_text(SETUP_SH))
+    cmds = _systemctl_commands(cmd)
+    # (1) BOTH timers stopped SYNCHRONOUSLY (no --no-block): prevents new triggers.
+    timer_stops = [c for c in cmds if c.startswith("systemctl stop ") and "--no-block" not in c]
+    assert len(timer_stops) == 1, f"expected exactly one synchronous timer stop, got {timer_stops}"
+    assert "apt-daily.timer" in timer_stops[0]
+    assert "apt-daily-upgrade.timer" in timer_stops[0]
+    # (2) the service units stopped too (async acceptable: jammy KillMode=process means
+    # the in-flight unattended-upgrade child is handled by the escalation instead).
+    svc_stops = [c for c in cmds if c.startswith("systemctl stop --no-block")]
+    assert len(svc_stops) == 1, f"expected exactly one --no-block service stop, got {svc_stops}"
+    for unit in ("unattended-upgrades", "apt-daily.service", "apt-daily-upgrade.service"):
+        assert unit in svc_stops[0], f"{unit} missing from the service stop command"
+    # (3) F2 (closed): exactly one PERSISTENT disable covering the full unit set...
+    disables = [c for c in cmds if c.startswith("systemctl disable")]
+    assert len(disables) == 1, f"expected exactly one persistent disable, got {disables}"
+    for unit in ("unattended-upgrades", "apt-daily.timer", "apt-daily-upgrade.timer"):
+        assert unit in disables[0], f"{unit} missing from the disable command"
+    # ...sitting INSIDE the EPHEMERAL_WORKER if-block (persistent GPU/dev hosts keep
+    # their security-update posture) -- located in command text.
+    gate_idx = cmd.index('if [ "${EPHEMERAL_WORKER:-0}" = "1" ]')
+    disable_idx = cmd.index(disables[0])
+    gate_fi_idx = cmd.index("\nfi", gate_idx)
+    assert gate_idx < disable_idx < gate_fi_idx, "persistent disable is not inside the EPHEMERAL_WORKER gate"
+    # Ordering IN COMMANDS: timers -> services -> gated disable -> escalation -> apt.
+    esc_idx = cmd.index("apt_locked()")
+    first_apt = cmd.index("apt_deadline_run apt-get")
+    assert cmd.index(timer_stops[0]) < cmd.index(svc_stops[0]) < disable_idx < esc_idx < first_apt
+    # Every systemctl call is self-bounded (timeout 30; part of the F1 global-deadline
+    # proof) and a guarded no-op on systemd-less machines.
+    assert cmd.count("timeout 30 systemctl") == 3
+    for c in cmds:
+        assert c.endswith("|| true") and "2>/dev/null" in c, f"unguarded systemctl command: {c}"
+
+
+def test_setup_sh_global_deadline_escalation_and_loud_failure():
+    txt = _text(SETUP_SH)
+    cmd = _command_text(txt)
+    # F1 (round 2): ONE global wall-clock budget bounds the whole section, and apt/curl
+    # EXECUTION runs under `timeout <remaining>` -- not merely a dpkg lock wait.
+    assert "APT_BUDGET=420" in cmd
+    assert "APT_SECTION_START=$SECONDS" in cmd
+    assert "rem=$((APT_BUDGET - (SECONDS - APT_SECTION_START)))" in cmd
+    assert 'timeout "$rem" "$@"' in cmd  # the gate really uses timeout(1) on execution
+    assert cmd.count("apt_deadline_run apt-get") == 4  # every apt call budget-gated
+    assert "apt_deadline_run curl" in cmd  # an ungated network fetch would break the bound
+    # Legacy unbounded / near-window lock waits are gone FROM COMMANDS; per-call lock
+    # wait is 60s now that contention is resolved AND verified by the escalation.
+    assert "DPkg::Lock::Timeout=-1" not in cmd
+    assert "DPkg::Lock::Timeout=600" not in cmd
+    assert "DPkg::Lock::Timeout=180" not in cmd
+    assert cmd.count("DPkg::Lock::Timeout=60 ") == 4
+    # Jammy escalation (KillMode=process): lock/process detection + PID-targeted signals
+    # captured via pgrep first -- and NO pattern-kill anywhere (new MINOR).
+    assert "apt_locked()" in cmd
+    assert "fuser /var/lib/dpkg/lock-frontend" in cmd
+    assert 'pids="$(pgrep -f unattended-upgrade 2>/dev/null || true)"' in cmd
+    assert "kill -TERM $pids" in cmd
+    assert "kill -KILL $pids" in cmd
+    assert "pkill" not in cmd
+    assert '"$waited" -lt 120' in cmd  # grace window for a clean finish
+    assert '"$waited" -lt 30' in cmd  # post-TERM re-check window
+    # NEW MAJOR: reaching SIGKILL DISCARDS the worker -- the KILL if-block must contain
+    # the loud exit and no apt call (dpkg state is unverifiable after SIGKILL).
+    kill_idx = cmd.index("kill -KILL $pids")
+    kill_fi = cmd.index("\nfi", kill_idx)  # the inner `; fi` is same-line; this is the block end
+    kill_block = cmd[kill_idx:kill_fi]
+    assert "exit 1" in kill_block, "KILL path must exit loudly, never fall through to apt"
+    assert "unverifiable" in kill_block  # the discard rationale is in the message itself
+    assert "apt_deadline_run" not in kill_block
+    # LOUD failure everywhere: budget-exhausted + KILL-discard + two apt-chain handlers.
+    assert cmd.count("[setup.sh] ERROR") == 4
+    # Wrapper propagation + F2 flag forwarding, asserted on command text.
+    assert "(sudo bash || bash) <<" not in cmd
+    assert 'env EPHEMERAL_WORKER="${EPHEMERAL_WORKER:-0}" bash <<' in cmd
+    # Failure signature + the jammy citation are DOCUMENTATION requirements, so the full
+    # text including comments is the right target for these three.
+    assert "unattended-upgr" in txt
+    assert "2026-07-18" in txt
+    assert "1690980" in txt  # Launchpad: KillMode=process leaves the child running
+
+
+# =======================================================================================
 # bash -n syntax check on every touched/created shell file.
 # =======================================================================================
 
 
-@pytest.mark.parametrize("script", [TRAIN_WRAPPER, VALIDATE_WRAPPER, LAUNCHER], ids=lambda p: p.name)
-def test_shell_scripts_pass_bash_n(script):
-    assert script.exists(), f"missing {script}"
+def _bash_version() -> tuple[int, int]:
     bash_exe = shutil.which("bash") or "/bin/bash"
-    proc = subprocess.run([bash_exe, "-n", str(script)], capture_output=True, text=True, timeout=30)
+    out = subprocess.run(
+        [bash_exe, "-c", 'echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'], capture_output=True, text=True, timeout=10
+    )
+    try:
+        major, minor = out.stdout.split()[:2]
+        return (int(major), int(minor))
+    except (ValueError, IndexError):
+        return (0, 0)
+
+
+@pytest.mark.parametrize("script", [TRAIN_WRAPPER, VALIDATE_WRAPPER, LAUNCHER, SETUP_SH], ids=lambda p: p.name)
+def test_shell_scripts_pass_bash_n(script, tmp_path):
+    assert script.exists(), f"missing {script}"
+    target = script
+    if script == SETUP_SH and _bash_version() < (4, 2):
+        # Upstream setup.sh uses `[[ ! -v MODE ]]` (bash >= 4.2; PRE-EXISTING -- HEAD's
+        # setup.sh fails bash-3.2 -n at that exact line). macOS system bash is 3.2 and
+        # the queue workers (Ubuntu, bash >= 5) check the real file, so on old bash we
+        # syntax-check a COPY with only that one pre-existing expression neutralized
+        # (F3: the changed hardening block gets real `bash -n` coverage, no skip).
+        txt = _text(SETUP_SH)
+        assert txt.count("! -v MODE") == 1, "pre-existing [[ -v ]] drifted; revisit this 3.2 shim"
+        target = tmp_path / "setup_v_neutralized.sh"
+        target.write_text(txt.replace("! -v MODE", '-z "${MODE:-}"'))
+    bash_exe = shutil.which("bash") or "/bin/bash"
+    proc = subprocess.run([bash_exe, "-n", str(target)], capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, f"bash -n failed for {script.name}:\n{proc.stderr}"

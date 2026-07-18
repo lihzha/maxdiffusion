@@ -70,17 +70,92 @@ fi
 echo "Python version check passed. Continuing with script."
 echo "--------------------------------------------------"
 
-(sudo bash || bash) <<'EOF'
+# --- Ephemeral-worker apt hardening (fork change; exp_01 mini-cycle 7, strengthened x2) -
+# 2026-07-18 v6e-64 fit-probe attempts 1+2: freshly-provisioned workers sat forever in
+# "Waiting for cache lock: /var/lib/dpkg/lock-frontend ... held by unattended-upgr"
+# (Ubuntu post-boot auto-update; the dpkg-lock timeout was -1 = wait FOREVER) while every
+# healthy host died at the ~10-min JAX distributed-init deadline. Hardening, jammy-verified:
+#  (1) GLOBAL DEADLINE: the whole apt-critical section runs under one 420s wall-clock
+#      budget (APT_BUDGET). Every command in the section is either trivially O(1),
+#      self-bounded (timeout-30 systemctl calls; escalation loops capped at 120s/30s),
+#      or gated by apt_deadline_run, which executes the command under
+#      `timeout <remaining budget>` -- bounding apt/curl EXECUTION time, not merely the
+#      lock wait. Worst case: <=90s systemctl + <=150s escalation + budget-gated
+#      remainder, all inside 420s + a seconds-scale ungated tail (tee/rm/var reads)
+#      ~= 7 min, provably within the ~10-min JAX window. Per-apt dpkg-lock waits drop
+#      to 60s: contention was already resolved AND verified by the escalation, so a
+#      long per-call lock allowance is no longer needed;
+#  (2) stop BOTH apt-daily timers synchronously first (no new triggers this boot), then
+#      the service units; on jammy an in-flight unattended-upgrade CANNOT be stopped via
+#      its unit (apt-daily-upgrade.service is KillMode=process: `systemctl stop` kills
+#      only the controlling shell while the child keeps the dpkg lock -- Launchpad
+#      #1690980), so the PROCESS is handled directly: 120s grace to finish cleanly,
+#      then SIGTERM to the exact PIDs captured via pgrep (its handler completes the
+#      current dpkg transaction and exits; 30s re-check). If SIGKILL is ever needed,
+#      dpkg state is UNVERIFIABLE: kill the captured PIDs to unwedge teardown, then
+#      exit 1 immediately -- an ephemeral worker is discarded, NEVER continues
+#      installing on top of possibly-corrupt dpkg state. "|| true" guards keep all of
+#      this a no-op without systemd / the units / the processes (e.g. containers);
+#  (3) every failure path is LOUD (budget exhausted, apt failed/timed out, KILL path):
+#      a visible setup failure beats silently starving the whole multi-host job;
+#  (4) PERSISTENT `systemctl disable` only under EPHEMERAL_WORKER=1 (set by the queue
+#      launcher's SETUP_CMD): this file doubles as the general TPU/GPU/dev installer,
+#      and persistent hosts must keep their security-update posture -- they get the
+#      current-boot stops only. The flag survives sudo's env_reset via `env` on the
+#      invocation line;
+#  (5) heredoc runs via `$SUDO env ... bash` instead of the old `(sudo bash || bash)`,
+#      which swallowed every failure (a failed `sudo bash` had already consumed the
+#      heredoc from stdin, so the fallback `bash` read EOF and exited 0). With the
+#      outer `set -e`, budget/apt/KILL-path errors abort setup.sh visibly.
+SUDO=""
+if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
+$SUDO env EPHEMERAL_WORKER="${EPHEMERAL_WORKER:-0}" bash <<'EOF'
+APT_BUDGET=420
+APT_SECTION_START=$SECONDS
+apt_deadline_run() {
+  rem=$((APT_BUDGET - (SECONDS - APT_SECTION_START)))
+  if [ "$rem" -le 0 ]; then
+    echo "[setup.sh] ERROR: apt section exceeded its ${APT_BUDGET}s global budget -- failing setup loudly" >&2
+    exit 1
+  fi
+  timeout "$rem" "$@"
+}
 mkdir -p /etc/needrestart/conf.d
 echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/99-noninteractive.conf
-apt-get -o DPkg::Lock::Timeout=-1 update && \
-apt-get -o DPkg::Lock::Timeout=-1 install -y numactl lsb-release gnupg curl net-tools iproute2 procps lsof git ethtool && \
+timeout 30 systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+timeout 30 systemctl stop --no-block unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+if [ "${EPHEMERAL_WORKER:-0}" = "1" ]; then
+  timeout 30 systemctl disable unattended-upgrades apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+fi
+apt_locked() {
+  fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1 && return 0
+  pgrep -f unattended-upgrade >/dev/null 2>&1
+}
+waited=0
+while [ "$waited" -lt 120 ] && apt_locked; do sleep 5; waited=$((waited + 5)); done
+if apt_locked; then
+  echo "[setup.sh] dpkg lock still held after ${waited}s grace; SIGTERM to the in-flight updater PIDs" >&2
+  pids="$(pgrep -f unattended-upgrade 2>/dev/null || true)"
+  if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi
+  waited=0
+  while [ "$waited" -lt 30 ] && apt_locked; do sleep 5; waited=$((waited + 5)); done
+fi
+if apt_locked; then
+  pids="$(pgrep -f unattended-upgrade 2>/dev/null || true)"
+  if [ -n "$pids" ]; then kill -KILL $pids 2>/dev/null || true; fi
+  echo "[setup.sh] ERROR: dpkg state unverifiable after SIGKILL -- discarding this ephemeral worker (not proceeding to apt)" >&2
+  exit 1
+fi
+apt_deadline_run apt-get -o DPkg::Lock::Timeout=60 update && \
+apt_deadline_run apt-get -o DPkg::Lock::Timeout=60 install -y numactl lsb-release gnupg curl net-tools iproute2 procps lsof git ethtool || \
+  { echo "[setup.sh] ERROR: apt update/install failed or timed out (global ${APT_BUDGET}s budget, 60s lock bound)" >&2; exit 1; }
 DISTRO=$(lsb_release -cs 2>/dev/null)
 [ -z "$DISTRO" ] && DISTRO=$(. /etc/os-release && echo "$VERSION_CODENAME")
 export GCSFUSE_REPO="gcsfuse-${DISTRO}"
 echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
-curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-apt-get -o DPkg::Lock::Timeout=-1 update -y && apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse
+apt_deadline_run curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+apt_deadline_run apt-get -o DPkg::Lock::Timeout=60 update -y && apt_deadline_run apt-get -o DPkg::Lock::Timeout=60 install -y gcsfuse || \
+  { echo "[setup.sh] ERROR: gcsfuse install failed or timed out (global ${APT_BUDGET}s budget, 60s lock bound)" >&2; exit 1; }
 rm -rf /var/lib/apt/lists/*
 EOF
 

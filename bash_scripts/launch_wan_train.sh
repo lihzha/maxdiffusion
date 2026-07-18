@@ -128,7 +128,10 @@ COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 # Runs on every worker before training: build the venv and prefetch the model.
 # (An empty setup_cmd is a no-op on the queue, and the train wrapper
 # needs the .venv that setup.sh creates.)
-SETUP_CMD="bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh ${MODEL_DIR}"
+# EPHEMERAL_WORKER=1: queue workers are single-job throwaway VMs -- root setup.sh uses
+# the flag to gate its PERSISTENT auto-update disable (persistent GPU/dev hosts running
+# setup.sh manually keep their security-update posture; they get current-boot stops only).
+SETUP_CMD="EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh ${MODEL_DIR}"
 
 # W&B key is forwarded from your shell env (export WANDB_API_KEY in ~/.zshrc).
 # NOTE: this writes the key into the job spec on GCS, readable by anyone with
