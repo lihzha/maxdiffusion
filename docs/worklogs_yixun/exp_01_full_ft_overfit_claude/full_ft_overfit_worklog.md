@@ -213,3 +213,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `passed` — job `20260718-212209-ff679a2a` SUCCEEDED on attempt 3 (attempts 1–2: TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE, INFRASTRUCTURE_PREEMPTION, queue-retried — infra, no action). Worker-0 log verification: COMMIT=0405a30 ✓; 8 devices ✓; guide 1.0 + fresh ✓; **trainable 5.00B**, no adapter line ✓; per-dtype lines: params/mu/nu each bf16(604 leaves, 9.82GB)+f32(221, 0.36GB) — the predicted mixed tree ✓; byte totals params 9.48GB / opt 18.96GB global ✓; **audit table: 8 largest params + path-matched mu/nu twins, all FSDP-sharded P(('context','fsdp')), no replicated large leaf** ✓; eval dir …/train ✓; batch echo 1/8/8 ✓; zero checkpoint step-dirs (empty init prefix only) ✓; JOB_EXIT=0, wandb synced (run wewfe1kx) ✓.
 - **Analysis** — One criterion partially evidenced: loss VALUE unobserved because LOG_PERIOD=10 > max_steps=1 (the log gate never fires on a 1-step smoke) — display artifact, not a training gap; the step completed through block_until_ready. First loss observation lands at full-run step 10. Not worth a launcher change.
 - **Next** — Fit probe (v6e-64, per-device 8 ⇒ GBS 512, 1 step, storage-light) — pre-approved by Query 4, launching now.
+
+## 2026-07-18T22:10:28Z — Query 5 recorded: full run pre-approved conditional on fit-probe PASS; cohort predeclared
+
+- **Goal** — Arm the full-run launch; satisfy §2.3's predeclare-before-launch requirement.
+- **Change** — Query 5 in `_yixun_query.md`; `full_ft_overfit_params_set_up.md` written (full config + 16 deterministic cohort ordinals + seed protocol + escalation controls + abort record).
+- **Result** — `in_progress` — fit probe running; on log-verified PASS the full run launches with acceptance criteria per plan §6.
+- **Next** — Fit-probe verdict → full-run launch (`WAN_EXPERIMENT=full_ft TPU_CHIPS=64`, no SMOKE) → monitor with wandb curve checks at 500-step marks.

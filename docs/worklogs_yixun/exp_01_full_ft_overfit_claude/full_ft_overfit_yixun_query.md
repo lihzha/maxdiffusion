@@ -59,3 +59,9 @@ A full finetune removes the adapter + frozen-backbone variable. If a fully-train
 **Verbatim:** "Approve smoke" → attempt 1 (per-device 8) OOM'd on v6e-8 by 44MB; then, after the reviewed launcher fix: "Approve smoke 2 + fit probe conditional on pass".
 
 **Scope:** smoke attempt 2 (v6e-8, per-device 1 / GBS 8, 1 step, storage-light) approved unconditionally; the v6e-64 fit probe (per-device 8 / GBS 512, 1 step, storage-light) is pre-approved **conditional on smoke 2 passing its worklog acceptance criteria** (log-verified, not merely queue-SUCCEEDED). The 10k full run remains a separate future approval.
+
+## Query 5 — 2026-07-18 (full-run pre-approval, from Yixun)
+
+**Verbatim:** "Approve full run conditional on fit probe pass"
+
+**Scope:** the primary 10k-step full run (v6e-64, GBS 512, LR 1e-5, fresh noise, guide 1.0, checkpoints every 2500 with keep-period 2500) is pre-approved, **conditional on the fit probe passing its acceptance criteria log-verified** (not merely queue-SUCCEEDED). Escalation-protocol runs (§2.4: 30k resume, LR control, fp32 control) and cohort-validation jobs remain separate future approvals.
