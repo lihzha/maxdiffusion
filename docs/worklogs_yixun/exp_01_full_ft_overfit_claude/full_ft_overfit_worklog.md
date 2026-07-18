@@ -184,3 +184,17 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `launched` — job `20260718-204019-6aad21e8-wan-full-ft-smoke-yixun` (v6e-8, submitted 20:40:19Z; teed submission log `full_ft_overfit_2026-07-18_20:40:19.log`). W&B key present → wandb active for the smoke.
 - **Analysis** — pending run.
 - **Next** — On PASS: request v6e-64 fit-probe approval. On failure: infra-vs-bug triage per SOP.
+
+## 2026-07-18T21:10:00Z — Smoke attempt 1 FAILED: v6e-8 HBM OOM by 44MB — triage: config (smoke-topology), not pipeline bug
+
+- **Goal** — Triage the smoke failure (status.json: APPLICATION_ERROR, worker-0 exit 1, attempt 1, non-retryable).
+- **Result** — `fix_ready` — worker-0 log (`logs/attempt-1/worker-0.log`, pulled): `CompileTimeHbmOom: Used 31.29G of 31.25G hbm. Exceeded by 44.29M`. Startup up to compile was healthy.
+- **Analysis** — **Application/config, NOT infrastructure and NOT a pipeline bug.** v6e-8 carries the full 5B state sharded over 8 chips (≈5 GB/chip params+grads+moments) vs ≈0.6 GB/chip on the target v6e-64; at per-device batch 8 that misses fitting by 0.14%. Plan §5.5 specified the v6e-8 smoke at **GBS 8 (per-device 1)**; the launcher's SMOKE block kept the full-run per-device 8 — that deviation (accepted at launch as "stricter probe") is precisely what OOM'd. Target-topology implication: v6e-64 at per-device 8 has ≈4.4 GB/chip MORE headroom than this failed configuration — the plan's fit expectation stands, to be confirmed by the fit probe (rung 6). Per announcement 02, the retry is a config-changed launch → requires fresh Yixun approval.
+- **Next** — Mini-cycle 6: make the launcher's `PER_DEVICE_BATCH_SIZE` env-overridable (1-line; full-run default 8 unchanged; worker-side GBS keys are inert per pyconfig — per-device is authoritative, proven in round 5), quick Codex review, commit. Then request approval for smoke attempt 2 at per-device 1 (plan-spec GBS 8).
+
+## 2026-07-18T22:05:00Z — Mini-cycle 6 (smoke-batch-override): APPROVE, zero findings → cycle CLOSED
+
+- **Goal** — Close the OOM-fix cycle.
+- **Change** — Launcher batch trio env-overridable (defaults 8/512/512 unchanged; globals overridable for worker-log echo honesty — inert to training per round-5 pyconfig proof); 2 new executed-golden tests incl. the exact smoke-attempt-2 recipe; default-submission regressions on all three arms. 97/97 green.
+- **Result** — `passed` — reviewer confirmed triage, 1/8/8 recipe, and the provisional v6e-64 headroom argument; stray-env sensitivity accepted as documented interface.
+- **Next** — Awaiting Yixun's smoke-attempt-2 approval (announcement 02; config-changed relaunch). On approval: launch with `SMOKE=1 PER_DEVICE_BATCH_SIZE=1 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=8 GLOBAL_BATCH_SIZE_TO_LOAD=8 TPU_CHIPS=8`.

@@ -394,13 +394,15 @@ _LAUNCHER_CONTROLLED = [
 ]
 
 
-def _run_launcher(experiment: str, tmp_path: Path) -> list[str]:
+def _run_launcher(experiment: str, tmp_path: Path, extra_env: dict | None = None) -> list[str]:
     """Run the launcher with a stub ``tpu`` and return the argv lines it would submit.
 
     ``HOME`` is redirected to an empty temp dir so the launcher's own
     ``export PATH="$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH"`` cannot resolve the
     real ``~/.local/bin/tpu`` ahead of our stub; the stub dir is prepended to PATH so it
-    wins over every real ``tpu`` on the inherited PATH.
+    wins over every real ``tpu`` on the inherited PATH. ``extra_env`` is applied AFTER
+    the ``_LAUNCHER_CONTROLLED`` strip -- it simulates a caller deliberately exporting
+    launcher knobs (the mini-cycle-6 small-topology smoke story).
     """
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
@@ -416,6 +418,8 @@ def _run_launcher(experiment: str, tmp_path: Path) -> list[str]:
     env["HOME"] = str(fake_home)
     env["WAN_EXPERIMENT"] = experiment
     env["WANDB_API_KEY"] = "test-key"  # keep WANDB_PROJECT populated (not blanked out)
+    if extra_env:
+        env.update(extra_env)
 
     bash_exe = shutil.which("bash") or "/bin/bash"
     proc = subprocess.run(
@@ -471,6 +475,10 @@ def test_launcher_side_adapter_arm_byte_identical(tmp_path):
     assert _env_value(lines, "MAX_TRAIN_STEPS") == "10000"
     assert _env_value(lines, "ACTION_ADAPTER_TYPE") == "side_adapter"
     assert _env_value(lines, "RUN_NAME").startswith("wan-side_adapter-")
+    # Mini-cycle 6 regression: env-unset defaults still submit the historical 8/512/512.
+    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "512"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_LOAD") == "512"
     assert "bash_scripts/train_wan_side_adapter.sh" in lines
     assert "bash_scripts/train_wan_full_ft.sh" not in lines
 
@@ -485,6 +493,10 @@ def test_launcher_pre_context_arm_byte_identical(tmp_path):
     assert _env_value(lines, "MAX_TRAIN_STEPS") == "30000"
     assert _env_value(lines, "ACTION_ADAPTER_TYPE") == "pre_context"
     assert _env_value(lines, "RUN_NAME").startswith("wan-pre_context-")
+    # Mini-cycle 6 regression: env-unset defaults still submit the historical 8/512/512.
+    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "512"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_LOAD") == "512"
     assert "bash_scripts/train_wan_side_adapter.sh" in lines
     assert "bash_scripts/train_wan_full_ft.sh" not in lines
 
@@ -516,6 +528,55 @@ def test_launcher_full_ft_smoke_disables_checkpoints(tmp_path):
     # identical to the adapter arms) -- never silently inheriting the yml default (F1).
     assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
     assert "bash_scripts/train_wan_full_ft.sh" in lines  # still the full-FT wrapper
+
+
+def test_launcher_batch_env_overrides_reach_submission(tmp_path):
+    # Mini-cycle 6 (v6e-8 smoke OOM at per-device 8): the batch trio must be
+    # env-overridable so a small-topology smoke can submit the plan-§5.5 GBS-8 recipe
+    # (per-device 1) WITHOUT touching full-run defaults. The globals ride along so the
+    # worker-log echo stays honest (they are inert to training: pyconfig recomputes both
+    # from per-device, proven by the derivation test above).
+    lines = _run_launcher(
+        "full_ft",
+        tmp_path,
+        extra_env={
+            "PER_DEVICE_BATCH_SIZE": "1",
+            "GLOBAL_BATCH_SIZE_TO_TRAIN_ON": "8",
+            "GLOBAL_BATCH_SIZE_TO_LOAD": "8",
+            "TPU_CHIPS": "8",
+        },
+    )
+    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "1"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "8"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_LOAD") == "8"
+    # The batch override must not disturb the rest of the full-FT arm.
+    assert _env_value(lines, "CHECKPOINT_EVERY") == "2500"
+    assert _env_value(lines, "EVAL_DATA_DIR") == TRAIN_PATH
+    assert "bash_scripts/train_wan_full_ft.sh" in lines
+
+
+def test_launcher_full_ft_smoke_attempt2_recipe(tmp_path):
+    # The EXACT smoke-attempt-2 launch (worklog 2026-07-18T21:10): SMOKE=1 on v6e-8 with
+    # per-device 1 -> 1 step at GBS 8, checkpoints fully off, full-FT wrapper dispatched.
+    lines = _run_launcher(
+        "full_ft",
+        tmp_path,
+        extra_env={
+            "SMOKE": "1",
+            "TPU_CHIPS": "8",
+            "PER_DEVICE_BATCH_SIZE": "1",
+            "GLOBAL_BATCH_SIZE_TO_TRAIN_ON": "8",
+            "GLOBAL_BATCH_SIZE_TO_LOAD": "8",
+        },
+    )
+    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "1"  # the OOM fix
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "8"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_LOAD") == "8"
+    assert _env_value(lines, "MAX_TRAIN_STEPS") == "1"
+    assert _env_value(lines, "CHECKPOINT_EVERY") == "0"
+    assert _env_value(lines, "SAVE_FINAL_CHECKPOINT") == "False"
+    assert _env_value(lines, "RUN_NAME").startswith("smoke-full-ft-")
+    assert "bash_scripts/train_wan_full_ft.sh" in lines
 
 
 def test_launcher_rejects_unknown_experiment(tmp_path):

@@ -18,6 +18,14 @@
 #   WAN_EXPERIMENT=pre_context|side_adapter|full_ft   (default pre_context)
 #   TPU_CHIPS=64                              (v6e chip count)
 #   NAME=<job name>                           (default wan-<type>-yixun)
+#   PER_DEVICE_BATCH_SIZE=8                   (AUTHORITATIVE batch knob: pyconfig derives
+#                                              GBS = num_devices x this on the worker.
+#                                              Small topologies must lower it — the v6e-8
+#                                              smoke OOM'd at 8; pass 1 there for GBS 8)
+#   GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512         (inert to training — pyconfig recomputes
+#   GLOBAL_BATCH_SIZE_TO_LOAD=512              both from per-device; override alongside
+#                                              PER_DEVICE_BATCH_SIZE so the worker-log
+#                                              echoes stay honest, e.g. 1/8/8 on v6e-8)
 
 set -euo pipefail
 
@@ -75,9 +83,15 @@ EVAL_EVERY="1000"
 EVAL_MAX_BATCHES="4"
 LOG_PERIOD="10"
 SAVE_FINAL_CHECKPOINT="True"
-PER_DEVICE_BATCH_SIZE="8"
-GLOBAL_BATCH_SIZE_TO_TRAIN_ON="512"
-GLOBAL_BATCH_SIZE_TO_LOAD="512"
+# Batch trio is env-overridable for small-topology smokes (mini-cycle 6: the v6e-8 smoke
+# OOM'd at the hard-set per-device 8). Full-run defaults unchanged. Per-device is the
+# authoritative knob (pyconfig recomputes both GBS keys from it; round-5 F1 test); the
+# globals are overridable purely so submitted env + worker echoes can stay coherent —
+# NOT bash-derived from TPU_CHIPS because per-device may legitimately be fractional
+# (e.g. 1.0) and $((...)) would choke, duplicating pyconfig's formula for no gain.
+PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-8}"
+GLOBAL_BATCH_SIZE_TO_TRAIN_ON="${GLOBAL_BATCH_SIZE_TO_TRAIN_ON:-512}"
+GLOBAL_BATCH_SIZE_TO_LOAD="${GLOBAL_BATCH_SIZE_TO_LOAD:-512}"
 TFRECORD_SHUFFLE_BUFFER_SIZE="1024"
 RUN_NAME="wan-${ACTION_ADAPTER_TYPE}-v6e${TPU_CHIPS}-full-gbs512-fresh-$(date -u +%Y%m%d-%H%M%S)"
 
