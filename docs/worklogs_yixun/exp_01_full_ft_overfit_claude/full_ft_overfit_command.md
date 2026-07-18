@@ -57,3 +57,13 @@ WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 NAME=wan-full-ft-fitprobe-yixun \
 - **Approval:** covered by Query 4/5 (same approved job; infra resubmit per announcement 02)
 - **Command:** identical to entry 3.
 - **Job id:** `20260718-223223-ef0a159d-wan-full-ft-fitprobe-yixun`
+
+- **Outcome (appended to entry 4):** FAILED — same infra class: workers 9+11 apt-locked (unattended-upgrades), coordination deadline killed the rest. Root cause isolated to setup.sh's unbounded apt lock wait; hardening in mini-cycle 7.
+
+## 5. Fit probe resubmit #3 (rung 6, unchanged) — 2026-07-18T22:57:54Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `6185cd8` tip (code identical to entries 3–4)
+- **Approval:** pre-authorized infra resubmit (announcement 02; Query 4/5 conditionals still armed)
+- **Command:** identical to entry 3.
+- **Job id:** `20260718-225754-87cbd078-wan-full-ft-fitprobe-yixun`
