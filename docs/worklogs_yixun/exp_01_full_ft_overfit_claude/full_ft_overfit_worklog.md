@@ -248,3 +248,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — setup.sh: jammy-safe timer/service stops, bounded PID-exact escalation with exit-after-KILL, global 420s budget over apt+curl execution, EPHEMERAL_WORKER-gated persistence (launcher sets it); tests comment-insensitive, zero skips. 100/100 green.
 - **Result** — `passed` — reviewer re-derived the timing arithmetic and approved with zero launch-blocking issues.
 - **Next** — Fit probe #4 from this commit (entry 6); on PASS → full run (Queries 5+6).
+
+## 2026-07-19T02:40:00Z — Fit probe #4: setup hardening WORKED; probe FAILED on real HBM limit — per-device 8 does not fit v6e-64
+
+- **Goal** — Verdict probe #4 (`20260718-233800-5d773c8b`, post-fix commit `0ffd950`).
+- **Result** — `partial` — **the cycle-7 hardening succeeded**: zero setup stalls, all 16 hosts reached compile (3/3 prior failures never got here). The probe then failed on its actual question: `CompileTimeHbmOom: 31.28G/31.25G, over by 36.92M` at per-device batch 8.
+- **Analysis** — **Real capacity finding, not infra.** v6e-8 overflowed by 44MB, v6e-64 by 37MB — near-identical despite ~4.4GB/chip less resident state on 64 chips ⇒ the headroom is consumed by FSDP collective buffers (per-layer weight all-gathers, grad reduce-scatters, XLA prefetch) that full-FT pays and the frozen-backbone adapter runs did not (no weight grads/moments, no grad reduce-scatter). My provisional headroom argument (worklog 2026-07-18T21:10) was wrong; the reviewer's fit-is-provisional-until-probe gate (round-3 F9) was the correct epistemic stance — on the record. Remat is already FULL; a 37MB miss might yield to XLA-flag tuning but that is fragile ground for a diagnostic. Robust remedy: **per-device 4**.
+- **Next** — Propose to Yixun: probe #5 at per-device 4 (GBS 256) → on PASS, full run amended to **GBS 256 × 20000 steps** (same 3.55 passes, same total compute, same 2500-multiple checkpoint/eval structure; cohort protocol unchanged). Plan §2.2 amendment on approval. NO launch until approved (config change).
