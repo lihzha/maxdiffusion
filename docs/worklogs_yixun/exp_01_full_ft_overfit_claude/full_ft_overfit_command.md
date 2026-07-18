@@ -67,3 +67,5 @@ WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 NAME=wan-full-ft-fitprobe-yixun \
 - **Approval:** pre-authorized infra resubmit (announcement 02; Query 4/5 conditionals still armed)
 - **Command:** identical to entry 3.
 - **Job id:** `20260718-225754-87cbd078-wan-full-ft-fitprobe-yixun`
+
+- **Outcome (appended to entry 5):** FAILED — same coordination-deadline class (worker-12 first abort; stuck host in unsampled ranks). 3/3 pre-fix failures → launch freeze until the cycle-7 post-fix commit; probe #4 will be entry 6.
