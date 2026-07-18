@@ -165,3 +165,22 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
   - **Data:** same TFRecord loader code path (inherited `_load_dataset`), rung-3 byte-level readback above.
 - **Result** — `passed` — all pre-TPU gates green. Implementation totals: 5 closed cycles, 2 plan reviews + 5 code reviews (Codex gpt-5.6-sol xhigh), 23 findings all resolved on the record, 25+ mutants killed, 95 tests.
 - **Next** — Smoke-run approval package to Yixun (announcement 02). No TPU action until approval.
+
+## 2026-07-18T20:39:58Z — SMOKE LAUNCH (rung 5): Yixun approved; acceptance criteria
+
+- **Goal** — First TPU contact for the full-FT probe: prove the 5B-unfrozen step compiles, fits, and logs correctly on v6e-8. Approved by Yixun ("Approve smoke", 2026-07-18; announcement 02 satisfied).
+- **Hypothesis** — The full-FT train step fits v6e-8 at per-device batch 8 with remat FULL and FSDP-sharded params/opt-state, and all round-3 startup instrumentation behaves on real hardware.
+- **Command / Validation** — `WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=8 NAME=wan-full-ft-smoke-yixun bash bash_scripts/launch_wan_train.sh` from the exp worktree (cwd rule); exact entry + job id in `full_ft_overfit_command.md`. Launcher-canonical smoke deltas vs the approval package, accepted: **1 step** (not ~20 — SMOKE hard-sets it; satisfies the ≥1-step criterion) and **per-device 8 ⇒ GBS 64 on 8 chips** (not GBS 8 — the true per-device load; a stricter memory probe).
+- **Acceptance criteria** (judge against these, not vibes):
+  1. Worker reports COMMIT=07eb5b2; 8 devices.
+  2. `_validate_probe_config` passes silently (guide 1.0, fresh noise) — startup log shows `guide scale: 1.0`, `noise mode: fresh`.
+  3. `trainable transformer params: ~5.0B` logged; NO adapter-param line.
+  4. Per-dtype lines for params/mu/nu present (expect mixed bf16+f32 per the loader's f32 norms).
+  5. Large-leaf audit table (8 params + path-matched mu/nu twins) logged; >100MB-replicated assert passes.
+  6. Resolved eval_data_dir ends `/train`.
+  7. Reaches step 1 with finite loss; no OOM/NaN; steps/s recorded (throughput datum for R5).
+  8. NO checkpoint objects written under the run dir.
+  W&B optional for smoke (key forwarded only if present in the submitting shell).
+- **Result** — `launched` — job `20260718-204019-6aad21e8-wan-full-ft-smoke-yixun` (v6e-8, submitted 20:40:19Z; teed submission log `full_ft_overfit_2026-07-18_20:40:19.log`). W&B key present → wandb active for the smoke.
+- **Analysis** — pending run.
+- **Next** — On PASS: request v6e-64 fit-probe approval. On failure: infra-vs-bug triage per SOP.
