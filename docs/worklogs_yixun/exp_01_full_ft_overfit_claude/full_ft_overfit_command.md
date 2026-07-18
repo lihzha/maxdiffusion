@@ -31,3 +31,19 @@ WAN_EXPERIMENT=full_ft SMOKE=1 PER_DEVICE_BATCH_SIZE=1 \
 ```
 - **Effective config:** v6e-8; 1 step; checkpoints/eval/final-save off; per-device 1 (GBS 8); fresh noise; train-split eval dir; yml `base_wan_5b_full_ft.yml`.
 - **Job id:** `20260718-212209-ff679a2a-wan-full-ft-smoke2-yixun` (state: `gs://v6_east1d/tpu-job-queue/jobs/20260718-212209-ff679a2a-wan-full-ft-smoke2-yixun/status.json`)
+
+- **Outcome (appended):** SUCCEEDED attempt 3 (2 infra preemptions, queue-retried). Log-verified PASS; loss-value display gap noted in worklog. wandb: `wewfe1kx`.
+
+## 3. Fit probe (rung 6) — 2026-07-18T22:07:20Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `2da034d` tip (code identical to smoke's `0405a30`; only docs advanced)
+- **Approval:** Yixun Query 4 — "fit probe conditional on pass"; smoke-2 PASS verified above.
+- **Command (exp worktree):**
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_01_full_ft_overfit
+WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 NAME=wan-full-ft-fitprobe-yixun \
+  bash bash_scripts/launch_wan_train.sh
+```
+- **Effective config:** v6e-64; 1 step; checkpoints/eval/final-save off; per-device 8 (GBS 512 — launcher defaults, the exact full-run memory shape); fresh noise; train-split eval dir.
+- **Job id:** `20260718-220720-f19db2ab-wan-full-ft-fitprobe-yixun`
