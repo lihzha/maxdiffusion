@@ -47,3 +47,13 @@ WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 NAME=wan-full-ft-fitprobe-yixun \
 ```
 - **Effective config:** v6e-64; 1 step; checkpoints/eval/final-save off; per-device 8 (GBS 512 — launcher defaults, the exact full-run memory shape); fresh noise; train-split eval dir.
 - **Job id:** `20260718-220720-f19db2ab-wan-full-ft-fitprobe-yixun`
+
+- **Outcome (appended to entry 3):** FAILED — INFRASTRUCTURE (worker-10 apt/unattended-upgrades lock hang blocked setup; 15 healthy hosts died at JAX-init DEADLINE_EXCEEDED). Queue barrier under-counted (8/16). No code change; resubmitted as entry 4.
+
+## 4. Fit probe resubmit (rung 6, unchanged) — 2026-07-18T22:32:23Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `fd65eb2` tip (code identical to entry 3)
+- **Approval:** covered by Query 4/5 (same approved job; infra resubmit per announcement 02)
+- **Command:** identical to entry 3.
+- **Job id:** `20260718-223223-ef0a159d-wan-full-ft-fitprobe-yixun`
