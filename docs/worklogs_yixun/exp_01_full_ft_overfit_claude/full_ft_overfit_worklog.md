@@ -220,3 +220,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — Query 5 in `_yixun_query.md`; `full_ft_overfit_params_set_up.md` written (full config + 16 deterministic cohort ordinals + seed protocol + escalation controls + abort record).
 - **Result** — `in_progress` — fit probe running; on log-verified PASS the full run launches with acceptance criteria per plan §6.
 - **Next** — Fit-probe verdict → full-run launch (`WAN_EXPERIMENT=full_ft TPU_CHIPS=64`, no SMOKE) → monitor with wandb curve checks at 500-step marks.
+
+## 2026-07-18T22:32:23Z — Fit probe attempt 1 FAILED: INFRA (worker-10 apt-lock hang → JAX init deadline) → auto-resubmit
+
+- **Goal** — Triage fit-probe job `20260718-220720-f19db2ab` (queue label APPLICATION_ERROR, worker-0 exit 134).
+- **Result** — `fix_ready` — **infrastructure, not a bug**: worker-10's log is an endless `Waiting for cache lock: /var/lib/dpkg/lock-frontend … held by unattended-upgr` (host-level Ubuntu auto-update); it never completed setup. All other 15 hosts entered train_wan.py, blocked at JAX distributed init, and died on `DEADLINE_EXCEEDED` → SIGABRT (134). Secondary quirk: the queue's setup barrier reported "All **8** workers completed setup" on a **16-host** v6e-64 slice — the barrier under-counted, letting the command start despite the stuck host (queue-infra behavior, noted for the runbook).
+- **Analysis** — No code path of ours executed past config echo on the healthy workers; nothing to fix in-repo. Per the standing infra-resubmit policy (announcement 02: same approved job, unchanged config), resubmitting.
+- **Next** — Resubmit fit probe unchanged; Query-5 full-run conditional stays armed on the resubmission's log-verified PASS.
