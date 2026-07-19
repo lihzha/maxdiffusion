@@ -270,3 +270,11 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — yml `per_device_batch_size: 4.0` / documentary 256/256 / `max_train_steps: 20000`; launcher full_ft arm 20000 + arm-dependent batch defaults (4/256/256) via `*_DEFAULT` restructure (set-vs-unset semantics preserved); RUN_NAME interpolates the resolved GBS (review-ordered — names no longer lie); wrapper comment accuracy. 100/100 tests; goldens prove adapter arms byte-identical.
 - **Result** — `passed` — review APPROVE-WITH-CHANGES, single ordered change fixed with exact-split mutant proof.
 - **Next** — Probe #5 verdict → on PASS, launch the amended full run FROM THIS COMMIT (Queries 6+7).
+
+## 2026-07-19T16:52:22Z — Probe #5 PASS (log-verified) → FULL RUN LAUNCH
+
+- **Goal** — Launch the amended primary run (rung 7). All gates green: probe #5 SUCCEEDED first-attempt (job `20260719-162702-4d29b151`; worker-8 = JAX process 0: 5.00B trainable, mixed-dtype lines, audit table on fsdp:64 specs, per-host physical 0.62+1.24 GB, batch echo 4/256, JOB_EXIT=0, no OOM — note for the runbook: queue worker index ≠ JAX process index on multi-host slices; host-0 logs can live in any worker-N.log). Cycle 8 closed at `031228e`. Approvals: Queries 5+6+7.
+- **Acceptance criteria (plan §6, amended):** worker reports COMMIT=031228e; 64 devices; GBS **256** (echo 4/256/256); guide 1.0 + fresh asserts pass; 5.00B trainable, no adapter line; per-dtype + audit lines; eval dir …/train; RUN_NAME contains **gbs256**; ≥1 step, finite loss by step 10 log line; wandb live (`train/loss` descending by step 500); checkpoints appear at 2500-multiples (~30 GB each), keep-period retains all.
+- **Command / Validation** — `WAN_EXPERIMENT=full_ft TPU_CHIPS=64 NAME=wan-full-ft-yixun bash bash_scripts/launch_wan_train.sh` (entry 8). Runtime estimate: refreshed from the first sps log lines.
+- **Result** — `launched` (job id below).
+- **Next** — Startup verification once RUNNING; then loss-curve checks at 500/1000-step marks; cohort validation asks after checkpoint 5000 exists.
