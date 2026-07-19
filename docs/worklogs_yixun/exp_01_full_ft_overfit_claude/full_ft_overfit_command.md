@@ -92,3 +92,17 @@ WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 PER_DEVICE_BATCH_SIZE=4 \
   NAME=wan-full-ft-fitprobe-yixun bash bash_scripts/launch_wan_train.sh
 ```
 - **Job id:** `20260719-162702-4d29b151-wan-full-ft-fitprobe-yixun`
+
+## 8. PRIMARY FULL RUN (rung 7, amended recipe) — 2026-07-19T16:52:22Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `031228e` (cycle-8 amended recipe; setup hardening included)
+- **Approval:** Queries 5 ("full run conditional on fit probe pass") + 6 (post-fix commit) + 7 (amended GBS 256 × 20k); probe #5 PASS log-verified above.
+- **Command (exp worktree):**
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_01_full_ft_overfit
+WAN_EXPERIMENT=full_ft TPU_CHIPS=64 NAME=wan-full-ft-yixun \
+  bash bash_scripts/launch_wan_train.sh
+```
+- **Effective config:** v6e-64; per-device 4 ⇒ GBS 256; 20000 steps (≈3.55 passes); LR 1e-5; fresh noise; guide 1.0; ckpt every 2500 keep-period 2500; eval-in-training every 1000 on TRAIN shards; wandb `maxdiffusion-wan-full-ft`; run name `wan-full-ft-v6e64-full-gbs256-fresh-<ts>`; yml `base_wan_5b_full_ft.yml`.
+- **Job id:** `20260719-165222-62b5c10e-wan-full-ft-yixun`
