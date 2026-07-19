@@ -255,3 +255,11 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `partial` — **the cycle-7 hardening succeeded**: zero setup stalls, all 16 hosts reached compile (3/3 prior failures never got here). The probe then failed on its actual question: `CompileTimeHbmOom: 31.28G/31.25G, over by 36.92M` at per-device batch 8.
 - **Analysis** — **Real capacity finding, not infra.** v6e-8 overflowed by 44MB, v6e-64 by 37MB — near-identical despite ~4.4GB/chip less resident state on 64 chips ⇒ the headroom is consumed by FSDP collective buffers (per-layer weight all-gathers, grad reduce-scatters, XLA prefetch) that full-FT pays and the frozen-backbone adapter runs did not (no weight grads/moments, no grad reduce-scatter). My provisional headroom argument (worklog 2026-07-18T21:10) was wrong; the reviewer's fit-is-provisional-until-probe gate (round-3 F9) was the correct epistemic stance — on the record. Remat is already FULL; a 37MB miss might yield to XLA-flag tuning but that is fragile ground for a diagnostic. Robust remedy: **per-device 4**.
 - **Next** — Propose to Yixun: probe #5 at per-device 4 (GBS 256) → on PASS, full run amended to **GBS 256 × 20000 steps** (same 3.55 passes, same total compute, same 2500-multiple checkpoint/eval structure; cohort protocol unchanged). Plan §2.2 amendment on approval. NO launch until approved (config change).
+
+## 2026-07-19T16:27:02Z — Query 7: amended run approved → probe #5 launch (per-device 4)
+
+- **Goal** — Rung-6 fit probe at the amended batch; acceptance criteria below.
+- **Command / Validation** — `WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 PER_DEVICE_BATCH_SIZE=4 GLOBAL_BATCH_SIZE_TO_TRAIN_ON=256 GLOBAL_BATCH_SIZE_TO_LOAD=256 NAME=wan-full-ft-fitprobe-yixun bash bash_scripts/launch_wan_train.sh` (entry 7 in `_command.md`).
+- **Acceptance criteria** — COMMIT=c01722c; 64 devices; asserts pass; 5.00B trainable; per-dtype + audit lines; batch echo 4/256/256; **compiles and completes step 1, no HBM OOM**; zero checkpoints. Setup phase: no apt stalls (hardening in effect).
+- **Result** — `launched` (job id below on submission).
+- **Next** — PASS → amended full run from the post-cycle-8 commit (recipe amendment under review in parallel). Plan §2.2 amendment noted as v3.1 (Query 7 provenance).

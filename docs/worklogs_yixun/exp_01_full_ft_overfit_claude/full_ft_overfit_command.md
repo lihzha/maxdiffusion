@@ -79,3 +79,16 @@ WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 NAME=wan-full-ft-fitprobe-yixun \
 - **Job id:** `20260718-233800-5d773c8b-wan-full-ft-fitprobe-yixun`
 
 - **Outcome (appended to entry 6):** FAILED — but the setup hardening PASSED (no stalls, 16/16 hosts compiled). Real finding: CompileTimeHbmOom 31.28/31.25G (+36.92M) at per-device 8 on v6e-64 ⇒ full-FT per-device 8 does not fit any topology (FSDP collective buffers). Remedy proposal: per-device 4 (entry 7 pending approval).
+
+## 7. Fit probe #5 (rung 6, amended batch) — 2026-07-19T16:27:02Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `c01722c` tip (code = post-hardening `0ffd950`)
+- **Approval:** Yixun Query 7 ("Approve amended run")
+- **Command (exp worktree):**
+```bash
+WAN_EXPERIMENT=full_ft SMOKE=1 TPU_CHIPS=64 PER_DEVICE_BATCH_SIZE=4 \
+  GLOBAL_BATCH_SIZE_TO_TRAIN_ON=256 GLOBAL_BATCH_SIZE_TO_LOAD=256 \
+  NAME=wan-full-ft-fitprobe-yixun bash bash_scripts/launch_wan_train.sh
+```
+- **Job id:** `20260719-162702-4d29b151-wan-full-ft-fitprobe-yixun`
