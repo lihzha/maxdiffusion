@@ -19,9 +19,17 @@
 # is built); only side_adapter_guide_scale / side_adapter_noise_mode / side_adapter_
 # sampling_steps / side_adapter_t_sampling / flow_* are consumed (objective + rollout).
 #
+# Recipe amendment (plan §2.2 v3.1, Query 7, 2026-07-19): fit probe #4 proved per-device 8
+# OOMs v6e-64 by ~37MB (FSDP collective buffers full-FT pays that the frozen-adapter runs
+# did not), so the primary recipe is per_device_batch_size 4 => GBS 256, and
+# max_train_steps 20000 -- the sample budget is unchanged (256 x 20000 = 5.12M ~= 3.55
+# train-set passes). Cohort evals move to the samples-seen quarters: steps
+# 5000/10000/15000/20000 (+ step-0 baseline).
+#
 # G1 retention (plan §2.2): checkpoint_keep_period == checkpoint_every == 2500 so Orbax
-# keeps every 2500/5000/7500/10000 checkpoint (multiples of keep_period survive despite
-# max_to_keep) for the cohort evaluation; the copied 5000 would have evicted step 2500.
+# keeps every 2500-multiple checkpoint (they survive despite max_to_keep) -- the amended
+# cohort steps 5000/10000/15000/20000 are all multiples of 2500, so all survive for the
+# cohort evaluation; the copied 5000 would have evicted the intermediate 2500-multiples.
 
 run_name: ''
 
@@ -189,22 +197,24 @@ flow_sigma_max: 1.0
 learning_rate: 1.e-5   # delta (§2.2): full-FT LR. Keep the '.' so yaml parses a float (1e-5 parses as str)
 scale_lr: False
 max_train_samples: -1
-max_train_steps: 10000
+max_train_steps: 20000   # delta (§2.2 v3.1, Query 7): 20000 @ GBS 256 = 5.12M samples ~= 3.55 passes (budget unchanged)
 num_train_epochs: 1
 seed: 0
 output_dir: 'gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft'   # delta: full-FT checkpoint root
-# delta (§6/F1): primary-run batch recipe, self-consistent standalone. pyconfig.user_init
-# RECOMPUTES both global_batch_size_to_* keys unconditionally at initialize time as
-# int(num_devices * per_device_batch_size) (load clamped up to num_devices when
-# per_device < 1), so per_device_batch_size is the ONLY authoritative batch knob:
-# 8.0 -> GBS 512 on the v6e-64 primary target, making the plain
-# `python train_wan.py <this yml> run_name=...` command satisfy plan §6 (GBS 512).
-# The 512s below document the resolved v6e-64 values; they are inert inputs (always
-# overwritten) kept coherent so the standalone yml never contradicts itself.
-per_device_batch_size: 8.0
+# delta (§6/F1; amended §2.2 v3.1): primary-run batch recipe, self-consistent standalone.
+# pyconfig.user_init RECOMPUTES both global_batch_size_to_* keys unconditionally at
+# initialize time as int(num_devices * per_device_batch_size) (load clamped up to
+# num_devices when per_device < 1), so per_device_batch_size is the ONLY authoritative
+# batch knob: 4.0 -> GBS 256 on the v6e-64 primary target, making the plain
+# `python train_wan.py <this yml> run_name=...` command satisfy plan §6 (GBS 256).
+# Per-device 8 does NOT fit v6e-64 (fit probe #4: HBM over by ~37MB -- FSDP collective
+# buffers; Query 7 approved the 4/256 amendment). The 256s below document the resolved
+# v6e-64 values; they are inert inputs (always overwritten) kept coherent so the
+# standalone yml never contradicts itself.
+per_device_batch_size: 4.0
 global_batch_size: 0
-global_batch_size_to_train_on: 512
-global_batch_size_to_load: 512
+global_batch_size_to_train_on: 256
+global_batch_size_to_load: 256
 
 warmup_steps_fraction: 0.05
 learning_rate_schedule_steps: -1
@@ -224,7 +234,7 @@ remat_policy: "FULL"
 names_which_can_be_saved: []
 names_which_can_be_offloaded: []
 
-checkpoint_every: 2500   # delta (§2.2): cohort cadence 2500/5000/7500/10000
+checkpoint_every: 2500   # delta (§2.2): every 2500 steps; amended cohort evals at 5000/10000/15000/20000 (all multiples)
 checkpoint_dir: ""
 checkpoint_step: -1
 checkpoint_keep_period: 2500   # delta (G1): keep every 2500-multiple so all cohort ckpts survive

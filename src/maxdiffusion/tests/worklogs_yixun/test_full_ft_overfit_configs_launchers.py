@@ -26,18 +26,21 @@ The tests exercise these five concerns:
       (arm value vs. common-default ordering), not just text presence -- and that the
       pre_context / side_adapter arms stay byte-identical.
 
-  (E) PLAIN-COMMAND SELF-CONSISTENCY (round-5 strengthen, Codex F1) -- the standalone yml
-      must satisfy plan §6 with NO overrides: ``per_device_batch_size: 8.0`` (-> GBS 512
-      on the 64-chip primary target) and a live ``wandb_project``. pyconfig's
-      ``user_init`` RECOMPUTES ``global_batch_size_to_{load,train_on}`` unconditionally
-      as ``int(num_devices * per_device_batch_size)`` after the yaml+CLI merge (the two
+  (E) PLAIN-COMMAND SELF-CONSISTENCY (round-5 strengthen, Codex F1; recipe amended by
+      mini-cycle 8 / plan §2.2 v3.1 / Query 7) -- the standalone yml must satisfy plan §6
+      with NO overrides: ``per_device_batch_size: 4.0`` (-> GBS 256 on the 64-chip
+      primary target; per-device 8 OOMs v6e-64 for full-FT, fit probe #4) and a live
+      ``wandb_project``. pyconfig's ``user_init`` RECOMPUTES
+      ``global_batch_size_to_{load,train_on}`` unconditionally as
+      ``int(num_devices * per_device_batch_size)`` after the yaml+CLI merge (the two
       global keys are inert inputs; per-device is the only authoritative knob), so the
       REAL ``_HyperParameters.calculate_global_batch_sizes`` is executed against the
       yml's per-device value under a patched 64-device view and must reproduce the yml's
-      stated 512s. The launcher full_ft arm's W&B project and the yml default are pinned
-      to each other (single source of truth), and the train wrapper's batch defaults stay
-      SMOKE-SCALED but are always passed as explicit CLI overrides (bare wrapper = dev
-      smoke; the launcher exports 8/512/512 for real runs) -- that contract is pinned too.
+      stated 256s. The launcher full_ft arm's W&B project and the yml default are pinned
+      to each other (single source of truth); the launcher batch defaults are now
+      ARM-DEPENDENT (adapters 8/512/512, full_ft 4/256/256; explicit env wins for every
+      arm), and the train wrapper's batch defaults stay SMOKE-SCALED but are always
+      passed as explicit CLI overrides (bare wrapper = dev smoke).
 
   (F) SETUP.SH APT HARDENING (mini-cycle 7, strengthened x2 per Codex reviews) -- static
       checks pinning the fix for the 2026-07-18 v6e-64 fit-probe failures (workers stuck
@@ -129,7 +132,9 @@ def test_full_yml_required_deltas():
     # yaml.safe_load yields a float (``1e-5`` without the dot parses as a STRING).
     assert cfg["learning_rate"] == pytest.approx(1e-5)
     assert isinstance(cfg["learning_rate"], float)
-    assert cfg["max_train_steps"] == 10000
+    # amended recipe (plan §2.2 v3.1, Query 7): 20000 steps @ GBS 256 keeps the 3.55-pass
+    # sample budget after fit probe #4 proved per-device 8 OOMs v6e-64.
+    assert cfg["max_train_steps"] == 20000
     # checkpoint cadence + retention (plan §2.2, finding G1: keep_period == every).
     assert cfg["checkpoint_every"] == 2500
     assert cfg["checkpoint_keep_period"] == 2500
@@ -143,28 +148,30 @@ def test_full_yml_required_deltas():
     # pre-exist for a `validation_ordinals=...` override), defaulting to contiguous.
     assert "validation_ordinals" in cfg
     assert cfg["validation_ordinals"] == ""
-    # F1 (round-5 strengthen): the PLAIN yml command must satisfy plan §6 with no
-    # overrides -- primary-run batch recipe (per_device 8.0 -> GBS 512 on 64 devices;
-    # authored `8.0` so yaml yields a float, matching the base key's type for pyconfig
-    # CLI coercion) and W&B live by default.
-    assert cfg["per_device_batch_size"] == 8.0
+    # F1 (round-5 strengthen; amended §2.2 v3.1): the PLAIN yml command must satisfy
+    # plan §6 with no overrides -- amended batch recipe (per_device 4.0 -> GBS 256 on 64
+    # devices; per-device 8 OOMs v6e-64 for full-FT, fit probe #4; authored `4.0` so
+    # yaml yields a float, matching the base key's type for pyconfig CLI coercion) and
+    # W&B live by default.
+    assert cfg["per_device_batch_size"] == 4.0
     assert isinstance(cfg["per_device_batch_size"], float)
-    assert cfg["global_batch_size_to_train_on"] == 512
-    assert cfg["global_batch_size_to_load"] == 512
+    assert cfg["global_batch_size_to_train_on"] == 256
+    assert cfg["global_batch_size_to_load"] == 256
     assert cfg["wandb_project"] == "maxdiffusion-wan-full-ft"
 
 
 def test_full_yml_genuine_deltas_differ_from_base():
     # Guard against a copy that silently dropped a delta: the genuine deltas must NOT
-    # equal the side-adapter base. (noise_mode/max_train_steps equal the base by design,
-    # so they are excluded here and asserted absolutely above.) The last four are the
-    # round-5 F1 additions (plain-command §6 self-consistency).
+    # equal the side-adapter base. (noise_mode equals the base by design, so it is
+    # excluded here and asserted absolutely above; max_train_steps joined this list with
+    # the §2.2 v3.1 amendment -- 20000 vs the base's 10000.)
     side = _load(SIDE_YML)
     full = _load(FULL_YML)
     for key in (
         "model_type",
         "side_adapter_guide_scale",
         "learning_rate",
+        "max_train_steps",
         "checkpoint_every",
         "checkpoint_keep_period",
         "eval_data_dir",
@@ -182,9 +189,9 @@ def test_full_yml_batch_trio_coheres_with_pyconfig_derivation(monkeypatch):
     # pyconfig.user_init unconditionally overwrites global_batch_size_to_{load,train_on}
     # via _HyperParameters.calculate_global_batch_sizes(per_device_batch_size) AFTER the
     # yaml+CLI merge -- per_device is the only authoritative input. Under the 64-device
-    # primary target, the yml's per-device value must resolve to exactly the GBS-512
-    # recipe plan §6 requires, and the yml's own (inert, documentary) global values must
-    # state that same result so the standalone file never contradicts itself.
+    # primary target, the yml's per-device value must resolve to exactly the amended
+    # GBS-256 recipe (plan §2.2 v3.1 / §6), and the yml's own (inert, documentary) global
+    # values must state that same result so the standalone file never contradicts itself.
     import jax  # deferred: only this test needs jax
 
     from maxdiffusion import pyconfig
@@ -192,7 +199,7 @@ def test_full_yml_batch_trio_coheres_with_pyconfig_derivation(monkeypatch):
     cfg = _load(FULL_YML)
     monkeypatch.setattr(jax, "devices", lambda: [object()] * 64)
     to_load, to_train_on = pyconfig._HyperParameters.calculate_global_batch_sizes(cfg["per_device_batch_size"])
-    assert (to_load, to_train_on) == (512, 512)  # plan §6: GBS 512 on v6e-64
+    assert (to_load, to_train_on) == (256, 256)  # plan §2.2 v3.1: GBS 256 on v6e-64
     # The yml's documentary globals equal what pyconfig actually derives from it.
     assert cfg["global_batch_size_to_load"] == to_load
     assert cfg["global_batch_size_to_train_on"] == to_train_on
@@ -472,14 +479,20 @@ def test_launcher_full_ft_arm_semantics(tmp_path):
     assert _env_value(lines, "WANDB_PROJECT") == "maxdiffusion-wan-full-ft"
     # One source of truth (F1): the launcher submits EXACTLY the yml's default project.
     assert _env_value(lines, "WANDB_PROJECT") == _load(FULL_YML)["wandb_project"]
-    assert _env_value(lines, "MAX_TRAIN_STEPS") == "10000"
+    # amended recipe (plan §2.2 v3.1, Query 7): 20000 steps @ GBS 256 (3.55 passes kept).
+    assert _env_value(lines, "MAX_TRAIN_STEPS") == "20000"
     assert _env_value(lines, "SIDE_ADAPTER_NOISE_MODE") == "fresh"
     assert _env_value(lines, "RUN_NAME").startswith("wan-full-ft-")
-    # Real queue runs get the primary-run batch recipe explicitly (F1 contract: the
-    # launcher, not silent yml inheritance, sets 8/512/512 through the wrapper).
-    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
-    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "512"
-    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_LOAD") == "512"
+    # cycle-8 change order: the run name interpolates the RESOLVED global batch, so a
+    # full_ft run is named gbs256 -- never the old hard-coded gbs512 lie.
+    assert "-gbs256-" in _env_value(lines, "RUN_NAME")
+    assert "gbs512" not in _env_value(lines, "RUN_NAME")
+    # Real queue runs get the AMENDED full-FT batch recipe explicitly (F1 contract +
+    # mini-cycle 8: env unset => the full_ft arm-default 4/256/256 -- per-device 8 OOMs
+    # v6e-64 for full-FT, fit probe #4 -- never silent yml inheritance).
+    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "4"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "256"
+    assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_LOAD") == "256"
     # ...and it dispatches the full-FT train wrapper, NOT the hard-coded adapter script.
     assert "bash_scripts/train_wan_full_ft.sh" in lines
     assert "bash_scripts/train_wan_side_adapter.sh" not in lines
@@ -499,6 +512,9 @@ def test_launcher_side_adapter_arm_byte_identical(tmp_path):
     assert _env_value(lines, "MAX_TRAIN_STEPS") == "10000"
     assert _env_value(lines, "ACTION_ADAPTER_TYPE") == "side_adapter"
     assert _env_value(lines, "RUN_NAME").startswith("wan-side_adapter-")
+    # RUN_NAME relocation (cycle-8 change order): adapters still resolve gbs512, so the
+    # historical name shape is byte-identical.
+    assert "-gbs512-" in _env_value(lines, "RUN_NAME")
     # Mini-cycle 6 regression: env-unset defaults still submit the historical 8/512/512.
     assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
     assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "512"
@@ -519,6 +535,8 @@ def test_launcher_pre_context_arm_byte_identical(tmp_path):
     assert _env_value(lines, "MAX_TRAIN_STEPS") == "30000"
     assert _env_value(lines, "ACTION_ADAPTER_TYPE") == "pre_context"
     assert _env_value(lines, "RUN_NAME").startswith("wan-pre_context-")
+    # RUN_NAME relocation (cycle-8 change order): adapters still resolve gbs512.
+    assert "-gbs512-" in _env_value(lines, "RUN_NAME")
     # Mini-cycle 6 regression: env-unset defaults still submit the historical 8/512/512.
     assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
     assert _env_value(lines, "GLOBAL_BATCH_SIZE_TO_TRAIN_ON") == "512"
@@ -550,9 +568,13 @@ def test_launcher_full_ft_smoke_disables_checkpoints(tmp_path):
     assert _env_value(lines, "MAX_TRAIN_STEPS") == "1"
     # Storage-light: no periodic checkpoints AND no final checkpoint.
     assert _env_value(lines, "SAVE_FINAL_CHECKPOINT") == "False"
-    # Smoke sets its batch EXPLICITLY (the historical 1-step-at-GBS-512 queue smoke,
-    # identical to the adapter arms) -- never silently inheriting the yml default (F1).
-    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "8"
+    # Smoke sets its batch EXPLICITLY -- env unset means the full_ft ARM default
+    # (4/256/256 after the §2.2 v3.1 amendment), never silent yml inheritance (F1).
+    assert _env_value(lines, "PER_DEVICE_BATCH_SIZE") == "4"
+    # RUN_NAME relocation kept the ordering: the SMOKE block runs AFTER the (relocated)
+    # non-smoke construction and still overwrites the whole name with its own template.
+    assert _env_value(lines, "RUN_NAME").startswith("smoke-full-ft-")
+    assert "gbs" not in _env_value(lines, "RUN_NAME")
     assert "bash_scripts/train_wan_full_ft.sh" in lines  # still the full-FT wrapper
 
 

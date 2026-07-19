@@ -65,14 +65,15 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_enable_async_collective_f
 # trainer ASSERTS fresh; (3) defaults EVAL_DATA_DIR to the TRAIN split (in-training eval on
 # train, plan §2.2/F7); (4) exposes LEARNING_RATE and drops the inert adapter knobs.
 #
-# Batch contract (round-5 F1): the yml itself defaults to the PRIMARY-RUN recipe
-# (per_device_batch_size 8.0 -> GBS 512 on v6e-64; pyconfig recomputes the global batch
+# Batch contract (round-5 F1; amended per plan §2.2 v3.1 / Query 7): the yml itself
+# defaults to the PRIMARY-RUN recipe (per_device_batch_size 4.0 -> GBS 256 on v6e-64 --
+# per-device 8 OOMs there for full-FT, fit probe #4; pyconfig recomputes the global batch
 # from per_device x device_count), so the plain `python train_wan.py <yml> run_name=...`
 # command satisfies plan §6 with no overrides. THIS WRAPPER's batch defaults stay
 # SMOKE-SCALED (per_device 1.0 / GBS 1) because a bare wrapper invocation is a dev smoke;
 # it always passes them as explicit CLI overrides (never silently inheriting the yml's
-# 512-recipe), and the launcher full_ft arm exports PER_DEVICE_BATCH_SIZE=8 /
-# GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512 / GLOBAL_BATCH_SIZE_TO_LOAD=512 for real queue runs.
+# 256-recipe), and the launcher full_ft arm exports PER_DEVICE_BATCH_SIZE=4 /
+# GLOBAL_BATCH_SIZE_TO_TRAIN_ON=256 / GLOBAL_BATCH_SIZE_TO_LOAD=256 for real queue runs.
 # Same for W&B: the yml defaults wandb_project=maxdiffusion-wan-full-ft (plain command
 # logs), the launcher exports the identical project for queue runs, and a bare wrapper
 # run passes empty unless WANDB_PROJECT is exported (quiet dev smoke).

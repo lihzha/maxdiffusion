@@ -263,3 +263,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Acceptance criteria** — COMMIT=c01722c; 64 devices; asserts pass; 5.00B trainable; per-dtype + audit lines; batch echo 4/256/256; **compiles and completes step 1, no HBM OOM**; zero checkpoints. Setup phase: no apt stalls (hardening in effect).
 - **Result** — `launched` (job id below on submission).
 - **Next** — PASS → amended full run from the post-cycle-8 commit (recipe amendment under review in parallel). Plan §2.2 amendment noted as v3.1 (Query 7 provenance).
+
+## 2026-07-19T17:35:00Z — Cycle 8 CLOSED: amended recipe (GBS 256 × 20k) committed
+
+- **Goal** — Encode Query 7's amendment into the committed recipe, reviewed.
+- **Change** — yml `per_device_batch_size: 4.0` / documentary 256/256 / `max_train_steps: 20000`; launcher full_ft arm 20000 + arm-dependent batch defaults (4/256/256) via `*_DEFAULT` restructure (set-vs-unset semantics preserved); RUN_NAME interpolates the resolved GBS (review-ordered — names no longer lie); wrapper comment accuracy. 100/100 tests; goldens prove adapter arms byte-identical.
+- **Result** — `passed` — review APPROVE-WITH-CHANGES, single ordered change fixed with exact-split mutant proof.
+- **Next** — Probe #5 verdict → on PASS, launch the amended full run FROM THIS COMMIT (Queries 6+7).

@@ -18,14 +18,18 @@
 #   WAN_EXPERIMENT=pre_context|side_adapter|full_ft   (default pre_context)
 #   TPU_CHIPS=64                              (v6e chip count)
 #   NAME=<job name>                           (default wan-<type>-yixun)
-#   PER_DEVICE_BATCH_SIZE=8                   (AUTHORITATIVE batch knob: pyconfig derives
+#   PER_DEVICE_BATCH_SIZE=<n>                 (AUTHORITATIVE batch knob: pyconfig derives
 #                                              GBS = num_devices x this on the worker.
-#                                              Small topologies must lower it — the v6e-8
-#                                              smoke OOM'd at 8; pass 1 there for GBS 8)
-#   GLOBAL_BATCH_SIZE_TO_TRAIN_ON=512         (inert to training — pyconfig recomputes
-#   GLOBAL_BATCH_SIZE_TO_LOAD=512              both from per-device; override alongside
-#                                              PER_DEVICE_BATCH_SIZE so the worker-log
-#                                              echoes stay honest, e.g. 1/8/8 on v6e-8)
+#                                              Arm-dependent defaults: adapters 8;
+#                                              full_ft 4 -- per-device 8 OOMs v6e-64 for
+#                                              full-FT, fit probe #4 / Query 7. Small
+#                                              topologies must lower it further, e.g. 1)
+#   GLOBAL_BATCH_SIZE_TO_TRAIN_ON=<n>         (inert to training — pyconfig recomputes
+#   GLOBAL_BATCH_SIZE_TO_LOAD=<n>              both from per-device; defaults follow the
+#                                              arm: adapters 512, full_ft 256. Override
+#                                              alongside PER_DEVICE_BATCH_SIZE so the
+#                                              worker-log echoes stay honest, 1/8/8 on
+#                                              a v6e-8 smoke)
 
 set -euo pipefail
 
@@ -67,7 +71,7 @@ case "$WAN_EXPERIMENT" in
     ACTION_ADAPTER_TYPE="full-ft"
     OUTPUT_DIR="gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft"
     WANDB_PROJECT="maxdiffusion-wan-full-ft"
-    MAX_TRAIN_STEPS="10000"
+    MAX_TRAIN_STEPS="20000"
     TRAIN_SCRIPT="bash_scripts/train_wan_full_ft.sh"
     ;;
   *)
@@ -83,17 +87,19 @@ EVAL_EVERY="1000"
 EVAL_MAX_BATCHES="4"
 LOG_PERIOD="10"
 SAVE_FINAL_CHECKPOINT="True"
-# Batch trio is env-overridable for small-topology smokes (mini-cycle 6: the v6e-8 smoke
-# OOM'd at the hard-set per-device 8). Full-run defaults unchanged. Per-device is the
+# Batch trio: env-overridable (mini-cycle 6: the v6e-8 smoke OOM'd at a hard-set
+# per-device 8) with ARM-DEPENDENT defaults (mini-cycle 8): the full_ft override block
+# below swaps in the amended full-FT recipe, and the env-respecting collapse happens
+# ONCE after it -- env unset => adapter arms submit 8/512/512 and full_ft submits
+# 4/256/256; an explicitly exported value wins for every arm. Per-device is the
 # authoritative knob (pyconfig recomputes both GBS keys from it; round-5 F1 test); the
-# globals are overridable purely so submitted env + worker echoes can stay coherent —
-# NOT bash-derived from TPU_CHIPS because per-device may legitimately be fractional
-# (e.g. 1.0) and $((...)) would choke, duplicating pyconfig's formula for no gain.
-PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-8}"
-GLOBAL_BATCH_SIZE_TO_TRAIN_ON="${GLOBAL_BATCH_SIZE_TO_TRAIN_ON:-512}"
-GLOBAL_BATCH_SIZE_TO_LOAD="${GLOBAL_BATCH_SIZE_TO_LOAD:-512}"
+# globals ride along so submitted env + worker echoes stay coherent — NOT bash-derived
+# from TPU_CHIPS because per-device may legitimately be fractional (e.g. 1.0) and
+# $((...)) would choke, duplicating pyconfig's formula for no gain.
+PER_DEVICE_BATCH_SIZE_DEFAULT="8"
+GLOBAL_BATCH_SIZE_TO_TRAIN_ON_DEFAULT="512"
+GLOBAL_BATCH_SIZE_TO_LOAD_DEFAULT="512"
 TFRECORD_SHUFFLE_BUFFER_SIZE="1024"
-RUN_NAME="wan-${ACTION_ADAPTER_TYPE}-v6e${TPU_CHIPS}-full-gbs512-fresh-$(date -u +%Y%m%d-%H%M%S)"
 
 # ---- Full-FT overrides ----
 # Applied AFTER the shared defaults above so the common CHECKPOINT_EVERY=100 /
@@ -104,7 +110,26 @@ if [ "$WAN_EXPERIMENT" = "full_ft" ]; then
   CHECKPOINT_EVERY="2500"
   CHECKPOINT_KEEP_PERIOD="2500"
   EVAL_DATA_DIR="$TRAIN_DATA_DIR"
+  # Amended primary recipe (plan §2.2 v3.1, Query 7, 2026-07-19): fit probe #4 proved
+  # per-device 8 OOMs v6e-64 by ~37MB (FSDP collective buffers that full-FT pays and the
+  # frozen-adapter runs did not), so full_ft defaults to per-device 4 => GBS 256; the
+  # arm's MAX_TRAIN_STEPS=20000 keeps the 3.55-pass sample budget unchanged.
+  PER_DEVICE_BATCH_SIZE_DEFAULT="4"
+  GLOBAL_BATCH_SIZE_TO_TRAIN_ON_DEFAULT="256"
+  GLOBAL_BATCH_SIZE_TO_LOAD_DEFAULT="256"
 fi
+
+# Env-respecting collapse: an explicitly exported batch value beats the arm default
+# (small-topology smokes pass e.g. PER_DEVICE_BATCH_SIZE=1 GLOBAL_*=8).
+PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-$PER_DEVICE_BATCH_SIZE_DEFAULT}"
+GLOBAL_BATCH_SIZE_TO_TRAIN_ON="${GLOBAL_BATCH_SIZE_TO_TRAIN_ON:-$GLOBAL_BATCH_SIZE_TO_TRAIN_ON_DEFAULT}"
+GLOBAL_BATCH_SIZE_TO_LOAD="${GLOBAL_BATCH_SIZE_TO_LOAD:-$GLOBAL_BATCH_SIZE_TO_LOAD_DEFAULT}"
+
+# Non-smoke run name, built AFTER the batch collapse so it interpolates the RESOLVED
+# global batch (cycle-8 change order: the old hard-coded `gbs512` lied for full_ft's
+# gbs256 recipe; adapter arms still resolve 512, keeping their names byte-identical).
+# The SMOKE block below overwrites the whole name with its own template, as before.
+RUN_NAME="wan-${ACTION_ADAPTER_TYPE}-v6e${TPU_CHIPS}-full-gbs${GLOBAL_BATCH_SIZE_TO_TRAIN_ON}-fresh-$(date -u +%Y%m%d-%H%M%S)"
 
 # ---- Optional one-step smoke (SMOKE=1) ----
 if [ "${SMOKE:-0}" = "1" ]; then
