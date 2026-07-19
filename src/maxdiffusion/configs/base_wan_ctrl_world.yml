@@ -265,14 +265,15 @@ max_grad_value: 1.0
 opt_enable_grad_global_norm_clipping: True
 max_grad_norm: 1.0
 # Skip the optimizer update entirely (params/opt_state/step revert) when the raw
-# pre-clip global grad norm is non-finite or exceeds this. Healthy window-avg
-# grad norms in the zero-init run were 0.04-0.2 through 28k steps; the divergence
-# at ~28.5k escalated through window-avgs of 0.7 -> 4.6 -> 120 -> 1e9+, so 50
-# skips the escalation steps while sitting >100x above baseline. False skips are
-# cheap (one lost batch); a missed bad update can poison Adam's moments for
-# ~1/(1-b2) steps. 0 disables the guard. Skipped steps are logged with the
-# batch's episode_ids and per-sample latent |max| for attribution.
-grad_norm_skip_threshold: 50.0
+# pre-clip global grad norm is non-finite or exceeds this. Retrain-from-20k data
+# (through 30.9k steps): healthy raw per-step max stays <= ~5.4, window-avg
+# 0.04-0.2, while the burst events measure 45+ (29700: 45.8) and the old run's
+# escalation went 120 -> 1e9+. 10 skips every observed burst while never touching
+# the healthy background. False skips are cheap (one lost batch); a missed bad
+# update poisons Adam's moments for ~1/(1-b2) steps. 0 disables the guard.
+# Skipped steps are logged with the batch's episode_ids and per-sample latent
+# |max| for attribution.
+grad_norm_skip_threshold: 10.0
 
 # Whether to apply flow-matching per-sample loss weighting.
 disable_training_weights: False
