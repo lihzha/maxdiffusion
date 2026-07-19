@@ -71,3 +71,9 @@ A full finetune removes the adapter + frozen-backbone variable. If a fully-train
 **Verbatim:** "Approve full run from post-fix commit"
 
 **Scope:** supersedes Query 5's implicit SHA — the 10k full run launches from the commit containing the reviewed setup.sh apt-hardening (mini-cycle 7), once BOTH hold: fit probe passed (any attempt) AND cycle 7 closed. All other full-run parameters unchanged from `_params_set_up.md`.
+
+## Query 7 — 2026-07-19 (amended-run approval, from Yixun)
+
+**Verbatim:** "Approve amended run"
+
+**Scope:** per the probe-4 HBM finding — probe #5 at per-device 4 (GBS 256) approved now; on its log-verified PASS, the full run launches with the amended recipe **GBS 256 × 20,000 steps** (3.55 passes and total compute unchanged; cohort evals at samples-seen quarters = steps 5000/10000/15000/20000 + step-0 baseline; all else per `_params_set_up.md`). Recipe amendment (yml + launcher arm) goes through a reviewed mini-cycle so the committed recipe equals the approved run.
