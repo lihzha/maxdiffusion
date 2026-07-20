@@ -106,3 +106,32 @@ WAN_EXPERIMENT=full_ft TPU_CHIPS=64 NAME=wan-full-ft-yixun \
 ```
 - **Effective config:** v6e-64; per-device 4 ⇒ GBS 256; 20000 steps (≈3.55 passes); LR 1e-5; fresh noise; guide 1.0; ckpt every 2500 keep-period 2500; eval-in-training every 1000 on TRAIN shards; wandb `maxdiffusion-wan-full-ft`; run name `wan-full-ft-v6e64-full-gbs256-fresh-<ts>`; yml `base_wan_5b_full_ft.yml`.
 - **Job id:** `20260719-165222-62b5c10e-wan-full-ft-yixun`
+
+## 9. Cohort validation ×5 (plan §2.3) — 2026-07-20T14:21:48Z
+
+- **Status:** LAUNCHED (5 jobs, ids below)
+- **Commit:** `c562856` tip (code = `031228e`)
+- **Approval:** Yixun, "Approve cohort validation", 2026-07-20
+- **Command template (exp worktree; documented queue pattern for validation jobs):**
+```bash
+export PATH="$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH"
+for STEP in 0 5000 10000 15000 20000; do
+tpu create v6 -n 8 --name "wan-full-ft-cohort-s${STEP}-yixun" \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers" \
+  --env RUN_NAME="wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222" \
+  --env CHECKPOINT_STEP="${STEP}" \
+  --env NUM_EVAL_VIDEOS="16" \
+  --env VALIDATION_ORDINALS="0,96037,192074,288111,384147,480184,576221,672258,768295,864332,960369,1056406,1152442,1248479,1344516,1440553" \
+  --env VALIDATION_SEED="0" \
+  --env COMMIT="c562856" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/validate_wan_full_ft.sh
+done
+```
+- **Job ids:**
+  - step 0: `20260720-142149-03b03447-wan-full-ft-cohort-s0-yixun`
+  - step 5000: `20260720-142155-14dfc21a-wan-full-ft-cohort-s5000-yixun`
+  - step 10000: `20260720-142201-8da2f201-wan-full-ft-cohort-s10000-yixun`
+  - step 15000: `20260720-142207-d91d6159-wan-full-ft-cohort-s15000-yixun`
+  - step 20000: `20260720-142212-0cfc8455-wan-full-ft-cohort-s20000-yixun`

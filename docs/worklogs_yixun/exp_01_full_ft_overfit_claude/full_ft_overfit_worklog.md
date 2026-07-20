@@ -285,3 +285,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `passed` (as a run) — 20000/20000 steps, attempt 1, no preemptions, 4h40m, 1.90 steps/s; all §6 criteria log-verified (process-0 logs in worker-6 — worker≠process indexing again); 8/8 checkpoints retained. Loss: 0.60→0.19 by step 500, then hard plateau 0.176–0.183 through 20k; eval-on-train mirrors. wandb context: pre-context adapter plateaued 0.57–0.60 under its guide-5 objective (not directly comparable; noted as context only).
 - **Analysis** — Pipeline trains cleanly unfrozen (favors "optimizable"); no memorization signature in one-step loss at 3.55 passes (inconclusive per plan §2.4 asymmetry — the designed metric is the cohort rollout). Runtime estimate lesson: actual 4.7h vs my 1.5–3-day guess — short latent sequences; recorded for future planning.
 - **Next** — Yixun approval for cohort validation: 5 v6e-8 jobs (checkpoint_step 0/5000/10000/15000/20000, validation_ordinals per `_params_set_up.md`, seed 0). Then `_analysis.md` + HTML report.
+
+## 2026-07-20T14:21:48Z — Cohort validation launched (5 × v6e-8, approved)
+
+- **Goal** — The designed memorization metric: rollout the 16 predeclared train clips at step-0 baseline + 4 checkpoints.
+- **Acceptance criteria (per job):** worker reports COMMIT=c562856; restores exactly its CHECKPOINT_STEP (step-0 = manager-free bypass, log shows no Orbax restore); 16 samples processed in listed-ordinal order, seed 0; `summary.json` + per-sample metrics/videos under `wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222/validation/step_NNNNNN/`; JOB_EXIT=0. Cross-job: identical cohort/seeds (only the checkpoint varies).
+- **Result** — `launched` — 5 jobs, ids in `_command.md` entry 9.
+- **Next** — All terminal → pull 5 summaries → within-cohort delta table → `_analysis.md` + HTML report + Codex analysis review → final report to Yixun/Lihan.
