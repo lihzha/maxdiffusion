@@ -278,3 +278,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Command / Validation** — `WAN_EXPERIMENT=full_ft TPU_CHIPS=64 NAME=wan-full-ft-yixun bash bash_scripts/launch_wan_train.sh` (entry 8). Runtime estimate: refreshed from the first sps log lines.
 - **Result** — `launched` (job id below).
 - **Next** — Startup verification once RUNNING; then loss-curve checks at 500/1000-step marks; cohort validation asks after checkpoint 5000 exists.
+
+## 2026-07-19T22:30:00Z — PRIMARY RUN COMPLETE: all acceptance criteria pass; loss plateaus ~0.176
+
+- **Goal** — Verify and record the primary run.
+- **Result** — `passed` (as a run) — 20000/20000 steps, attempt 1, no preemptions, 4h40m, 1.90 steps/s; all §6 criteria log-verified (process-0 logs in worker-6 — worker≠process indexing again); 8/8 checkpoints retained. Loss: 0.60→0.19 by step 500, then hard plateau 0.176–0.183 through 20k; eval-on-train mirrors. wandb context: pre-context adapter plateaued 0.57–0.60 under its guide-5 objective (not directly comparable; noted as context only).
+- **Analysis** — Pipeline trains cleanly unfrozen (favors "optimizable"); no memorization signature in one-step loss at 3.55 passes (inconclusive per plan §2.4 asymmetry — the designed metric is the cohort rollout). Runtime estimate lesson: actual 4.7h vs my 1.5–3-day guess — short latent sequences; recorded for future planning.
+- **Next** — Yixun approval for cohort validation: 5 v6e-8 jobs (checkpoint_step 0/5000/10000/15000/20000, validation_ordinals per `_params_set_up.md`, seed 0). Then `_analysis.md` + HTML report.
