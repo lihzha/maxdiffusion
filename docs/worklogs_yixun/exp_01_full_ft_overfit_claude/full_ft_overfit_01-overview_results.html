@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exp_01 full_ft_overfit — results overview</title>
+<style>
+:root{--bg:#fcfcfb;--ink:#1c1c1b;--ink2:#5f5f5c;--muted:#8a8a86;--line:#e4e4e0;--card:#ffffff;--accent:#2a78d6;--good:#1a7f37;--warn:#9a6700}
+@media (prefers-color-scheme: dark){:root{--bg:#1a1a19;--ink:#ececea;--ink2:#b0b0ac;--muted:#7c7c78;--line:#33332f;--card:#222220;--accent:#5e9fe8;--good:#4ac26b;--warn:#d4a72c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:32px 20px 64px}
+main{max-width:880px;margin:0 auto}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:36px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.sub{color:var(--ink2);font-size:13px;margin-bottom:24px}
+.verdict{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--good);border-radius:8px;padding:14px 18px;margin:20px 0}
+.verdict b{color:var(--good)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
+th{color:var(--ink2);font-weight:600;text-align:right;padding:6px 10px;border-bottom:1px solid var(--line)}
+td{padding:6px 10px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+.best{color:var(--good);font-weight:600}
+.pending{color:var(--warn);font-style:italic}
+.chartwrap{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;overflow-x:auto;margin:14px 0}
+.note{color:var(--muted);font-size:12.5px;margin-top:6px}
+svg text{font:11px -apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--ink2)}
+svg .axis{stroke:var(--line)}
+.tip{position:fixed;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--ink);display:none;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+code{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;line-height:1.5}
+details summary{cursor:pointer;color:var(--ink2)}
+</style>
+</head>
+<body>
+<main>
+<h1>exp_01 <code>full_ft_overfit</code> — can the pipeline be overfit at all?</h1>
+<div class="sub">Wan2.2 TI2V 5B, backbone fully unfrozen, no adapter, no CFG · DROID train split (1,440,554 windows) · GBS 256 × 20,000 steps (≈3.55 passes) · v6e-64 · run <code>wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222</code> · commit <code>031228e</code> · every number traces to <code>full_ft_overfit_results.md</code></div>
+
+<div class="verdict"><b>Verdict: pipeline exonerated — hypothesis (B) supported.</b> With nothing frozen, the identical data/objective/rollout machinery jumps train-clip reconstruction from SSIM ≈ 0.20 (pretrained) to <b>0.79</b> — the entire gain in place by step 5000, then flat. The adapters' difficulty is a frozen-backbone optimization phenomenon, not a broken pipeline. (Full reasoning &amp; caveats: <code>full_ft_overfit_analysis.md</code>.)</div>
+
+<h2>Training loss (windowed, log-period 10)</h2>
+<div class="chartwrap">
+<svg id="losschart" width="820" height="260" role="img" aria-label="Train loss vs step: falls from 0.60 to 0.19 by step 500, plateau near 0.176 through step 20000">
+</svg>
+<div class="note">One series (train loss). Warmup ends ≈ step 1000 (LR 1e-5). Eval-on-train tracks it within ±0.005 — see table below. Hover for values.</div>
+</div>
+
+<h2>Cohort reconstruction — 16 predeclared train clips, identical seeds, 25-step rollout</h2>
+<table>
+<tr><th>checkpoint</th><th>latent&nbsp;MSE</th><th>pixel&nbsp;MSE</th><th>SSIM</th><th>provenance</th></tr>
+<tr><td>0 · pretrained baseline</td><td class="pending">3.51*</td><td class="pending">0.199*</td><td class="pending">0.20*</td><td class="pending">*preliminary 14/16 (official job queued)</td></tr>
+<tr><td>5000</td><td>0.2536</td><td>0.0191</td><td>0.7873</td><td>official 16/16</td></tr>
+<tr><td>10000</td><td>0.2573</td><td>0.0195</td><td>0.7851</td><td>official 16/16</td></tr>
+<tr><td>15000</td><td>0.2537</td><td>0.0193</td><td class="best">0.7876</td><td>official 16/16</td></tr>
+<tr><td>20000</td><td class="best">0.2495</td><td class="best">0.0190</td><td>0.7875</td><td>official 16/16</td></tr>
+</table>
+<div class="chartwrap">
+<svg id="ssimchart" width="820" height="150" role="img" aria-label="SSIM by checkpoint: 0.20 preliminary at step 0, then 0.785 to 0.788 flat across steps 5000 to 20000"></svg>
+<div class="note">Filled dots: official. Hollow gray dot: preliminary pretrained baseline (14/16 samples salvaged from a preempted attempt; final value pending job <code>s0b</code> — cannot plausibly approach 0.79).</div>
+</div>
+
+<h2>Context (different splits/objectives — context, not thresholds)</h2>
+<table>
+<tr><th>run</th><th>trainable</th><th>clips</th><th>SSIM</th><th>latent&nbsp;MSE</th></tr>
+<tr><td>pre-context adapter (30k steps)</td><td>~128M / frozen 5B</td><td>val</td><td>0.295</td><td>1.496</td></tr>
+<tr><td>side-adapter r20 (best)</td><td>~240M / frozen 5B</td><td>val</td><td>0.62–0.66</td><td>—</td></tr>
+<tr><td><b>full-FT (this experiment)</b></td><td><b>5.00B, nothing frozen</b></td><td>train</td><td><b>0.787</b></td><td><b>0.25</b></td></tr>
+</table>
+
+<h2>Eval-on-train series (fresh noise/timesteps, every 1000 steps)</h2>
+<details><summary>show all 20 values</summary>
+<table>
+<tr><th>step</th><th>loss</th><th>step</th><th>loss</th></tr>
+<tr><td>1000</td><td>0.1905</td><td>11000</td><td>0.1811</td></tr>
+<tr><td>2000</td><td>0.1852</td><td>12000</td><td>0.1815</td></tr>
+<tr><td>3000</td><td>0.1866</td><td>13000</td><td>0.1797</td></tr>
+<tr><td>4000</td><td>0.1824</td><td>14000</td><td>0.1789</td></tr>
+<tr><td>5000</td><td>0.1822</td><td>15000</td><td>0.1828</td></tr>
+<tr><td>6000</td><td>0.1801</td><td>16000</td><td>0.1798</td></tr>
+<tr><td>7000</td><td>0.1827</td><td>17000</td><td>0.1798</td></tr>
+<tr><td>8000</td><td>0.1824</td><td>18000</td><td>0.1809</td></tr>
+<tr><td>9000</td><td>0.1811</td><td>19000</td><td>0.1787</td></tr>
+<tr><td>10000</td><td>0.1838</td><td>20000</td><td>0.1784</td></tr>
+</table>
+</details>
+
+<h2>Watch the videos</h2>
+<p class="note">Per-clip <code>ground_truth.mp4</code> / <code>sample.mp4</code> / <code>comparison_gt_top_pred_bottom.mp4</code> live on GCS (not embedded here to keep the repo light). Pull any checkpoint's set locally:</p>
+<pre>gsutil -m cp -r "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft/wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222/validation/step_020000" ~/Desktop/fullft_val_20000
+# baseline (once s0b lands): …/validation/step_000000</pre>
+
+<h2>Provenance</h2>
+<p class="note">Experiment folder: <code>docs/worklogs_yixun/exp_01_full_ft_overfit_claude/</code> — plan (v3 + Query-7 amendment), 2 plan reviews, 6 code-review files (9 closed cycles, 30 findings resolved), worklog (every action), <code>_command.md</code> (all 10 launches incl. failures), params/results/analysis. Branch <code>claude-exp_01_full_ft_overfit-20260715</code>.</p>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+const loss=[[10,.601025],[50,.577998],[200,.225456],[500,.194006],[1000,.186654],[2000,.182948],[3000,.181549],[4000,.183527],[5000,.17916],[6000,.180953],[7000,.17966],[8000,.184298],[9000,.177248],[10000,.178548],[11000,.18121],[12000,.176496],[13000,.180103],[14000,.177648],[15000,.17526],[16000,.179003],[17000,.177852],[18000,.176692],[19000,.177047],[20000,.176295]];
+const cs=getComputedStyle(document.documentElement);
+const ACC=cs.getPropertyValue('--accent').trim(),LINE=cs.getPropertyValue('--line').trim(),MUT=cs.getPropertyValue('--muted').trim();
+(function(){
+const svg=document.getElementById('losschart'),W=820,H=260,m={l:52,r:16,t:14,b:30};
+const xmax=20000,ymin=.15,ymax=.62;
+const X=s=>m.l+(W-m.l-m.r)*s/xmax, Y=v=>m.t+(H-m.t-m.b)*(1-(v-ymin)/(ymax-ymin));
+let g='';
+[.2,.3,.4,.5,.6].forEach(v=>{g+=`<line class="axis" x1="${m.l}" y1="${Y(v)}" x2="${W-m.r}" y2="${Y(v)}"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${v.toFixed(1)}</text>`;});
+[0,5000,10000,15000,20000].forEach(s=>{g+=`<text x="${X(s)}" y="${H-8}" text-anchor="middle">${s/1000}k</text>`;});
+g+=`<polyline fill="none" stroke="${ACC}" stroke-width="2" stroke-linejoin="round" points="${loss.map(p=>X(p[0])+','+Y(p[1])).join(' ')}"/>`;
+g+=`<circle cx="${X(20000)}" cy="${Y(.176295)}" r="4" fill="${ACC}"/><text x="${X(20000)-8}" y="${Y(.176295)-10}" text-anchor="end">0.176 @ 20k</text>`;
+g+=`<circle cx="${X(10)}" cy="${Y(.601025)}" r="4" fill="${ACC}"/><text x="${X(10)+8}" y="${Y(.601025)+4}">0.601 @ 10</text>`;
+svg.innerHTML=g;
+const tip=document.getElementById('tip');
+svg.addEventListener('mousemove',e=>{const r=svg.getBoundingClientRect();const fx=(e.clientX-r.left-m.l)/(W-m.l-m.r)*xmax;
+let best=loss[0];for(const p of loss)if(Math.abs(p[0]-fx)<Math.abs(best[0]-fx))best=p;
+tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-10)+'px';tip.textContent=`step ${best[0]} · loss ${best[1].toFixed(4)}`;});
+svg.addEventListener('mouseleave',()=>tip.style.display='none');
+})();
+(function(){
+const svg=document.getElementById('ssimchart'),W=820,H=150,m={l:52,r:16,t:14,b:30};
+const pts=[[0,.2018,false],[5000,.7873,true],[10000,.7851,true],[15000,.7876,true],[20000,.7875,true]];
+const X=s=>m.l+(W-m.l-m.r)*s/20000, Y=v=>m.t+(H-m.t-m.b)*(1-v);
+let g='';
+[0,.5,1].forEach(v=>{g+=`<line class="axis" x1="${m.l}" y1="${Y(v)}" x2="${W-m.r}" y2="${Y(v)}"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${v}</text>`;});
+[0,5000,10000,15000,20000].forEach(s=>{g+=`<text x="${X(s)}" y="${H-8}" text-anchor="middle">${s/1000}k</text>`;});
+pts.forEach(p=>{
+if(p[2])g+=`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="6" fill="${ACC}"/>`;
+else g+=`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="6" fill="none" stroke="${MUT}" stroke-width="2" stroke-dasharray="3 2"/>`;
+g+=`<text x="${X(p[0])}" y="${Y(p[1])-12}" text-anchor="middle">${p[1].toFixed(3)}${p[2]?'':'*'}</text>`;});
+g+=`<text x="${X(0)}" y="${H-24}" text-anchor="start" fill="${MUT}">*preliminary</text>`;
+svg.innerHTML=g;
+})();
+</script>
+</body>
+</html>
