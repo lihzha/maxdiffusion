@@ -17,3 +17,15 @@
 - Full-FT **optimizes healthily** (fast initial fit, clean gradients, no instability) — the training pipeline is trainable end-to-end with the backbone unfrozen.
 - **No strong memorization signal in one-step loss at 3.55 passes:** a perfectly memorizing model could in principle drive this loss toward ~0 (frame-0 pin identifies the clip; v is then computable exactly), and we sit at a hard plateau ~0.176. Per plan §1/§2.4 this negative-at-budget is **inconclusive by design** — 1.44M windows in 3.55 passes is a weak memorization dose.
 - **Pending decisive evidence:** cohort rollout (16 fixed train clips, step-0 pretrained baseline vs checkpoints 5000/10000/15000/20000) — reconstruction delta is the designed metric.
+
+## Cohort validation (plan §2.3; 16 predeclared train clips, seed 0, 25-step rollout)
+
+| Checkpoint | latent MSE | pixel MSE | SSIM | provenance |
+|---|---|---|---|---|
+| 0 (pretrained) | — | — | — | **pending official** (job `s0b` queued; preliminary 14/16-sample aggregate cited in `_analysis.md` only) |
+| 5000  | 0.2536 | 0.01912 | 0.7873 | official `summary.json`, 16/16 |
+| 10000 | 0.2573 | 0.01946 | 0.7851 | official, 16/16 |
+| 15000 | 0.2537 | 0.01926 | 0.7876 | official, 16/16 |
+| 20000 | 0.2495 | 0.01896 | 0.7875 | official, 16/16 |
+
+Artifacts per checkpoint: per-sample `ground_truth.mp4` / `sample.mp4` / `comparison_gt_top_pred_bottom.mp4` / `metrics.json` + `summary.{json,csv}` under `…/validation/step_NNNNNN/`. Jobs: `_command.md` entries 9–10.
