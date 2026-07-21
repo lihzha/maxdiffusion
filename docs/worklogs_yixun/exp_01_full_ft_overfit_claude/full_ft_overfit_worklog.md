@@ -292,3 +292,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Acceptance criteria (per job):** worker reports COMMIT=c562856; restores exactly its CHECKPOINT_STEP (step-0 = manager-free bypass, log shows no Orbax restore); 16 samples processed in listed-ordinal order, seed 0; `summary.json` + per-sample metrics/videos under `wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222/validation/step_NNNNNN/`; JOB_EXIT=0. Cross-job: identical cohort/seeds (only the checkpoint varies).
 - **Result** — `launched` — 5 jobs, ids in `_command.md` entry 9.
 - **Next** — All terminal → pull 5 summaries → within-cohort delta table → `_analysis.md` + HTML report + Codex analysis review → final report to Yixun/Lihan.
+
+## 2026-07-21T18:50:00Z — Analysis review (6 MAJOR) → analysis v2; HTML verdict aligned
+
+- **Goal** — Close the analysis-review cycle.
+- **Change** — Codex analysis review: REQUEST-REVISION, 6 MAJOR findings (verdict overreach, memorization claim unsupported, provisional-pending-s0, §2.4 rationale, exp_02 speculation labeling, reliability caveats). ALL accepted; `_analysis.md` rewritten to v2 (provisional verdict, narrow claims, identifying-design spec for exp_02, full caveat set); resolutions appended to the review file; HTML verdict box reworded to match F1.
+- **Result** — `passed` — the record now claims exactly what the data supports, no more.
+- **Next** — Yixun: video review at leisure + merge decision. s0b lands → official row swaps in. Optional held-out cohort job (analysis §4.4c) if Lihan wants the memorization question answered.
