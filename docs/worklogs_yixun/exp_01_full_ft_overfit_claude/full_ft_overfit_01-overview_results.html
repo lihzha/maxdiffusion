@@ -34,7 +34,7 @@ details summary{cursor:pointer;color:var(--ink2)}
 <h1>exp_01 <code>full_ft_overfit</code> — can the pipeline be overfit at all?</h1>
 <div class="sub">Wan2.2 TI2V 5B, backbone fully unfrozen, no adapter, no CFG · DROID train split (1,440,554 windows) · GBS 256 × 20,000 steps (≈3.55 passes) · v6e-64 · run <code>wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222</code> · commit <code>031228e</code> · every number traces to <code>full_ft_overfit_results.md</code></div>
 
-<div class="verdict"><b>Verdict: pipeline exonerated — hypothesis (B) supported.</b> With nothing frozen, the identical data/objective/rollout machinery jumps train-clip reconstruction from SSIM ≈ 0.20 (pretrained) to <b>0.79</b> — the entire gain in place by step 5000, then flat. The adapters' difficulty is a frozen-backbone optimization phenomenon, not a broken pipeline. (Full reasoning &amp; caveats: <code>full_ft_overfit_analysis.md</code>.)</div>
+<div class="verdict"><b>Provisional verdict: the strong "pipeline cannot fit" form of (A) is disfavored; results favor (B) under the predeclared decision rule.</b> With nothing frozen, the same core loss/data code lifts train-clip reconstruction from SSIM ≈ 0.20 (pretrained, preliminary 14/16) to <b>0.79</b>, all gain in place by step 5000. Not established: causal isolation of frozen-backbone optimization (split/objective/conditioning confounds), and domain-fit vs per-clip memorization (train-only cohort). Provisional until the official step-0 job lands. (Full reasoning &amp; caveats: <code>full_ft_overfit_analysis.md</code>.)</div>
 
 <h2>Training loss (windowed, log-period 10)</h2>
 <div class="chartwrap">
