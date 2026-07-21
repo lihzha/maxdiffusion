@@ -135,3 +135,10 @@ done
   - step 10000: `20260720-142201-8da2f201-wan-full-ft-cohort-s10000-yixun`
   - step 15000: `20260720-142207-d91d6159-wan-full-ft-cohort-s15000-yixun`
   - step 20000: `20260720-142212-0cfc8455-wan-full-ft-cohort-s20000-yixun`
+
+## 10. Cohort s0 RESUBMIT (wedged-job replacement) — 2026-07-21T01:59:16Z
+
+- **Status:** LAUNCHED
+- **Why:** original s0 job (`20260720-142149-03b03447`) wedged at queue level — attempt 8 ended 17:30Z, no attempt 9 for ~10 h, status stuck PROVISIONING (maintenance-storm aftermath). Deleted; identical resubmit (infra policy — no config change).
+- **Command:** identical to entry 9's template with CHECKPOINT_STEP=0, NAME=wan-full-ft-cohort-s0b-yixun.
+- **Job id:** `20260721-015850-83c5e067-wan-full-ft-cohort-s0b-yixun`
