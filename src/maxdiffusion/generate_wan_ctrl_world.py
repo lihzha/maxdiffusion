@@ -395,7 +395,11 @@ def run(argv: Sequence[str]) -> None:
     )
     action_adaln_proj = None
     if action_cond_mode == "adaln":
-        inner_dim = config.num_attention_heads * config.attention_head_dim
+        # inner_dim must come from the loaded transformer's own registered
+        # config, not config.num_attention_heads/attention_head_dim (those
+        # top-level yaml fields are stale for this pipeline — the real
+        # architecture is loaded from the pretrained checkpoint's config.json).
+        inner_dim = pipeline.transformer.config.num_attention_heads * pipeline.transformer.config.attention_head_dim
         action_adaln_proj = NNXWanActionAdaLNProjector(
             rngs=nnx.Rngs(jax.random.key(config.seed + 1)),
             tokens_per_frame=action_tokens_per_frame,

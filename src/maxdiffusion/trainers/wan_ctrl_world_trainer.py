@@ -472,11 +472,19 @@ class WanCtrlWorldTrainer:
             weights_dtype=_dtype(self.config.weights_dtype),
         )
 
-    def _build_action_adaln_proj(self) -> NNXWanActionAdaLNProjector | None:
-        """Only built when action_cond_mode == "adaln"; unused (None) otherwise."""
+    def _build_action_adaln_proj(self, transformer_config) -> NNXWanActionAdaLNProjector | None:
+        """Only built when action_cond_mode == "adaln"; unused (None) otherwise.
+
+        ``inner_dim`` must come from the loaded transformer's own registered
+        config, not ``self.config.num_attention_heads``/``attention_head_dim``
+        — those top-level yaml fields are stale for this pipeline: the real
+        architecture is loaded from the pretrained checkpoint's config.json
+        (see ``create_sharded_logical_transformer`` in wan_pipeline.py), which
+        can (and does, for WAN 2.2 TI2V-5B) differ from the yaml defaults.
+        """
         if getattr(self.config, "action_cond_mode", "cross_attn") != "adaln":
             return None
-        inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
+        inner_dim = transformer_config.num_attention_heads * transformer_config.attention_head_dim
         return NNXWanActionAdaLNProjector(
             rngs=nnx.Rngs(jax.random.key(self.config.seed + 1)),
             tokens_per_frame=getattr(self.config, "action_tokens_per_latent_frame", 1),
@@ -614,7 +622,7 @@ class WanCtrlWorldTrainer:
 
         # 2. Build combined model
         action_encoder = self._build_action_encoder()
-        action_adaln_proj = self._build_action_adaln_proj()
+        action_adaln_proj = self._build_action_adaln_proj(pipeline.transformer.config)
         combined = WanCtrlWorldModel(pipeline.transformer, action_encoder, action_adaln_proj)
 
         # 3. Split combined model into (graphdef, params, rest_of_state)
