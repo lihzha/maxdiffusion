@@ -659,6 +659,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       frame_level_cond: bool = False,
       cond_tokens_per_frame: int = 1,
       frame_positions: Optional[tuple] = None,
+      action_hidden_states: Optional[jax.Array] = None,
   ) -> Union[jax.Array, Tuple[jax.Array, jax.Array], Dict[str, jax.Array]]:
     hidden_states = nn.with_logical_constraint(hidden_states, ("batch", None, None, None, None))
     batch_size, _, num_frames, height, width = hidden_states.shape
@@ -674,6 +675,12 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       hidden_states = self.patch_embedding(hidden_states)
       hidden_states = jax.lax.collapse(hidden_states, 1, -1)
     per_token_t = timestep.ndim == 2  # [B, seq_len] for TI2V
+    if action_hidden_states is not None and not per_token_t:
+      raise NotImplementedError(
+          "action_hidden_states (AdaLN action conditioning) requires a "
+          "per-token timestep (timestep.ndim == 2); the global-timestep path "
+          "does not recompute timestep_proj after mixing in extra conditioning."
+      )
     with self.conditional_named_scope("condition_embedder"):
       if per_token_t:
         # Per-token timestep: process time and text embeddings separately.
@@ -682,6 +689,11 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         bt, sl = timestep.shape
         t_sinusoidal = self.condition_embedder.timesteps_proj(timestep)  # [B, sl, freq_dim]
         temb = self.condition_embedder.time_embedder(t_sinusoidal)  # [B, sl, dim]
+        if action_hidden_states is not None:
+          # AdaLN action conditioning: summed into the per-token time embedding
+          # (instead of / in addition to cross-attention) before the shared
+          # time_proj MLP expands it into the 6-way modulation vector.
+          temb = temb + action_hidden_states.astype(temb.dtype)
         # Force full (data×fsdp×context)-way batch sharding after time_embedder,
         # but only when context > 1 (e.g. TI2V with context=4).
         # time_embedder weights have ("embed","mlp") partitioning where "embed"

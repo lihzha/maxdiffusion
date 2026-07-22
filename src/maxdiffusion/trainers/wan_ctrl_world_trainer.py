@@ -31,10 +31,21 @@ Uses the same per-token timestep scheme introduced by WAN Ti2V:
 
 Conditioning
 ------------
-Action tokens are the sole cross-attention conditioning. Text is not used:
-the action encoder is called with ``text_embed=None``, matching the
-text-free inference path. 5 % of samples have their action tokens zeroed
-for classifier-free guidance.
+Action tokens are the sole conditioning signal. Text is not used: the action
+encoder is called with ``text_embed=None``, matching the text-free inference
+path. 5 % of samples have their action tokens zeroed for classifier-free
+guidance.
+
+``action_cond_mode`` (config) selects how the action tokens reach the
+transformer:
+
+* ``"cross_attn"`` (default): action tokens are used as the sole
+  cross-attention K/V sequence, exactly as in the original design.
+* ``"adaln"``: cross-attention instead receives all-zero tokens (the same
+  no-op state used for the CFG-uncond branch) and the action tokens are
+  projected (``NNXWanActionAdaLNProjector``) and summed into the per-token
+  timestep embedding that drives AdaLN modulation. The two modes are
+  mutually exclusive and not checkpoint-compatible with each other.
 
 Checkpointing
 -------------
@@ -62,7 +73,7 @@ from flax.training import train_state
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from maxdiffusion import max_logging, max_utils
-from maxdiffusion.models.wan.action_encoder_wan import NNXWanActionEncoder
+from maxdiffusion.models.wan.action_encoder_wan import NNXWanActionEncoder, NNXWanActionAdaLNProjector
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers import FlaxFlowMatchScheduler
 from maxdiffusion.train_utils import load_next_batch
@@ -85,11 +96,23 @@ def _group_actions(actions: jnp.ndarray, F_lat: int) -> jnp.ndarray:
 
 
 class WanCtrlWorldModel(nnx.Module):
-    """WAN transformer + action encoder held together for nnx.split/merge."""
+    """WAN transformer + action encoder (+ optional AdaLN action projector),
+    held together for nnx.split/merge.
 
-    def __init__(self, transformer, action_encoder: NNXWanActionEncoder):
+    ``action_adaln_proj`` is only present (non-None) when
+    ``config.action_cond_mode == "adaln"``; it is unused in the default
+    ``"cross_attn"`` mode.
+    """
+
+    def __init__(
+        self,
+        transformer,
+        action_encoder: NNXWanActionEncoder,
+        action_adaln_proj: NNXWanActionAdaLNProjector | None = None,
+    ):
         self.transformer = transformer
         self.action_encoder = action_encoder
+        self.action_adaln_proj = action_adaln_proj if action_adaln_proj is not None else nnx.data(None)
 
 
 # ── TrainState ────────────────────────────────────────────────────────────────
@@ -118,6 +141,37 @@ def _apply_cfg_dropout(
     b = action_tokens.shape[0]
     keep = (jax.random.uniform(rng, (b, 1, 1)) >= drop_prob).astype(action_tokens.dtype)
     return action_tokens * keep
+
+
+def _route_action_conditioning(
+    action_tokens: jnp.ndarray,
+    action_adaln_proj: NNXWanActionAdaLNProjector | None,
+    action_cond_mode: str,
+    tokens_per_frame_k: int,
+    H_lat: int,
+    W_lat: int,
+) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+    """Route encoded action tokens to cross-attention or AdaLN conditioning.
+
+    ``"cross_attn"`` (default): action tokens pass through unchanged as the
+    transformer's cross-attention K/V; no AdaLN conditioning is added.
+    ``"adaln"``: cross-attention gets all-zero tokens (a no-op — the same
+    state used for CFG-uncond) and the action tokens are projected per latent
+    frame, then repeated across each frame's spatial patch tokens to align
+    with the per-token timestep embedding they get summed into.
+
+    Returns ``(encoder_hidden_states, action_hidden_states)`` — the second
+    element is ``None`` in cross-attention mode.
+    """
+    if action_cond_mode == "adaln":
+        b, fk, d = action_tokens.shape
+        f_lat = fk // tokens_per_frame_k
+        grouped = action_tokens.reshape(b, f_lat, tokens_per_frame_k, d)
+        action_temb = action_adaln_proj(grouped)                       # (B, F_lat, inner_dim)
+        spatial_tokens_per_frame = (H_lat // 2) * (W_lat // 2)
+        action_hidden_states = jnp.repeat(action_temb, spatial_tokens_per_frame, axis=1)
+        return jnp.zeros_like(action_tokens), action_hidden_states
+    return action_tokens, None
 
 
 def _build_per_token_timestep(
@@ -250,14 +304,22 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         cfg_rng, do_rng = jax.random.split(d_rng)
         action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
 
+        action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
+        cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
+        enc_tokens, action_hidden_states = _route_action_conditioning(
+            action_tokens, model.action_adaln_proj, action_cond_mode,
+            cond_tokens_per_frame, H_lat, W_lat,
+        )
+
         model_pred = model.transformer(
             hidden_states=noisy_latents,
             timestep=timestep_2d,           # (B, seq_len) → per-token AdaLN
-            encoder_hidden_states=action_tokens,
+            encoder_hidden_states=enc_tokens,
+            action_hidden_states=action_hidden_states,
             deterministic=False,
             rngs=nnx.Rngs(dropout=do_rng),
             frame_level_cond=True,
-            cond_tokens_per_frame=getattr(config, "action_tokens_per_latent_frame", 1),
+            cond_tokens_per_frame=cond_tokens_per_frame,
             frame_positions=frame_positions,
         )
 
@@ -410,6 +472,20 @@ class WanCtrlWorldTrainer:
             weights_dtype=_dtype(self.config.weights_dtype),
         )
 
+    def _build_action_adaln_proj(self) -> NNXWanActionAdaLNProjector | None:
+        """Only built when action_cond_mode == "adaln"; unused (None) otherwise."""
+        if getattr(self.config, "action_cond_mode", "cross_attn") != "adaln":
+            return None
+        inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
+        return NNXWanActionAdaLNProjector(
+            rngs=nnx.Rngs(jax.random.key(self.config.seed + 1)),
+            tokens_per_frame=getattr(self.config, "action_tokens_per_latent_frame", 1),
+            wan_text_dim=self.config.wan_text_dim,
+            inner_dim=inner_dim,
+            dtype=_dtype(self.config.activations_dtype),
+            weights_dtype=_dtype(self.config.weights_dtype),
+        )
+
     # ── Checkpointing ─────────────────────────────────────────────────────────
 
     def _build_checkpoint_manager(self, ckpt_dir: str) -> ocp.CheckpointManager:
@@ -538,7 +614,8 @@ class WanCtrlWorldTrainer:
 
         # 2. Build combined model
         action_encoder = self._build_action_encoder()
-        combined = WanCtrlWorldModel(pipeline.transformer, action_encoder)
+        action_adaln_proj = self._build_action_adaln_proj()
+        combined = WanCtrlWorldModel(pipeline.transformer, action_encoder, action_adaln_proj)
 
         # 3. Split combined model into (graphdef, params, rest_of_state)
         with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
@@ -931,13 +1008,21 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
 
     action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat*K, 4096)
 
+    action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
+    cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
+    enc_tokens, action_hidden_states = _route_action_conditioning(
+        action_tokens, model.action_adaln_proj, action_cond_mode,
+        cond_tokens_per_frame, H_lat, W_lat,
+    )
+
     model_pred = model.transformer(
         hidden_states=noisy_latents,
         timestep=timestep_2d,
-        encoder_hidden_states=action_tokens,
+        encoder_hidden_states=enc_tokens,
+        action_hidden_states=action_hidden_states,
         deterministic=True,
         frame_level_cond=True,
-        cond_tokens_per_frame=getattr(config, "action_tokens_per_latent_frame", 1),
+        cond_tokens_per_frame=cond_tokens_per_frame,
         frame_positions=frame_positions,
     )
 
@@ -974,6 +1059,9 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
     actions_grouped = _group_actions(actions, F_lat)
     action_tokens = model.action_encoder(actions_grouped, None)
 
+    action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
+    cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
+
     num_train_t = scheduler.config.num_train_timesteps
     # Shift-warped sigma schedule — the same warp FlaxFlowMatchScheduler.set_timesteps
     # applies at inference; official Wan2.2 TI2V-5B ships sample_shift=5.0.
@@ -999,13 +1087,18 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
         ts_2d = jax.lax.with_sharding_constraint(ts_2d, P(("data", "fsdp", "context"), None))
 
         def _velocity(tokens):
+            enc_tokens, action_hidden_states = _route_action_conditioning(
+                tokens, model.action_adaln_proj, action_cond_mode,
+                cond_tokens_per_frame, H_lat, W_lat,
+            )
             return model.transformer(
                 hidden_states=roll_input,
                 timestep=ts_2d,
-                encoder_hidden_states=tokens,
+                encoder_hidden_states=enc_tokens,
+                action_hidden_states=action_hidden_states,
                 deterministic=True,
                 frame_level_cond=True,
-                cond_tokens_per_frame=getattr(config, "action_tokens_per_latent_frame", 1),
+                cond_tokens_per_frame=cond_tokens_per_frame,
                 frame_positions=frame_positions,
             )
 

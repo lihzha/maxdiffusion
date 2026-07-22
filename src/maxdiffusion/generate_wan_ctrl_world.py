@@ -32,7 +32,7 @@ from flax import nnx
 from flax.linen import partitioning as nn_partitioning
 
 from maxdiffusion import max_logging, pyconfig
-from maxdiffusion.models.wan.action_encoder_wan import NNXWanActionEncoder
+from maxdiffusion.models.wan.action_encoder_wan import NNXWanActionEncoder, NNXWanActionAdaLNProjector
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers.scheduling_flow_match_flax import FlaxFlowMatchScheduler
 from maxdiffusion.trainers.wan_ctrl_world_trainer import (
@@ -40,6 +40,7 @@ from maxdiffusion.trainers.wan_ctrl_world_trainer import (
     _build_per_token_timestep,
     _dtype,
     _group_actions,
+    _route_action_conditioning,
 )
 
 
@@ -61,6 +62,7 @@ def _denoise_step(
     scheduler: FlaxFlowMatchScheduler,
     scheduler_state,
     cond_tokens_per_frame: int = 1,
+    action_cond_mode: str = "cross_attn",
 ):
     """One Euler flow-matching step with optional classifier-free guidance.
 
@@ -75,16 +77,28 @@ def _denoise_step(
     t_batch = jnp.broadcast_to(timestep, (b,))
     timestep_2d = _build_per_token_timestep(t_batch, F_lat, H_lat, W_lat, n_hist)
 
+    def _route(tokens):
+        return _route_action_conditioning(
+            tokens, model.action_adaln_proj, action_cond_mode,
+            cond_tokens_per_frame, H_lat, W_lat,
+        )
+
     if guidance_scale > 1.0:
         # Double-batch: [uncond, cond] in a single forward pass.
+        enc_uncond, adaln_uncond = _route(uncond_action_tokens)
+        enc_cond, adaln_cond = _route(action_tokens)
         latents_2x = jnp.concatenate([latents, latents], axis=0)
-        tokens_2x  = jnp.concatenate([uncond_action_tokens, action_tokens], axis=0)
+        tokens_2x  = jnp.concatenate([enc_uncond, enc_cond], axis=0)
         t_2d       = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
         pos_2x     = jnp.concatenate([frame_positions, frame_positions], axis=0)
+        action_hidden_states_2x = (
+            jnp.concatenate([adaln_uncond, adaln_cond], axis=0) if adaln_cond is not None else None
+        )
         pred_2x = model.transformer(
             hidden_states=latents_2x,
             timestep=t_2d,
             encoder_hidden_states=tokens_2x,
+            action_hidden_states=action_hidden_states_2x,
             deterministic=True,
             frame_level_cond=True,
             cond_tokens_per_frame=cond_tokens_per_frame,
@@ -94,10 +108,12 @@ def _denoise_step(
         pred_cond   = pred_2x[b:]
         model_pred  = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
     else:
+        enc_tokens, action_hidden_states = _route(action_tokens)
         model_pred = model.transformer(
             hidden_states=latents,
             timestep=timestep_2d,
-            encoder_hidden_states=action_tokens,
+            encoder_hidden_states=enc_tokens,
+            action_hidden_states=action_hidden_states,
             deterministic=True,
             frame_level_cond=True,
             cond_tokens_per_frame=cond_tokens_per_frame,
@@ -149,6 +165,7 @@ def run_ar_denoising(
     logical_axis_rules,
     guidance_scale: float = 1.0,
     cond_tokens_per_frame: int = 1,
+    action_cond_mode: str = "cross_attn",
 ) -> jnp.ndarray:
     """Auto-regressive denoising: generate ar_num_chunks * ar_chunk_size future frames.
 
@@ -195,6 +212,7 @@ def run_ar_denoising(
             step_rng, dtype, mesh, logical_axis_rules,
             guidance_scale=guidance_scale,
             cond_tokens_per_frame=cond_tokens_per_frame,
+            action_cond_mode=action_cond_mode,
         )  # (B, C, ar_chunk_size, H, W)
 
         generated_chunks.append(gen_chunk)
@@ -223,6 +241,7 @@ def run_denoising(
     logical_axis_rules,
     guidance_scale: float = 1.0,
     cond_tokens_per_frame: int = 1,
+    action_cond_mode: str = "cross_attn",
 ) -> jnp.ndarray:
     """Denoise future latent frames from random noise, conditioned on history + actions.
 
@@ -261,6 +280,7 @@ def run_denoising(
             scheduler=scheduler,
             scheduler_state=sched_state,
             cond_tokens_per_frame=cond_tokens_per_frame,
+            action_cond_mode=action_cond_mode,
         ),
     )
 
@@ -362,6 +382,7 @@ def run(argv: Sequence[str]) -> None:
 
     # ── Build combined model (same architecture as training) ──────────────────
     action_tokens_per_frame = int(getattr(config, "action_tokens_per_latent_frame", 1))
+    action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
     action_encoder = NNXWanActionEncoder(
         rngs=nnx.Rngs(jax.random.key(config.seed)),
         action_dim=config.action_dim,
@@ -372,9 +393,20 @@ def run(argv: Sequence[str]) -> None:
         dtype=weights_dtype,
         weights_dtype=weights_dtype,
     )
+    action_adaln_proj = None
+    if action_cond_mode == "adaln":
+        inner_dim = config.num_attention_heads * config.attention_head_dim
+        action_adaln_proj = NNXWanActionAdaLNProjector(
+            rngs=nnx.Rngs(jax.random.key(config.seed + 1)),
+            tokens_per_frame=action_tokens_per_frame,
+            wan_text_dim=config.wan_text_dim,
+            inner_dim=inner_dim,
+            dtype=weights_dtype,
+            weights_dtype=weights_dtype,
+        )
 
     with pipeline.mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-        combined = WanCtrlWorldModel(pipeline.transformer, action_encoder)
+        combined = WanCtrlWorldModel(pipeline.transformer, action_encoder, action_adaln_proj)
         graphdef, params, rest_of_state = nnx.split(combined, nnx.Param, ...)
 
     # ── Restore checkpoint ────────────────────────────────────────────────────
@@ -476,6 +508,7 @@ def run(argv: Sequence[str]) -> None:
                 logical_axis_rules=config.logical_axis_rules,
                 guidance_scale=guidance_scale,
                 cond_tokens_per_frame=action_tokens_per_frame,
+                action_cond_mode=action_cond_mode,
             )
         else:
             # Encode actions (constant across denoising steps).
@@ -493,6 +526,7 @@ def run(argv: Sequence[str]) -> None:
                 logical_axis_rules=config.logical_axis_rules,
                 guidance_scale=guidance_scale,
                 cond_tokens_per_frame=action_tokens_per_frame,
+                action_cond_mode=action_cond_mode,
             )
 
         # Decode GT and predicted full sequences.

@@ -185,6 +185,17 @@ wan_action_encoder_hidden_dim: 1024
 # not compatible across values.
 action_tokens_per_latent_frame: 4
 
+# How action tokens reach the transformer:
+#   'cross_attn' (default) — action tokens are the sole cross-attention K/V
+#                             sequence (frame-locked via action_tokens_per_latent_frame).
+#   'adaln'                — cross-attention gets zeroed (no-op) tokens instead;
+#                             action tokens are projected per latent frame and
+#                             summed into the per-token timestep embedding that
+#                             drives AdaLN modulation.
+# NOTE: changing this is not checkpoint-compatible — 'adaln' trains an extra
+# action_adaln_proj module that 'cross_attn' checkpoints don't have.
+action_cond_mode: 'cross_attn'
+
 # Windowing in latent space. Each latent frame corresponds to 4 raw frames.
 # num_predicted_latents = number of future (predicted) latent frames;
 # total window = num_history_latent_frames + num_predicted_latents.

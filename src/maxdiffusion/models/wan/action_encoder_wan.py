@@ -135,3 +135,53 @@ class NNXWanActionEncoder(nnx.Module):
             # Tile (B, out_dim) → (B*F*K, out_dim): repeat each sample F*K times.
             x = x + jnp.repeat(text_embed, F * K, axis=0).astype(x.dtype)
         return x.reshape(B, F * K, -1)     # (B, F_lat * tokens_per_frame, out_dim)
+
+
+class NNXWanActionAdaLNProjector(nnx.Module):
+    """Projects per-latent-frame action tokens into the WAN transformer's AdaLN
+    conditioning space, as an alternative to feeding them through cross-attention.
+
+    The ``tokens_per_frame`` action tokens for a given latent frame (each
+    ``wan_text_dim`` wide, as produced by ``NNXWanActionEncoder``) are
+    concatenated and projected down to ``inner_dim`` with a single linear
+    layer, giving one AdaLN vector per latent frame. The caller repeats that
+    vector across the frame's spatial patch tokens and adds it to the WAN
+    transformer's per-token timestep embedding (see
+    ``WanModel.__call__``'s ``action_hidden_states`` argument).
+
+    Zero-initialised so a freshly-created model starts identical to the
+    no-action baseline (mirrors ``NNXWanActionEncoder.linear_3``).
+    """
+
+    def __init__(
+        self,
+        rngs: nnx.Rngs,
+        tokens_per_frame: int,
+        wan_text_dim: int,
+        inner_dim: int,
+        dtype: jnp.dtype = jnp.bfloat16,
+        weights_dtype: jnp.dtype = jnp.bfloat16,
+    ):
+        self.dtype = dtype
+        self.tokens_per_frame = tokens_per_frame
+        self.proj = nnx.Linear(
+            in_features=tokens_per_frame * wan_text_dim,
+            out_features=inner_dim,
+            rngs=rngs,
+            dtype=dtype,
+            param_dtype=weights_dtype,
+            # Zero-init (see class docstring) — with_partitioning only attaches
+            # FSDP sharding metadata, it doesn't change the init values. Without
+            # this the kernel (tokens_per_frame*wan_text_dim x inner_dim, e.g.
+            # 16384x5120 ≈ 320MB at float32) would replicate in full on every
+            # device instead of being FSDP-sharded like every other large
+            # linear in the WAN stack (see NNXPixArtAlphaTextProjection).
+            kernel_init=nnx.with_partitioning(nnx.initializers.zeros, ("embed", "mlp")),
+            bias_init=nnx.with_partitioning(nnx.initializers.zeros, ("mlp",)),
+        )
+
+    def __call__(self, action_tokens_grouped: jax.Array) -> jax.Array:
+        """``(B, F_lat, tokens_per_frame, wan_text_dim)`` → ``(B, F_lat, inner_dim)``."""
+        B, F, K, D = action_tokens_grouped.shape
+        x = action_tokens_grouped.reshape(B, F, K * D).astype(self.dtype)
+        return self.proj(x)
