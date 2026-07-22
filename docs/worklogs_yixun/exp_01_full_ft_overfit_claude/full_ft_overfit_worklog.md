@@ -299,3 +299,9 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — Codex analysis review: REQUEST-REVISION, 6 MAJOR findings (verdict overreach, memorization claim unsupported, provisional-pending-s0, §2.4 rationale, exp_02 speculation labeling, reliability caveats). ALL accepted; `_analysis.md` rewritten to v2 (provisional verdict, narrow claims, identifying-design spec for exp_02, full caveat set); resolutions appended to the review file; HTML verdict box reworded to match F1.
 - **Result** — `passed` — the record now claims exactly what the data supports, no more.
 - **Next** — Yixun: video review at leisure + merge decision. s0b lands → official row swaps in. Optional held-out cohort job (analysis §4.4c) if Lihan wants the memorization question answered.
+
+## 2026-07-22T13:40:00Z — Official s0 landed → analysis FINAL
+
+- **Goal** — Complete the predeclared comparator protocol.
+- **Result** — `passed` — s0b SUCCEEDED (att 2): official 16/16 pretrained baseline SSIM **0.1966** / latent 3.479 / pixel 0.199 — confirms the preliminary 14/16 (0.20/3.51/0.199). `_results.md` row finalized, HTML updated (all points now official), `_analysis.md` status PROVISIONAL → **FINAL** (verdict wording unchanged — the review-approved form). exp_01 evidence collection is closed.
+- **Next** — Yixun: merge decision (SOP rule 4); optional video review; optional held-out cohort job (analysis §4.4c).

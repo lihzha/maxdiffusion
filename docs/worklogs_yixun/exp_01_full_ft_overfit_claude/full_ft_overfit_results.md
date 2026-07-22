@@ -22,7 +22,7 @@
 
 | Checkpoint | latent MSE | pixel MSE | SSIM | provenance |
 |---|---|---|---|---|
-| 0 (pretrained) | — | — | — | **pending official** (job `s0b` queued; preliminary 14/16-sample aggregate cited in `_analysis.md` only) |
+| 0 (pretrained) | 3.4794 | 0.19922 | **0.1966** | official `summary.json`, 16/16 (job `s0b`, SUCCEEDED 2026-07-22 att 2; matches the 14/16 preliminary 3.51/0.199/0.20) |
 | 5000  | 0.2536 | 0.01912 | 0.7873 | official `summary.json`, 16/16 |
 | 10000 | 0.2573 | 0.01946 | 0.7851 | official, 16/16 |
 | 15000 | 0.2537 | 0.01926 | 0.7876 | official, 16/16 |

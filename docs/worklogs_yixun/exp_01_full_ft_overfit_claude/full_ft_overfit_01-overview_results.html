@@ -34,7 +34,7 @@ details summary{cursor:pointer;color:var(--ink2)}
 <h1>exp_01 <code>full_ft_overfit</code> — can the pipeline be overfit at all?</h1>
 <div class="sub">Wan2.2 TI2V 5B, backbone fully unfrozen, no adapter, no CFG · DROID train split (1,440,554 windows) · GBS 256 × 20,000 steps (≈3.55 passes) · v6e-64 · run <code>wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222</code> · commit <code>031228e</code> · every number traces to <code>full_ft_overfit_results.md</code></div>
 
-<div class="verdict"><b>Provisional verdict: the strong "pipeline cannot fit" form of (A) is disfavored; results favor (B) under the predeclared decision rule.</b> With nothing frozen, the same core loss/data code lifts train-clip reconstruction from SSIM ≈ 0.20 (pretrained, preliminary 14/16) to <b>0.79</b>, all gain in place by step 5000. Not established: causal isolation of frozen-backbone optimization (split/objective/conditioning confounds), and domain-fit vs per-clip memorization (train-only cohort). Provisional until the official step-0 job lands. (Full reasoning &amp; caveats: <code>full_ft_overfit_analysis.md</code>.)</div>
+<div class="verdict"><b>Verdict: the strong "pipeline cannot fit" form of (A) is disfavored; results favor (B) under the predeclared decision rule.</b> With nothing frozen, the same core loss/data code lifts train-clip reconstruction from SSIM <b>0.197</b> (pretrained, official 16/16) to <b>0.787</b>, all gain in place by step 5000. Not established: causal isolation of frozen-backbone optimization (split/objective/conditioning confounds), and domain-fit vs per-clip memorization (train-only cohort). Step-0 comparator now official — the predeclared protocol is complete. (Full reasoning &amp; caveats: <code>full_ft_overfit_analysis.md</code>.)</div>
 
 <h2>Training loss (windowed, log-period 10)</h2>
 <div class="chartwrap">
@@ -46,15 +46,15 @@ details summary{cursor:pointer;color:var(--ink2)}
 <h2>Cohort reconstruction — 16 predeclared train clips, identical seeds, 25-step rollout</h2>
 <table>
 <tr><th>checkpoint</th><th>latent&nbsp;MSE</th><th>pixel&nbsp;MSE</th><th>SSIM</th><th>provenance</th></tr>
-<tr><td>0 · pretrained baseline</td><td class="pending">3.51*</td><td class="pending">0.199*</td><td class="pending">0.20*</td><td class="pending">*preliminary 14/16 (official job queued)</td></tr>
+<tr><td>0 · pretrained baseline</td><td>3.4794</td><td>0.1992</td><td>0.1966</td><td>official 16/16</td></tr>
 <tr><td>5000</td><td>0.2536</td><td>0.0191</td><td>0.7873</td><td>official 16/16</td></tr>
 <tr><td>10000</td><td>0.2573</td><td>0.0195</td><td>0.7851</td><td>official 16/16</td></tr>
 <tr><td>15000</td><td>0.2537</td><td>0.0193</td><td class="best">0.7876</td><td>official 16/16</td></tr>
 <tr><td>20000</td><td class="best">0.2495</td><td class="best">0.0190</td><td>0.7875</td><td>official 16/16</td></tr>
 </table>
 <div class="chartwrap">
-<svg id="ssimchart" width="820" height="150" role="img" aria-label="SSIM by checkpoint: 0.20 preliminary at step 0, then 0.785 to 0.788 flat across steps 5000 to 20000"></svg>
-<div class="note">Filled dots: official. Hollow gray dot: preliminary pretrained baseline (14/16 samples salvaged from a preempted attempt; final value pending job <code>s0b</code> — cannot plausibly approach 0.79).</div>
+<svg id="ssimchart" width="820" height="150" role="img" aria-label="SSIM by checkpoint: 0.197 at step 0, then 0.785 to 0.788 flat across steps 5000 to 20000"></svg>
+<div class="note">All points official (16/16 samples, identical cohort &amp; seeds; only the checkpoint varies).</div>
 </div>
 
 <h2>Context (different splits/objectives — context, not thresholds)</h2>
@@ -85,7 +85,7 @@ details summary{cursor:pointer;color:var(--ink2)}
 <h2>Watch the videos</h2>
 <p class="note">Per-clip <code>ground_truth.mp4</code> / <code>sample.mp4</code> / <code>comparison_gt_top_pred_bottom.mp4</code> live on GCS (not embedded here to keep the repo light). Pull any checkpoint's set locally:</p>
 <pre>gsutil -m cp -r "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft/wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222/validation/step_020000" ~/Desktop/fullft_val_20000
-# baseline (once s0b lands): …/validation/step_000000</pre>
+# pretrained baseline: …/validation/step_000000</pre>
 
 <h2>Provenance</h2>
 <p class="note">Experiment folder: <code>docs/worklogs_yixun/exp_01_full_ft_overfit_claude/</code> — plan (v3 + Query-7 amendment), 2 plan reviews, 6 code-review files (9 closed cycles, 30 findings resolved), worklog (every action), <code>_command.md</code> (all 10 launches incl. failures), params/results/analysis. Branch <code>claude-exp_01_full_ft_overfit-20260715</code>.</p>
@@ -114,7 +114,7 @@ svg.addEventListener('mouseleave',()=>tip.style.display='none');
 })();
 (function(){
 const svg=document.getElementById('ssimchart'),W=820,H=150,m={l:52,r:16,t:14,b:30};
-const pts=[[0,.2018,false],[5000,.7873,true],[10000,.7851,true],[15000,.7876,true],[20000,.7875,true]];
+const pts=[[0,.1966,true],[5000,.7873,true],[10000,.7851,true],[15000,.7876,true],[20000,.7875,true]];
 const X=s=>m.l+(W-m.l-m.r)*s/20000, Y=v=>m.t+(H-m.t-m.b)*(1-v);
 let g='';
 [0,.5,1].forEach(v=>{g+=`<line class="axis" x1="${m.l}" y1="${Y(v)}" x2="${W-m.r}" y2="${Y(v)}"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${v}</text>`;});
@@ -122,8 +122,8 @@ let g='';
 pts.forEach(p=>{
 if(p[2])g+=`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="6" fill="${ACC}"/>`;
 else g+=`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="6" fill="none" stroke="${MUT}" stroke-width="2" stroke-dasharray="3 2"/>`;
-g+=`<text x="${X(p[0])}" y="${Y(p[1])-12}" text-anchor="middle">${p[1].toFixed(3)}${p[2]?'':'*'}</text>`;});
-g+=`<text x="${X(0)}" y="${H-24}" text-anchor="start" fill="${MUT}">*preliminary</text>`;
+g+=`<text x="${X(p[0])}" y="${Y(p[1])-12}" text-anchor="middle">${p[1].toFixed(3)}</text>`;});
+
 svg.innerHTML=g;
 })();
 </script>
