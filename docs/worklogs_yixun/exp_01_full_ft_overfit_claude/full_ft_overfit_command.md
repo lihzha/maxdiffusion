@@ -142,3 +142,5 @@ done
 - **Why:** original s0 job (`20260720-142149-03b03447`) wedged at queue level — attempt 8 ended 17:30Z, no attempt 9 for ~10 h, status stuck PROVISIONING (maintenance-storm aftermath). Deleted; identical resubmit (infra policy — no config change).
 - **Command:** identical to entry 9's template with CHECKPOINT_STEP=0, NAME=wan-full-ft-cohort-s0b-yixun.
 - **Job id:** `20260721-015850-83c5e067-wan-full-ft-cohort-s0b-yixun`
+
+- **Outcome (appended to entry 10):** SUCCEEDED (att 2; att 1 infra-preempted). Official step-0: latent 3.4794 / pixel 0.1992 / SSIM 0.1966, 16/16 — confirms preliminary.
