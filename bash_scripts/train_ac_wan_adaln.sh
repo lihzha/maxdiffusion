@@ -115,8 +115,8 @@ python src/maxdiffusion/train_wan.py \
     eval_every=1000 \
     height=480 \
     width=832 \
-    num_predicted_latents=10 \
-    num_history_latent_frames=10 \
+    num_predicted_latents=5 \
+    num_history_latent_frames=7 \
     history_noise_max_timestep=200 \
     flash_min_seq_length=128 \
     hardware='tpu' \
