@@ -1363,6 +1363,51 @@ class FlaxWanAttention(nnx.Module):
     """Return a JAX named scope if enabled, otherwise a null context."""
     return jax.named_scope(name) if self.enable_jax_named_scopes else contextlib.nullcontext()
 
+  def attn_diagnostics(self, hidden_states: jax.Array, rotary_emb: Optional[jax.Array]) -> jax.Array:
+    """Eager recompute of the self-attention Q/K to expose what flash attention
+    hides, for the attention-instability "A vs B" diagnostic. Returns float32 [3]:
+
+      [0] logit_absmax : max |Qᵢ·Kⱼ| * scale over all query/key pairs, computed on
+          the post-qk-norm + RoPE Q/K — i.e. exactly the logits the flash kernel
+          forms. Large (≳ tens) ⇒ attention-logit growth / softmax entropy
+          collapse, the curvature a logit soft-cap targets (mechanism A).
+      [1] rms_q_min, [2] rms_k_min : min over tokens of the qk-norm RMS
+          denominator sqrt(mean(x², -1) + eps). Approaching sqrt(eps) (1e-3 at
+          eps=1e-6) ⇒ a near-zero-norm token blows up the RMSNorm backward
+          (∝ 1/rms²) — a denominator singularity a logit cap would NOT fix, which
+          instead calls for a larger qk-norm eps (mechanism B).
+
+    Recomputes only the two Q/K projections (cheap vs. the attention itself). The
+    result is a metric with no gradient path, so it does not perturb training.
+    Self-attention with qk_norm only. The logit max is chunked over queries to
+    bound peak memory (never materialises the full [B, heads, S, S] matrix).
+    """
+    q_raw = self.query(hidden_states)
+    k_raw = self.key(hidden_states)
+    eps = float(getattr(self.norm_q, "epsilon", 1e-6)) if self.norm_q is not None else 1e-6
+    rms_q_min = jnp.min(jnp.sqrt(jnp.mean(q_raw.astype(jnp.float32) ** 2, axis=-1) + eps))
+    rms_k_min = jnp.min(jnp.sqrt(jnp.mean(k_raw.astype(jnp.float32) ** 2, axis=-1) + eps))
+
+    q = self.norm_q(q_raw) if self.norm_q is not None else q_raw
+    k = self.norm_k(k_raw) if self.norm_k is not None else k_raw
+    q = _unflatten_heads(q, self.heads)      # (B, heads, S, dim_head)
+    k = _unflatten_heads(k, self.heads)
+    if rotary_emb is not None:
+      q, k = self._apply_rope(q, k, rotary_emb)
+    q = q.astype(jnp.float32)
+    k = k.astype(jnp.float32)
+    scale = self.dim_head ** -0.5
+
+    seq_len = q.shape[2]
+    chunk = 512
+    logit_absmax = jnp.zeros((), jnp.float32)
+    for start in range(0, seq_len, chunk):
+      q_chunk = q[:, :, start:start + chunk]                        # (B, heads, c, dim_head)
+      logits = jnp.einsum("bhqd,bhkd->bhqk", q_chunk, k) * scale
+      logit_absmax = jnp.maximum(logit_absmax, jnp.max(jnp.abs(logits)))
+
+    return jnp.stack([logit_absmax, rms_q_min, rms_k_min]).astype(jnp.float32)
+
   def __call__(
       self,
       hidden_states: jax.Array,

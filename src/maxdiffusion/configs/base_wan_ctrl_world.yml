@@ -292,6 +292,18 @@ grad_norm_skip_threshold: 10.0
 # late-training grad spikes. Set False to disable.
 log_attn_param_stats: True
 
+# Activation-level A-vs-B attention diagnostic. Eagerly recomputes each block's
+# self-attention Q/K (flash hides them) to log, window-reduced:
+#   train/logit_absmax_l29 / _maxblk  — max |QKᵀ|·scale (post qk-norm + RoPE).
+#       Large (≳ tens) at spike windows ⇒ attention-logit growth / softmax
+#       collapse ⇒ mechanism A (logit soft-cap is the fix).
+#   train/rms_q_min_l29, train/rms_k_min_l29 — min qk-norm RMS denominator.
+#       → sqrt(eps)=1e-3 at spike windows ⇒ near-zero-norm token blows up the
+#       RMSNorm backward ⇒ mechanism B (raise qk-norm eps instead).
+# EXPENSIVE (adds a chunked QKᵀ per block every step); enable only for short
+# diagnostic runs. No gradient path, so it does not change training dynamics.
+log_attn_activation_stats: False
+
 # Whether to apply flow-matching per-sample loss weighting.
 disable_training_weights: False
 

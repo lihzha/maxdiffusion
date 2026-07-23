@@ -399,6 +399,7 @@ class WanTransformerBlock(nnx.Module):
       encoder_attention_mask: Optional[jax.Array] = None,
       frame_level_cond: bool = False,
       cond_tokens_per_frame: int = 1,
+      return_attn_diag: bool = False,
   ):
     with self.conditional_named_scope("transformer_block"):
       # Support both global [B, 6, dim] and per-token [B, seq_len, 6, dim] temb.
@@ -441,6 +442,12 @@ class WanTransformerBlock(nnx.Module):
           )
         with self.conditional_named_scope("self_attn_residual"):
           hidden_states = (hidden_states.astype(jnp.float32) + attn_output * gate_msa).astype(hidden_states.dtype)
+        # Attention A/B instability diagnostic on this block's self-attention.
+        # norm_hidden_states is still the self-attn input here (reassigned below
+        # for cross-attn), so recompute Q/K logits + qk-norm RMS from it. No
+        # gradient path → does not affect training; gated by return_attn_diag.
+        attn_diag = (self.attn1.attn_diagnostics(norm_hidden_states, rotary_emb)
+                     if return_attn_diag else None)
 
       # 2. Cross-attention
       with self.conditional_named_scope("cross_attn"):
@@ -488,6 +495,8 @@ class WanTransformerBlock(nnx.Module):
           hidden_states = (hidden_states.astype(jnp.float32) + ff_output.astype(jnp.float32) * c_gate_msa).astype(
               hidden_states.dtype
           )
+      if return_attn_diag:
+        return hidden_states, attn_diag
       return hidden_states
 
 
@@ -660,6 +669,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       cond_tokens_per_frame: int = 1,
       frame_positions: Optional[tuple] = None,
       action_hidden_states: Optional[jax.Array] = None,
+      return_attn_diag: bool = False,
   ) -> Union[jax.Array, Tuple[jax.Array, jax.Array], Dict[str, jax.Array]]:
     hidden_states = nn.with_logical_constraint(hidden_states, ("batch", None, None, None, None))
     batch_size, _, num_frames, height, width = hidden_states.shape
@@ -759,7 +769,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
         def scan_fn(carry, block_state):
           hidden_states_carry, rngs_carry = carry
           block = nnx.merge(graphdef_blocks, block_state)
-          hidden_states = block(
+          out = block(
               hidden_states_carry,
               encoder_hidden_states,
               timestep_proj,
@@ -769,19 +779,24 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
               encoder_attention_mask,
               frame_level_cond=frame_level_cond,
               cond_tokens_per_frame=cond_tokens_per_frame,
+              return_attn_diag=return_attn_diag,
           )
+          hidden_states, diag = out if return_attn_diag else (out, None)
           new_carry = (hidden_states, rngs_carry)
-          return new_carry, None
+          return new_carry, diag
 
         rematted_block_forward = self.gradient_checkpoint.apply(
             scan_fn, self.names_which_can_be_saved, self.names_which_can_be_offloaded, prevent_cse=not self.scan_layers
         )
         initial_carry = (h, rngs)
-        final_carry, _ = jax.lax.scan(rematted_block_forward, initial_carry, blocks_state)
+        # When return_attn_diag, y=diag per step → scan stacks to (num_blocks, 3);
+        # otherwise y=None (stacks to None), identical to the original behaviour.
+        final_carry, diags = jax.lax.scan(rematted_block_forward, initial_carry, blocks_state)
 
         h_out, _ = final_carry
       else:
         h_out = h
+        diag_list = []
         for block in self.blocks:
 
           def layer_forward(hidden_states):
@@ -795,6 +810,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
                 encoder_attention_mask=encoder_attention_mask,
                 frame_level_cond=frame_level_cond,
                 cond_tokens_per_frame=cond_tokens_per_frame,
+                return_attn_diag=return_attn_diag,
             )
 
           rematted_layer_forward = self.gradient_checkpoint.apply(
@@ -803,17 +819,24 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
               self.names_which_can_be_offloaded,
               prevent_cse=not self.scan_layers,
           )
-          h_out = rematted_layer_forward(h_out)
-      return h_out
+          out = rematted_layer_forward(h_out)
+          if return_attn_diag:
+            h_out, diag = out
+            diag_list.append(diag)
+          else:
+            h_out = out
+        diags = jnp.stack(diag_list, axis=0) if return_attn_diag else None
+      return h_out, diags
 
     hidden_states_before_blocks = hidden_states
 
+    attn_diags = None
     if skip_blocks:
       if cached_residual is None:
         raise ValueError("cached_residual must be provided when skip_blocks is True")
       hidden_states = hidden_states + cached_residual
     else:
-      hidden_states = _run_all_blocks(hidden_states)
+      hidden_states, attn_diags = _run_all_blocks(hidden_states)
 
     residual_x = hidden_states - hidden_states_before_blocks
 
@@ -835,6 +858,10 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
     hidden_states = jnp.transpose(hidden_states, (0, 7, 1, 4, 2, 5, 3, 6))
     hidden_states = hidden_states.reshape(batch_size, -1, num_frames, height, width)
 
+    if return_attn_diag:
+      # (num_blocks, 3) per-block [logit_absmax, rms_q_min, rms_k_min]; index -1
+      # is the final block (L29). Diagnostic-only path (compute_loss).
+      return hidden_states, attn_diags
     if return_residual:
       return hidden_states, residual_x
     return hidden_states

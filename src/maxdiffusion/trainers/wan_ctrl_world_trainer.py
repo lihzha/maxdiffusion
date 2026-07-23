@@ -359,7 +359,8 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             cond_tokens_per_frame, H_lat, W_lat,
         )
 
-        model_pred = model.transformer(
+        want_attn_diag = bool(getattr(config, "log_attn_activation_stats", False))
+        transformer_out = model.transformer(
             hidden_states=noisy_latents,
             timestep=timestep_2d,           # (B, seq_len) → per-token AdaLN
             encoder_hidden_states=enc_tokens,
@@ -369,7 +370,12 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             frame_level_cond=True,
             cond_tokens_per_frame=cond_tokens_per_frame,
             frame_positions=frame_positions,
+            return_attn_diag=want_attn_diag,
         )
+        # (num_blocks, 3) per-block [logit_absmax, rms_q_min, rms_k_min] for the
+        # attention A/B diagnostic, or None when disabled. Carried through has_aux
+        # (no gradient path), so it does not affect the trained model.
+        model_pred, attn_diags = transformer_out if want_attn_diag else (transformer_out, None)
 
         diff = target_future - model_pred[:, :, n_hist:]
         sq = diff ** 2
@@ -385,14 +391,14 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         axes = tuple(range(1, sq.ndim))
         per_sample_loss = jnp.mean(sq, axis=axes)                       # (B,)
         per_sample_outgrad = jnp.sqrt(jnp.sum(outgrad ** 2, axis=axes)) # (B,)
-        return jnp.mean(per_sample_loss), (per_sample_loss, per_sample_outgrad)
+        return jnp.mean(per_sample_loss), (per_sample_loss, per_sample_outgrad, attn_diags)
 
     if grad_accum_steps == 1:
         def loss_fn(params):
             return compute_loss(params, data, noise_rng, timestep_rng, drop_rng)
 
         grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-        (loss, (per_sample_loss, per_sample_outgrad)), grads = grad_fn(state.params)
+        (loss, (per_sample_loss, per_sample_outgrad, attn_diags)), grads = grad_fn(state.params)
         total_loss = loss
     else:
         # data leaves: [grad_accum_steps, bsz, ...]
@@ -406,7 +412,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         # that occurs inside jax.lax.scan).
         acc_grads = jax.tree_util.tree_map(jnp.zeros_like, state.params)
         total_loss = jnp.zeros((), dtype=jnp.float32)
-        ps_losses, ps_outgrads = [], []
+        ps_losses, ps_outgrads, micro_diags = [], [], []
 
         for i in range(grad_accum_steps):
             micro_data = jax.tree_util.tree_map(lambda x, _i=i: x[_i], data)
@@ -416,18 +422,22 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
                 return compute_loss(params, _d, _n, _t, _dr)
 
             grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-            (micro_loss, (micro_ps_loss, micro_ps_outgrad)), micro_grads = grad_fn(state.params)
+            (micro_loss, (micro_ps_loss, micro_ps_outgrad, micro_diag)), micro_grads = grad_fn(state.params)
             acc_grads = jax.tree_util.tree_map(
                 lambda a, g: a + g / grad_accum_steps, acc_grads, micro_grads
             )
             total_loss = total_loss + micro_loss / grad_accum_steps
             ps_losses.append(micro_ps_loss)
             ps_outgrads.append(micro_ps_outgrad)
+            if micro_diag is not None:
+                micro_diags.append(micro_diag)
 
         grads = acc_grads
         # Concatenate micro-batches to match the flattened (accum*B,) episode_ids.
         per_sample_loss = jnp.concatenate(ps_losses, axis=0)
         per_sample_outgrad = jnp.concatenate(ps_outgrads, axis=0)
+        # Attention diagnostics: mean the per-block stats across micro-batches.
+        attn_diags = jnp.mean(jnp.stack(micro_diags, axis=0), axis=0) if micro_diags else None
 
     grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
     new_state = state.apply_gradients(grads=grads)
@@ -466,6 +476,22 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
     if getattr(config, "log_attn_param_stats", True):
         attn_stats = _attn_param_layer_stats(new_state.params)
 
+    # Activation-level attention diagnostic (A vs B). attn_diags is (num_blocks, 3)
+    # = per-block [logit_absmax, rms_q_min, rms_k_min]; index -1 = final block
+    # (L29). logit_absmax large ⇒ logit growth (A); rms_*_min → sqrt(eps)=1e-3 ⇒
+    # qk-norm denominator singularity (B). Per-step values (windowed in the loop).
+    act_diag_stats = {}
+    if attn_diags is not None:
+        attn_diags = jax.lax.with_sharding_constraint(attn_diags, P())
+        act_diag_stats = {
+            "actdiag/logit_absmax_l29": attn_diags[-1, 0],
+            "actdiag/logit_absmax_maxblk": jnp.max(attn_diags[:, 0]),
+            "actdiag/rms_q_min_l29": attn_diags[-1, 1],
+            "actdiag/rms_k_min_l29": attn_diags[-1, 2],
+            "actdiag/rms_q_min_minblk": jnp.min(attn_diags[:, 1]),
+            "actdiag/rms_k_min_minblk": jnp.min(attn_diags[:, 2]),
+        }
+
     metrics = {
         "scalar": {
             "learning/loss": total_loss,
@@ -475,6 +501,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             "learning/outgrad_max": jnp.max(outgrad_per_sample),
             "learning/update_skipped": update_skipped,
             **attn_stats,
+            **act_diag_stats,
         },
         "scalars": {
             "learning/latent_absmax_per_sample": latent_absmax_per_sample,
@@ -788,6 +815,13 @@ class WanCtrlWorldTrainer:
         recent_absmax: list[float] = []
         recent_loss_max: list[float] = []
         recent_outgrad_max: list[float] = []
+        # Attention A/B activation diagnostic: window-reduced so a transient spike
+        # step (logit max ↑ or rms min ↓) is never averaged away. Empty unless
+        # log_attn_activation_stats is on.
+        recent_logit_l29: list[float] = []
+        recent_logit_maxblk: list[float] = []
+        recent_rms_q_l29: list[float] = []
+        recent_rms_k_l29: list[float] = []
         skipped_count = 0
         skip_threshold = float(getattr(config, "grad_norm_skip_threshold", 0.0) or 0.0)
         last_step_time = datetime.datetime.now()
@@ -838,6 +872,11 @@ class WanCtrlWorldTrainer:
             recent_absmax.append(float(metrics["scalar"]["learning/latent_absmax"]))
             recent_loss_max.append(float(metrics["scalar"]["learning/loss_max"]))
             recent_outgrad_max.append(float(metrics["scalar"]["learning/outgrad_max"]))
+            if "actdiag/logit_absmax_l29" in metrics["scalar"]:
+                recent_logit_l29.append(float(metrics["scalar"]["actdiag/logit_absmax_l29"]))
+                recent_logit_maxblk.append(float(metrics["scalar"]["actdiag/logit_absmax_maxblk"]))
+                recent_rms_q_l29.append(float(metrics["scalar"]["actdiag/rms_q_min_l29"]))
+                recent_rms_k_l29.append(float(metrics["scalar"]["actdiag/rms_k_min_l29"]))
             skipped_count += int(float(metrics["scalar"]["learning/update_skipped"]))
 
             # Grad-spike attribution: on a skipped step, name the batch's
@@ -895,6 +934,23 @@ class WanCtrlWorldTrainer:
                     max_logging.log(
                         "[wan_ctrl_world] WARN: no attn/* param stats emitted — "
                         "tensor-name match in _attn_param_layer_stats may need fixing")
+                # Attention A/B diagnostic, window-reduced (max for logit-growth
+                # signals, min for the qk-norm denominator signals) so the spike
+                # step's extreme survives the window.
+                act_log = {}
+                if recent_logit_l29:
+                    act_log = {
+                        "train/logit_absmax_l29": max(recent_logit_l29),
+                        "train/logit_absmax_maxblk": max(recent_logit_maxblk),
+                        "train/rms_q_min_l29": min(recent_rms_q_l29),
+                        "train/rms_k_min_l29": min(recent_rms_k_l29),
+                    }
+                    max_logging.log(
+                        f"  attn A/B: logit_absmax L29={act_log['train/logit_absmax_l29']:.2f} "
+                        f"maxblk={act_log['train/logit_absmax_maxblk']:.2f} | "
+                        f"rms_min L29 q={act_log['train/rms_q_min_l29']:.4f} "
+                        f"k={act_log['train/rms_k_min_l29']:.4f}  "
+                        f"(logit↑⇒A; rms→1e-3⇒B)")
                 if wandb_run is not None:
                     wandb_run.log({"train/loss": avg_loss, "train/grad_norm": avg_grad,
                                    "train/grad_norm_max": max(recent_grad),
@@ -903,12 +959,16 @@ class WanCtrlWorldTrainer:
                                    "train/outgrad_max": max(recent_outgrad_max),
                                    "train/updates_skipped": skipped_count,
                                    "train/lr": lr, "train/steps_per_sec": sps,
-                                   **attn_log}, step=step + 1)
+                                   **attn_log, **act_log}, step=step + 1)
                 recent_loss.clear()
                 recent_grad.clear()
                 recent_absmax.clear()
                 recent_loss_max.clear()
                 recent_outgrad_max.clear()
+                recent_logit_l29.clear()
+                recent_logit_maxblk.clear()
+                recent_rms_q_l29.clear()
+                recent_rms_k_l29.clear()
                 skipped_count = 0
                 last_step_time = now
 

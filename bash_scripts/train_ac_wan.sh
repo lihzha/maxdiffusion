@@ -146,6 +146,7 @@ python src/maxdiffusion/train_wan.py \
     history_noise_max_timestep=200 \
     flash_min_seq_length=128 \
     hardware='tpu' \
+    log_attn_activation_stats=True \
     wandb_project='wan-ac-history-fewer-frames-no-text-downsampled-zero-init' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
