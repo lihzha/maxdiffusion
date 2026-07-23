@@ -21,8 +21,12 @@ if ! command -v gcsfuse >/dev/null; then
   export GCSFUSE_REPO="gcsfuse-${DISTRO}"
   echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-  sudo apt-get -o DPkg::Lock::Timeout=-1 update
-  sudo apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse || { echo "gcsfuse install failed on $(hostname)"; exit 1; }
+  # NEEDRESTART_MODE=l keeps needrestart in "list only" mode so the apt install
+  # does NOT bounce tpu-runtime.service (the occasional crash that a restart
+  # "fixes"). It must be passed THROUGH sudo (env is reset across sudo), not just
+  # exported. DEBIAN_FRONTEND avoids the debconf dialog prompts.
+  sudo NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=-1 update
+  sudo NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse || { echo "gcsfuse install failed on $(hostname)"; exit 1; }
 fi
 
 mkdir -p "$GCS_MOUNT" /dev/shm/gcsfuse-cache
