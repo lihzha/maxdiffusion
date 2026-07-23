@@ -244,6 +244,54 @@ def _apply_history_noise(
     return noised, t_hist
 
 
+# ── Attention-sharpness diagnostics ────────────────────────────────────────────
+
+
+def _attn_param_layer_stats(params) -> dict:
+    """Per-layer stats of the self-attention (attn1) tensors that drive attention
+    logit growth — the hypothesised late-training instability at the final block.
+
+    ``scan_layers`` builds the blocks with ``nnx.vmap`` over num_layers, so each
+    matched leaf is stacked as ``(num_layers, ...)`` with layer index -1 = the
+    last block (L29 for the 30-block WAN 2.2 TI2V-5B). We track the qk-norm
+    scales (``norm_q``/``norm_k``, whose growth directly inflates the logits and
+    which the freeze fix targets) via per-layer absmax, and the Q/K projection
+    kernels via per-layer Frobenius norm.
+
+    Flash attention never materialises QK^T, so the logits/entropy themselves
+    aren't observable without breaking the kernel; these parameter magnitudes are
+    the cheap, kernel-agnostic proxy for the same thing. Returns {} (metrics then
+    simply absent — never crashes training) if the names don't match.
+    """
+    def elem(p):
+        for attr in ("key", "name", "idx"):
+            v = getattr(p, attr, None)
+            if v is not None:
+                return str(v)
+        return str(p)
+
+    targets = {
+        "norm_q_scale": (("attn1", "norm_q", "scale"), "absmax"),
+        "norm_k_scale": (("attn1", "norm_k", "scale"), "absmax"),
+        "q_kernel":     (("attn1", "query", "kernel"), "fro"),
+        "k_kernel":     (("attn1", "key", "kernel"), "fro"),
+    }
+    stats = {}
+    for path, leaf in jax.tree_util.tree_leaves_with_path(params):
+        key = ".".join(elem(p) for p in path)
+        for name, (needles, kind) in targets.items():
+            if name in stats or not all(n in key for n in needles) or leaf.ndim < 2:
+                continue
+            flat = leaf.reshape(leaf.shape[0], -1).astype(jnp.float32)  # (num_layers, -1)
+            per_layer = (jnp.max(jnp.abs(flat), axis=1) if kind == "absmax"
+                         else jnp.sqrt(jnp.sum(flat ** 2, axis=1)))
+            per_layer = jax.lax.with_sharding_constraint(per_layer, P())
+            stats[f"attn/{name}_last"] = per_layer[-1]                  # final block
+            stats[f"attn/{name}_max"] = jnp.max(per_layer)              # worst block
+            stats[f"attn/{name}_argmax"] = jnp.argmax(per_layer).astype(jnp.float32)
+    return stats
+
+
 # ── Training step ─────────────────────────────────────────────────────────────
 
 
@@ -324,17 +372,27 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         )
 
         diff = target_future - model_pred[:, :, n_hist:]
-        loss = diff ** 2
+        sq = diff ** 2
+        # d(loss)/d(pred) = -2*diff*weight; its per-sample L2 norm is the cheap
+        # causal proxy for how much each episode drives the parameter gradient
+        # (shared Jacobian d(pred)/d(params) cancels out of the ranking), unlike
+        # latent_absmax which only measures input magnitude.
+        outgrad = 2.0 * diff
         if not config.disable_training_weights:
-            loss = loss * jnp.expand_dims(training_weight, (1, 2, 3, 4))
-        return jnp.mean(loss)
+            w = jnp.expand_dims(training_weight, (1, 2, 3, 4))
+            sq = sq * w
+            outgrad = outgrad * w
+        axes = tuple(range(1, sq.ndim))
+        per_sample_loss = jnp.mean(sq, axis=axes)                       # (B,)
+        per_sample_outgrad = jnp.sqrt(jnp.sum(outgrad ** 2, axis=axes)) # (B,)
+        return jnp.mean(per_sample_loss), (per_sample_loss, per_sample_outgrad)
 
     if grad_accum_steps == 1:
         def loss_fn(params):
             return compute_loss(params, data, noise_rng, timestep_rng, drop_rng)
 
-        grad_fn = nnx.value_and_grad(loss_fn)
-        loss, grads = grad_fn(state.params)
+        grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+        (loss, (per_sample_loss, per_sample_outgrad)), grads = grad_fn(state.params)
         total_loss = loss
     else:
         # data leaves: [grad_accum_steps, bsz, ...]
@@ -348,6 +406,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         # that occurs inside jax.lax.scan).
         acc_grads = jax.tree_util.tree_map(jnp.zeros_like, state.params)
         total_loss = jnp.zeros((), dtype=jnp.float32)
+        ps_losses, ps_outgrads = [], []
 
         for i in range(grad_accum_steps):
             micro_data = jax.tree_util.tree_map(lambda x, _i=i: x[_i], data)
@@ -356,14 +415,19 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             def loss_fn(params, _d=micro_data, _n=n_i, _t=t_i, _dr=d_i):
                 return compute_loss(params, _d, _n, _t, _dr)
 
-            grad_fn = nnx.value_and_grad(loss_fn)
-            micro_loss, micro_grads = grad_fn(state.params)
+            grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+            (micro_loss, (micro_ps_loss, micro_ps_outgrad)), micro_grads = grad_fn(state.params)
             acc_grads = jax.tree_util.tree_map(
                 lambda a, g: a + g / grad_accum_steps, acc_grads, micro_grads
             )
             total_loss = total_loss + micro_loss / grad_accum_steps
+            ps_losses.append(micro_ps_loss)
+            ps_outgrads.append(micro_ps_outgrad)
 
         grads = acc_grads
+        # Concatenate micro-batches to match the flattened (accum*B,) episode_ids.
+        per_sample_loss = jnp.concatenate(ps_losses, axis=0)
+        per_sample_outgrad = jnp.concatenate(ps_outgrads, axis=0)
 
     grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
     new_state = state.apply_gradients(grads=grads)
@@ -384,23 +448,38 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         )
         update_skipped = is_bad.astype(jnp.float32)
 
-    # Data diagnostics: per-sample latent |max| and episode ids, replicated so
+    # Data diagnostics: per-sample episode ids, latent |max|, loss, and
+    # output-grad norm (the causal spike-attribution signal), replicated so
     # every host can attribute a grad spike to specific batch samples. Leading
-    # dims ((accum,) B) are flattened.
+    # dims ((accum,) B) are flattened to line up with episode_ids.
     lat_abs = jnp.abs(data["latent"])
     latent_absmax_per_sample = jnp.max(lat_abs, axis=tuple(range(lat_abs.ndim - 4, lat_abs.ndim))).reshape(-1)
     latent_absmax_per_sample = jax.lax.with_sharding_constraint(latent_absmax_per_sample, P())
     episode_ids = jax.lax.with_sharding_constraint(data["episode_id"].reshape(-1), P())
+    loss_per_sample = jax.lax.with_sharding_constraint(per_sample_loss.reshape(-1), P())
+    outgrad_per_sample = jax.lax.with_sharding_constraint(per_sample_outgrad.reshape(-1), P())
+
+    # Attention-sharpness tracking (computed on the post-update weights). Reveals
+    # whether the qk-norm scales / Q-K kernels at the final block are growing —
+    # the hypothesised driver of the late-training grad spikes.
+    attn_stats = {}
+    if getattr(config, "log_attn_param_stats", True):
+        attn_stats = _attn_param_layer_stats(new_state.params)
 
     metrics = {
         "scalar": {
             "learning/loss": total_loss,
             "learning/grad_norm": grad_norm,
             "learning/latent_absmax": jnp.max(latent_absmax_per_sample),
+            "learning/loss_max": jnp.max(loss_per_sample),
+            "learning/outgrad_max": jnp.max(outgrad_per_sample),
             "learning/update_skipped": update_skipped,
+            **attn_stats,
         },
         "scalars": {
             "learning/latent_absmax_per_sample": latent_absmax_per_sample,
+            "learning/loss_per_sample": loss_per_sample,
+            "learning/outgrad_per_sample": outgrad_per_sample,
             "learning/episode_ids": episode_ids,
         },
     }
@@ -707,6 +786,8 @@ class WanCtrlWorldTrainer:
         recent_loss: list[float] = []
         recent_grad: list[float] = []
         recent_absmax: list[float] = []
+        recent_loss_max: list[float] = []
+        recent_outgrad_max: list[float] = []
         skipped_count = 0
         skip_threshold = float(getattr(config, "grad_norm_skip_threshold", 0.0) or 0.0)
         last_step_time = datetime.datetime.now()
@@ -755,21 +836,33 @@ class WanCtrlWorldTrainer:
             recent_loss.append(float(metrics["scalar"]["learning/loss"]))
             recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
             recent_absmax.append(float(metrics["scalar"]["learning/latent_absmax"]))
+            recent_loss_max.append(float(metrics["scalar"]["learning/loss_max"]))
+            recent_outgrad_max.append(float(metrics["scalar"]["learning/outgrad_max"]))
             skipped_count += int(float(metrics["scalar"]["learning/update_skipped"]))
 
             # Grad-spike attribution: on a skipped step, name the batch's
-            # episodes sorted by latent |max| so bad data can be tracked down.
+            # episodes ranked by output-grad norm (the causal proxy for each
+            # episode's gradient contribution). A single dominant episode ⇒ a
+            # data/episode cause; a flat ranking ⇒ intrinsic instability with no
+            # single culprit. loss and latent_absmax shown alongside.
             grad_val = recent_grad[-1]
             if skip_threshold > 0.0 and (not np.isfinite(grad_val) or grad_val > skip_threshold):
                 eids = np.asarray(metrics["scalars"]["learning/episode_ids"])
                 absmax = np.asarray(metrics["scalars"]["learning/latent_absmax_per_sample"])
+                ps_loss = np.asarray(metrics["scalars"]["learning/loss_per_sample"])
+                outgrad = np.asarray(metrics["scalars"]["learning/outgrad_per_sample"])
                 if jax.process_index() == 0:
-                    order = np.argsort(-absmax)
-                    offenders = ", ".join(f"ep{int(eids[i])}:{absmax[i]:.3e}" for i in order)
+                    order = np.argsort(-outgrad)
+                    share = outgrad[order[0]] / (outgrad.sum() + 1e-12)
+                    offenders = ", ".join(
+                        f"ep{int(eids[i])}:g={outgrad[i]:.3e},l={ps_loss[i]:.3e},a={absmax[i]:.2f}"
+                        for i in order
+                    )
                     max_logging.log(
                         f"[wan_ctrl_world] GRAD SPIKE step {step}: raw grad_norm={grad_val:.3e} "
-                        f"(threshold {skip_threshold:g}) — update skipped. "
-                        f"Batch episode_id:latent_absmax (desc): {offenders}"
+                        f"(threshold {skip_threshold:g}) — update skipped. top episode "
+                        f"ep{int(eids[order[0]])} holds {share:.0%} of batch output-grad. "
+                        f"episode_id:outgrad(g)/loss(l)/latent_absmax(a) desc-by-g: {offenders}"
                     )
 
             if jax.process_index() == 0 and (step < 5 or (step + 1) % config.log_period == 0):
@@ -785,15 +878,37 @@ class WanCtrlWorldTrainer:
                     f"loss={avg_loss:.4f} grad_norm={avg_grad:.3f} "
                     f"lr={lr:.2e} steps/s={sps:.2f} s/step={1/sps:.2f}"
                 )
+                # Attention-sharpness params vary slowly, so log the current
+                # step's value (not a window reduction). "_last" = final block,
+                # "_max"/"_argmax" = worst block + its index.
+                attn_log = {f"train/{k.split('/', 1)[1]}": float(v)
+                            for k, v in metrics["scalar"].items() if k.startswith("attn/")}
+                if attn_log:
+                    ql, qm, qa = (attn_log.get("train/norm_q_scale_last"),
+                                  attn_log.get("train/norm_q_scale_max"),
+                                  attn_log.get("train/norm_q_scale_argmax"))
+                    if ql is not None:
+                        max_logging.log(
+                            f"  attn qk-norm scale absmax: L-last={ql:.3f} "
+                            f"max={qm:.3f}@L{int(qa)}")
+                elif step < config.log_period * 2:
+                    max_logging.log(
+                        "[wan_ctrl_world] WARN: no attn/* param stats emitted — "
+                        "tensor-name match in _attn_param_layer_stats may need fixing")
                 if wandb_run is not None:
                     wandb_run.log({"train/loss": avg_loss, "train/grad_norm": avg_grad,
                                    "train/grad_norm_max": max(recent_grad),
                                    "train/latent_absmax": max(recent_absmax),
+                                   "train/loss_max": max(recent_loss_max),
+                                   "train/outgrad_max": max(recent_outgrad_max),
                                    "train/updates_skipped": skipped_count,
-                                   "train/lr": lr, "train/steps_per_sec": sps}, step=step + 1)
+                                   "train/lr": lr, "train/steps_per_sec": sps,
+                                   **attn_log}, step=step + 1)
                 recent_loss.clear()
                 recent_grad.clear()
                 recent_absmax.clear()
+                recent_loss_max.clear()
+                recent_outgrad_max.clear()
                 skipped_count = 0
                 last_step_time = now
 

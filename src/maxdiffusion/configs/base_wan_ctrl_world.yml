@@ -286,6 +286,12 @@ max_grad_norm: 1.0
 # |max| for attribution.
 grad_norm_skip_threshold: 10.0
 
+# Log per-layer self-attention (attn1) qk-norm scale absmax + Q/K kernel norms
+# each log window (train/norm_q_scale_last is the final block, _max/_argmax the
+# worst block). Cheap; tests whether attention-logit growth is driving the
+# late-training grad spikes. Set False to disable.
+log_attn_param_stats: True
+
 # Whether to apply flow-matching per-sample loss weighting.
 disable_training_weights: False
 
