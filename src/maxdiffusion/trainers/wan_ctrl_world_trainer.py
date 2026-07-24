@@ -367,7 +367,11 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             action_hidden_states=action_hidden_states,
             deterministic=False,
             rngs=nnx.Rngs(dropout=do_rng),
-            frame_level_cond=True,
+            # Per-frame cross-attn locking only applies when action tokens flow
+            # through cross-attention. In adaln mode _route_action_conditioning
+            # zeros the cross-attn tokens, so the per-frame reshape is a wasted
+            # no-op (B*F_lat batch expansion over all-zero K/V) — disable it.
+            frame_level_cond=(action_cond_mode != "adaln"),
             cond_tokens_per_frame=cond_tokens_per_frame,
             frame_positions=frame_positions,
             return_attn_diag=want_attn_diag,
@@ -1204,7 +1208,8 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
         encoder_hidden_states=enc_tokens,
         action_hidden_states=action_hidden_states,
         deterministic=True,
-        frame_level_cond=True,
+        # adaln mode zeros the cross-attn tokens → skip per-frame locking (no-op).
+        frame_level_cond=(action_cond_mode != "adaln"),
         cond_tokens_per_frame=cond_tokens_per_frame,
         frame_positions=frame_positions,
     )
@@ -1280,7 +1285,8 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
                 encoder_hidden_states=enc_tokens,
                 action_hidden_states=action_hidden_states,
                 deterministic=True,
-                frame_level_cond=True,
+                # adaln mode zeros the cross-attn tokens → skip per-frame locking.
+                frame_level_cond=(action_cond_mode != "adaln"),
                 cond_tokens_per_frame=cond_tokens_per_frame,
                 frame_positions=frame_positions,
             )

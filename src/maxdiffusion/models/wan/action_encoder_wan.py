@@ -149,8 +149,17 @@ class NNXWanActionAdaLNProjector(nnx.Module):
     transformer's per-token timestep embedding (see
     ``WanModel.__call__``'s ``action_hidden_states`` argument).
 
-    Zero-initialised so a freshly-created model starts identical to the
-    no-action baseline (mirrors ``NNXWanActionEncoder.linear_3``).
+    The init no-op (a freshly-created model identical to the no-action baseline)
+    comes from ``NNXWanActionEncoder.linear_3`` being zero-init: the action tokens
+    are exactly 0 at init, so this projection outputs 0 regardless of its own
+    weights. This kernel is therefore NORMAL-initialised, NOT zero. Zero-init here
+    too would be a bug: in AdaLN mode the cross-attention path is zeroed, so
+    ``encoder → adaln_proj`` is the only action route, and two zero-inits in series
+    deadlock — ``adaln_proj``'s kernel gets no gradient (zero input) and
+    ``linear_3`` gets no gradient (through ``adaln_proj``'s zero kernel), so only
+    this layer's bias ever moves and the action encoder stays frozen at 0 forever.
+    A non-zero kernel here keeps the init no-op (via ``linear_3=0``) while giving
+    ``linear_3`` a gradient path so the encoder can actually learn.
     """
 
     def __init__(
@@ -170,13 +179,16 @@ class NNXWanActionAdaLNProjector(nnx.Module):
             rngs=rngs,
             dtype=dtype,
             param_dtype=weights_dtype,
-            # Zero-init (see class docstring) — with_partitioning only attaches
-            # FSDP sharding metadata, it doesn't change the init values. Without
-            # this the kernel (tokens_per_frame*wan_text_dim x inner_dim, e.g.
-            # 16384x5120 ≈ 320MB at float32) would replicate in full on every
-            # device instead of being FSDP-sharded like every other large
-            # linear in the WAN stack (see NNXPixArtAlphaTextProjection).
-            kernel_init=nnx.with_partitioning(nnx.initializers.zeros, ("embed", "mlp")),
+            # Kernel is NORMAL-init, not zero (see class docstring: zero-init here
+            # deadlocks the action encoder in AdaLN mode). The init no-op comes
+            # from linear_3=0 upstream, not from this kernel. Bias stays zero.
+            # with_partitioning only attaches FSDP sharding metadata, it doesn't
+            # change the init values; it keeps this large kernel
+            # (tokens_per_frame*wan_text_dim x inner_dim, e.g. 16384x5120 ≈ 320MB
+            # at float32) FSDP-sharded rather than replicated on every device,
+            # like every other large linear in the WAN stack (see
+            # NNXPixArtAlphaTextProjection).
+            kernel_init=nnx.with_partitioning(nnx.initializers.lecun_normal(), ("embed", "mlp")),
             bias_init=nnx.with_partitioning(nnx.initializers.zeros, ("mlp",)),
         )
 
