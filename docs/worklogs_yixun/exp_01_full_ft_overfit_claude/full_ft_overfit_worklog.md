@@ -313,3 +313,9 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Command / Validation** — Grounding attempted: val `summary.json` unreadable and shard listing empty → **gcloud reauth required** (blocks rung 3 + launches only; local cycles proceed). 14,636 count taken from Query 8 pending rung-3 verification + the evaluator's own hard assertion.
 - **Result** — `in_progress` — Codex plan review (Part II scope) launching next.
 - **Next** — Plan review → resolve → cycles A/B/C → rungs 1–3 → pre-launch package to Yixun (launch reserved).
+
+## 2026-07-26T16:05:00Z — Part-II plan review: APPROVE-WITH-CHANGES → plan v2, cycles begin
+
+- **Goal** — Close the Part-II plan cycle.
+- **Result** — `passed` — 7 findings (6 MAJOR, 1 MINOR), all accepted: RNG contracts + position-indexing test, EOF-drain/full-scan/golden-aggregate, allclose-not-bitwise for the vector mean, `requested_step` kwarg (pyconfig immutability trap caught pre-code), T1 smoke gate + VAE deletion, 9-column schema + mandatory plot, gallery position-join semantics. Plan v2 in place; resolutions appended to `full_ft_overfit_codex_plan2_review.md`.
+- **Next** — Coder cycle A `val-loss-core`.
