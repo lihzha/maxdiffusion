@@ -319,3 +319,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Goal** — Close the Part-II plan cycle.
 - **Result** — `passed` — 7 findings (6 MAJOR, 1 MINOR), all accepted: RNG contracts + position-indexing test, EOF-drain/full-scan/golden-aggregate, allclose-not-bitwise for the vector mean, `requested_step` kwarg (pyconfig immutability trap caught pre-code), T1 smoke gate + VAE deletion, 9-column schema + mandatory plot, gallery position-join semantics. Plan v2 in place; resolutions appended to `full_ft_overfit_codex_plan2_review.md`.
 - **Next** — Coder cycle A `val-loss-core`.
+
+## 2026-07-26T17:20:00Z — Cycle A (val-loss-core) CLOSED
+
+- **Goal** — Part-II cycle 1 of 3: per-example loss helper + deterministic RNG + batching/aggregation pure functions.
+- **Change** — `masked_velocity_mse_per_example` (+32, additive; scalar training helper hash-verified untouched); `eval_wan_full_ft_val_loss.py` pure part (`per_example_rng`/`plan_batches`/`aggregate`, float64 host reductions, ddof=1); 20 tests. Review APPROVE-WITH-CHANGES (adjudications 5/5 ACCEPTED — incl. the bitwise→1-ULP-closeness deviation, empirically forced by CPU XLA and consistent with the reviewer's own plan-F3 wording); 1 MINOR fixed test-side (generic num_steps bounds+support coverage). 6 mutants killed total.
+- **Result** — `passed` — 120/120 green.
+- **Next** — Cycle B `val-loss-evaluator` (Coder launching); rung-3 scan re-downloading cleanly (gsutil pileup from colliding parallel downloads killed — infra note: two concurrent gsutil -m runs on one destination thrash .gstmp slices; sequential re-fetch in flight).
