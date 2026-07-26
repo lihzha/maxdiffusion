@@ -326,3 +326,11 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — `masked_velocity_mse_per_example` (+32, additive; scalar training helper hash-verified untouched); `eval_wan_full_ft_val_loss.py` pure part (`per_example_rng`/`plan_batches`/`aggregate`, float64 host reductions, ddof=1); 20 tests. Review APPROVE-WITH-CHANGES (adjudications 5/5 ACCEPTED — incl. the bitwise→1-ULP-closeness deviation, empirically forced by CPU XLA and consistent with the reviewer's own plan-F3 wording); 1 MINOR fixed test-side (generic num_steps bounds+support coverage). 6 mutants killed total.
 - **Result** — `passed` — 120/120 green.
 - **Next** — Cycle B `val-loss-evaluator` (Coder launching); rung-3 scan re-downloading cleanly (gsutil pileup from colliding parallel downloads killed — infra note: two concurrent gsutil -m runs on one destination thrash .gstmp slices; sequential re-fetch in flight).
+
+## 2026-07-26T18:35:00Z — Rung 3 (full val-split scan): PASS
+
+- **Goal** — F2-upgraded dataset verification before any launch.
+- **Command / Validation** — All 8 shards (3.16 GiB) downloaded (sequential, post gsutil-collision cleanup) and every record parsed locally: per-record byte schema (z_i0 23040 / z_video 207360 / actions 896) asserted on all 14,636 records.
+- **Result** — `passed` — TOTAL=14,636 exactly; stored ordinals 0..14,635 globally contiguous (⇒ stored ordinal ≡ dataset position on this split — evaluator still keys RNG by position per contract, the two coincide); 0 duplicate names; T2 positions 0/2927/5854/8781/11708/14635 all valid (last = final record).
+- **Analysis** — Dataset integrity fully established; the evaluator's runtime EOF-drain + n==14,636 assertion remains as the launch-time guard.
+- **Next** — Cycle B in progress; local scan artifacts deleted (3.2 GB freed).
