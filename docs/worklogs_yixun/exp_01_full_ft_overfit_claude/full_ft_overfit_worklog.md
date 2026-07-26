@@ -305,3 +305,11 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Goal** — Complete the predeclared comparator protocol.
 - **Result** — `passed` — s0b SUCCEEDED (att 2): official 16/16 pretrained baseline SSIM **0.1966** / latent 3.479 / pixel 0.199 — confirms the preliminary 14/16 (0.20/3.51/0.199). `_results.md` row finalized, HTML updated (all points now official), `_analysis.md` status PROVISIONAL → **FINAL** (verdict wording unchanged — the review-approved form). exp_01 evidence collection is closed.
 - **Next** — Yixun: merge decision (SOP rule 4); optional video review; optional held-out cohort job (analysis §4.4c).
+
+## 2026-07-26T15:10:00Z — Query 8 recorded; Part-II plan drafted (val-set evaluation)
+
+- **Goal** — Continue exp_01: full val loss per checkpoint (T1) + step-20k val visualization/gallery (T2), offline-only.
+- **Change** — Query 8 appended (verbatim + 3 interpretation notes: position-as-ordinal, plan-review-still-runs, merge-still-open); `plan_full_ft_overfit.md` gains Part II (D1–D7 design, per-file code plan, 3 Coder cycles, launch gate).
+- **Command / Validation** — Grounding attempted: val `summary.json` unreadable and shard listing empty → **gcloud reauth required** (blocks rung 3 + launches only; local cycles proceed). 14,636 count taken from Query 8 pending rung-3 verification + the evaluator's own hard assertion.
+- **Result** — `in_progress` — Codex plan review (Part II scope) launching next.
+- **Next** — Plan review → resolve → cycles A/B/C → rungs 1–3 → pre-launch package to Yixun (launch reserved).

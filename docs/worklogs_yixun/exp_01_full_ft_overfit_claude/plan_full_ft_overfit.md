@@ -136,3 +136,50 @@ Worker reports the exp-branch SHA; 64 devices; GBS 512; startup log shows: `trai
 1. **Comparator:** the primary comparator is the **pretrained backbone at step 0 on the identical train cohort + seeds** (within-cohort memorization delta). Fresh side-adapter r20 (val SSIM ≈0.664 @ 2k) and pre-context (≈0.30) are reported as context, never as thresholds.
 2. **Step budget:** 10k is not a hard limit — it is the positive-signal milestone; negative evidence follows the §2.4 escalation (30k + controls) before any conclusion.
 3. **fp32-control storage:** accepted — ≈70 GB checkpoints on `gs://v6_east1d` for the control run are within budget.
+
+---
+
+# Part II — Validation-set evaluation (Query 8) — plan v1
+
+Planner: Claude Fable 5 (max effort). Status: draft for Codex review. Scope: offline evaluation only — zero changes to training behavior, trainers' train paths, or checkpoints. Base: exp branch @ `3ff55ab`.
+
+## II.1 Objective
+
+(T1) Per-checkpoint full-validation one-step loss: the exact training objective (velocity MSE, frame-0 masked) over ALL 14,636 val windows for checkpoints 2500…20000, with per-example (t, ε) held fixed across checkpoints so the curve is purely a model effect. (T2) Qualitative val-set rollout at step 20000 on six fixed positions + an HTML gallery. Together these add the held-out instrument the Part-I analysis explicitly lacked (its F2/F6 caveats).
+
+## II.2 Design decisions (the reviewable core)
+
+**D1 — Deterministic per-example RNG (T1).** For val dataset position `p` (0-based, the round-4 coordinate; stored `ordinal` field NOT used as the index): `k = fold_in(key(validation_seed), p)`; `(k_t, k_eps) = split(k)`; `t_idx = randint(k_t, [], 0, side_adapter_sampling_steps)` over the SAME 25-point `build_rollout_sigmas(25, flow_shift=5.0, …)` grid as training's uniform sampling; `ε = normal(k_eps, z_video.shape, float32)`. Properties: independent of checkpoint, batch composition, batch order, host count — identical draws for every checkpoint by construction. ε is recomputed per batch per checkpoint (fold_in is cheap; caching 14,636 ε tensors ≈ 6 GB is pointless).
+
+**D2 — Exactly-once coverage + padding exclusion (T1).** Reader = the tested `_iter_parsed_records` seam (file-ordered, no shuffle/repeat) consuming the val shards once; each record tagged with its position. Batches of B=32 (per-device 4 × 8 chips) assembled in position order; the final partial batch (14,636 = 457×32 + 12) is padded by repeating the last record with a **validity mask**; per-example losses come back to host and aggregation counts ONLY valid entries. Hard assertions: (a) positions seen are exactly 0…N−1 with no gaps/dupes; (b) N == `validation_expected_count` (CLI-set to 14636; evaluator refuses to run with the key unset). Dataset-level duplicate risk is covered by (a) only if the shards themselves are duplicate-free — verified once at rung 3 against the val split's own metadata/stored-ordinal contiguity, recorded in the worklog.
+
+**D3 — Objective parity (T1).** Loss math via the SAME shared code as training: `build_noisy_pinned_latents` (pin) → one plain transformer call (null context broadcast, activations dtype; NO actions/adapter/CFG) → target `ε − z_video` → frame-0-masked MSE. New pure helper `masked_velocity_mse_per_example(v_pred, v_target) -> [B]` (needed for stderr), **characterized against `masked_velocity_mse`**: mean of the vector == the scalar helper's value with `batch_size=B`, bitwise, on random and frame-0-perturbed inputs. stderr = sample std of the 14,636 per-example losses / √N.
+
+**D4 — Checkpoint loop in ONE job (T1).** Sequential over the 8 steps inside a single v6e-8 process: build state once (reusing the tested `_build_full_ft_validation_state` + `_restore_checkpoint_state(cohort_mode=True)` from the generate script), restore each checkpoint into the same sharded buffers, stream the 8 passes from a host-RAM record cache (~3.4 GB, loaded once). Sequential-vs-parallel: 8 parallel jobs would pay 8× (queue slot + setup + model load ≈ 30 min) to save ~40 min of eval — strictly worse under the queue contention we've measured; sequential also guarantees identical data/RNG trivially.
+
+**D5 — Outputs (T1).** `{output_dir}/{run_name}/validation_loss/`: `val_loss.json` (rows: step, mean_loss, stderr, n, seed, dataset path, commit, eval code SHA, timestamp), `val_loss.csv` (same rows), `val_loss_plot.png` (single-series checkpoint-vs-loss). Plot written by a pure function; runs on the worker if matplotlib imports, and the module exposes a `plot-only` CPU mode regenerating the PNG from the JSON locally (guaranteed path if the worker lacks matplotlib — the JSON/CSV are the record either way).
+
+**D6 — T2 reuses Part-I machinery unchanged.** `validate_wan_full_ft.sh` with `EVAL_DATA_DIR=<val split>`, `VALIDATION_ORDINALS="0,2927,5854,8781,11708,14635"`, `CHECKPOINT_STEP=20000`, `NUM_EVAL_VIDEOS=6`, `VALIDATION_SEED=0`, and `VALIDATION_OUTPUT_DIR={output_dir}/{run_name}/validation_valset` (separate root — prevents any collision with the Part-I train-cohort outputs at `validation/step_020000`). Zero evaluator-code changes for T2.
+
+**D7 — Gallery (T2).** New CPU-only `src/maxdiffusion/make_wan_val_gallery.py`: input = a locally pulled `step_020000` directory; reads each sample's `metrics.json` + the three MP4s; emits `gallery.html` (self-contained styling, relative video paths, per-sample ordinal + latent/pixel/SSIM, run/checkpoint/commit header, and the REQUIRED provenance statement: ground truth is the VAE decode of cached `z_video`, not the original DROID RGB). Actionable errors on missing samples/files; sample order = the config.json `validation_ordinals` order.
+
+## II.3 Planned code, per file
+
+- **`src/maxdiffusion/models/wan/side_adapter_wan.py`** (+~15): `masked_velocity_mse_per_example` beside the existing helpers (same mask/normalization source), shape-mismatch raise matching the scalar helper.
+- **`src/maxdiffusion/eval_wan_full_ft_val_loss.py`** (NEW, ~220): pure functions `per_example_rng(seed, position, num_steps, shape)` (D1), `plan_batches(n, batch)` (positions + validity), `aggregate(losses, validity, expected)` (mean/stderr/count + assertions), `write_outputs(...)` (JSON/CSV/plot fn); jitted eval step (stub-testable); main = config → state build → per-checkpoint restore loop → outputs. `FULL_FT_TI2V`-only guard; asserts guide 1.0 + fresh noise keys as the trainer does.
+- **`src/maxdiffusion/configs/base_wan_5b_full_ft.yml`** (+3 keys): `validation_checkpoint_steps: ''`, `validation_expected_count: 0`, `validation_loss_output_dir: ''` (all CLI-overridable; evaluator requires the first two non-empty/positive).
+- **`bash_scripts/eval_wan_full_ft_val_loss.sh`** (NEW, from the validate wrapper template): env knobs RUN_NAME (required), CHECKPOINT_STEPS, EXPECTED_COUNT, EVAL_DATA_DIR (default val split), VALIDATION_SEED, PER_DEVICE_BATCH_SIZE (default 4).
+- **`src/maxdiffusion/make_wan_val_gallery.py`** (NEW, ~120): D7.
+- **Tests** (`src/maxdiffusion/tests/worklogs_yixun/`): `test_full_ft_overfit_val_loss_core.py` (per-example helper characterization incl. bitwise mean-equality + mismatch raise; RNG determinism/independence: same (seed,p) → identical (t,ε) regardless of call order/batch; distinct p → distinct draws; t within [0,25)); `test_full_ft_overfit_val_loss_evaluator.py` (stub-transformer end-to-end on a fake 37-record/„expected 37" dataset via the `_iter_parsed_records` monkeypatch seam: exactly-once coverage, padded-tail exclusion (n stays 37 with B=8), count-mismatch hard failure, cross-"checkpoint" (t,ε) identity via two stub restores, JSON/CSV/plot writer contents incl. commit field); `test_full_ft_overfit_val_gallery.py` (fake step dir → 6 entries, ordinals, metrics, provenance sentence present; missing metrics → actionable error).
+
+## II.4 Coder rounds (closed cycles)
+
+A `val-loss-core` — per-example helper + RNG/batching/aggregation pure functions + core tests. B `val-loss-evaluator` — evaluator script + yml keys + wrapper + integration tests. C `val-gallery` — gallery generator + tests. Each: write (test-first) → briefed Codex review (`…_codex_code_<marker>_review.md`) → strengthen → commit.
+
+## II.5 Validation ladder + launch gate
+
+Rung 1: suite + py_compile + yaml + bash -n. Rung 2: covered by the stub-transformer integration test. Rung 3: val-split readback — parse first/last shard records, verify schema + position/stored-ordinal contiguity + TOTAL COUNT == 14,636 (needs gcloud reauth). Rungs 5–7 (the two v6e-8 jobs) are what the pre-launch package covers; **no launch without Yixun's approval** (announcement 02; Query 8 explicitly reserves it).
+
+## II.6 Acceptance criteria (draft — finalized in the package)
+
+T1 job: COMMIT match; 8/8 checkpoints restored at their exact steps (log line each); `n == 14636` assertion passes per checkpoint; JSON/CSV/PNG present under `validation_loss/`; monotonicity NOT assumed — whatever the curve is, it's the result. T2 job: COMMIT match; step-20000 restore; 6/6 samples at the exact positions in listed order; videos + metrics per sample; summary.json n=6. Gallery: opens from disk, 6 entries, provenance statement, no broken video refs.
