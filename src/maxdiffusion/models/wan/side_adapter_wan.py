@@ -580,6 +580,38 @@ def masked_velocity_mse(v_pred: jax.Array, v_target: jax.Array, batch_size: int)
     return jnp.sum(diff**2) / n_valid
 
 
+def masked_velocity_mse_per_example(v_pred: jax.Array, v_target: jax.Array) -> jax.Array:
+    """Per-example frame-0-masked velocity MSE -- a ``[B]`` float32 vector.
+
+    The per-example twin of :func:`masked_velocity_mse`, added for OFFLINE
+    validation-loss evaluation: reporting a mean loss AND its sample standard error
+    over the held-out set needs the individual per-example losses, not just the
+    batch scalar. The scalar helper remains THE training objective and is untouched;
+    this vector form is never used to compute a training gradient.
+
+    Same mask source and normalization as the scalar helper, applied per row: the
+    mask is built from ``v_target`` (shape ``[1, C, F, H, W]``, frame 0 zeroed) so a
+    broadcastable-but-malformed ``v_pred`` is rejected identically; element ``i`` is
+    the float32 masked mean squared velocity error of example ``i``, normalized by
+    the per-example unmasked count ``sum(mask) == C * (F - 1) * H * W``. Element ``i``
+    equals ``masked_velocity_mse(v_pred[i : i + 1], v_target[i : i + 1], 1)`` up to
+    float reduction-order rounding (~1 ULP: XLA compiles the scalar helper's
+    standalone rank-5 reduction differently from this batched reduction), and the
+    vector mean equals the batch scalar ``masked_velocity_mse(v_pred, v_target, B)``
+    to the same tolerance. ``v_pred``/``v_target`` are ``[B, C, F, H, W]`` with
+    identical shapes; returns a float32 vector of shape ``[B]``.
+    """
+    if v_pred.shape != v_target.shape:
+        raise ValueError(
+            f"masked_velocity_mse_per_example: v_pred shape {v_pred.shape} != v_target shape {v_target.shape}"
+        )
+    mask = jnp.ones((1, *v_target.shape[1:]), dtype=jnp.float32)
+    mask = mask.at[:, :, :1, :, :].set(0.0)
+    diff = (v_pred.astype(jnp.float32) - v_target.astype(jnp.float32)) * mask
+    n_valid = jnp.maximum(jnp.sum(mask), 1.0)
+    return jnp.sum(diff**2, axis=(1, 2, 3, 4)) / n_valid
+
+
 def _patchify_and_time_embed(
     transformer,
     hidden_states: jax.Array,
