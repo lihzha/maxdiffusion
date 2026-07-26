@@ -559,6 +559,9 @@ class WanCtrlWorldTrainer:
             # Eval windows are anchored at the episode start (history = frame 0
             # repeated), matching a deployment-style cold-start rollout.
             first_window_only=not is_training,
+            # Eval repeats too — see the `repeat` docstring: a draining val
+            # iterator desynchronises the hosts on the collective eval step.
+            repeat=True,
         )
         return MultiHostDataLoadIterator(ds.dataset, mesh)
 

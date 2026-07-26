@@ -99,6 +99,14 @@ class WanCtrlWorldDroidDataset:
         shuffle:            Whether to shuffle.
         shuffle_buffer:     Trajectory-level shuffle buffer size.
         shard_for_training: Shard files across JAX processes.
+        repeat:             Repeat the dataset indefinitely. Defaults to
+                            ``split == "train"``. Training needs it; in-training
+                            eval also passes ``True`` so every host yields the
+                            same number of batches forever (a finite, per-host
+                            sharded val set drains mid-run and hosts then
+                            exhaust on different steps, diverging on the
+                            collective eval step). Leave ``False`` for offline
+                            consumers that iterate val to completion.
     """
 
     def __init__(
@@ -116,6 +124,7 @@ class WanCtrlWorldDroidDataset:
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
         first_window_only: bool = False,
+        repeat: bool | None = None,
     ):
         if max_latent_frames <= 0:
             raise ValueError("max_latent_frames must be > 0")
@@ -165,7 +174,7 @@ class WanCtrlWorldDroidDataset:
         min_traj_len = self.max_latent_frames if first_window_only else self.n_fut + 1
         ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], min_traj_len))
 
-        if self._is_train:
+        if self._is_train if repeat is None else repeat:
             ds = ds.repeat()
         if shuffle and self._is_train:
             ds = ds.shuffle(shuffle_buffer, seed=seed, reshuffle_each_iteration=True)
