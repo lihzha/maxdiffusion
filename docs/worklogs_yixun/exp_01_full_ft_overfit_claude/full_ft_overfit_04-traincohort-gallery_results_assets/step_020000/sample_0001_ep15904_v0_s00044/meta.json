@@ -1,0 +1,34 @@
+{
+  "action_score": 0.11112640240625052,
+  "action_shape": [
+    32,
+    7
+  ],
+  "candidate_stride": 4,
+  "episode_id": 15904,
+  "frames": 33,
+  "max_area": 61440,
+  "oh": 192,
+  "ow": 320,
+  "rank_in_episode": 1,
+  "save_dtype": "float16",
+  "source": "droid_ctrl_world",
+  "split": "train",
+  "start_frame": 44,
+  "usable_length": 119,
+  "video_length": 119,
+  "video_path": "/scratch/gpfs/AM43/yy4041/data/droid_ctrl_world/videos/train/15904/0.mp4",
+  "view": 0,
+  "z_I0_shape": [
+    48,
+    1,
+    12,
+    20
+  ],
+  "z_video_shape": [
+    48,
+    9,
+    12,
+    20
+  ]
+}

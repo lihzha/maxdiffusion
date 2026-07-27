@@ -1,0 +1,8 @@
+{
+  "checkpoint_step": 20000,
+  "mean_latent_mse": 0.24954784056171775,
+  "mean_pixel_mse": 0.018961072579259053,
+  "mean_ssim": 0.7875142816002623,
+  "num_samples": 16,
+  "summary_csv": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft/wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222/validation/step_020000/summary.csv"
+}
