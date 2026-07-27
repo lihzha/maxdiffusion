@@ -2,12 +2,12 @@
 
 Cross-experiment status index — one section per experiment/run, newest first. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`. Per-experiment detail lives in `exp_<NN>_<name>_claude/` folders per `experiment_SOP.md`; this file is the at-a-glance map.
 
-Last updated: 2026-07-21
+Last updated: 2026-07-27
 
 ## exp_01 `full_ft_overfit` — full-FT overfit diagnostic
 
 - **What:** Plain Wan TI2V **full finetune** (backbone unfrozen, **no adapter**) overfit sanity check on DROID. Diagnostic to separate **(A)** "data/loss/pipeline broken" from **(B)** "frozen-backbone + adapter optimization too hard". Explicitly **NOT** the long-term method.
-- **Status:** COMPLETE (provisional, 2026-07-21) — primary run done (20k steps @ GBS 256, 4h40m, zero preemptions); cohort: pretrained SSIM ≈0.20 (prelim 14/16, official s0b queued) → **0.787 flat across ckpts 5000–20000**. Verdict (analysis v2, Codex-reviewed): strong-form (A) disfavored; favors (B) under the predeclared rule; causal isolation + memorization question open (held-out cohort proposed). Awaiting: official s0, video review, **merge decision**.
+- **Status:** PARTS I+II COMPLETE (2026-07-27) — Part I: train-cohort SSIM 0.197→0.787 (official). Part II (held-out): val loss monotone 0.18447→0.17885 across ckpts 2500–20000 (n=14,636/pt, deterministic per-position (t,ε)); val-clip rollout SSIM 0.7269 vs train 0.7875 — domain transfer established, memorization share unquantified. Analyses Codex-reviewed (Part I: 6 findings; Part II: 6 findings — all applied). Reports 01/02/03 (03 = val gallery with in-repo videos). **Awaiting Yixun: merge decision.**
 - **Branch / worktree:** `claude-exp_01_full_ft_overfit-20260715` off `yixun-dev` @ `8258965`; worktree `/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_01_full_ft_overfit`. Exp-docs auto-sync to `yixun-dev` via `.githooks/post-commit`.
 - **Docs:** `docs/worklogs_yixun/exp_01_full_ft_overfit_claude/` — `_yixun_query.md`, `_worklog.md`.
 - **Decision rule:** overfits fast → pipeline OK, continue adapter work; can't overfit after substantial steps → debug data / loss / noise / CFG / latent alignment first.
