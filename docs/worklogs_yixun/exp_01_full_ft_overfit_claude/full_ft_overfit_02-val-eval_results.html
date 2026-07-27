@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exp_01 full_ft_overfit — validation-set evaluation</title>
+<style>
+:root{--bg:#fcfcfb;--ink:#1c1c1b;--ink2:#5f5f5c;--muted:#8a8a86;--line:#e4e4e0;--card:#ffffff;--accent:#2a78d6;--good:#1a7f37;--warn:#9a6700}
+@media (prefers-color-scheme: dark){:root{--bg:#1a1a19;--ink:#ececea;--ink2:#b0b0ac;--muted:#7c7c78;--line:#33332f;--card:#222220;--accent:#5e9fe8;--good:#4ac26b;--warn:#d4a72c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:32px 20px 64px}
+main{max-width:880px;margin:0 auto}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:36px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.sub{color:var(--ink2);font-size:13px;margin-bottom:24px}
+.verdict{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--good);border-radius:8px;padding:14px 18px;margin:20px 0}
+.verdict b{color:var(--good)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
+th{color:var(--ink2);font-weight:600;text-align:right;padding:6px 10px;border-bottom:1px solid var(--line)}
+td{padding:6px 10px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+.best{color:var(--good);font-weight:600}
+.chartwrap{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;overflow-x:auto;margin:14px 0}
+.note{color:var(--muted);font-size:12.5px;margin-top:6px}
+svg text{font:11px -apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--ink2)}
+svg .axis{stroke:var(--line)}
+code{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font-size:12.5px;line-height:1.5}
+</style>
+</head>
+<body>
+<main>
+<h1>exp_01 <code>full_ft_overfit</code> — Part II: validation-set evaluation</h1>
+<div class="sub">Run <code>wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222</code> · val split: all <b>14,636</b> windows (verified exact/contiguous/unique) · deterministic per-position (t, ε), seed 0, identical across checkpoints · train_commit <code>031228ee9</code> · eval_commit <code>6b6b80fee</code> · numbers trace to <code>full_ft_overfit_results.md</code> Part II</div>
+
+<div class="verdict"><b>No aggregate held-out-loss degradation at any evaluated checkpoint:</b> val loss decreases at every interval, 0.184468 → 0.178854 (−3.0%). Held-out rollout SSIM 0.7269 vs 0.7875 on train clips (same protocol/seeds) — <b>substantial domain transfer established</b>; the train-vs-val cohorts are unequal/unpaired, so the memorization share is not quantified. Full statements &amp; caveats: <code>full_ft_overfit_analysis.md</code> Part-II addendum (v2, Codex-reviewed).</div>
+
+<h2>T1 — one-step val loss vs checkpoint (n = 14,636 per point)</h2>
+<div class="chartwrap">
+<svg id="valchart" width="820" height="240" role="img" aria-label="Validation loss falls monotonically from 0.1845 at step 2500 to 0.1789 at step 20000"></svg>
+<div class="note">Error bars = ±1 stderr (ddof=1). Same (t, ε) per example at every checkpoint — the curve is a pure model effect. Canonical plot from the worker: <code>validation_loss/val_loss_plot.png</code> on GCS.</div>
+</div>
+<table>
+<tr><th>checkpoint</th><th>val loss</th><th>stderr</th><th>n</th></tr>
+<tr><td>2500</td><td>0.184468</td><td>0.000689</td><td>14636</td></tr>
+<tr><td>5000</td><td>0.182009</td><td>0.000685</td><td>14636</td></tr>
+<tr><td>7500</td><td>0.180972</td><td>0.000686</td><td>14636</td></tr>
+<tr><td>10000</td><td>0.180235</td><td>0.000682</td><td>14636</td></tr>
+<tr><td>12500</td><td>0.179753</td><td>0.000683</td><td>14636</td></tr>
+<tr><td>15000</td><td>0.179401</td><td>0.000682</td><td>14636</td></tr>
+<tr><td>17500</td><td>0.179078</td><td>0.000683</td><td>14636</td></tr>
+<tr><td>20000</td><td class="best">0.178854</td><td>0.000680</td><td>14636</td></tr>
+</table>
+<div class="note">Reference: final train windowed loss ≈ 0.1763 — a differently aggregated estimator (windowed, fresh draws), so the difference is not a calibrated train/val gap. Smoke subset row (n=128, isolated dir): 0.1829 ± 0.0061 at step 2500 — consistent.</div>
+
+<h2>T2 — step-20000 rollout on 6 fixed val positions (seed 0)</h2>
+<table>
+<tr><th>dataset position</th><th>SSIM</th><th>latent MSE</th><th>pixel MSE</th></tr>
+<tr><td>0</td><td class="best">0.8617</td><td>0.1368</td><td>0.00422</td></tr>
+<tr><td>2927</td><td>0.8421</td><td>0.2054</td><td>0.00994</td></tr>
+<tr><td>5854</td><td>0.7595</td><td>0.2519</td><td>0.02200</td></tr>
+<tr><td>8781</td><td>0.6149</td><td>0.4531</td><td>0.03182</td></tr>
+<tr><td>11708</td><td>0.5350</td><td>0.6432</td><td>0.05272</td></tr>
+<tr><td>14635</td><td>0.7482</td><td>0.3231</td><td>0.02304</td></tr>
+<tr><td><b>mean</b></td><td><b>0.7269</b></td><td><b>0.3356</b></td><td><b>0.02395</b></td></tr>
+</table>
+<table style="margin-top:10px">
+<tr><th>cohort (same protocol/seeds)</th><th>SSIM</th><th>latent MSE</th></tr>
+<tr><td>val clips @ 20000 (this page, 6 clips)</td><td>0.7269</td><td>0.3356</td></tr>
+<tr><td>train clips @ 20000 (Part I, 16 clips)</td><td>0.7875</td><td>0.2495</td></tr>
+<tr><td>train clips @ step 0 · pretrained (Part I)</td><td>0.1966</td><td>3.479</td></tr>
+</table>
+
+<h2>Watch the val-clip videos</h2>
+<pre>open docs/worklogs_yixun/exp_01_full_ft_overfit_claude/full_ft_overfit_03-valset-gallery_results.html</pre>
+<div class="note">The gallery (report 03, assets in-repo, ~1 MB) has all six clips: ground truth / prediction / GT-top-vs-pred-bottom, per-clip metrics. Ground truth there is the VAE decode of cached z_video latents, not the original DROID RGB video.</div>
+
+<h2>Provenance</h2>
+<p class="note">Jobs 11–13 in <code>full_ft_overfit_command.md</code> (smoke → full → viz, all first-attempt SUCCEEDED). Evaluator: cycles II-A/B/C, 4 review rounds, 12 findings incl. the two-host allgather BLOCKER fixed pre-launch; 213 CPU tests. Deterministic method: per-example key = fold_in(key(0), position) → (t over the 25-point training σ-grid, ε unbatched f32); padded tail (14,636 = 457×32+12) mask-excluded from mean and stderr.</p>
+</main>
+<script>
+const rows=[[2500,.184468,.000689],[5000,.182009,.000685],[7500,.180972,.000686],[10000,.180235,.000682],[12500,.179753,.000683],[15000,.179401,.000682],[17500,.179078,.000683],[20000,.178854,.000680]];
+const cs=getComputedStyle(document.documentElement);
+const ACC=cs.getPropertyValue('--accent').trim();
+(function(){
+const svg=document.getElementById('valchart'),W=820,H=240,m={l:64,r:16,t:14,b:30};
+const ymin=.1780,ymax=.1852;
+const X=s=>m.l+(W-m.l-m.r)*(s-2500)/17500, Y=v=>m.t+(H-m.t-m.b)*(1-(v-ymin)/(ymax-ymin));
+let g='';
+[.178,.180,.182,.184].forEach(v=>{g+=`<line class="axis" x1="${m.l}" y1="${Y(v)}" x2="${W-m.r}" y2="${Y(v)}"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${v.toFixed(3)}</text>`;});
+rows.forEach(r=>{g+=`<text x="${X(r[0])}" y="${H-8}" text-anchor="middle">${r[0]/1000}k</text>`;});
+g+=`<polyline fill="none" stroke="${ACC}" stroke-width="2" stroke-linejoin="round" points="${rows.map(r=>X(r[0])+','+Y(r[1])).join(' ')}"/>`;
+rows.forEach(r=>{
+g+=`<line x1="${X(r[0])}" y1="${Y(r[1]-r[2])}" x2="${X(r[0])}" y2="${Y(r[1]+r[2])}" stroke="${ACC}" stroke-width="1.5" opacity="0.6"/>`;
+g+=`<circle cx="${X(r[0])}" cy="${Y(r[1])}" r="4" fill="${ACC}"/>`;});
+g+=`<text x="${X(2500)+8}" y="${Y(.184468)-8}">0.18447</text><text x="${X(20000)-8}" y="${Y(.178854)-10}" text-anchor="end">0.17885</text>`;
+svg.innerHTML=g;
+})();
+</script>
+</body>
+</html>

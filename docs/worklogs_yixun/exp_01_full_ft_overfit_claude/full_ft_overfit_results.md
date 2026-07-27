@@ -29,3 +29,34 @@
 | 20000 | 0.2495 | 0.01896 | 0.7875 | official, 16/16 |
 
 Artifacts per checkpoint: per-sample `ground_truth.mp4` / `sample.mp4` / `comparison_gt_top_pred_bottom.mp4` / `metrics.json` + `summary.{json,csv}` under `…/validation/step_NNNNNN/`. Jobs: `_command.md` entries 9–10.
+
+## Part II — Validation-set evaluation (Query 8; jobs 11–13, all SUCCEEDED first-attempt)
+
+### T1 — One-step masked velocity MSE, ALL 14,636 val windows, deterministic per-position (t, ε) identical across checkpoints (seed 0)
+
+| checkpoint | val loss | stderr | n |
+|---|---|---|---|
+| 2500  | 0.184468 | 0.000689 | 14636 |
+| 5000  | 0.182009 | 0.000685 | 14636 |
+| 7500  | 0.180972 | 0.000686 | 14636 |
+| 10000 | 0.180235 | 0.000682 | 14636 |
+| 12500 | 0.179753 | 0.000683 | 14636 |
+| 15000 | 0.179401 | 0.000682 | 14636 |
+| 17500 | 0.179078 | 0.000683 | 14636 |
+| 20000 | 0.178854 | 0.000680 | 14636 |
+
+Monotone decrease at every interval; total 2500→20000 = −0.00561 (−3.0%, ≈8× stderr). Reference: final train windowed loss ≈ 0.1763 → train/val gap at 20000 ≈ 0.0026 (≈1.5%). Provenance in every row: train_commit `031228ee9…`, eval_commit `6b6b80fee…`, dataset `…/droid_wan_side_adapter/val`, seed 0. Artifacts: `…/{run}/validation_loss/{val_loss.json,val_loss.csv,val_loss_plot.png}` (plot written on-worker). Smoke (isolated, `validation_loss_smoke/`, n=128 subset): 0.18287±0.00608 at 2500 — consistent with the full row.
+
+### T2 — Step-20000, 25-step rollout on 6 fixed val positions (seed 0, no actions/adapter/CFG)
+
+| dataset position | SSIM | latent MSE | pixel MSE |
+|---|---|---|---|
+| 0     | 0.8617 | 0.1368 | 0.00422 |
+| 2927  | 0.8421 | 0.2054 | 0.00994 |
+| 5854  | 0.7595 | 0.2519 | 0.02200 |
+| 8781  | 0.6149 | 0.4531 | 0.03182 |
+| 11708 | 0.5350 | 0.6432 | 0.05272 |
+| 14635 | 0.7482 | 0.3231 | 0.02304 |
+| **mean (6)** | **0.7269** | **0.3356** | **0.02395** |
+
+Cross-reference (Part I, same protocol/seeds, TRAIN clips): step-20000 SSIM 0.7875 / latent 0.2495; pretrained step-0 SSIM 0.1966 / latent 3.479. Artifacts: `…/{run}/validation_valset/step_020000/` (3 MP4s + metrics per sample, summary.json n=6); local `gallery.html` built via `make_wan_val_gallery` (GT = VAE decode of cached z_video, not original DROID RGB — stated in the gallery).

@@ -369,3 +369,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Goal** — Verdict the smoke; fire the armed sequence.
 - **Result** — `passed` — job `20260727-025956-826b08f6` SUCCEEDED att 1: COMMIT/TRAIN_COMMIT stamped exactly; ckpt-2500 restore; **n=128 (4×32) across 2 hosts — process_allgather field-proven**; smoke row mean 0.1829 stderr 0.0061; outputs isolated (`validation_loss/` empty); PNG written on-worker (matplotlib present); JOB_EXIT=0.
 - **Next** — Entries 12–13: T1 full (8 ckpts) + T2 viz, parallel v6e-8 jobs, same commits.
+
+## 2026-07-27T15:30:00Z — T1-full + T2 complete (log-verified) → Part-II analysis v2 (all 6 review findings applied)
+
+- **Goal** — Close Part II's evidence + analysis.
+- **Result** — `passed` — Jobs 12–13 SUCCEEDED first-attempt with all acceptance criteria log-verified (appended to entries 12–13). Headline: val loss monotone 0.184468→0.178854 (n=14,636/pt); val-clip rollout SSIM 0.7269 (range 0.535–0.862) vs train-clip 0.7875. Analysis addendum reviewed (REQUEST-REVISION, 6 findings: no-overfitting overclaim, plateau wording, memorization-not-quantified, reference-targets-not-ceiling, stderr framing, evidence-trail gaps) — ALL applied in v2; HTML verdict aligned; adapter contextual figures now cited to Part I explicitly (finding 6a): pre-context 0.295 (results.md Part I context table), side-adapter 0.62–0.66 (docs/side_adaptor.md, val split).
+- **Change** — `_results.md` Part-II section; `_analysis.md` addendum v2; reports 02 (curve+tables) & 03 (gallery, videos in-repo ~1MB) built; resolutions to be appended to the review file at commit.
+- **Next** — Commit + push; final read-out to Yixun; merge decision (covers Parts I+II) remains the open user gate.
