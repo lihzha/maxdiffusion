@@ -1,0 +1,29 @@
+{
+  "checkpoint_dir": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft/wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222/checkpoints",
+  "checkpoint_step": 20000,
+  "eval_data_dir": "gs://v6_east1d/datasets/droid_wan_side_adapter/train",
+  "model_type": "FULL_FT_TI2V",
+  "num_eval_videos": 16,
+  "run_name": "wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222",
+  "seed": 0,
+  "side_adapter_guide_scale": 1.0,
+  "side_adapter_sampling_steps": 25,
+  "validation_ordinals": [
+    0,
+    96037,
+    192074,
+    288111,
+    384147,
+    480184,
+    576221,
+    672258,
+    768295,
+    864332,
+    960369,
+    1056406,
+    1152442,
+    1248479,
+    1344516,
+    1440553
+  ]
+}

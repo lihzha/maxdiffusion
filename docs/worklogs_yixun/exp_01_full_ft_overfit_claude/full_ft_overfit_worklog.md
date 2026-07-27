@@ -376,3 +376,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `passed` — Jobs 12–13 SUCCEEDED first-attempt with all acceptance criteria log-verified (appended to entries 12–13). Headline: val loss monotone 0.184468→0.178854 (n=14,636/pt); val-clip rollout SSIM 0.7269 (range 0.535–0.862) vs train-clip 0.7875. Analysis addendum reviewed (REQUEST-REVISION, 6 findings: no-overfitting overclaim, plateau wording, memorization-not-quantified, reference-targets-not-ceiling, stderr framing, evidence-trail gaps) — ALL applied in v2; HTML verdict aligned; adapter contextual figures now cited to Part I explicitly (finding 6a): pre-context 0.295 (results.md Part I context table), side-adapter 0.62–0.66 (docs/side_adaptor.md, val split).
 - **Change** — `_results.md` Part-II section; `_analysis.md` addendum v2; reports 02 (curve+tables) & 03 (gallery, videos in-repo ~1MB) built; resolutions to be appended to the review file at commit.
 - **Next** — Commit + push; final read-out to Yixun; merge decision (covers Parts I+II) remains the open user gate.
+
+## 2026-07-27T23:55:00Z — Cycle II-D CLOSED; residuals applied to both cohorts; report 04 added
+
+- **Goal** — Query 10 deliverable: residual |pred−GT| videos everywhere.
+- **Change** — Cycle D committed (`35f8890`; review APPROVE-W-C, 3 MINOR strengthened, 253+2 green, one session-limit interruption absorbed). Applied: 6 val residuals (report 03 regenerated — 4 videos/card + definition line); 16 train residuals written into the user's Desktop pull + local gallery.html there; Desktop step dir copied in-repo as report **04** assets (16 clips × 4 videos, ~3.4 MB) with `full_ft_overfit_04-traincohort-gallery_results.html`. Residual definition: per-pixel |pred−GT| on decoded display-space RGB, ×4 clipped, brighter = larger error.
+- **Result** — `passed` — all refs resolve; idempotent tool; source videos untouched (write-only-new-file verified by review).
+- **Next** — None open for this query. Standing: exp_01 stays unmerged (Query 10); exp_02 direction with Lihan when ready.
