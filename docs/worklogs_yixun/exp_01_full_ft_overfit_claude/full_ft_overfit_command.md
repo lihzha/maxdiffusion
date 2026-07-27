@@ -166,3 +166,33 @@ tpu create v6 -n 8 --name wan-full-ft-valloss-smoke-yixun \
   -- bash bash_scripts/eval_wan_full_ft_val_loss.sh
 ```
 - **Job id:** `20260727-025956-826b08f6-wan-full-ft-valloss-smoke-yixun`
+
+- **Outcome (appended to entry 11):** SUCCEEDED att 1 — all smoke acceptance criteria log-verified (n=128 two-host gather; isolation intact; PNG on-worker; row: mean 0.182865, stderr 0.006076).
+
+## 12. T1 FULL VAL LOSS (8 checkpoints) — 2026-07-27T03:42:05Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `6b6b80fee0deca9a460ee4d1957749d6add93b86` | TRAIN_COMMIT: `031228ee926d189a07396336e68c27b7a278f96c`
+- **Approval:** Query 9 (smoke PASS verified above).
+- **Command (exp worktree):** as entry 11 but `--name wan-full-ft-valloss-yixun`, `CHECKPOINT_STEPS="2500,5000,7500,10000,12500,15000,17500,20000"`, NO `SMOKE_LIMIT`.
+- **Job id:** `20260727-034205-cc82af09-wan-full-ft-valloss-yixun`
+
+## 13. T2 STEP-20K VAL VISUALIZATION — 2026-07-27T03:42:05Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `6b6b80fee0deca9a460ee4d1957749d6add93b86` | generation via round-4-tested generate path
+- **Approval:** Query 9 (smoke PASS; T2 reuses the Part-I field-proven rollout machinery).
+- **Command (exp worktree):**
+```bash
+tpu create v6 -n 8 --name wan-full-ft-valviz-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers" \
+  --env RUN_NAME="wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222" --env CHECKPOINT_STEP="20000" --env NUM_EVAL_VIDEOS="6" \
+  --env VALIDATION_ORDINALS="0,2927,5854,8781,11708,14635" --env VALIDATION_SEED="0" \
+  --env EVAL_DATA_DIR="gs://v6_east1d/datasets/droid_wan_side_adapter/val" \
+  --env VALIDATION_OUTPUT_DIR="gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-full-ft/wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222/validation_valset" \
+  --env COMMIT="6b6b80fee0deca9a460ee4d1957749d6add93b86" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/validate_wan_full_ft.sh
+```
+- **Job id:** `20260727-034210-b250372c-wan-full-ft-valviz-yixun`
