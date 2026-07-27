@@ -1,0 +1,17 @@
+{
+  "checkpoint_step": 20000,
+  "frames": 33,
+  "height": 192,
+  "latent_mae": 0.28632843494415283,
+  "latent_mse": 0.2518610954284668,
+  "name": "ep43399_v0_s00060",
+  "ordinal": 5854,
+  "pixel_mae": 0.0633154883980751,
+  "pixel_mse": 0.02199511229991913,
+  "sample_index": 2,
+  "ssim_avg": 0.7594980254317775,
+  "width": 320,
+  "z_init_anchor_mse": 0.0,
+  "z_pred_std": 0.878825306892395,
+  "z_target_std": 0.9107236266136169
+}

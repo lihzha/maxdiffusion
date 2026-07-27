@@ -196,3 +196,6 @@ tpu create v6 -n 8 --name wan-full-ft-valviz-yixun \
   -- bash bash_scripts/validate_wan_full_ft.sh
 ```
 - **Job id:** `20260727-034210-b250372c-wan-full-ft-valviz-yixun`
+
+- **Outcome (entry 12):** SUCCEEDED att 1 — acceptance log-verified: 8/8 restores at exact steps; n=14,636 × 8; 9-column JSON+CSV + on-worker PNG at `validation_loss/`; rows carry train_commit 031228ee9 / eval_commit 6b6b80fee. Job `20260727-034205-cc82af09`.
+- **Outcome (entry 13):** SUCCEEDED att 1 — 6/6 samples at positions 0/2927/5854/8781/11708/14635 in order (metrics sample_index 0–5), 3 MP4s + metrics each, summary num_samples=6; local gallery built (6 cards, provenance sentence, refs resolve). Job `20260727-034210-b250372c`.

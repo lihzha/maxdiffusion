@@ -40,3 +40,20 @@ Limitations, explicitly: one training seed/run; one rollout-seed protocol; a 16-
 ## 5. Experiment status
 
 Complete. Remaining: Yixun/Lihan video review (optional); merge decision (SOP isolation rule 4). Code recommendation unchanged and separable from the science: **merge** — every line went through closed review cycles, and the launcher/setup hardening benefits all future queue jobs regardless of exp_01's conclusions.
+
+---
+
+# Part II addendum — held-out evaluation (Planner: Claude Fable 5; v2 after Codex analysis review — all 6 findings applied)
+
+**What Part II adds:** the two instruments Part I explicitly lacked — a full-coverage held-out loss curve and held-out rollout reconstruction.
+
+**Findings (stated within what the instruments measure):**
+
+1. **No aggregate held-out-loss degradation detected at the eight evaluated checkpoints.** Val loss decreases from 0.184468 (step 2500) to 0.178854 (step 20000), −0.005614 (−3.0%), decreasing at every interval. The final train (≈0.1763) and val (0.178854) losses are broadly consistent, but the two are differently aggregated estimators (10-step windowed training log with fresh stochastic draws vs exact full-val mean with fixed per-position draws), so their difference is not a calibrated train/val generalization gap.
+2. **Part I's apparent train-loss plateau contains a small continued improvement under the full-val instrument.** The lower-noise full-val curve resolves a slow one-step-loss tail the train windows did not visibly show. The evaluated 16-clip train rollout means show no detectable gain after step 5000 under that single-seed protocol.
+3. **T2 establishes substantial domain transfer; it does not quantify memorization.** Held-out rollout at step 20000: SSIM 0.7269 / latent MSE 0.3356 (6 fixed val clips, seed 0) vs 0.7875 / 0.2495 on the 16 train clips (same protocol/seeds). This rules out a purely train-clip-only explanation of Part I's improvement. The two cohorts are unequal, unpaired, and possibly different in difficulty; per-clip val SSIM spans 0.535–0.862; there is no step-0 val comparator — so the 0.0606 SSIM difference cannot be attributed between generalization and train-clip memorization, and the experiment remains unable to quantify how much additional memorization occurred.
+4. **Per-clip spread is large** (val SSIM 0.535–0.862; position 11708 hardest). Future per-method comparisons should report per-clip numbers, not just means.
+
+**Implication for exp_02:** 0.1789 (val loss) and 0.7269 (val-clip SSIM) are **full-FT reference targets under this run's protocol** — its budget, optimizer, and hyperparameters — not upper bounds; a lower-dimensional or regularized method can outperform a particular full-FT optimization run. Historical adapter results remain contextual (objective/conditioning/split confounds recorded in Part I) and become direct comparators only under the proposed identifying design (conditioning, guide scale, data, dose, and evaluation held fixed).
+
+**Reliability & measurement caveats:** the −0.005614 endpoint change is stated exactly; no σ-multiple is claimed (the per-checkpoint stderr is marginal, not the stderr of paired per-example differences, and per-window losses may be correlated). T1 absolute values use one validation RNG seed; T2 uses six clips and one rollout seed. Rollout metrics compare predictions against VAE decodes of cached `z_video`, not original DROID RGB; no human qualitative video review is recorded yet. Deterministic per-position (t, ε) makes the T1 curve checkpoint-comparable by construction; n=14,636 asserted per row; both SHAs stamped in every artifact row.
