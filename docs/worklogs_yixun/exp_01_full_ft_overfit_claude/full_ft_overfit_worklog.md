@@ -363,3 +363,9 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Acceptance criteria — T2:** step-20000 restore; 6/6 samples at positions 0/2927/5854/8781/11708/14635 in order, seed 0; 3 MP4s + metrics per sample; summary num_samples=6; then local gallery build passes (6 cards, provenance sentence, no broken refs).
 - **Result** — `launched` (smoke job id in `_command.md` entry 11).
 - **Next** — Smoke log-verified PASS → launch T1-full + T2 (entries 12–13) without further ask.
+
+## 2026-07-27T03:42:05Z — T1 smoke PASS (log-verified) → T1 full + T2 launched
+
+- **Goal** — Verdict the smoke; fire the armed sequence.
+- **Result** — `passed` — job `20260727-025956-826b08f6` SUCCEEDED att 1: COMMIT/TRAIN_COMMIT stamped exactly; ckpt-2500 restore; **n=128 (4×32) across 2 hosts — process_allgather field-proven**; smoke row mean 0.1829 stderr 0.0061; outputs isolated (`validation_loss/` empty); PNG written on-worker (matplotlib present); JOB_EXIT=0.
+- **Next** — Entries 12–13: T1 full (8 ckpts) + T2 viz, parallel v6e-8 jobs, same commits.
