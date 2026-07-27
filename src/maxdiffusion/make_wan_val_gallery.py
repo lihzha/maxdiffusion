@@ -25,6 +25,7 @@ import html
 import json
 import math
 import os
+import re
 import sys
 from typing import Sequence
 
@@ -32,6 +33,18 @@ from typing import Sequence
 PROVENANCE = (
     "Ground truth shown here is the VAE decode of the cached z_video latents, " "not the original DROID RGB video."
 )
+
+# Residual videos (Part II, cycle D): produced by make_wan_residual_videos.py as
+# residual_gainN.mp4 in each sample dir. Rendered as a fourth card video with this caption,
+# plus one definition line near the provenance sentence. Both are single-source templates
+# parametric in the gain N (parsed from the filename), so nothing is hardcoded to a gain.
+RESIDUAL_CAPTION_TEMPLATE = "residual |pred − GT| ×{gain}"
+RESIDUAL_DEFINITION_TEMPLATE = (
+    "Residual videos show the per-pixel absolute difference between prediction and "
+    "ground truth, amplified ×{gain} and clipped; brighter = larger error."
+)
+# A valid residual is exactly residual_gain<int>.mp4; anything else is ignored (not a second).
+_RESIDUAL_RE = re.compile(r"^residual_gain(\d+)\.mp4$")
 
 # logical name -> the on-disk filename generate_wan_side_adapter.py writes per sample.
 VIDEO_FILES = {
@@ -154,6 +167,24 @@ def discover_samples(step_dir: str, config: dict, summary: dict) -> list[dict]:
                     f"{', '.join(VIDEO_FILES.values())})."
                 )
             r["video_paths"][logical] = path
+
+        # Optional residual video (Part II, cycle D). Absent -> unchanged behavior. At most
+        # one residual_gainN.mp4 per dir; more than one is an ambiguous stale state -> error.
+        matched = []
+        for path in sorted(glob.glob(os.path.join(r["dir"], "residual_gain*.mp4"))):
+            m = _RESIDUAL_RE.match(os.path.basename(path))
+            if m:
+                matched.append((path, int(m.group(1))))
+        if len(matched) > 1:
+            raise ValueError(
+                f"{r['dir']}: found {len(matched)} residual videos "
+                f"({', '.join(os.path.basename(p) for p, _ in matched)}); expected at most one "
+                f"residual_gainN.mp4 per sample dir. Delete the stale file(s) explicitly -- "
+                f"make_wan_residual_videos refuses mixed-gain dirs and its --overwrite only "
+                f"re-encodes the requested gain's filename, so it cannot heal this state."
+            )
+        if matched:
+            r["residual_path"], r["residual_gain"] = matched[0]
     return records
 
 
@@ -211,6 +242,13 @@ def _card(s: dict) -> str:
         f'<video controls preload="metadata" src="{_esc(videos[key])}"></video></figure>'
         for key, cap in VIDEO_CAPTIONS
     )
+    # Fourth video (only when a residual is present -> byte-identical output when absent).
+    if "residual" in videos:
+        cap = RESIDUAL_CAPTION_TEMPLATE.format(gain=s.get("residual_gain"))
+        figs += (
+            f'<figure class="vid"><figcaption>{cap}</figcaption>'
+            f'<video controls preload="metadata" src="{_esc(videos["residual"])}"></video></figure>'
+        )
     return (
         '<section class="card">'
         '<div class="ids">'
@@ -286,6 +324,15 @@ def build_gallery_html(step_meta: dict, samples: list[dict]) -> str:
 
     cards = "\n".join(_card(s) for s in samples)
 
+    # One definition line per distinct residual gain present (empty -> nothing emitted, so a
+    # no-residual gallery is byte-identical to the pre-cycle output). In practice a step dir
+    # is processed at a single gain, so this is exactly one line.
+    residual_gains = sorted({s["residual_gain"] for s in samples if s.get("residual_gain") is not None})
+    residual_defs = "".join(
+        f'<p class="provenance residual-note">{RESIDUAL_DEFINITION_TEMPLATE.format(gain=g)}</p>\n'
+        for g in residual_gains
+    )
+
     return (
         '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
         '<meta charset="utf-8">\n'
@@ -296,6 +343,7 @@ def build_gallery_html(step_meta: dict, samples: list[dict]) -> str:
         f"<h1>{title}</h1>\n"
         f'<div class="meta">{"".join(meta_bits)}</div>\n'
         f'<p class="provenance">{PROVENANCE}</p>\n'
+        f"{residual_defs}"
         f'<div class="summary">{"".join(summary_bits)}</div>\n'
         f'<div class="cards">\n{cards}\n</div>\n'
         "</main>\n</body>\n</html>\n"
@@ -322,18 +370,20 @@ def write_gallery(step_dir: str, out: str | None = None, title: str | None = Non
     samples = []
     for r in records:
         videos = {logical: os.path.relpath(os.path.abspath(p), out_dir) for logical, p in r["video_paths"].items()}
-        samples.append(
-            {
-                "sample_index": r["sample_index"],
-                "dataset_position": r["dataset_position"],
-                "stored_ordinal": r["stored_ordinal"],
-                "name": r["name"],
-                "latent_mse": r["latent_mse"],
-                "pixel_mse": r["pixel_mse"],
-                "ssim_avg": r["ssim_avg"],
-                "videos": videos,
-            }
-        )
+        sample = {
+            "sample_index": r["sample_index"],
+            "dataset_position": r["dataset_position"],
+            "stored_ordinal": r["stored_ordinal"],
+            "name": r["name"],
+            "latent_mse": r["latent_mse"],
+            "pixel_mse": r["pixel_mse"],
+            "ssim_avg": r["ssim_avg"],
+            "videos": videos,
+        }
+        if "residual_path" in r:
+            videos["residual"] = os.path.relpath(os.path.abspath(r["residual_path"]), out_dir)
+            sample["residual_gain"] = r["residual_gain"]
+        samples.append(sample)
 
     step_meta = build_step_meta(config, summary, title)
     doc = build_gallery_html(step_meta, samples)
