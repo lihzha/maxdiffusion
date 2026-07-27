@@ -341,3 +341,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Change** — Evaluator complete (EOF-drain count gate → F2 provenance guard → state build + VAE free → 8-step restore loop via new `requested_step` kwarg → per-batch device eval → **per-batch multihost gather** → aggregate → 9-column JSON/CSV + guarded plot + plot-only CLI + SMOKE_LIMIT path); yml +3 keys; wrapper with mandatory TRAIN_COMMIT. Review found a real BLOCKER on paper: v6e-8 is two-host, the sharded [B] loss needed process_allgather — fixed via seam, smoke will exercise it. 192+2 green (orchestrator-reproduced); 7 mutants across write+strengthen; one incidental bash quoting bug fixed.
 - **Result** — `passed` — follow-up verdict APPROVE, explicitly the Codex half of the T1 sign-off (Query 9).
 - **Next** — Cycle C `val-gallery` (final cycle) → dual sign-off → smoke launch.
+
+## 2026-07-26T23:30:00Z — Cycle C (val-gallery) CLOSED: APPROVE, zero findings → Codex sign-off COMPLETE
+
+- **Goal** — Final Part-II cycle: the T2 gallery generator.
+- **Change** — `make_wan_val_gallery.py` (stdlib-only, position-join per F7, exact schema verified against the real generate script, per-file errors, relative refs, verbatim VAE-decode provenance) + 21 tests, 3 mutants. Suite 213 passed + 2 skipped.
+- **Result** — `passed` — review APPROVE/no findings; **Codex half of the Query-9 launch sign-off COMPLETE** for T1 smoke → T1 full → T2.
+- **Next** — Planner verification (Fable half) → pre-launch package → smoke launch under the Query-9 grant.
