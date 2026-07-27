@@ -334,3 +334,10 @@ Append-only lab notebook (one entry per action) for the plain-Wan-TI2V full-fine
 - **Result** — `passed` — TOTAL=14,636 exactly; stored ordinals 0..14,635 globally contiguous (⇒ stored ordinal ≡ dataset position on this split — evaluator still keys RNG by position per contract, the two coincide); 0 duplicate names; T2 positions 0/2927/5854/8781/11708/14635 all valid (last = final record).
 - **Analysis** — Dataset integrity fully established; the evaluator's runtime EOF-drain + n==14,636 assertion remains as the launch-time guard.
 - **Next** — Cycle B in progress; local scan artifacts deleted (3.2 GB freed).
+
+## 2026-07-26T21:30:00Z — Cycle B (val-loss-evaluator) CLOSED with launch sign-off
+
+- **Goal** — Part-II cycle 2 of 3: the T1 evaluator end to end.
+- **Change** — Evaluator complete (EOF-drain count gate → F2 provenance guard → state build + VAE free → 8-step restore loop via new `requested_step` kwarg → per-batch device eval → **per-batch multihost gather** → aggregate → 9-column JSON/CSV + guarded plot + plot-only CLI + SMOKE_LIMIT path); yml +3 keys; wrapper with mandatory TRAIN_COMMIT. Review found a real BLOCKER on paper: v6e-8 is two-host, the sharded [B] loss needed process_allgather — fixed via seam, smoke will exercise it. 192+2 green (orchestrator-reproduced); 7 mutants across write+strengthen; one incidental bash quoting bug fixed.
+- **Result** — `passed` — follow-up verdict APPROVE, explicitly the Codex half of the T1 sign-off (Query 9).
+- **Next** — Cycle C `val-gallery` (final cycle) → dual sign-off → smoke launch.

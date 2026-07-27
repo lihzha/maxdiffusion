@@ -343,7 +343,7 @@ def _build_full_ft_validation_state(config):
     return trainer, pipeline, mesh, state, state_shardings
 
 
-def _restore_checkpoint_state(config, state, ckpt_dir, *, cohort_mode=False):
+def _restore_checkpoint_state(config, state, ckpt_dir, *, cohort_mode=False, requested_step=None):
     """Restore params/opt_state/step from the Orbax Composite checkpoint into ``state``.
 
     Shared by the side-adapter and full-FT validation paths: the Composite layout
@@ -362,8 +362,15 @@ def _restore_checkpoint_state(config, state, ckpt_dir, *, cohort_mode=False):
     empty-directory error names the full-FT mode (F4). With ``cohort_mode=False`` the
     step resolution, state fields, and error message are byte-identical to the original
     side-adapter path (``requested if requested > 0 else latest_step()``).
+
+    ``requested_step`` (Part II / Query 8 F4): when ``None`` (default) the requested step
+    is read from ``config.checkpoint_step`` -- byte-identical to the pre-Part-II behavior,
+    so the adapter path and the single-step T2 rollout are untouched. When an int is
+    supplied it OVERRIDES the config-derived step, which is how the T1 per-checkpoint loop
+    evaluates each cohort step in turn (pyconfig objects are immutable, so per-iteration
+    ``config.checkpoint_step`` mutation is impossible).
     """
-    requested = int(getattr(config, "checkpoint_step", -1))
+    requested = int(getattr(config, "checkpoint_step", -1)) if requested_step is None else int(requested_step)
     if cohort_mode and requested == 0:
         max_logging.log("[wan_side_adapter_val] checkpoint_step=0: pretrained baseline, skipping Orbax restore")
         return state, 0

@@ -257,6 +257,16 @@ validation_start_index: 0
 # cohort (e.g. "0,90000,180000,..."); MUST exist here so `validation_ordinals=...` is a
 # valid pyconfig CLI override. Empty -> contiguous validation_start_index read.
 validation_ordinals: ''
+# delta (Part II / Query 8, plan D5): keys for the full-validation one-step-loss evaluator
+# (eval_wan_full_ft_val_loss.py). All CLI-overridable; the evaluator REQUIRES the first two.
+# validation_checkpoint_steps: comma-separated POSITIVE checkpoint steps to evaluate (e.g.
+#   "2500,5000,...,20000"); must be non-empty. validation_expected_count: the exact held-out
+#   window count the reader must drain to (e.g. 14636); must be >0 and is asserted BEFORE any
+#   restore. validation_loss_output_dir: explicit output root; empty ->
+#   {output_dir}/{run_name}/validation_loss (SMOKE_LIMIT -> validation_loss_smoke).
+validation_checkpoint_steps: ''
+validation_expected_count: 0
+validation_loss_output_dir: ''
 validation_seed: 0
 min_guidance_scale: 1.0
 max_guidance_scale: 2.5
