@@ -144,3 +144,25 @@ done
 - **Job id:** `20260721-015850-83c5e067-wan-full-ft-cohort-s0b-yixun`
 
 - **Outcome (appended to entry 10):** SUCCEEDED (att 2; att 1 infra-preempted). Official step-0: latent 3.4794 / pixel 0.1992 / SSIM 0.1966, 16/16 — confirms preliminary.
+
+## 11. T1 VAL-LOSS SMOKE (Part II rung 5–6) — 2026-07-27T02:59:56Z
+
+- **Status:** LAUNCHED (job id below)
+- **Commit:** `6b6b80fee0deca9a460ee4d1957749d6add93b86` | TRAIN_COMMIT: `031228ee926d189a07396336e68c27b7a278f96c`
+- **Approval:** Query 9 dual sign-off (Codex: cycle-C review COMPLETE statement; Fable: verification battery in worklog).
+- **Command (exp worktree):**
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_01_full_ft_overfit
+tpu create v6 -n 8 --name wan-full-ft-valloss-smoke-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu && bash bash_scripts/prefetch_hf_snapshot.sh Wan-AI/Wan2.2-TI2V-5B-Diffusers" \
+  --env RUN_NAME="wan-full-ft-v6e64-full-gbs256-fresh-20260719-165222" \
+  --env CHECKPOINT_STEPS="2500" \
+  --env EXPECTED_COUNT="14636" \
+  --env SMOKE_LIMIT="4" \
+  --env TRAIN_COMMIT="031228ee926d189a07396336e68c27b7a278f96c" \
+  --env COMMIT="6b6b80fee0deca9a460ee4d1957749d6add93b86" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/eval_wan_full_ft_val_loss.sh
+```
+- **Job id:** `20260727-025956-826b08f6-wan-full-ft-valloss-smoke-yixun`
