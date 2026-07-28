@@ -26,3 +26,15 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
   - **If NO** → we need either (a) Lihan/Della to re-cache 100 trajectories including instructions, or (b) a raw-DROID→instruction join on a machine that can see `/n/fs/iromdata/droid_raw/1.0.1` (IROM) to produce an `ep<N> → instruction` map, which is then uploaded to GCS (tiny file) and joined to the cached windows.
 - **Result** — `in_progress` (investigation), blocked on reauth for the decisive probe.
 - **Next** — Probe `meta_json` the moment auth returns; then draft `plan_overfit100.md` on the confirmed branch (A or B).
+
+## 2026-07-28T02:15:00Z — Data question RESOLVED: everything needed is on GCS (no cluster dependency)
+
+- **Goal** — Settle the blocking fact (instruction source) and fix the data path.
+- **Command / Validation** — Probed a cached window + the bucket:
+  - `meta_json` schema (verbatim from Lihan's cache): `episode_id, video_path, view, start_frame, frames(33), usable_length, video_length, rank_in_episode, action_score, candidate_stride(4), z_I0_shape[48,1,12,20], z_video_shape[48,9,12,20], source="droid_ctrl_world", split`. **No instruction text** — but `episode_id` is a clean join key.
+  - **`gs://v6_east1d/datasets/droid_ctrl_world_aligned/`** exists with `annotation/train/<episode_id>.json` (**69,723 episodes**, ids 0–69722), `latent_videos/train/<ep>/<view>.pt` (~1.35 MB each, 3 views), `videos/train/<ep>/<view>.mp4` (~0.3–0.9 MB).
+  - Annotation schema (sampled 10): **`texts`: 1–3 instructions** (the DROID triple), **`success`: 0/1**, `episode_id`, `video_length`, `videos[]`, `latent_videos[]`, `states[]`. Examples: ep1 success=1, 3 texts ("Put the banana plushy in the box"); ep5000 success=0; ep45678 success=1, 1 text.
+  - Upload timestamps are TODAY (latents 09:37Z, videos 15:13Z) — dataset may still be filling; **per-episode availability must be verified at selection time**.
+- **Result** — `passed` — every ingredient for the user's spec is GCS-resident and TPU-readable: success filter, the 1-of-3 instruction choice with empty-filtering, and latents. **No Della/IROM access required.**
+- **Analysis** — Two candidate data paths: **(A)** build the 100-episode window set directly from `latent_videos` (100×~1.35 MB per view = trivial download, full control over windowing, and the MP4s give true RGB ground truth for galleries) vs **(B)** locate the same episodes' windows inside the existing 334 GB cached train shards (needs a one-time full-shard index scan). **A is strictly cheaper and more flexible** — adopted, subject to a rung-3 readback confirming the .pt layout reproduces the cache geometry ([48, T_lat, 12, 20], z_i0 = first latent frame).
+- **Next** — `plan_overfit100.md`, then Codex plan review.
