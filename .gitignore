@@ -201,3 +201,5 @@ docs/worklogs_yixun/_handoff_events.log
 # Codex personal/local config + handoff hook (Yixun)
 .codex/
 AGENTS.md
+
+.cursor/
