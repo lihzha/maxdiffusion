@@ -31,3 +31,9 @@ Source: Yixun, relaying/echoing Lihan's critique of exp_01. Append each new quer
 - Per-example T5 embeddings: precompute into a new cached dataset vs compute on the fly (100 trajectories is small enough that either may work).
 - Trajectory→window mapping: 100 trajectories = how many windows? Do we train on ALL windows of those trajectories, or a fixed subset?
 - Success criterion: "perfect reconstruction" needs a concrete metric threshold (rollout SSIM / latent MSE on the memorized set) + a step budget.
+
+## Query 2 — 2026-07-28 (design decisions, from Yixun)
+
+**Verbatim:** "use one view per episode (the first one (exterior view), which has the index 0), and lr 1e-5"
+
+**Decisions locked:** (1) **one camera view per episode — view index 0** (the first exterior view; `latent_videos/train/<ep>/0.pt`); (2) **learning rate 1e-5** (same as exp_01's full-FT recipe — deliberate memorization is pursued via dose/epochs, not a hotter LR).
