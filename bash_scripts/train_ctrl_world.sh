@@ -20,6 +20,11 @@
 # reseeds the input pipeline, so the resumed run sees a freshly shuffled data
 # stream instead of replaying the windows it already trained on. Any warm-start
 # paths below are ignored once a checkpoint exists.
+#
+# Starting fresh: bump RUN_TAG (section 3b). Reusing a tag whose checkpoints dir
+# is non-empty resumes that run instead, silently discarding the action-encoder
+# init. The trainer logs which path it took ("no checkpoint found; starting from
+# step 0" vs "restoring checkpoint at step N") — check that line on startup.
 
 # --- 1. Activate the training env ---
 source ~/.zshrc
@@ -56,7 +61,7 @@ fi
 # Default: cold-start UNet/VAE from the upstream SVD repo on disk. Point this at
 # the directory produced by scripts/convert_ctrl_world_ckpt.py to warm-start
 # from a Ctrl-World torch checkpoint.
-export SVD_MODEL_DIR="$GCS_MOUNT/svd/stable-video-diffusion-img2vid"
+export SVD_MODEL_DIR="$GCS_MOUNT/svd/svd_checkpoint"
 if [ ! -f "$SVD_MODEL_DIR/unet/config.json" ]; then
   echo "ERROR: SVD model not found at $SVD_MODEL_DIR/unet/config.json — download it first."
   echo "  python -c \"from huggingface_hub import snapshot_download; snapshot_download('stabilityai/stable-video-diffusion-img2vid', local_dir='/tmp/svd')\""
@@ -65,12 +70,34 @@ if [ ! -f "$SVD_MODEL_DIR/unet/config.json" ]; then
 fi
 echo "Using SVD_MODEL_DIR=$SVD_MODEL_DIR"
 
-# Optional: pretrained action encoder to warm-start (set to "" to fresh-init).
-export ACTION_ENCODER_INIT="$GCS_MOUNT/ctrl_world/jax-ckpt/action_encoder.safetensors"
-if [ ! -f "$ACTION_ENCODER_INIT" ]; then
-  echo "[info] action encoder warm-start not found at $ACTION_ENCODER_INIT — initialising from scratch."
-  ACTION_ENCODER_INIT=""
+# Action encoder: fresh-init by default (no warm-start). linear_3 is zero-init,
+# so the encoder emits no action signal at step 0 and the pretrained UNet starts
+# undisturbed; the action pathway is learned from there.
+# To warm-start from a converted Ctrl-World checkpoint instead:
+#   ACTION_ENCODER_INIT=$GCS_MOUNT/ctrl_world/jax-ckpt/action_encoder.safetensors bash $0
+export ACTION_ENCODER_INIT="${ACTION_ENCODER_INIT:-}"
+if [ -n "$ACTION_ENCODER_INIT" ] && [ ! -f "$ACTION_ENCODER_INIT" ]; then
+  # Hard failure rather than a silent fall back to scratch: if you asked for a
+  # warm-start, a missing file (e.g. gcsfuse not mounted yet) is a bug, not a
+  # reason to quietly train a different model.
+  echo "ERROR: ACTION_ENCODER_INIT=$ACTION_ENCODER_INIT does not exist."
+  exit 1
 fi
+if [ -z "$ACTION_ENCODER_INIT" ]; then
+  echo "Action encoder: fresh init (zero-init output projection), no warm-start."
+else
+  echo "Action encoder: warm-starting from $ACTION_ENCODER_INIT"
+fi
+
+# --- 3b. Run identity ---
+# The trainer always resumes from $output_dir/checkpoints if anything is there,
+# which would restore an old action encoder and discard the fresh init above.
+# So a genuinely fresh run needs its own tag; bump RUN_TAG (never reuse one).
+# RUN_TAG also names the W&B run (it is passed through as run_name).
+export RUN_TAG="${RUN_TAG:-ctrl-world-zeroinit-1}"
+export OUTPUT_DIR="gs://$GCS_BUCKET/checkpoints/svd_ac/$RUN_TAG"
+echo "RUN_TAG=$RUN_TAG"
+echo "OUTPUT_DIR=$OUTPUT_DIR"
 
 # --- 4. Data paths (pre-encoded TFRecords; see docs/ctrl_world_data_format.md) ---
 export TRAIN_DATA_DIR="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned/train"
@@ -112,8 +139,8 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_ctrl_world.py \
     src/maxdiffusion/configs/base_ctrl_world.yml \
-    run_name=ctrl-world-run-1 \
-    output_dir=gs://$GCS_BUCKET/checkpoints/svd_ac/ctrl-world \
+    run_name=$RUN_TAG \
+    output_dir=$OUTPUT_DIR \
     pretrained_model_name_or_path=$SVD_MODEL_DIR \
     action_encoder_init_path=$ACTION_ENCODER_INIT \
     dataset_type=ctrl_world \
@@ -129,15 +156,15 @@ python src/maxdiffusion/train_ctrl_world.py \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=1 \
     scan_layers=True \
-    max_train_steps=200000 \
+    max_train_steps=100000 \
     learning_rate=1e-5 \
     per_device_batch_size=1.0 \
-    num_history=6 \
+    num_history=7 \
     num_frames=5 \
     action_dim=7 \
     text_embed_dim=512 \
-    checkpoint_every=5000 \
-    eval_every=2000 \
+    checkpoint_every=1000 \
+    eval_every=1000 \
     eval_max_batches=50 \
     save_optimizer=True \
     checkpoint_max_to_keep=3 \

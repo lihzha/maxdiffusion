@@ -50,9 +50,12 @@ class FlaxActionEncoder(nn.Module):
         Linear(hidden_size, hidden_size)
 
     The first two Dense kernels use Kaiming-normal init
-    (``fan_in``, ``relu`` nonlinearity); the third uses Flax's default
-    ``lecun_normal`` (matches PyTorch's default for the last layer, which
-    Ctrl-World does NOT override).
+    (``fan_in``, ``relu`` nonlinearity); the output projection is zero-init so
+    a fresh encoder is a no-op at step 0 (see ``setup``). Note this diverges
+    from upstream Ctrl-World, which leaves the third layer at PyTorch's default
+    ``kaiming_uniform_(a=sqrt(5))`` — warm-starting via
+    ``action_encoder_init_path`` restores the upstream weights and bypasses
+    this init entirely.
 
     If ``text_embed_dim`` is not None and a ``text_embeds`` argument is
     passed to ``__call__``, the text embedding is repeated to
@@ -90,6 +93,13 @@ class FlaxActionEncoder(nn.Module):
         )
         self.linear_3 = nn.Dense(
             self.hidden_size,
+            # Zero-init the output projection so a cold-started encoder emits
+            # nothing at step 0: the pretrained UNet's cross-attention sees a
+            # zero (or, with text conditioning on, constant) context instead of
+            # random conditioning, so training begins at the pretrained
+            # operating point rather than being knocked off it. Same rationale
+            # as NNXWanActionEncoder.linear_3. Bias already defaults to zeros.
+            kernel_init=nn.initializers.zeros,
             dtype=self.dtype,
             param_dtype=self.weights_dtype,
         )
