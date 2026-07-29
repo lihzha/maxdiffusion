@@ -65,3 +65,10 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Result** — Re-review: F1/F5 resolved; F2/F3/F4/F6/F7 partial; new G1–G5 (trainer-seam mismatch BLOCKER — step fns are module-level, jit-bound in `start_training`, confirmed in code; encode contract under-specified BLOCKER — `.mode()` + latents mean/std convention confirmed at `wan_pipeline.py:585/608`; S2 10-episode data path missing BLOCKER; success statistic inexact MAJOR; provenance gaps MAJOR). Plan v3 written resolving all five (own-module trainer with `context_table` state field + rewritten `start_training`; locked encode contract + gates V1–V4 with final thresholds; dual `train100`/`train10` artifacts + numerical S2 gate; exact success formula + guard + machine aggregation artifact; dual fingerprints + ordered draw log).
 - **Version Control** — this commit; v2 @ `092eb91`. Third review launched (background).
 - **Next** — v3 verdict → surface to Yixun for plan approval.
+
+## 2026-07-28T07:40:00Z — Plan v3 review (REQUEST-REVISION: H1, H2) → plan v4
+
+- **Goal** — Close the third plan-review round.
+- **Result** — G1/G3/G5 RESOLVED on record; H1 (V1 fixtures not materialized — true: the three cache windows lived only as an unfingerprinted scratchpad probe) and H2 (checkpoint lists unexecutable: single periodic cadence at `wan_ti2v_full_ft_trainer.py:615-616`, `max_to_keep=3` at `wan_ti2v_side_adapter_trainer.py:392-396`) both verified and fixed in v4, plus the G4 residue (S2/S3 conflation in C₃, mode-unqualified m, overbroad claim → `C₃¹⁰⁰`/`m_corr`/tie-break/two-tier claim).
+- **Version Control** — this commit; v3 @ `42c9057`. Fourth review launched (background).
+- **Next** — v4 verdict → surface to Yixun for plan approval.
