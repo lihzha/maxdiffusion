@@ -1,0 +1,132 @@
+[manifest] draw    1  ep 25189  accepted (1/100, n_windows=26)
+[manifest] draw    2  ep 8944   not_success
+[manifest] draw    3  ep 67253  accepted (2/100, n_windows=15)
+[manifest] draw    4  ep 40723  not_success
+[manifest] draw    5  ep 30872  not_success
+[manifest] draw    6  ep 3905   accepted (3/100, n_windows=12)
+[manifest] draw    7  ep 40985  accepted (4/100, n_windows=5)
+[manifest] draw    8  ep 53956  accepted (5/100, n_windows=15)
+[manifest] draw    9  ep 45109  accepted (6/100, n_windows=35)
+[manifest] draw   10  ep 26802  accepted (7/100, n_windows=27)
+[manifest] draw   11  ep 48923  accepted (8/100, n_windows=16)
+[manifest] draw   12  ep 22546  accepted (9/100, n_windows=12)
+[manifest] draw   13  ep 31530  accepted (10/100, n_windows=4)
+[manifest] draw   14  ep 60367  accepted (11/100, n_windows=21)
+[manifest] draw   15  ep 52361  accepted (12/100, n_windows=36)
+[manifest] draw   16  ep 61233  accepted (13/100, n_windows=42)
+[manifest] draw   17  ep 41791  not_success
+[manifest] draw   18  ep 49497  accepted (14/100, n_windows=21)
+[manifest] draw   19  ep 63560  accepted (15/100, n_windows=12)
+[manifest] draw   20  ep 42427  not_success
+[manifest] draw   21  ep 15184  accepted (16/100, n_windows=15)
+[manifest] draw   22  ep 34212  accepted (17/100, n_windows=1)
+[manifest] draw   23  ep 30976  accepted (18/100, n_windows=4)
+[manifest] draw   24  ep 4099   accepted (19/100, n_windows=4)
+[manifest] draw   25  ep 991    accepted (20/100, n_windows=1)
+[manifest] draw   26  ep 35500  accepted (21/100, n_windows=4)
+[manifest] draw   27  ep 31999  accepted (22/100, n_windows=6)
+[manifest] draw   28  ep 10329  accepted (23/100, n_windows=7)
+[manifest] draw   29  ep 34499  accepted (24/100, n_windows=42)
+[manifest] draw   30  ep 30835  not_success
+[manifest] draw   31  ep 37274  accepted (25/100, n_windows=7)
+[manifest] draw   32  ep 35276  not_success
+[manifest] draw   33  ep 61291  accepted (26/100, n_windows=18)
+[manifest] draw   34  ep 6336   accepted (27/100, n_windows=2)
+[manifest] draw   35  ep 34355  too_short
+[manifest] draw   36  ep 28709  accepted (28/100, n_windows=29)
+[manifest] draw   37  ep 54362  not_success
+[manifest] draw   38  ep 21530  accepted (29/100, n_windows=6)
+[manifest] draw   39  ep 52341  accepted (30/100, n_windows=2)
+[manifest] draw   40  ep 19306  accepted (31/100, n_windows=99)
+[manifest] draw   41  ep 27573  accepted (32/100, n_windows=9)
+[manifest] draw   42  ep 37834  accepted (33/100, n_windows=19)
+[manifest] draw   43  ep 11518  accepted (34/100, n_windows=42)
+[manifest] draw   44  ep 22488  accepted (35/100, n_windows=7)
+[manifest] draw   45  ep 62723  not_success
+[manifest] draw   46  ep 66118  accepted (36/100, n_windows=10)
+[manifest] draw   47  ep 47809  accepted (37/100, n_windows=7)
+[manifest] draw   48  ep 8877   accepted (38/100, n_windows=30)
+[manifest] draw   49  ep 8945   not_success
+[manifest] draw   50  ep 15673  accepted (39/100, n_windows=12)
+[manifest] draw   51  ep 11071  accepted (40/100, n_windows=28)
+[manifest] draw   52  ep 44499  accepted (41/100, n_windows=12)
+[manifest] draw   53  ep 69308  accepted (42/100, n_windows=16)
+[manifest] draw   54  ep 67477  accepted (43/100, n_windows=8)
+[manifest] draw   55  ep 22800  accepted (44/100, n_windows=5)
+[manifest] draw   56  ep 61069  accepted (45/100, n_windows=47)
+[manifest] draw   57  ep 68254  not_success
+[manifest] draw   58  ep 35494  accepted (46/100, n_windows=19)
+[manifest] draw   59  ep 49796  accepted (47/100, n_windows=6)
+[manifest] draw   60  ep 19099  accepted (48/100, n_windows=3)
+[manifest] draw   61  ep 69218  accepted (49/100, n_windows=3)
+[manifest] draw   62  ep 6908   too_short
+[manifest] draw   63  ep 19658  accepted (50/100, n_windows=2)
+[manifest] draw   64  ep 19339  accepted (51/100, n_windows=13)
+[manifest] draw   65  ep 19009  not_success
+[manifest] draw   66  ep 4358   accepted (52/100, n_windows=21)
+[manifest] draw   67  ep 25179  not_success
+[manifest] draw   68  ep 53617  accepted (53/100, n_windows=20)
+[manifest] draw   69  ep 60900  accepted (54/100, n_windows=34)
+[manifest] draw   70  ep 24363  accepted (55/100, n_windows=61)
+[manifest] draw   71  ep 46898  not_success
+[manifest] draw   72  ep 21262  not_success
+[manifest] draw   73  ep 17669  accepted (56/100, n_windows=29)
+[manifest] draw   74  ep 15898  too_short
+[manifest] draw   75  ep 54416  accepted (57/100, n_windows=4)
+[manifest] draw   76  ep 9998   not_success
+[manifest] draw   77  ep 39091  accepted (58/100, n_windows=16)
+[manifest] draw   78  ep 51375  accepted (59/100, n_windows=2)
+[manifest] draw   79  ep 42776  not_success
+[manifest] draw   80  ep 36671  accepted (60/100, n_windows=6)
+[manifest] draw   81  ep 26610  accepted (61/100, n_windows=4)
+[manifest] draw   82  ep 29037  accepted (62/100, n_windows=31)
+[manifest] draw   83  ep 28370  too_short
+[manifest] draw   84  ep 24960  accepted (63/100, n_windows=27)
+[manifest] draw   85  ep 48582  accepted (64/100, n_windows=11)
+[manifest] draw   86  ep 44550  accepted (65/100, n_windows=7)
+[manifest] draw   87  ep 65562  accepted (66/100, n_windows=9)
+[manifest] draw   88  ep 259    not_success
+[manifest] draw   89  ep 3402   not_success
+[manifest] draw   90  ep 52301  accepted (67/100, n_windows=4)
+[manifest] draw   91  ep 62102  accepted (68/100, n_windows=13)
+[manifest] draw   92  ep 30738  accepted (69/100, n_windows=68)
+[manifest] draw   93  ep 23688  accepted (70/100, n_windows=1)
+[manifest] draw   94  ep 2521   accepted (71/100, n_windows=16)
+[manifest] draw   95  ep 59043  accepted (72/100, n_windows=21)
+[manifest] draw   96  ep 46550  accepted (73/100, n_windows=5)
+[manifest] draw   97  ep 62064  accepted (74/100, n_windows=25)
+[manifest] draw   98  ep 57681  accepted (75/100, n_windows=9)
+[manifest] draw   99  ep 60453  accepted (76/100, n_windows=11)
+[manifest] draw  100  ep 36295  accepted (77/100, n_windows=11)
+[manifest] draw  101  ep 17148  accepted (78/100, n_windows=4)
+[manifest] draw  102  ep 5964   accepted (79/100, n_windows=17)
+[manifest] draw  103  ep 34148  accepted (80/100, n_windows=20)
+[manifest] draw  104  ep 50125  accepted (81/100, n_windows=15)
+[manifest] draw  105  ep 53656  accepted (82/100, n_windows=12)
+[manifest] draw  106  ep 11022  accepted (83/100, n_windows=4)
+[manifest] draw  107  ep 21431  not_success
+[manifest] draw  108  ep 24557  too_short
+[manifest] draw  109  ep 8243   not_success
+[manifest] draw  110  ep 22960  too_short
+[manifest] draw  111  ep 9029   accepted (84/100, n_windows=16)
+[manifest] draw  112  ep 8896   accepted (85/100, n_windows=16)
+[manifest] draw  113  ep 40491  not_success
+[manifest] draw  114  ep 46170  accepted (86/100, n_windows=3)
+[manifest] draw  115  ep 39393  accepted (87/100, n_windows=10)
+[manifest] draw  116  ep 40738  accepted (88/100, n_windows=47)
+[manifest] draw  117  ep 16907  accepted (89/100, n_windows=3)
+[manifest] draw  118  ep 67045  accepted (90/100, n_windows=5)
+[manifest] draw  119  ep 69447  accepted (91/100, n_windows=5)
+[manifest] draw  120  ep 51382  accepted (92/100, n_windows=2)
+[manifest] draw  121  ep 49658  accepted (93/100, n_windows=3)
+[manifest] draw  122  ep 28817  accepted (94/100, n_windows=79)
+[manifest] draw  123  ep 62784  accepted (95/100, n_windows=3)
+[manifest] draw  124  ep 4015   accepted (96/100, n_windows=1)
+[manifest] draw  125  ep 65802  accepted (97/100, n_windows=10)
+[manifest] draw  126  ep 9732   accepted (98/100, n_windows=16)
+[manifest] draw  127  ep 69642  accepted (99/100, n_windows=16)
+[manifest] draw  128  ep 15119  not_success
+[manifest] draw  129  ep 65294  accepted (100/100, n_windows=12)
+[manifest] accepted 100 episodes / 1629 windows
+[manifest] draws=129 tally={'accepted': 100, 'not_success': 23, 'too_short': 6}
+[manifest] wrote docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json

@@ -1,0 +1,3653 @@
+{
+  "selection_seed": 0,
+  "builder_commit": "b88bac1dd12579af30e243218f899b6fbfb41c44",
+  "created_utc": "2026-07-29T02:17:57.375875+00:00",
+  "tool_versions": {
+    "python": "3.12.8",
+    "gsutil": "gsutil version: 5.37",
+    "ffprobe": "ffprobe version 8.0 Copyright (c) 2007-2025 the FFmpeg developers"
+  },
+  "provisional": false,
+  "fixture": {
+    "uri": "gs://v6_east1d/datasets/exp02_overfit100/fixtures/v1_cache_windows.npz",
+    "generation": 1785291278937267,
+    "md5": "Szm9uNUI2AtjyRNTtpm9SA==",
+    "size_bytes": 693246,
+    "names": [
+      "ep0_v0_s00000",
+      "ep0_v0_s00004",
+      "ep0_v0_s00008"
+    ],
+    "shapes": {
+      "z_i0": [
+        48,
+        1,
+        12,
+        20
+      ],
+      "z_video": [
+        48,
+        9,
+        12,
+        20
+      ]
+    },
+    "dtypes": {
+      "z_i0": "float16",
+      "z_video": "float16"
+    }
+  },
+  "episodes": [
+    {
+      "episode_index": 0,
+      "episode_id": 25189,
+      "texts": [
+        "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)",
+      "used_text": "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/25189.json",
+        "size": 418410,
+        "md5": "rHNPAdU4uv9IFN6mRKqeig==",
+        "generation": 1785214471109432
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/25189/0.mp4",
+        "size": 308822,
+        "md5": "GEgPoE23YldSDCjXfQvgfQ==",
+        "generation": 1785253436462045
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 133,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 26
+    },
+    {
+      "episode_index": 1,
+      "episode_id": 67253,
+      "texts": [
+        "Fully open the slightly open drawer and put the black pen in the drawer",
+        "Open the drawer on the right, place the red pen inside the open drawer",
+        "Open the drawer and put the pen inside"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fully open the slightly open drawer and put the black pen in the drawer",
+      "used_text": "Fully open the slightly open drawer and put the black pen in the drawer",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/67253.json",
+        "size": 284750,
+        "md5": "16/BlFX62wIzd0aWUtvCdA==",
+        "generation": 1785214465819517
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/67253/0.mp4",
+        "size": 262187,
+        "md5": "BZ0z5cMF8AP5UCQ0giZx7w==",
+        "generation": 1785239453449351
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 91,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 15
+    },
+    {
+      "episode_index": 2,
+      "episode_id": 3905,
+      "texts": [
+        "Rotate the orange toy car 90 degrees counterclockwise"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Rotate the orange toy car 90 degrees counterclockwise",
+      "used_text": "Rotate the orange toy car 90 degrees counterclockwise",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/3905.json",
+        "size": 249848,
+        "md5": "Osq4OzyWPmMmF7/1uDefzQ==",
+        "generation": 1785214855078637
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/3905/0.mp4",
+        "size": 264407,
+        "md5": "ai5rVm4sapsot+F/Nq+NVg==",
+        "generation": 1785245634450292
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 80,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 12
+    },
+    {
+      "episode_index": 3,
+      "episode_id": 40985,
+      "texts": [
+        "Remove the marker from the pot and put it on the table",
+        "Remove the black marker from the pot and put it on the table",
+        "Remove the marker from the pot and put it on the table"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Remove the black marker from the pot and put it on the table",
+      "used_text": "Remove the black marker from the pot and put it on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/40985.json",
+        "size": 162651,
+        "md5": "zKtban24l5697tdhWdYQyQ==",
+        "generation": 1785215094508602
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/40985/0.mp4",
+        "size": 227291,
+        "md5": "S6vDaFVYSrJPrhEKfVkZdw==",
+        "generation": 1785245575540299
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 51,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 5
+    },
+    {
+      "episode_index": 4,
+      "episode_id": 53956,
+      "texts": [
+        "Move lid on or off of container (ex: pot, cup, pill bottle)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move lid on or off of container (ex: pot, cup, pill bottle)",
+      "used_text": "Move lid on or off of container (ex: pot, cup, pill bottle)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/53956.json",
+        "size": 285325,
+        "md5": "VEq55ehrSXucS6jPkD9jBw==",
+        "generation": 1785214548422851
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/53956/0.mp4",
+        "size": 164192,
+        "md5": "oO2PHtSIdeR3dQYP9gGDvg==",
+        "generation": 1785247194477421
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 90,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 15
+    },
+    {
+      "episode_index": 5,
+      "episode_id": 45109,
+      "texts": [
+        "Open the middle drawer and take the black objects and put them on the counter",
+        "Open the topmost drawer and take out three small, black objects",
+        "Open the drawer and put the black blocks in the drawer on the desk"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Open the drawer and put the black blocks in the drawer on the desk",
+      "used_text": "Open the drawer and put the black blocks in the drawer on the desk",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/45109.json",
+        "size": 531607,
+        "md5": "ee707r1upZt6bwxVDPGgVg==",
+        "generation": 1785215213801392
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/45109/0.mp4",
+        "size": 610869,
+        "md5": "UmSw1d+RYHTbl+wuCZIKqg==",
+        "generation": 1785244015018386
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 170,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 35
+    },
+    {
+      "episode_index": 6,
+      "episode_id": 26802,
+      "texts": [
+        "Open or close curtain (ex: blanket on bed, shower curtain, shades)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Open or close curtain (ex: blanket on bed, shower curtain, shades)",
+      "used_text": "Open or close curtain (ex: blanket on bed, shower curtain, shades)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/26802.json",
+        "size": 439092,
+        "md5": "KuBq6u3gc6ZcEKuvW3bUAQ==",
+        "generation": 1785214854293077
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/26802/0.mp4",
+        "size": 409427,
+        "md5": "n6vM0OeEW9bs2k7BEtsX3w==",
+        "generation": 1785237533358101
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 140,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 27
+    },
+    {
+      "episode_index": 7,
+      "episode_id": 48923,
+      "texts": [
+        "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)",
+      "used_text": "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/48923.json",
+        "size": 292551,
+        "md5": "m+kEyvFIb8xF7HN/Tm2FOw==",
+        "generation": 1785214563842364
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/48923/0.mp4",
+        "size": 238775,
+        "md5": "+yyWYQ6DxaHQkGeKUx8urw==",
+        "generation": 1785237234949924
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 95,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 8,
+      "episode_id": 22546,
+      "texts": [
+        "Remove the clean tag from the front of the dishwasher"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Remove the clean tag from the front of the dishwasher",
+      "used_text": "Remove the clean tag from the front of the dishwasher",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/22546.json",
+        "size": 244532,
+        "md5": "hIuVzf+5Vt6a5bDJcDEugA==",
+        "generation": 1785214821448632
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/22546/0.mp4",
+        "size": 95711,
+        "md5": "EH+3P7PshWvVJZv61Hpr5A==",
+        "generation": 1785253555308388
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 78,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 12
+    },
+    {
+      "episode_index": 9,
+      "episode_id": 31530,
+      "texts": [
+        "Fold the towel from right to left",
+        "Move the green cloth to the left",
+        "Fold the green cloth"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Move the green cloth to the left",
+      "used_text": "Move the green cloth to the left",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/31530.json",
+        "size": 145581,
+        "md5": "HFh4OliN7VHERy+D0F6D6g==",
+        "generation": 1785214802113292
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/31530/0.mp4",
+        "size": 167370,
+        "md5": "FpdjTBJNz8DOGSlaqdkZ7A==",
+        "generation": 1785243234553662
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 46,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 10,
+      "episode_id": 60367,
+      "texts": [
+        "Use the spoon to stir the bowl"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Use the spoon to stir the bowl",
+      "used_text": "Use the spoon to stir the bowl",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/60367.json",
+        "size": 358874,
+        "md5": "/8WnaEVXwkMAM1L6tRnDeA==",
+        "generation": 1785214604340539
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/60367/0.mp4",
+        "size": 336778,
+        "md5": "ZUsqOgw90HyV+zp/YCBYuA==",
+        "generation": 1785238793294769
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 113,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 21
+    },
+    {
+      "episode_index": 11,
+      "episode_id": 52361,
+      "texts": [
+        "Turn on the stove light"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Turn on the stove light",
+      "used_text": "Turn on the stove light",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/52361.json",
+        "size": 534322,
+        "md5": "7IYSuNN4fh+Ed8/NYHZErQ==",
+        "generation": 1785214520074856
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/52361/0.mp4",
+        "size": 343032,
+        "md5": "6MjP0u0tDQAbuzEUCjurBw==",
+        "generation": 1785243053218300
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 173,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 36
+    },
+    {
+      "episode_index": 12,
+      "episode_id": 61233,
+      "texts": [
+        "Fold the towel",
+        "Fold the cloth on the table",
+        "Fold the towel in triangles"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Fold the towel in triangles",
+      "used_text": "Fold the towel in triangles",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/61233.json",
+        "size": 629015,
+        "md5": "fq2QKpZtId5PuCp35z26XA==",
+        "generation": 1785214534606703
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/61233/0.mp4",
+        "size": 333252,
+        "md5": "tMVSgGddpsr1Rdm0DuwaHQ==",
+        "generation": 1785242034468436
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 198,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 42
+    },
+    {
+      "episode_index": 13,
+      "episode_id": 49497,
+      "texts": [
+        "Do any three tasks consecutively.\n\nSuggested tasks:\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Hang or unhang object (ex: towel on hook, clothes over chair)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Do any three tasks consecutively.\n\nSuggested tasks:\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "used_text": "Do any three tasks consecutively.\n\nSuggested tasks:\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/49497.json",
+        "size": 358630,
+        "md5": "3KQXX6M7JCtrE0N43bLe3g==",
+        "generation": 1785214575837905
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/49497/0.mp4",
+        "size": 151049,
+        "md5": "EJxkRZlD6aHY8hBP5NMD9Q==",
+        "generation": 1785238013926618
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 114,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 21
+    },
+    {
+      "episode_index": 14,
+      "episode_id": 63560,
+      "texts": [
+        "Take the snack out of the sink"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Take the snack out of the sink",
+      "used_text": "Take the snack out of the sink",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/63560.json",
+        "size": 244618,
+        "md5": "a/f+Areb0AtK5XbT7iv0AA==",
+        "generation": 1785214583643234
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/63560/0.mp4",
+        "size": 217650,
+        "md5": "ma337xwTLfWrNR0nXBDLxQ==",
+        "generation": 1785253973561919
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 78,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 12
+    },
+    {
+      "episode_index": 15,
+      "episode_id": 15184,
+      "texts": [
+        "Turn the overhead lights off"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Turn the overhead lights off",
+      "used_text": "Turn the overhead lights off",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/15184.json",
+        "size": 282670,
+        "md5": "H6ULBJEqGVfXs13N62bL/Q==",
+        "generation": 1785214559749835
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/15184/0.mp4",
+        "size": 257404,
+        "md5": "MD6ObRAqT0lU5DHnDWZ4/A==",
+        "generation": 1785251996451762
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 90,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 15
+    },
+    {
+      "episode_index": 16,
+      "episode_id": 34212,
+      "texts": [
+        "Put the gold object in the blue cup",
+        "Put the gold object in the blue cup",
+        "Pick up the silver block from the table and put it in the light blue cup."
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Put the gold object in the blue cup",
+      "used_text": "Put the gold object in the blue cup",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/34212.json",
+        "size": 107551,
+        "md5": "xoZJGTPEoERjKTU6P74alA==",
+        "generation": 1785214784130632
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/34212/0.mp4",
+        "size": 153138,
+        "md5": "WBCiNMA9qDl9Oadbj8chiQ==",
+        "generation": 1785239034343845
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 34,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 1
+    },
+    {
+      "episode_index": 17,
+      "episode_id": 30976,
+      "texts": [
+        "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/30976.json",
+        "size": 141665,
+        "md5": "YGMQYAkrZK6y7Q4YGZMdEA==",
+        "generation": 1785214471044513
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/30976/0.mp4",
+        "size": 155663,
+        "md5": "6oU84bY4UYC7VXAs12WfBA==",
+        "generation": 1785242935626203
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 45,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 18,
+      "episode_id": 4099,
+      "texts": [
+        "Pick up the blue spoon and place it on the counter"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Pick up the blue spoon and place it on the counter",
+      "used_text": "Pick up the blue spoon and place it on the counter",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/4099.json",
+        "size": 139470,
+        "md5": "CtzYZyFSZ1TFqNX9On8zhQ==",
+        "generation": 1785214803159240
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/4099/0.mp4",
+        "size": 206979,
+        "md5": "tTmqWjDYZYLxVJ5cKwowKA==",
+        "generation": 1785251156147563
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 45,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 19,
+      "episode_id": 991,
+      "texts": [
+        "Put the green block in the bowl",
+        "Put the green block in the black bowl.",
+        "Place the cube in the bowl"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Place the cube in the bowl",
+      "used_text": "Place the cube in the bowl",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/991.json",
+        "size": 106683,
+        "md5": "3VfSqqoBT/iVUWv3QCmO0g==",
+        "generation": 1785214797999973
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/991/0.mp4",
+        "size": 127400,
+        "md5": "XuMjnsSVYuHgCE9stjpnAg==",
+        "generation": 1785241794435011
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 34,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 1
+    },
+    {
+      "episode_index": 20,
+      "episode_id": 35500,
+      "texts": [
+        "Hang or unhang object (ex: towel on hook, clothes over chair)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/35500.json",
+        "size": 153257,
+        "md5": "pYu0gamkQ8TPRt/DB3TTHA==",
+        "generation": 1785214476190502
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/35500/0.mp4",
+        "size": 132775,
+        "md5": "ZPOEUJNm0iWyuKt5x8JcuQ==",
+        "generation": 1785255175328035
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 48,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 21,
+      "episode_id": 31999,
+      "texts": [
+        "Hang or unhang object (ex: towel on hook, clothes over chair)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/31999.json",
+        "size": 176644,
+        "md5": "FkqlNb3Db/Fi6ZgzBZY1sg==",
+        "generation": 1785214563529453
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/31999/0.mp4",
+        "size": 142340,
+        "md5": "b77TJHjSI9i4v1cO6RGAgg==",
+        "generation": 1785240053624245
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 56,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 6
+    },
+    {
+      "episode_index": 22,
+      "episode_id": 10329,
+      "texts": [
+        "Lift the top of the coffee maker",
+        "Open the top of the coffee machine",
+        "Open the coffee maker"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Lift the top of the coffee maker",
+      "used_text": "Lift the top of the coffee maker",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/10329.json",
+        "size": 179815,
+        "md5": "NKXXD97bGtGnKGvARa6bTA==",
+        "generation": 1785215214232596
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/10329/0.mp4",
+        "size": 205269,
+        "md5": "emCcxgCwCI7Iv3G/8yQNRQ==",
+        "generation": 1785236753937062
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 58,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 7
+    },
+    {
+      "episode_index": 23,
+      "episode_id": 34499,
+      "texts": [
+        "Hang or unhang object (ex: towel on hook, clothes over chair)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/34499.json",
+        "size": 616495,
+        "md5": "SsF6G1DGDgQrDQWSQRDhvQ==",
+        "generation": 1785214536480359
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/34499/0.mp4",
+        "size": 924241,
+        "md5": "rvJTG6/mJ445U9vMzsCDeA==",
+        "generation": 1785243476029808
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 199,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 42
+    },
+    {
+      "episode_index": 24,
+      "episode_id": 37274,
+      "texts": [
+        "Close the drawer"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Close the drawer",
+      "used_text": "Close the drawer",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/37274.json",
+        "size": 188628,
+        "md5": "FMKTAYzrNBqCgPjmXisBrA==",
+        "generation": 1785214566626965
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/37274/0.mp4",
+        "size": 157567,
+        "md5": "F7FO+C/rXYifHg7rkEaB8g==",
+        "generation": 1785248636589814
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 60,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 7
+    },
+    {
+      "episode_index": 25,
+      "episode_id": 61291,
+      "texts": [
+        "Do any task, and then reset the scene.\n\nSuggested task:\n* Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Do any task, and then reset the scene.\n\nSuggested task:\n* Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)",
+      "used_text": "Do any task, and then reset the scene.\n\nSuggested task:\n* Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/61291.json",
+        "size": 316348,
+        "md5": "6e6ZInZssy65TGKRGJXOYA==",
+        "generation": 1785214760649039
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/61291/0.mp4",
+        "size": 352941,
+        "md5": "SZyA3BnmRRPY45UlTWd/nA==",
+        "generation": 1785243894241130
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 101,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 18
+    },
+    {
+      "episode_index": 26,
+      "episode_id": 6336,
+      "texts": [
+        "Left click the mouse",
+        "Press on the mouse",
+        "Push the button on the mouse."
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Press on the mouse",
+      "used_text": "Press on the mouse",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/6336.json",
+        "size": 118119,
+        "md5": "1wak7yHdzWPJyoxyeLC5hw==",
+        "generation": 1785214822337913
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/6336/0.mp4",
+        "size": 141246,
+        "md5": "atwU4VGZboD2INrA1INV1w==",
+        "generation": 1785246473260349
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 37,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 2
+    },
+    {
+      "episode_index": 27,
+      "episode_id": 28709,
+      "texts": [
+        "Move the black and white cube to the right, pick up the cube in the middle then place it down again",
+        "Move the black block to the right",
+        "Move the white and black cube to the right then lift and drop the rubik's cube in the middle position"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Move the white and black cube to the right then lift and drop the rubik's cube in the middle position",
+      "used_text": "Move the white and black cube to the right then lift and drop the rubik's cube in the middle position",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/28709.json",
+        "size": 452544,
+        "md5": "OWMX6HYftCtMgcmI6upIDA==",
+        "generation": 1785214913521308
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/28709/0.mp4",
+        "size": 394586,
+        "md5": "PqXF2yxpQHOdCP0FBOymVw==",
+        "generation": 1785250793275100
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 145,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 29
+    },
+    {
+      "episode_index": 28,
+      "episode_id": 21530,
+      "texts": [
+        "Use cloth to clean something (ex: table, window, mirror, plate)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Use cloth to clean something (ex: table, window, mirror, plate)",
+      "used_text": "Use cloth to clean something (ex: table, window, mirror, plate)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/21530.json",
+        "size": 166516,
+        "md5": "baylOUfcAwYopx2JmJr/kA==",
+        "generation": 1785214555329046
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/21530/0.mp4",
+        "size": 188687,
+        "md5": "S22O47FByrV6YzLLyVStLQ==",
+        "generation": 1785255054166223
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 53,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 6
+    },
+    {
+      "episode_index": 29,
+      "episode_id": 52341,
+      "texts": [
+        "Pick up the orange object and put it in the sink",
+        "Put the brown toy inside the sink",
+        "Pick up the brown toy and put it in the sink"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Pick up the orange object and put it in the sink",
+      "used_text": "Pick up the orange object and put it in the sink",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/52341.json",
+        "size": 118976,
+        "md5": "yzqrroZG642E40tP2CtDrg==",
+        "generation": 1785215093625642
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/52341/0.mp4",
+        "size": 167356,
+        "md5": "4IPr1i5DV3wCe/679Y0CKQ==",
+        "generation": 1785247134929959
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 38,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 2
+    },
+    {
+      "episode_index": 30,
+      "episode_id": 19306,
+      "texts": [
+        "wrap pen in towel and pack in container"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "wrap pen in towel and pack in container",
+      "used_text": "wrap pen in towel and pack in container",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/19306.json",
+        "size": 1342877,
+        "md5": "ju2rCx6gu8gmA8t5z8yP7g==",
+        "generation": 1785214854934794
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/19306/0.mp4",
+        "size": 2126138,
+        "md5": "kMOsrFoJPvIuvi/zC/ezYA==",
+        "generation": 1785252956560700
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 427,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 99
+    },
+    {
+      "episode_index": 31,
+      "episode_id": 27573,
+      "texts": [
+        "Move the mug backwards",
+        "Move the cup to the left",
+        "Move the cup slightly to the bottom on the table"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move the mug backwards",
+      "used_text": "Move the mug backwards",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/27573.json",
+        "size": 213095,
+        "md5": "8PNh6kce+CVbQ4pCp2/wfA==",
+        "generation": 1785214536962342
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/27573/0.mp4",
+        "size": 104856,
+        "md5": "0f6TMnyfJMzG1r/CS35Qtw==",
+        "generation": 1785248996220950
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 68,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 9
+    },
+    {
+      "episode_index": 32,
+      "episode_id": 37834,
+      "texts": [
+        "Put the clothes on the box",
+        "Put the t-shirts on the brown box.",
+        "Move the shirts on the chair to the top of the box"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Put the t-shirts on the brown box.",
+      "used_text": "Put the t-shirts on the brown box.",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/37834.json",
+        "size": 337392,
+        "md5": "GQTXeIYjVPwyaRJ2ym6G0A==",
+        "generation": 1785214785388482
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/37834/0.mp4",
+        "size": 376926,
+        "md5": "6op0Tq/3Q2cJ0Dnj8jpitg==",
+        "generation": 1785255054075414
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 108,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 19
+    },
+    {
+      "episode_index": 33,
+      "episode_id": 11518,
+      "texts": [
+        "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/11518.json",
+        "size": 622511,
+        "md5": "Lu4fJsz7u9EzM0crgBC1dg==",
+        "generation": 1785214734875849
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/11518/0.mp4",
+        "size": 443735,
+        "md5": "VzzB3JNKmCbNmQrj858/kw==",
+        "generation": 1785243534397146
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 198,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 42
+    },
+    {
+      "episode_index": 34,
+      "episode_id": 22488,
+      "texts": [
+        "Put the green and orange blocks in the bowl",
+        "Put the two blocks inside the bowl",
+        "Pick up the green and orange blocks and put them in the bowl"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Put the two blocks inside the bowl",
+      "used_text": "Put the two blocks inside the bowl",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/22488.json",
+        "size": 185838,
+        "md5": "Dr3lNythOQone7Vo18WGyA==",
+        "generation": 1785214614699374
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/22488/0.mp4",
+        "size": 193109,
+        "md5": "e+49/gmq6439RAIUvyJXVQ==",
+        "generation": 1785245453471091
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 59,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 7
+    },
+    {
+      "episode_index": 35,
+      "episode_id": 66118,
+      "texts": [
+        "Pick the tube on the table and put it in the purse",
+        "Put the white object in the bag",
+        "Put the small tube in the purse"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Pick the tube on the table and put it in the purse",
+      "used_text": "Pick the tube on the table and put it in the purse",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/66118.json",
+        "size": 222656,
+        "md5": "BZx4tTY/qyngxzkUWUtiRg==",
+        "generation": 1785214821368781
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/66118/0.mp4",
+        "size": 197256,
+        "md5": "O8AqRxBrUiZ/D7ddXAXLuA==",
+        "generation": 1785253853239929
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 70,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 10
+    },
+    {
+      "episode_index": 36,
+      "episode_id": 47809,
+      "texts": [
+        "Remove the green pen from the bowl and put it on the table",
+        "Remove the green pen from the white bowl",
+        "Put the pen in the bowl on the table"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Put the pen in the bowl on the table",
+      "used_text": "Put the pen in the bowl on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/47809.json",
+        "size": 188641,
+        "md5": "s7xxBx9x+A0VHxD7maLEqg==",
+        "generation": 1785214611449271
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/47809/0.mp4",
+        "size": 135588,
+        "md5": "9oYw0amdCMH1fS9ToToyaQ==",
+        "generation": 1785251335944155
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 60,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 7
+    },
+    {
+      "episode_index": 37,
+      "episode_id": 8877,
+      "texts": [
+        "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/8877.json",
+        "size": 483479,
+        "md5": "2iETh+EMvIwttXZ7KGa4Eg==",
+        "generation": 1785214818389151
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/8877/0.mp4",
+        "size": 372397,
+        "md5": "DC6LFY9wBc2phg8zh0I6hQ==",
+        "generation": 1785250913675279
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 152,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 30
+    },
+    {
+      "episode_index": 38,
+      "episode_id": 15673,
+      "texts": [
+        "Put the plush toy on the toy car"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the plush toy on the toy car",
+      "used_text": "Put the plush toy on the toy car",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/15673.json",
+        "size": 241348,
+        "md5": "4oGXC/VnXaV/n5dWnAA1ug==",
+        "generation": 1785214773425144
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/15673/0.mp4",
+        "size": 242253,
+        "md5": "HXViYzsvD+jEjVyUb/imkw==",
+        "generation": 1785245333547111
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 77,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 12
+    },
+    {
+      "episode_index": 39,
+      "episode_id": 11071,
+      "texts": [
+        "Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)",
+      "used_text": "Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/11071.json",
+        "size": 442238,
+        "md5": "JaymYjOqGUniBlLrveriuA==",
+        "generation": 1785214759995748
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/11071/0.mp4",
+        "size": 306770,
+        "md5": "jMqumvZBk6b1yX9gIwKMwQ==",
+        "generation": 1785249174861721
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 141,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 28
+    },
+    {
+      "episode_index": 40,
+      "episode_id": 44499,
+      "texts": [
+        "Stack up the cups"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Stack up the cups",
+      "used_text": "Stack up the cups",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/44499.json",
+        "size": 243291,
+        "md5": "Q8SsqiRi8pjsX3m8laikPA==",
+        "generation": 1785214772240327
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/44499/0.mp4",
+        "size": 171667,
+        "md5": "FQg5e+/mGQaB0eV2+dnQsw==",
+        "generation": 1785251035848264
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 77,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 12
+    },
+    {
+      "episode_index": 41,
+      "episode_id": 69308,
+      "texts": [
+        "Remove the yellow object from the top middle of the box and put it on the table",
+        "Take the yellow object from the toolbox and put it on the table",
+        "Remove the cylindrical yellow object from the black and white case and place it on the table"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Take the yellow object from the toolbox and put it on the table",
+      "used_text": "Take the yellow object from the toolbox and put it on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/69308.json",
+        "size": 300341,
+        "md5": "WzMjdrQe3xIAtWDlC/kavw==",
+        "generation": 1785214518654527
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/69308/0.mp4",
+        "size": 294874,
+        "md5": "b3DVqn2tWl2bt8M1TGEs/A==",
+        "generation": 1785246233249189
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 96,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 42,
+      "episode_id": 67477,
+      "texts": [
+        "Put the white cloth on the rack.",
+        "Hang the cloth on the stand",
+        "Hang the white cloth on the black stand."
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the white cloth on the rack.",
+      "used_text": "Put the white cloth on the rack.",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/67477.json",
+        "size": 193072,
+        "md5": "TZvvtrH+8Q7nvpjmuNHWXw==",
+        "generation": 1785215154333560
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/67477/0.mp4",
+        "size": 106561,
+        "md5": "MpV/30xKmwi1iIDKsBftKg==",
+        "generation": 1785250316213593
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 61,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 8
+    },
+    {
+      "episode_index": 43,
+      "episode_id": 22800,
+      "texts": [
+        "Put the left yellow block on the right yellow block"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the left yellow block on the right yellow block",
+      "used_text": "Put the left yellow block on the right yellow block",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/22800.json",
+        "size": 163521,
+        "md5": "3xACO58pfXiUhVjUA/wJ9w==",
+        "generation": 1785214509423316
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/22800/0.mp4",
+        "size": 71754,
+        "md5": "N6DTct1mnnOWrzMGQg1ekw==",
+        "generation": 1785246415006997
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 52,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 5
+    },
+    {
+      "episode_index": 44,
+      "episode_id": 61069,
+      "texts": [
+        "Pick up the blue pair of shoes and move them to the left side of the rack"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Pick up the blue pair of shoes and move them to the left side of the rack",
+      "used_text": "Pick up the blue pair of shoes and move them to the left side of the rack",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/61069.json",
+        "size": 693448,
+        "md5": "lBOIp8LLqs79bRX6Vrknzw==",
+        "generation": 1785215153443102
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/61069/0.mp4",
+        "size": 1074461,
+        "md5": "WwPnRS8M2b2sYPKxKoKqVQ==",
+        "generation": 1785236814563890
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 220,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 47
+    },
+    {
+      "episode_index": 45,
+      "episode_id": 35494,
+      "texts": [
+        "Turn the knobs on the pot",
+        "Twist the knobs on both handles of the pot",
+        "Twist the two knobs on the handles of the pot on the stove."
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Twist the knobs on both handles of the pot",
+      "used_text": "Twist the knobs on both handles of the pot",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/35494.json",
+        "size": 331132,
+        "md5": "ADYGEVkhdWaE0R/UigqFPg==",
+        "generation": 1785214542507949
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/35494/0.mp4",
+        "size": 351654,
+        "md5": "zZwiQfXlLxyhztTxdxkLYQ==",
+        "generation": 1785250073575262
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 105,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 19
+    },
+    {
+      "episode_index": 46,
+      "episode_id": 49796,
+      "texts": [
+        "Put the bowl in the container"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the bowl in the container",
+      "used_text": "Put the bowl in the container",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/49796.json",
+        "size": 167102,
+        "md5": "sOIm5Ex4XAivo3Vc30ogbg==",
+        "generation": 1785214486457552
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/49796/0.mp4",
+        "size": 119129,
+        "md5": "tDw9R9gcmvUfzzSlLsm1Pw==",
+        "generation": 1785249895811653
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 53,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 6
+    },
+    {
+      "episode_index": 47,
+      "episode_id": 19099,
+      "texts": [
+        "Put the blue lego brick in the open drawer then close the drawer",
+        "Put the blue lego brick in the open drawer, then close the drawer",
+        "Place the blue object inside the open cabinet drawer and close the drawer"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Put the blue lego brick in the open drawer, then close the drawer",
+      "used_text": "Put the blue lego brick in the open drawer, then close the drawer",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/19099.json",
+        "size": 134752,
+        "md5": "/9OQ4Q4ZYK1/POw5JF/F+g==",
+        "generation": 1785214762571559
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/19099/0.mp4",
+        "size": 181801,
+        "md5": "VUTPiJb+vTzYEKuOd7SNlA==",
+        "generation": 1785244495643083
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 43,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 3
+    },
+    {
+      "episode_index": 48,
+      "episode_id": 69218,
+      "texts": [
+        "Press button (ex: light switch, elevators, microwave button)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Press button (ex: light switch, elevators, microwave button)",
+      "used_text": "Press button (ex: light switch, elevators, microwave button)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/69218.json",
+        "size": 138866,
+        "md5": "35RkocuWdOgAQXJmP+SXqg==",
+        "generation": 1785214590509006
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/69218/0.mp4",
+        "size": 121519,
+        "md5": "DGpou9uD1SE0UNxtwwTN9w==",
+        "generation": 1785244013283996
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 44,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 3
+    },
+    {
+      "episode_index": 49,
+      "episode_id": 19658,
+      "texts": [
+        "Pick up the medicine bottle and move it forward.",
+        "Move the bottle backwards",
+        "Move the bottle forward"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Move the bottle forward",
+      "used_text": "Move the bottle forward",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/19658.json",
+        "size": 127530,
+        "md5": "CSJKHzOKRMveNg+ZTuwcsw==",
+        "generation": 1785214540112313
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/19658/0.mp4",
+        "size": 65753,
+        "md5": "D8le4MNxE49rPAzgZuvqeQ==",
+        "generation": 1785243894598131
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 40,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 2
+    },
+    {
+      "episode_index": 50,
+      "episode_id": 19339,
+      "texts": [
+        "Remove the box out of the sink",
+        "Remove the box from the sink",
+        "Take the basket from the sink and put it on the counter"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Remove the box out of the sink",
+      "used_text": "Remove the box out of the sink",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/19339.json",
+        "size": 259850,
+        "md5": "KKqiflxqkbl1vTJ0w4er6g==",
+        "generation": 1785214772844602
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/19339/0.mp4",
+        "size": 213665,
+        "md5": "h//Oy2mRyrXheHJASiuHIQ==",
+        "generation": 1785244374145335
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 82,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 13
+    },
+    {
+      "episode_index": 51,
+      "episode_id": 4358,
+      "texts": [
+        "Use the blue fabric to wipe the stove."
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Use the blue fabric to wipe the stove.",
+      "used_text": "Use the blue fabric to wipe the stove.",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/4358.json",
+        "size": 363680,
+        "md5": "Enm4WZEom9ctMSurwS/4JA==",
+        "generation": 1785214497548029
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/4358/0.mp4",
+        "size": 412691,
+        "md5": "Bj/0s0zQoKPhr4Lr1BLrDA==",
+        "generation": 1785248813263656
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 116,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 21
+    },
+    {
+      "episode_index": 52,
+      "episode_id": 53617,
+      "texts": [
+        "Move the black bowl next to the napkin an remove the can from the bowl"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move the black bowl next to the napkin an remove the can from the bowl",
+      "used_text": "Move the black bowl next to the napkin an remove the can from the bowl",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/53617.json",
+        "size": 343883,
+        "md5": "Sg2T3cSc/mfETuEAz9bsuw==",
+        "generation": 1785214515794221
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/53617/0.mp4",
+        "size": 480406,
+        "md5": "Yc86Oa0Jxewjl1hgaeM0VA==",
+        "generation": 1785246174963388
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 109,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 20
+    },
+    {
+      "episode_index": 53,
+      "episode_id": 60900,
+      "texts": [
+        "Put the cloth in the black box",
+        "Put the white towel inside the black basket.",
+        "Put the white towel inside the black box"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Put the white towel inside the black basket.",
+      "used_text": "Put the white towel inside the black basket.",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/60900.json",
+        "size": 535475,
+        "md5": "T61To9uqaU7sMArgHxV8Gg==",
+        "generation": 1785214534281279
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/60900/0.mp4",
+        "size": 554141,
+        "md5": "lFCMM8pdfYAT666/e6emnw==",
+        "generation": 1785246113807432
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 168,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 34
+    },
+    {
+      "episode_index": 54,
+      "episode_id": 24363,
+      "texts": [
+        "Move the pillows from the middle of the couch and set them against the armrest",
+        "Move the small pillows to the right armrest of the couch",
+        "Arrange the small pillows on the right side of the sofa"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Move the small pillows to the right armrest of the couch",
+      "used_text": "Move the small pillows to the right armrest of the couch",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/24363.json",
+        "size": 857541,
+        "md5": "38sbydFWYNv08FE+Ph1bQA==",
+        "generation": 1785215094311786
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/24363/0.mp4",
+        "size": 827664,
+        "md5": "4jMjvB+Fs3Do/DuSL3S08Q==",
+        "generation": 1785244854000513
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 275,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 61
+    },
+    {
+      "episode_index": 55,
+      "episode_id": 17669,
+      "texts": [
+        "Do any two tasks consecutively.\n\nSuggested tasks:\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Do any two tasks consecutively.\n\nSuggested tasks:\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)",
+      "used_text": "Do any two tasks consecutively.\n\nSuggested tasks:\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/17669.json",
+        "size": 466562,
+        "md5": "9+Hft/AgFh8av5yuENff+Q==",
+        "generation": 1785214556756374
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/17669/0.mp4",
+        "size": 352861,
+        "md5": "RAUuO5E2lDc/js4E9qP3aQ==",
+        "generation": 1785247076078154
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 148,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 29
+    },
+    {
+      "episode_index": 56,
+      "episode_id": 54416,
+      "texts": [
+        "Turn on the extension cable",
+        "Turn on the switch on the adapter",
+        "Push down on the first button from the right on the adaptor."
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Turn on the extension cable",
+      "used_text": "Turn on the extension cable",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/54416.json",
+        "size": 146518,
+        "md5": "kIXkeJcHH4tkFnjeFclXqQ==",
+        "generation": 1785214609860503
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/54416/0.mp4",
+        "size": 60024,
+        "md5": "mwKa0Sg5NxQvkfJdlIZjGQ==",
+        "generation": 1785254934115839
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 46,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 57,
+      "episode_id": 39091,
+      "texts": [
+        "Put the marker in the cup"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the marker in the cup",
+      "used_text": "Put the marker in the cup",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/39091.json",
+        "size": 291518,
+        "md5": "fPu9tXlG+wEFi6LTKqjxow==",
+        "generation": 1785214510564386
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/39091/0.mp4",
+        "size": 330835,
+        "md5": "HBUMHMq+pI8xSK9HM4HdOA==",
+        "generation": 1785245035762670
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 93,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 58,
+      "episode_id": 51375,
+      "texts": [
+        "Press button (ex: light switch, elevators, microwave button)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Press button (ex: light switch, elevators, microwave button)",
+      "used_text": "Press button (ex: light switch, elevators, microwave button)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/51375.json",
+        "size": 121648,
+        "md5": "e0zO9/TLsVheFHLA3tZXhQ==",
+        "generation": 1785214505532242
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/51375/0.mp4",
+        "size": 119777,
+        "md5": "wQTfw9tOnOhv38BnngmR4A==",
+        "generation": 1785242274052109
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 38,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 2
+    },
+    {
+      "episode_index": 59,
+      "episode_id": 36671,
+      "texts": [
+        "Use cloth to clean something (ex: table, window, mirror, plate)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Use cloth to clean something (ex: table, window, mirror, plate)",
+      "used_text": "Use cloth to clean something (ex: table, window, mirror, plate)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/36671.json",
+        "size": 170044,
+        "md5": "H9XzAGX0x0CMbvsKyDf81Q==",
+        "generation": 1785214914108516
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/36671/0.mp4",
+        "size": 85618,
+        "md5": "qNPra/4iVm1bb6XfUfhHoQ==",
+        "generation": 1785244914217282
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 54,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 6
+    },
+    {
+      "episode_index": 60,
+      "episode_id": 26610,
+      "texts": [
+        "Put the cloth on the table",
+        "Put the cloth on the table",
+        "Place the towel on the table"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the cloth on the table",
+      "used_text": "Put the cloth on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/26610.json",
+        "size": 148791,
+        "md5": "HlkRBs/jwqz9KM5nsOn0Lg==",
+        "generation": 1785214585642440
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/26610/0.mp4",
+        "size": 97577,
+        "md5": "9lzftgBlEVGXtrk/oZWKGw==",
+        "generation": 1785237775021414
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 47,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 61,
+      "episode_id": 29037,
+      "texts": [
+        "Put both right and left blocks on the first right position",
+        "Stack the items on the plank",
+        "Move the rings to one side of the wooden platform"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Stack the items on the plank",
+      "used_text": "Stack the items on the plank",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/29037.json",
+        "size": 492845,
+        "md5": "KViRw8Xg1pAOmZ8dESTmxQ==",
+        "generation": 1785215214374724
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/29037/0.mp4",
+        "size": 408163,
+        "md5": "cTpcZM7K9zMhGnYdsrwShw==",
+        "generation": 1785245756477912
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 156,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 31
+    },
+    {
+      "episode_index": 62,
+      "episode_id": 24960,
+      "texts": [
+        "Put the towel into the box.",
+        "Put the white towel inside the black basket.",
+        "Put the towel inside the black object"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Put the towel inside the black object",
+      "used_text": "Put the towel inside the black object",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/24960.json",
+        "size": 444112,
+        "md5": "APVmUwf+YczCZX6gbliozw==",
+        "generation": 1785214465902691
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/24960/0.mp4",
+        "size": 660430,
+        "md5": "crwqTBCO9GIvFCpr/WgUPQ==",
+        "generation": 1785241015020669
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 139,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 27
+    },
+    {
+      "episode_index": 63,
+      "episode_id": 48582,
+      "texts": [
+        "Put the whisker on the table",
+        "Remove the whisker from the bottle",
+        "Pick up one object from the jar and put it on the table"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the whisker on the table",
+      "used_text": "Put the whisker on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/48582.json",
+        "size": 239625,
+        "md5": "rae1rjmtySW0ju8/xqwcQg==",
+        "generation": 1785215094999022
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/48582/0.mp4",
+        "size": 209432,
+        "md5": "UzQQEFauPWS2ZcLPBTiFHw==",
+        "generation": 1785254335660084
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 76,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 11
+    },
+    {
+      "episode_index": 64,
+      "episode_id": 44550,
+      "texts": [
+        "Pick up the cutter and put it on the table"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Pick up the cutter and put it on the table",
+      "used_text": "Pick up the cutter and put it on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/44550.json",
+        "size": 185333,
+        "md5": "L4XMABFv2ZbEFBoJ/Dkmzg==",
+        "generation": 1785214471145223
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/44550/0.mp4",
+        "size": 154933,
+        "md5": "RxZQI8uD9Itom58UM8BOBg==",
+        "generation": 1785237593269744
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 59,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 7
+    },
+    {
+      "episode_index": 65,
+      "episode_id": 65562,
+      "texts": [
+        "Pull the black box out of the bottom of the black cabinet",
+        "Slightly pull out the black bin under the black and white cabinet",
+        "Pull out the black storage bin from underneath the cabinet"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Slightly pull out the black bin under the black and white cabinet",
+      "used_text": "Slightly pull out the black bin under the black and white cabinet",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/65562.json",
+        "size": 214072,
+        "md5": "Zi8PLtJNhVtw/azIPGAoTQ==",
+        "generation": 1785214501040770
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/65562/0.mp4",
+        "size": 249938,
+        "md5": "7yIWAB6+g5NYCwyaP8GlLw==",
+        "generation": 1785255055073532
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 68,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 9
+    },
+    {
+      "episode_index": 66,
+      "episode_id": 52301,
+      "texts": [
+        "Take the pen out of the cup and put it on the table",
+        "Remove the pen from the cup",
+        "Pick up the pen from the cup and put it on the table"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Pick up the pen from the cup and put it on the table",
+      "used_text": "Pick up the pen from the cup and put it on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/52301.json",
+        "size": 151979,
+        "md5": "n2OaPRNDkHEbDKLqrEMyyQ==",
+        "generation": 1785215215119906
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/52301/0.mp4",
+        "size": 73677,
+        "md5": "5WQ/8pxn0G8yNrO1q+ZmZQ==",
+        "generation": 1785240533213146
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 48,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 67,
+      "episode_id": 62102,
+      "texts": [
+        "Turn off the lamp",
+        "Turn off the desk lamp",
+        "Turn off the lamp"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Turn off the lamp",
+      "used_text": "Turn off the lamp",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/62102.json",
+        "size": 256071,
+        "md5": "IFRJ1wf159coLMGXftXqVg==",
+        "generation": 1785214591550685
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/62102/0.mp4",
+        "size": 232440,
+        "md5": "wDfbHJivPIPUOXUR84d21w==",
+        "generation": 1785242875445168
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 81,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 13
+    },
+    {
+      "episode_index": 68,
+      "episode_id": 30738,
+      "texts": [
+        "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/30738.json",
+        "size": 945719,
+        "md5": "OZmNJU9Ts0qH1VOBfO3Ifg==",
+        "generation": 1785214484421616
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/30738/0.mp4",
+        "size": 1467572,
+        "md5": "/IxduLCh5zwzpTK7UFvVYQ==",
+        "generation": 1785251996148689
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 303,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 68
+    },
+    {
+      "episode_index": 69,
+      "episode_id": 23688,
+      "texts": [
+        "Move the cup slightly to the left",
+        "Move the mug to the left",
+        "Move the mug to the left."
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Move the mug to the left",
+      "used_text": "Move the mug to the left",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/23688.json",
+        "size": 111657,
+        "md5": "UorfSOVU1EqLQ7VGmMOCww==",
+        "generation": 1785214757857628
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/23688/0.mp4",
+        "size": 133465,
+        "md5": "O33NL+GpkO3wetosyWwxNw==",
+        "generation": 1785237895729680
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 35,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 1
+    },
+    {
+      "episode_index": 70,
+      "episode_id": 2521,
+      "texts": [
+        "Take the red marker out of the clear cup",
+        "Remove the marker from the cup",
+        "Take the red marker out of the clear cup."
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Take the red marker out of the clear cup",
+      "used_text": "Take the red marker out of the clear cup",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/2521.json",
+        "size": 298776,
+        "md5": "14TsvQqNaUQygJpN26i4fw==",
+        "generation": 1785214787897428
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/2521/0.mp4",
+        "size": 435184,
+        "md5": "xOk/4q15fFSG3xY3esyEvw==",
+        "generation": 1785247373315209
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 95,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 71,
+      "episode_id": 59043,
+      "texts": [
+        "Put the fork and spoon on the cutlery tray."
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the fork and spoon on the cutlery tray.",
+      "used_text": "Put the fork and spoon on the cutlery tray.",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/59043.json",
+        "size": 364866,
+        "md5": "IyD7auSpVAvBKxr9dIqBhQ==",
+        "generation": 1785214562544892
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/59043/0.mp4",
+        "size": 411389,
+        "md5": "WV0m6RLYw9+nVEhtFkQNPQ==",
+        "generation": 1785237894647870
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 116,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 21
+    },
+    {
+      "episode_index": 72,
+      "episode_id": 46550,
+      "texts": [
+        "Hang or unhang object (ex: towel on hook, clothes over chair)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/46550.json",
+        "size": 159500,
+        "md5": "RndqWm9Q0TmCBy9BkHFkRg==",
+        "generation": 1785214775228608
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/46550/0.mp4",
+        "size": 233203,
+        "md5": "mZb6fpp9HditlIqmTInSYw==",
+        "generation": 1785246655044072
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 51,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 5
+    },
+    {
+      "episode_index": 73,
+      "episode_id": 62064,
+      "texts": [
+        "Hang or unhang object (ex: towel on hook, clothes over chair)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/62064.json",
+        "size": 405885,
+        "md5": "5ivTOHz0p+9NbVQR9Hye7A==",
+        "generation": 1785214572792394
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/62064/0.mp4",
+        "size": 287588,
+        "md5": "MnpdXpSaVoLVbUZHzagWQg==",
+        "generation": 1785240173958221
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 130,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 25
+    },
+    {
+      "episode_index": 74,
+      "episode_id": 57681,
+      "texts": [
+        "Open the left side of the cabinet"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Open the left side of the cabinet",
+      "used_text": "Open the left side of the cabinet",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/57681.json",
+        "size": 209209,
+        "md5": "lN2qm5xUjoPsIQL9Fl8aPA==",
+        "generation": 1785214490229488
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/57681/0.mp4",
+        "size": 305556,
+        "md5": "a4KKRnLocnYCuM3noFU/Ww==",
+        "generation": 1785237294348264
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 67,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 9
+    },
+    {
+      "episode_index": 75,
+      "episode_id": 60453,
+      "texts": [
+        "Put the black marker inside the yellow mug",
+        "Put the marker in the cup",
+        "Pick up the marker from the table and put it in the cup"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the black marker inside the yellow mug",
+      "used_text": "Put the black marker inside the yellow mug",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/60453.json",
+        "size": 239020,
+        "md5": "D0p8vFE+7pm4pGHzzQxolw==",
+        "generation": 1785214762008766
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/60453/0.mp4",
+        "size": 91139,
+        "md5": "Xxj8F5N16c+r34IRBTTuHA==",
+        "generation": 1785240234021866
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 76,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 11
+    },
+    {
+      "episode_index": 76,
+      "episode_id": 36295,
+      "texts": [
+        "Open the left cabinet door"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Open the left cabinet door",
+      "used_text": "Open the left cabinet door",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/36295.json",
+        "size": 227326,
+        "md5": "4CTVB3ywcf5kl0xcTcDlzw==",
+        "generation": 1785214609361411
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/36295/0.mp4",
+        "size": 92801,
+        "md5": "NPuUkWlnKz310Tkc7cz6RA==",
+        "generation": 1785251873897538
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 74,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 11
+    },
+    {
+      "episode_index": 77,
+      "episode_id": 17148,
+      "texts": [
+        "Get the bottle with the white lid from the table and place it on the black box",
+        "Put the bottle on top of the black box",
+        "Put the bottle on top of the black box"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Put the bottle on top of the black box",
+      "used_text": "Put the bottle on top of the black box",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/17148.json",
+        "size": 150369,
+        "md5": "+s/MPnF/A82E5C85CCiWaA==",
+        "generation": 1785214464078343
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/17148/0.mp4",
+        "size": 86053,
+        "md5": "w1VTP+rkdghHoyyBVASJLw==",
+        "generation": 1785239934497590
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 47,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 78,
+      "episode_id": 5964,
+      "texts": [
+        "move rubber bands in/out of bag"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "move rubber bands in/out of bag",
+      "used_text": "move rubber bands in/out of bag",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/5964.json",
+        "size": 316892,
+        "md5": "UNRyB9xX8eYW4N7drAiixg==",
+        "generation": 1785214805563974
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/5964/0.mp4",
+        "size": 321743,
+        "md5": "Zd+H+Xae2R5oN6m8QmEh9w==",
+        "generation": 1785242994969739
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 100,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 17
+    },
+    {
+      "episode_index": 79,
+      "episode_id": 34148,
+      "texts": [
+        "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/34148.json",
+        "size": 346354,
+        "md5": "Kug2JPnHdj047HyjjjB+Kw==",
+        "generation": 1785215275193919
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/34148/0.mp4",
+        "size": 391374,
+        "md5": "z81Cux9LAM8020YkAZsrBw==",
+        "generation": 1785240353497968
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 110,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 20
+    },
+    {
+      "episode_index": 80,
+      "episode_id": 50125,
+      "texts": [
+        "pnp-table-to-bowl-bars"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "pnp-table-to-bowl-bars",
+      "used_text": "pnp-table-to-bowl-bars",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/50125.json",
+        "size": 282674,
+        "md5": "cioruBm75RNJUwaDEwHdTA==",
+        "generation": 1785214584353979
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/50125/0.mp4",
+        "size": 202164,
+        "md5": "mGYrutA7DSi2sc0sJUKKuw==",
+        "generation": 1785244853453722
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 90,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 15
+    },
+    {
+      "episode_index": 81,
+      "episode_id": 53656,
+      "texts": [
+        "Move the towel to the left"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move the towel to the left",
+      "used_text": "Move the towel to the left",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/53656.json",
+        "size": 241886,
+        "md5": "mSSDk0hb/nVjTdDckXFXdg==",
+        "generation": 1785214484808206
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/53656/0.mp4",
+        "size": 258726,
+        "md5": "qikHVDnKUU+CH/0rJZyYPw==",
+        "generation": 1785238075255716
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 77,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 12
+    },
+    {
+      "episode_index": 82,
+      "episode_id": 11022,
+      "texts": [
+        "Take the lid off the pot"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Take the lid off the pot",
+      "used_text": "Take the lid off the pot",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/11022.json",
+        "size": 151722,
+        "md5": "8o44jmwpdEd9lQ+FTs82Eg==",
+        "generation": 1785214817625673
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/11022/0.mp4",
+        "size": 99805,
+        "md5": "sxRFyuDpJs6UAoCG/kTNsg==",
+        "generation": 1785241255117613
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 48,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 4
+    },
+    {
+      "episode_index": 83,
+      "episode_id": 9029,
+      "texts": [
+        "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/9029.json",
+        "size": 290668,
+        "md5": "mUnvVBA6xmU3c3zbapKdqw==",
+        "generation": 1785214557239441
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/9029/0.mp4",
+        "size": 425467,
+        "md5": "I5Fm+hECp38UTetqEWZJ+Q==",
+        "generation": 1785239453765726
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 94,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 84,
+      "episode_id": 8896,
+      "texts": [
+        "Unfold the cloth on the table once",
+        "Unfold the table towel",
+        "Unfold the cloth"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Unfold the cloth on the table once",
+      "used_text": "Unfold the cloth on the table once",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/8896.json",
+        "size": 304292,
+        "md5": "5+g8VMtsmEmIalVoYfRYcQ==",
+        "generation": 1785214781446869
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/8896/0.mp4",
+        "size": 257759,
+        "md5": "WaxYvPXyrVSluXTYBJ6jtw==",
+        "generation": 1785253255543211
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 96,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 85,
+      "episode_id": 46170,
+      "texts": [
+        "Move the measuring tape to the right",
+        "Move the pot to the right",
+        "Move the tape measure to the right"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Move the tape measure to the right",
+      "used_text": "Move the tape measure to the right",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/46170.json",
+        "size": 133520,
+        "md5": "LBWiD7z6Dc/I11PJMVHp/Q==",
+        "generation": 1785214812762431
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/46170/0.mp4",
+        "size": 71915,
+        "md5": "sadksdDqZHdDB8vXXNdItw==",
+        "generation": 1785252234765250
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 42,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 3
+    },
+    {
+      "episode_index": 86,
+      "episode_id": 39393,
+      "texts": [
+        "Put the marker in the mug",
+        "Put the marker into the mug cup",
+        "Put the pen in the mug"
+      ],
+      "chosen_text_index": 2,
+      "chosen_text_raw": "Put the pen in the mug",
+      "used_text": "Put the pen in the mug",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/39393.json",
+        "size": 222224,
+        "md5": "5/ZzbgHZsdgSFOi++THneQ==",
+        "generation": 1785214854531749
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/39393/0.mp4",
+        "size": 172440,
+        "md5": "Go8m6W6NjE6p43GJlbXvJA==",
+        "generation": 1785243654039778
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 71,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 10
+    },
+    {
+      "episode_index": 87,
+      "episode_id": 40738,
+      "texts": [
+        "Move the pink bowl to the left, pick up the black ceramic bowl and pour its contents into the pink bowl"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move the pink bowl to the left, pick up the black ceramic bowl and pour its contents into the pink bowl",
+      "used_text": "Move the pink bowl to the left, pick up the black ceramic bowl and pour its contents into the pink bowl",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/40738.json",
+        "size": 686802,
+        "md5": "4Ei5ppz16u8bz0YsGu0Z3w==",
+        "generation": 1785214559598476
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/40738/0.mp4",
+        "size": 659988,
+        "md5": "SkGdHGZdj5Iunu+/6m5MOw==",
+        "generation": 1785251993578952
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 217,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 47
+    },
+    {
+      "episode_index": 88,
+      "episode_id": 16907,
+      "texts": [
+        "Put the orange pepper on the pan"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the orange pepper on the pan",
+      "used_text": "Put the orange pepper on the pan",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/16907.json",
+        "size": 134240,
+        "md5": "/RtjojT8H1oEwYtKVcbRdA==",
+        "generation": 1785214495156829
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/16907/0.mp4",
+        "size": 142516,
+        "md5": "l2EZ+vSEiS64yYBzP5OfXA==",
+        "generation": 1785238315070272
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 43,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 3
+    },
+    {
+      "episode_index": 89,
+      "episode_id": 67045,
+      "texts": [
+        "Open or close curtain (ex: blanket on bed, shower curtain, shades)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Open or close curtain (ex: blanket on bed, shower curtain, shades)",
+      "used_text": "Open or close curtain (ex: blanket on bed, shower curtain, shades)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/67045.json",
+        "size": 160707,
+        "md5": "WA/xeie+IU5ip4xHbyaPYA==",
+        "generation": 1785214514100256
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/67045/0.mp4",
+        "size": 82082,
+        "md5": "aQhef4Ya6hYyNBCSh5hATw==",
+        "generation": 1785242933248129
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 51,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 5
+    },
+    {
+      "episode_index": 90,
+      "episode_id": 69447,
+      "texts": [
+        "Pick up the pineapple plush toy and put it in the box"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Pick up the pineapple plush toy and put it in the box",
+      "used_text": "Pick up the pineapple plush toy and put it in the box",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/69447.json",
+        "size": 164577,
+        "md5": "4nwGhORKJAyGSsUsuh0j0Q==",
+        "generation": 1785214809622305
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/69447/0.mp4",
+        "size": 156381,
+        "md5": "kAUIGbH/lEr/HJCIy0eiyg==",
+        "generation": 1785253854216750
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 52,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 5
+    },
+    {
+      "episode_index": 91,
+      "episode_id": 51382,
+      "texts": [
+        "Press button (ex: light switch, elevators, microwave button)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Press button (ex: light switch, elevators, microwave button)",
+      "used_text": "Press button (ex: light switch, elevators, microwave button)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/51382.json",
+        "size": 121195,
+        "md5": "bUbCKp+hRcvj4OCR5X2YRg==",
+        "generation": 1785214974730103
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/51382/0.mp4",
+        "size": 61948,
+        "md5": "BBtCmLADtzZuU617QWPB5g==",
+        "generation": 1785237715810811
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 38,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 2
+    },
+    {
+      "episode_index": 92,
+      "episode_id": 49658,
+      "texts": [
+        "Remove the wrench from the toolbox and put it inside the large blue cup on the right",
+        "Put the orange object inside the cup",
+        "Put the tool in the cup"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Remove the wrench from the toolbox and put it inside the large blue cup on the right",
+      "used_text": "Remove the wrench from the toolbox and put it inside the large blue cup on the right",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/49658.json",
+        "size": 136962,
+        "md5": "bD8TjENbutruZnPBtb7T6Q==",
+        "generation": 1785214777057409
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/49658/0.mp4",
+        "size": 110295,
+        "md5": "5w0GxOF8gyCo+V17rxQCfQ==",
+        "generation": 1785244256333834
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 43,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 3
+    },
+    {
+      "episode_index": 93,
+      "episode_id": 28817,
+      "texts": [
+        "Move object to a new position and orientation (ex: grasping, relocating, flipping)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Move object to a new position and orientation (ex: grasping, relocating, flipping)",
+      "used_text": "Move object to a new position and orientation (ex: grasping, relocating, flipping)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/28817.json",
+        "size": 1096239,
+        "md5": "EJIoN0G4duLSGDbLGoVViQ==",
+        "generation": 1785215394849130
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/28817/0.mp4",
+        "size": 606243,
+        "md5": "YK7prNqoWdUZsN0WWUT81g==",
+        "generation": 1785240235872267
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 346,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 79
+    },
+    {
+      "episode_index": 94,
+      "episode_id": 62784,
+      "texts": [
+        "Put the blue object inside the drawer and close it",
+        "Put the light blue building block inside the open topmost drawer then push the drawer backwards.",
+        "Put the building block in the open drawer, then close the drawer"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Put the blue object inside the drawer and close it",
+      "used_text": "Put the blue object inside the drawer and close it",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/62784.json",
+        "size": 129407,
+        "md5": "rJURGKdOivgiSfXRl/XsUg==",
+        "generation": 1785214759735449
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/62784/0.mp4",
+        "size": 193770,
+        "md5": "0eCAZmU53bDicxaSLsXJmQ==",
+        "generation": 1785239395034325
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 41,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 3
+    },
+    {
+      "episode_index": 95,
+      "episode_id": 4015,
+      "texts": [
+        "Take the cloth off the board and put it on the counter",
+        "Take the cloth on the desk pad and put it on the table",
+        "Remove the cloth from the wooden board and put it on the table"
+      ],
+      "chosen_text_index": 1,
+      "chosen_text_raw": "Take the cloth on the desk pad and put it on the table",
+      "used_text": "Take the cloth on the desk pad and put it on the table",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/4015.json",
+        "size": 110032,
+        "md5": "MxJChsXT408KJ21vian20Q==",
+        "generation": 1785215213347524
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/4015/0.mp4",
+        "size": 109374,
+        "md5": "1ppxR8bYOdCaawc1tAMPEQ==",
+        "generation": 1785247135708613
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 35,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 1
+    },
+    {
+      "episode_index": 96,
+      "episode_id": 65802,
+      "texts": [
+        "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/65802.json",
+        "size": 219933,
+        "md5": "Di2wvA2F8Q0O77DbWoOGtA==",
+        "generation": 1785214584029562
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/65802/0.mp4",
+        "size": 172129,
+        "md5": "OJgOXKCApri0QNoWNfIshA==",
+        "generation": 1785237955029863
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 70,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 10
+    },
+    {
+      "episode_index": 97,
+      "episode_id": 9732,
+      "texts": [
+        "Hang or unhang object (ex: towel on hook, clothes over chair)"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/9732.json",
+        "size": 302994,
+        "md5": "tIeLiOUxf17X1Dci4ghb5Q==",
+        "generation": 1785214506359743
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/9732/0.mp4",
+        "size": 209384,
+        "md5": "/Woxce7QVytcKFqpdtZfxA==",
+        "generation": 1785254633253295
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 96,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 98,
+      "episode_id": 69642,
+      "texts": [
+        "Pick up the folk from the dryer and put it in the sink"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Pick up the folk from the dryer and put it in the sink",
+      "used_text": "Pick up the folk from the dryer and put it in the sink",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/69642.json",
+        "size": 301209,
+        "md5": "LgPrSdPgiAwUyiCvL5Jrzw==",
+        "generation": 1785214531040152
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/69642/0.mp4",
+        "size": 154579,
+        "md5": "ueREUp+I/li2effFdY7Jmg==",
+        "generation": 1785253194624234
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 95,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 16
+    },
+    {
+      "episode_index": 99,
+      "episode_id": 65294,
+      "texts": [
+        "Open the soap bottle"
+      ],
+      "chosen_text_index": 0,
+      "chosen_text_raw": "Open the soap bottle",
+      "used_text": "Open the soap bottle",
+      "annotation_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/annotation/train/65294.json",
+        "size": 248014,
+        "md5": "I375e/z/HlgAH8/oYbdAEw==",
+        "generation": 1785214674189266
+      },
+      "video_fingerprint": {
+        "uri": "gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/65294/0.mp4",
+        "size": 135763,
+        "md5": "EHGmbUX9LOjxs1LeUD8ucQ==",
+        "generation": 1785253914153173
+      },
+      "ffprobe": {
+        "width": 320,
+        "height": 192,
+        "nb_frames": 79,
+        "fps": 5.0,
+        "pix_fmt": "yuv420p"
+      },
+      "n_windows": 12
+    }
+  ],
+  "draw_log": [
+    {
+      "episode_id": 25189,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 8944,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 67253,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 40723,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 30872,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 3905,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 40985,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 53956,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 45109,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 26802,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 48923,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 22546,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 31530,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 60367,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 52361,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 61233,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 41791,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 49497,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 63560,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 42427,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 15184,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 34212,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 30976,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 4099,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 991,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 35500,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 31999,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 10329,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 34499,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 30835,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 37274,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 35276,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 61291,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 6336,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 34355,
+      "reason": "too_short"
+    },
+    {
+      "episode_id": 28709,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 54362,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 21530,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 52341,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 19306,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 27573,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 37834,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 11518,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 22488,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 62723,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 66118,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 47809,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 8877,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 8945,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 15673,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 11071,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 44499,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 69308,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 67477,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 22800,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 61069,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 68254,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 35494,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 49796,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 19099,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 69218,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 6908,
+      "reason": "too_short"
+    },
+    {
+      "episode_id": 19658,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 19339,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 19009,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 4358,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 25179,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 53617,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 60900,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 24363,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 46898,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 21262,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 17669,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 15898,
+      "reason": "too_short"
+    },
+    {
+      "episode_id": 54416,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 9998,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 39091,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 51375,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 42776,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 36671,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 26610,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 29037,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 28370,
+      "reason": "too_short"
+    },
+    {
+      "episode_id": 24960,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 48582,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 44550,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 65562,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 259,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 3402,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 52301,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 62102,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 30738,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 23688,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 2521,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 59043,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 46550,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 62064,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 57681,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 60453,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 36295,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 17148,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 5964,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 34148,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 50125,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 53656,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 11022,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 21431,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 24557,
+      "reason": "too_short"
+    },
+    {
+      "episode_id": 8243,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 22960,
+      "reason": "too_short"
+    },
+    {
+      "episode_id": 9029,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 8896,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 40491,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 46170,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 39393,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 40738,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 16907,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 67045,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 69447,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 51382,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 49658,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 28817,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 62784,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 4015,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 65802,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 9732,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 69642,
+      "reason": "accepted"
+    },
+    {
+      "episode_id": 15119,
+      "reason": "not_success"
+    },
+    {
+      "episode_id": 65294,
+      "reason": "accepted"
+    }
+  ],
+  "rejection_tally": {
+    "accepted": 100,
+    "not_success": 23,
+    "too_short": 6
+  },
+  "totals": {
+    "episodes": 100,
+    "windows": 1629
+  }
+}
