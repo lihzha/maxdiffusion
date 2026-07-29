@@ -72,3 +72,10 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Result** — G1/G3/G5 RESOLVED on record; H1 (V1 fixtures not materialized — true: the three cache windows lived only as an unfingerprinted scratchpad probe) and H2 (checkpoint lists unexecutable: single periodic cadence at `wan_ti2v_full_ft_trainer.py:615-616`, `max_to_keep=3` at `wan_ti2v_side_adapter_trainer.py:392-396`) both verified and fixed in v4, plus the G4 residue (S2/S3 conflation in C₃, mode-unqualified m, overbroad claim → `C₃¹⁰⁰`/`m_corr`/tie-break/two-tier claim).
 - **Version Control** — this commit; v3 @ `42c9057`. Fourth review launched (background).
 - **Next** — v4 verdict → surface to Yixun for plan approval.
+
+## 2026-07-28T08:30:00Z — Plan v4 review: APPROVE-WITH-CHANGES → plan cycle CLOSED
+
+- **Goal** — Close the plan cycle (round 4).
+- **Result** — `passed`: H1/H2/G4-residue all RESOLVED on record; reviewer confirms the new CheckpointManager stays compatible with exp_01's Composite `params`/`opt_state`/`step` restore path and that the context table is correctly rebuilt outside the checkpoint; explicitly "No launch blocker remains", no fifth review needed. Single MINOR I1 (D10/D11 S2-ablation contradiction) fixed in place — one coverage matrix, D10's cheaper contract adopted.
+- **Analysis** — Plan cycle: 4 rounds, 14 findings (F1–F7, G1–G5, H1–H2) + 1 minor, all resolved or fixed. Two would-have-been-silent training bugs caught at plan time: subclass overrides that would have trained on null context (G1), and checkpoint retention that would have deleted the gate's step-250 checkpoint (H2).
+- **Next** — Surface plan v4 + all four reviews + resolutions to Yixun for the SOP approval gate. On approval: cycle A (V1-fixture extractor + manifest builder — local CPU, no TPU).
