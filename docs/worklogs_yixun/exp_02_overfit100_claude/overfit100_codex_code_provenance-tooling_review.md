@@ -44,6 +44,88 @@ i. **CHANGE** — add fail-closed manifest and fixture internal-consistency vali
 
 ---
 
-*(Strengthening record to be appended at the close of this round — per SOP, the round is not finished until every finding's resolution is recorded below.)*
+## Strengthening record (Coder: Claude Opus 5, 2026-07-29)
+
+All four findings **FIXED**; all four CHANGE seams (a, f, g, i) **FIXED**. Nothing rejected.
+Commits: A1 `7166436`, A2 `9a24518`, artifacts in the following commit. Suite: **399 passed,
+2 skipped** (146 cycle-A tests, up from 67); `black -l 119` clean, `ruff check` clean.
+
+**A1 — BLOCKER — builder provenance not reproducible. FIXED.**
+`assert_implementation_committed()` cross-checks `git ls-tree HEAD` and `git status --porcelain`
+for all five implementation paths and raises `DirtyImplementationError` before any network call,
+so a production manifest can only be built from a commit that actually contains the builder
+(`--dry-run` is exempt — it writes nothing — and stamps `builder_commit: "dry-run"`, which the
+structural gate rejects as a non-SHA). `collect_tool_versions()` now also records **ffmpeg**
+plus the two libraries that determine the selection itself: **numpy** (`candidate_order`) and
+**jax** (`pick_instruction_index`). Red evidence: run against the exact pre-commit tree, the
+builder refused, listed all five files, and wrote nothing. The manifest was then rebuilt from
+the clean commit and carries `builder_commit 9a24518cbe82f35386e607169410f751fb1b7af7`.
+
+**A2 — MAJOR — content not bound to the recorded generation. FIXED.**
+Every object is now **statted first**, then downloaded at that exact generation
+(`gsutil cp gs://…#<generation>`; verified to work for both batched and single-file copies),
+then re-hashed: `verify_payload_binding()` compares base64-md5 **and** size against the stat
+before the bytes are parsed or probed, and any mismatch aborts with `SourceError`.
+`verify_annotation_binding()` additionally requires the annotation's embedded `episode_id` to
+equal the drawn candidate (plus `success` present, `texts` a list). Tests: md5-mismatch abort,
+episode-id-mismatch abort, size mismatch, and `pinned_uri` refusing a fingerprint with no
+generation. This closes the window in which a decision could be made from one generation's
+bytes while a different generation's fingerprint was recorded.
+
+**A3 — MAJOR — absence conflated with failure; invariance only on an error-free fake. FIXED.**
+Added an explicit per-object outcome type (`Resolved`: `found` / `absent` / `error`).
+`classify_stat_batch()` derives absence **only** from gsutil's exact `No URLs matched: <uri>`
+lines — the substring heuristic (`"404"`, `"NotFoundException"`) is gone, and a transient error
+whose text merely contains `404` is now classified as an error (regression test included).
+Unresolved batch members are retried **once individually** before being reported. Absence is
+established solely by the stat, so a stat-present object that fails to download, fails its md5,
+or yields invalid JSON is an **error, never a rejection reason**; likewise stat-success /
+probe-failure now aborts (seam f) instead of masquerading as `missing_video`. Errors are
+**deferred** — they raise only when the walk *consumes* that candidate — so a failure on a
+candidate prefetched past the stopping acceptance cannot change the result; tested both ways
+(error before the nth acceptance aborts, error after it is invisible). MP4 downloads also moved
+inside the ordered walk, so no video is fetched for a candidate that is never consumed; only
+cheap metadata (stats) is prefetched. The six recorded rejection reasons are unchanged and a
+test pins that vocabulary.
+
+**A4 — MAJOR — verifiers fail open. FIXED.**
+`validate_manifest_structure()` is a new pure, fail-closed gate covering: exact required key
+sets (top level / episode / fingerprint / ffprobe), `provisional is False`, 40-hex
+`builder_commit`, all six tool versions non-empty, fixture block complete with the exact three
+window names, contiguous `episode_index` 0..n-1, unique `episode_id`, `chosen_text_index`
+landing on a **non-empty** text with `chosen_text_raw`/`used_text` consistent, expected
+annotation/MP4 URI patterns, pinned corpus geometry (320x192 @ 5 fps yuv420p),
+`nb_frames >= 33`, `n_windows == 1 + (nb_frames-33)//4`, the draw-log reason vocabulary, no
+duplicate draws, a draw log ending on the accepting draw, accepted ids == episodes in order,
+tally reconciliation, and both totals. It runs **before any remote stat** in `verify_manifest`
+(asserted: a structurally broken manifest produces zero stat calls) and again on the freshly
+built manifest before it is written. 33 mutation tests, one per invariant, each required to be
+caught. `verify_fixture()` gained `validate_fixture_structure()`: exact ordered name set,
+shapes/dtypes for **every** array of every window, and the `z_i0 == z_video[:, :1]` bitwise
+contract — mutation-tested, including a structurally broken but correctly-hashed fixture.
+`verify_manifest` now also distinguishes a stat **error** from an **absent** object instead of
+reporting both as missing.
+
+**Seam judgments.** a / f / g / i fixed as described above. b, c, d, e, h were judged OK and are
+unchanged; per (c) the shared IO layer was **not** expanded — cycle B should own its own.
+
+**Additional defect found during strengthening (not in the review).** Ruff F811 flagged that a
+`Resolved.error` *classmethod* shadows the `error` *field*'s default, leaving every
+`absent`/`found` outcome with a truthy bound method in `.error` (confirmed at runtime before the
+fix). The constructor was renamed `Resolved.failed()` and a regression test asserts
+`Resolved.absent().error is None`. Had this shipped, every "is this an error?" check on a
+non-error outcome would have read as true.
+
+**Rebuild result (review step 3).** Manifest regenerated from the clean commit `9a24518`:
+100 episodes / 1,629 windows / 129 draws, tally `{accepted: 100, not_success: 23, too_short: 6}`.
+Diffed against the superseded artifact: `episodes`, `draw_log`, `rejection_tally`, `totals`,
+`fixture`, `selection_seed` and `provisional` are **all identical**; only `builder_commit`,
+`created_utc` and the (now larger) `tool_versions` differ, with no unexpected key differences.
+That identity is independent evidence both that no source drift occurred between the two builds
+and that the strengthened stat-first / pinned-download / md5-bound IO path reaches exactly the
+same decisions. The published fixture was re-verified from GCS with the strengthened
+`verify_fixture()` (clean) before the rebuild; the rebuilt manifest passed the offline
+structural gate (`expected_episodes=100`) and a live `verify_manifest()` over all 201 objects
+(clean, 52.7 s).
 
 **Planner note for cycle D (from the verdict paragraph):** the shuffled-text control must derange instruction **values**, not episode indices — with 6 duplicate-instruction groups (22 episodes), an index derangement could map an episode to a different episode carrying the *same text*, silently weakening the control. Carried into cycle D's requirements.

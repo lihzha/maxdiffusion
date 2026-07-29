@@ -1,11 +1,14 @@
 {
   "selection_seed": 0,
-  "builder_commit": "b88bac1dd12579af30e243218f899b6fbfb41c44",
-  "created_utc": "2026-07-29T02:17:57.375875+00:00",
+  "builder_commit": "9a24518cbe82f35386e607169410f751fb1b7af7",
+  "created_utc": "2026-07-29T03:33:36.186421+00:00",
   "tool_versions": {
     "python": "3.12.8",
     "gsutil": "gsutil version: 5.37",
-    "ffprobe": "ffprobe version 8.0 Copyright (c) 2007-2025 the FFmpeg developers"
+    "ffprobe": "ffprobe version 8.0 Copyright (c) 2007-2025 the FFmpeg developers",
+    "ffmpeg": "ffmpeg version 8.0 Copyright (c) 2000-2025 the FFmpeg developers",
+    "numpy": "2.5.1",
+    "jax": "0.11.0"
   },
   "provisional": false,
   "fixture": {
