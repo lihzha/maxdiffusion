@@ -58,3 +58,10 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Version Control** — branch `claude-exp_02_overfit100-20260728`; v1 @ `cb5d73f`; this commit = plan v2 + resolutions.
 - **Result** — `fix_ready`; Codex re-review launched (background) on v2.
 - **Next** — Re-review verdict → surface plan v2 + review + resolutions to Yixun for approval → cycle A (manifest builder).
+
+## 2026-07-28T06:40:00Z — Plan v2 re-review (REQUEST-REVISION, G1–G5) → plan v3
+
+- **Goal** — Close the second plan-review round.
+- **Result** — Re-review: F1/F5 resolved; F2/F3/F4/F6/F7 partial; new G1–G5 (trainer-seam mismatch BLOCKER — step fns are module-level, jit-bound in `start_training`, confirmed in code; encode contract under-specified BLOCKER — `.mode()` + latents mean/std convention confirmed at `wan_pipeline.py:585/608`; S2 10-episode data path missing BLOCKER; success statistic inexact MAJOR; provenance gaps MAJOR). Plan v3 written resolving all five (own-module trainer with `context_table` state field + rewritten `start_training`; locked encode contract + gates V1–V4 with final thresholds; dual `train100`/`train10` artifacts + numerical S2 gate; exact success formula + guard + machine aggregation artifact; dual fingerprints + ordered draw log).
+- **Version Control** — this commit; v2 @ `092eb91`. Third review launched (background).
+- **Next** — v3 verdict → surface to Yixun for plan approval.
