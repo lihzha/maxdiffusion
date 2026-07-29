@@ -79,3 +79,9 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Result** — `passed`: H1/H2/G4-residue all RESOLVED on record; reviewer confirms the new CheckpointManager stays compatible with exp_01's Composite `params`/`opt_state`/`step` restore path and that the context table is correctly rebuilt outside the checkpoint; explicitly "No launch blocker remains", no fifth review needed. Single MINOR I1 (D10/D11 S2-ablation contradiction) fixed in place — one coverage matrix, D10's cheaper contract adopted.
 - **Analysis** — Plan cycle: 4 rounds, 14 findings (F1–F7, G1–G5, H1–H2) + 1 minor, all resolved or fixed. Two would-have-been-silent training bugs caught at plan time: subclass overrides that would have trained on null context (G1), and checkpoint retention that would have deleted the gate's step-250 checkpoint (H2).
 - **Next** — Surface plan v4 + all four reviews + resolutions to Yixun for the SOP approval gate. On approval: cycle A (V1-fixture extractor + manifest builder — local CPU, no TPU).
+
+## 2026-07-28T09:00:00Z — Plan approved (Query 4); cycle A opened
+
+- **Goal** — Record the approval + conditional launch grant; start Coder round 1.
+- **Result** — Plan v4 approved by Yixun; dataset-build + S1-smoke pre-approved conditional on dual sign-off; S2/S3 reserved. Cycle A (provenance tooling: `extract_v1_fixture.py` + `build_overfit100_manifest.py`, test-first) assigned to the Opus Coder. Cycle A is local-CPU only — no TPU involved.
+- **Next** — Coder implements (red→green) → runs the extractor + manifest builder for real (fixture upload + `overfit100_manifest.json`) → Codex review → strengthen → commits A1/A2.
