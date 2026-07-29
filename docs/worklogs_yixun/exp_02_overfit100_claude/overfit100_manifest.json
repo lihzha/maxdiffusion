@@ -3652,5 +3652,20 @@
   "totals": {
     "episodes": 100,
     "windows": 1629
-  }
+  },
+  "vae_fingerprint": {
+    "hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    "revision": "b8fff7315c768468a5333511427288870b2e9635",
+    "vae_config_sha256": "d996c340fe9a7df5d7371f76a7d8d6956f6c98256080074d8434fa5eeac11360"
+  },
+  "amended": [
+    {
+      "reason": "cycle-B review B1: VAE pin made mandatory",
+      "date": "2026-07-29T04:55:27.167979+00:00",
+      "commit": "5d534996b267ec9c81a2a695f9f1f633a638c940",
+      "fields": [
+        "vae_fingerprint"
+      ]
+    }
+  ]
 }
