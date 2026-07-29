@@ -284,7 +284,7 @@ max_grad_norm: 1.0
 # update poisons Adam's moments for ~1/(1-b2) steps. 0 disables the guard.
 # Skipped steps are logged with the batch's episode_ids and per-sample latent
 # |max| for attribution.
-grad_norm_skip_threshold: 10.0
+grad_norm_skip_threshold: 0.0
 
 # Log per-layer self-attention (attn1) qk-norm scale absmax + Q/K kernel norms
 # each log window (train/norm_q_scale_last is the final block, _max/_argmax the
