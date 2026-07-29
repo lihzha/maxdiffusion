@@ -30,6 +30,11 @@ Last updated: 2026-07-14
 - **Workaround:** ALWAYS append `< /dev/null` to non-interactive `codex exec` invocations. Detect recurrence by: log stuck at 1 line + process CPU ≈ 0 + no `OpenAI Codex vX.Y.Z` header line.
 - **Status:** standing rule for every reviewer call; classified infrastructure (launch-env), no code change.
 
+### 6. gcloud/gsutil reauth expires silently and recurs (infra, standing)
+- **Symptom:** third recurrence 2026-07-29 — `ReauthUnattendedError` / "Reauthentication required" from gsutil; the `tpu` CLI then reports jobs as "not found". A 2.5 h monitoring loop read auth failures as "PENDING" because the poll's error fallback conflated them with a missing status file.
+- **Workaround:** user runs `gcloud auth login` (account yh4742@princeton.edu). **Monitoring rule:** poll scripts must treat gsutil stderr containing "Reauth" as an ALARM state (stop and surface), never as pending/absent.
+- **Status:** standing; recurs on a multi-hour cadence during long sessions.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
