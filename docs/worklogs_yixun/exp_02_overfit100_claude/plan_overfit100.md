@@ -10,7 +10,7 @@ Planner: Claude Fable 5 (xhigh; v1 under Opus 5 max — deviation logged). Statu
 
 **Not claimed:** text + first frame does not determine the recorded future causally; success = the weights recite a finite mapping whose inputs are (audited-)unique, possibly leaning on first-frame fingerprints more than language; failure ≠ broken pipeline (→ §7); exp_01's 0.787 is not a "conditioning ceiling."
 
-**Text-ablation controls:** at gate checkpoints the eval cohort rolls out under **correct** / **null** (empty prompt) / **shuffled** (seeded derangement) context. Gaps reported always; no pass/fail attached.
+**Text-ablation controls:** at gate checkpoints the eval cohort rolls out under **correct** / **null** (empty prompt) / **shuffled** context. **Shuffled = seeded derangement of instruction VALUES across episodes, never assigning any episode a text string equal to its own** — an index-level derangement would be too weak here because 6 duplicate-instruction groups cover 22 episodes (cycle-A review verdict, adopted). Gaps reported always; no pass/fail attached.
 
 **Duplicate-condition audit:** build report lists exact-duplicate instructions and min pairwise `z_i0` L2 distance among window pairs with different targets. **The success-rule denominator is fixed at build time** — collided windows are flagged in the pre-launch report and stay in the denominator; they may be discussed in analysis but never removed post hoc (G4).
 
@@ -70,10 +70,10 @@ Planner: Claude Fable 5 (xhigh; v1 under Opus 5 max — deviation logged). Statu
 - **NEW** `trainers/wan_ti2v_overfit100_trainer.py` (~320 LOC): D7 as specified (own state/loss/steps + rewritten `start_training` + seam overrides).
 - **EDIT** `train_wan.py` (+3): dispatch `OVERFIT100_TI2V`.
 - **NEW** `configs/base_wan_5b_overfit100.yml`: model_type, dataset dirs (train100/train10 switch), steps/warmup/ckpt knobs, `num_text_slots`, `text_encode_batch`, `expected_windows`.
-- **EDIT** `generate_wan_side_adapter.py`: OVERFIT100 branch — schema-v2 reader, per-example context, `context_mode ∈ {correct,null,shuffled}` (seeded derangement), full-FT restore reuse, **aggregation-artifact writer** (G4), metrics incl. VAE ceiling.
+- **EDIT** `generate_wan_side_adapter.py`: OVERFIT100 branch — schema-v2 reader, per-example context, `context_mode ∈ {correct,null,shuffled}` (shuffled = seeded VALUE derangement per §1), full-FT restore reuse, **aggregation-artifact writer** (G4), metrics incl. VAE ceiling.
 - **EDIT** `eval_wan_full_ft_val_loss.py`: OVERFIT100 mode (schema v2, per-example context, model-type gate extended); aggregation core unchanged.
 - **NEW** bash arms: build / train / validate + launcher arm.
-- **Tests:** selection determinism + empty-filter + draw-log; manifest fingerprint-drift fail; **V1-fixture extraction + preflight md5/name verification (H1)**; window math (ep0→14, ep1→24, edges); schema round-trip; **train10 filter + count assert (G3)**; text-table parity/order/no-negatives/bytes; `_data_shardings` tree-match; **row-distinct gather with index≠id fixture (G1)**; objective parity vs full-FT on null-equal table row; context modes (null ≡ exp_01 path, shuffled = seeded derangement); gate V1–V4 threshold logic on fixtures; **checkpoint-schedule emit/retain set for both configs (H2)**; **success-statistic function (`m_corr`, fractions, `c*` tie-break, two-tier rule) as a pure tested unit (G4)**.
+- **Tests:** selection determinism + empty-filter + draw-log; manifest fingerprint-drift fail; **V1-fixture extraction + preflight md5/name verification (H1)**; window math (ep0→14, ep1→24, edges); schema round-trip; **train10 filter + count assert (G3)**; text-table parity/order/no-negatives/bytes; `_data_shardings` tree-match; **row-distinct gather with index≠id fixture (G1)**; objective parity vs full-FT on null-equal table row; context modes (null ≡ exp_01 path, shuffled = seeded VALUE derangement incl. a duplicate-text fixture proving no episode keeps its own string); gate V1–V4 threshold logic on fixtures; **checkpoint-schedule emit/retain set for both configs (H2)**; **success-statistic function (`m_corr`, fractions, `c*` tie-break, two-tier rule) as a pure tested unit (G4)**.
 
 ## 5. Cycles
 
