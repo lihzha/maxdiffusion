@@ -147,3 +147,9 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Result** — Enormous progress before the crash: **pinned-snapshot VAE loaded on TPU** (B1 end-to-end ✓); **gate V1 PASSED on all three fixture windows** — rel-L2 0.0981/0.0997/0.1016 (budget ≤ 0.25), Pearson 0.9955/0.9953/0.9952 (≥ 0.97) — the encode contract (layout, `.mode()`, latents normalization, uint8 door) is **empirically correct against Lihan's cache encoder**; abort path wrote `failed_gates.json` as designed. Crash: `FileNotFoundError: 'ffmpeg'` in the V3 precheck — **the TPU image ships no ffmpeg** (declared probe-gap item 8; the rung worked as intended).
 - **Analysis** — Environment gap in our launch path (classified: launch-env infrastructure, fixed via script change): the bash arm must ensure ffmpeg (apt, lock-safe per setup.sh's hardening; workers run as root) and the builder gets a fail-fast ffmpeg preflight so a missing binary dies pre-VAE. R1 (encoder mismatch) is now RETIRED by the V1 pass. Query 5 recorded: Catherine maintains the dataset — re-point round cancelled, snapshot kept as insurance.
 - **Next** — Coder mini-round `ffmpeg-ensure` → quick review → commit/push → re-sign-off → resubmit probe (attempt 3).
+
+## 2026-07-30T00:20:00Z — ffmpeg-ensure closed (APPROVE, no findings); probe attempt 3 LAUNCHED
+
+- **Result** — Review: APPROVE, zero findings. Suite 644+2 verified by Planner. Commit `934f80f` + review file pushed.
+- **Dual sign-off (re-established)** — Codex: ffmpeg-ensure APPROVE (this file set); Planner: suite green own-run, V1-on-TPU + audit-benchmark evidence from attempt 2 on record, commit pushed, package below at launch time. Acceptance criteria: as the 06:10Z entry plus `build_commit=934f80f…`; V1 numbers should reproduce (~0.10 rel-L2); NEW must-pass: ffmpeg ensure prints two version lines before prefetch.
+- **Next** — Submit attempt 3; monitor.
