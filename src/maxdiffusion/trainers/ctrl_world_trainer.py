@@ -17,6 +17,13 @@ partition annotations baked into ``FlaxVideoUNet`` (action-encoder params are
 tiny and fall back to replicated). Data is sharded along all named mesh axes
 (``[data, fsdp, context, tensor]``) along the batch axis — concretely on a
 single-host 8-chip v6e mesh that becomes pure data-parallel data sharding.
+
+Checkpoints are written with everything needed to resume mid-training: params,
+optimizer state (so the LR schedule / Adam moments continue where they left
+off), the step counter, the training RNG, and a restart counter. On restart the
+restart counter is bumped and folded into the data-pipeline seed, so every
+resumed run walks the dataset in a fresh shuffle order rather than replaying the
+same window sequence from step 0 (see ``reshuffle_data_on_restart``).
 """
 
 from __future__ import annotations
@@ -103,6 +110,27 @@ def _unbox_tree(tree):
     )
 
 
+def _is_typed_key(x) -> bool:
+    prng_dtype = getattr(jax.dtypes, "prng_key", None)
+    return prng_dtype is not None and jnp.issubdtype(x.dtype, prng_dtype)
+
+
+def _rng_to_list(rng) -> list[int]:
+    """Serialise a PRNG key to plain ints so it can ride along in the JSON item."""
+    raw = jax.random.key_data(rng) if _is_typed_key(rng) else rng
+    return [int(v) for v in np.asarray(raw).reshape(-1)]
+
+
+def _rng_from_list(values, like):
+    """Inverse of ``_rng_to_list``; ``like`` supplies dtype/shape/impl."""
+    raw = np.asarray(values, dtype=np.uint32)
+    if _is_typed_key(like):
+        return jax.random.wrap_key_data(
+            jnp.asarray(raw.reshape(np.asarray(jax.random.key_data(like)).shape))
+        )
+    return jnp.asarray(raw.reshape(like.shape), dtype=like.dtype)
+
+
 # ── Trainer ──────────────────────────────────────────────────────────────────
 
 
@@ -114,6 +142,12 @@ class CtrlWorldTrainer:
         self.dtype = _dtype_from_str(config.activations_dtype)
         self.weights_dtype = _dtype_from_str(config.weights_dtype)
         self.train_cfg = _build_ctrl_world_train_config(config)
+        # Overwritten in start_training once the checkpoint (if any) is read.
+        self.restart_count = 0
+        self.data_seed = int(config.seed)
+        # Set up in start_training; stays None on non-zero hosts and when
+        # wandb_project is empty, so every log site must guard on it.
+        self._wandb_run = None
 
     # ── Setup ──────────────────────────────────────────────────────────────────
 
@@ -306,6 +340,31 @@ class CtrlWorldTrainer:
             "text_embeds": batch_pspec,
         }
 
+        train_step_fn = self._build_train_step(apply_fns, state_shardings, data_shardings)
+        eval_step_fn = self._build_eval_step(apply_fns, state_shardings, data_shardings)
+
+        # ── Checkpointing / resume ────────────────────────────────────────────
+        # Restore *before* building the data iterator: the restored restart
+        # counter is what seeds the (re)shuffle for this run.
+        ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, "checkpoints")
+        ckpt_mgr = self._build_checkpoint_manager(ckpt_dir)
+        state, start_step, ckpt_meta = self._maybe_restore(ckpt_mgr, state, state_shardings)
+
+        # Restart counter is monotonic across launches and identical on every
+        # host (it comes out of the checkpoint), so hosts stay in lockstep.
+        self.restart_count = int(ckpt_meta.get("restart_count", -1)) + 1
+        self.data_seed = self._data_seed(self.restart_count)
+
+        rng = jax.random.PRNGKey(config.seed + 1)
+        if "rng" in ckpt_meta:
+            rng = _rng_from_list(ckpt_meta["rng"], rng)
+        if start_step:
+            max_logging.log(
+                f"[ctrl_world] resumed at step {start_step} "
+                f"(restart #{self.restart_count}, data_seed={self.data_seed}, "
+                f"rng={'restored' if 'rng' in ckpt_meta else 'reseeded from config.seed'})"
+            )
+
         train_iter = make_data_iterator(
             config,
             jax.process_index(),
@@ -313,26 +372,30 @@ class CtrlWorldTrainer:
             mesh,
             self._global_batch_size_to_load(),
             is_training=True,
+            seed=self.data_seed,
         )
 
-        train_step_fn = self._build_train_step(apply_fns, state_shardings, data_shardings)
-        eval_step_fn = self._build_eval_step(apply_fns, state_shardings, data_shardings)
-
-        # Checkpointing.
-        ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, "checkpoints")
-        ckpt_mgr = self._build_checkpoint_manager(ckpt_dir)
-        state, start_step = self._maybe_restore(ckpt_mgr, state, state_shardings)
-        if start_step:
-            max_logging.log(f"[ctrl_world] resumed at step {start_step}")
-
-        rng = jax.random.PRNGKey(config.seed + 1)
         if jax.process_index() == 0:
             max_logging.log("***** Running training *****")
             max_logging.log(f"  Per-host batch size: {self._global_batch_size_to_load() // jax.process_count()}")
             max_logging.log(f"  Global batch size:   {self._global_batch_size_to_load()}")
             max_logging.log(f"  Devices:             {jax.device_count()}")
             max_logging.log(f"  Max train steps:     {config.max_train_steps}")
+            max_logging.log(f"  Start step:          {start_step}")
             max_logging.log(f"  Output dir:          {config.output_dir}")
+            max_logging.log(f"  Checkpoint dir:      {ckpt_dir}")
+            max_logging.log(f"  Save optimizer:      {config.save_optimizer}")
+            max_logging.log(f"  Data seed:           {self.data_seed} (restart #{self.restart_count})")
+
+        if jax.process_index() == 0 and getattr(config, "wandb_project", ""):
+            import wandb
+            self._wandb_run = wandb.init(
+                project=config.wandb_project,
+                entity=getattr(config, "wandb_entity", None) or None,
+                name=config.run_name or None,
+                settings=wandb.Settings(start_method="thread"),
+            )
+        wandb_run = self._wandb_run
 
         recent_loss: list[float] = []
         recent_grad: list[float] = []
@@ -359,6 +422,18 @@ class CtrlWorldTrainer:
                     f"loss={avg_loss:.4f} grad_norm={avg_grad:.3f} "
                     f"lr={lr:.2e} steps/s={steps_per_sec:.2f}"
                 )
+                if wandb_run is not None:
+                    wandb_run.log(
+                        {
+                            "train/loss": avg_loss,
+                            "train/loss_max": max(recent_loss),
+                            "train/grad_norm": avg_grad,
+                            "train/grad_norm_max": max(recent_grad),
+                            "train/lr": lr,
+                            "train/steps_per_sec": steps_per_sec,
+                        },
+                        step=step + 1,
+                    )
                 recent_loss.clear()
                 recent_grad.clear()
                 last_step_time = now
@@ -373,11 +448,14 @@ class CtrlWorldTrainer:
                 config.checkpoint_every > 0
                 and (step + 1) % config.checkpoint_every == 0
             ):
-                self._save_checkpoint(ckpt_mgr, step + 1, state)
+                self._save_checkpoint(ckpt_mgr, step + 1, state, rng)
 
         if config.save_final_checkpoint:
-            self._save_checkpoint(ckpt_mgr, config.max_train_steps, state)
+            self._save_checkpoint(ckpt_mgr, config.max_train_steps, state, rng)
         ckpt_mgr.wait_until_finished()
+        ckpt_mgr.close()
+        if wandb_run is not None:
+            wandb_run.finish()
 
     # ── Eval ───────────────────────────────────────────────────────────────────
 
@@ -387,6 +465,8 @@ class CtrlWorldTrainer:
             max_logging.log("[ctrl_world] eval_every>0 but eval_data_dir is empty; skipping eval")
             return
         max_logging.log(f"[ctrl_world] starting eval at step {step}")
+        # Fixed seed (never the per-restart data seed) so eval loss stays
+        # comparable across steps and across restarts.
         eval_iter = make_data_iterator(
             config,
             jax.process_index(),
@@ -394,6 +474,7 @@ class CtrlWorldTrainer:
             mesh,
             self._global_batch_size_to_load(),
             is_training=False,
+            seed=config.seed,
         )
         max_batches = max(1, int(getattr(config, "eval_max_batches", 50)))
         losses: list[float] = []
@@ -415,12 +496,20 @@ class CtrlWorldTrainer:
                 f"[ctrl_world] eval step={step} batches={len(losses)} "
                 f"mean_loss={mean:.4f} elapsed={elapsed:.1f}s"
             )
+            if self._wandb_run is not None:
+                self._wandb_run.log(
+                    {"eval/loss": mean, "eval/batches": len(losses)}, step=step
+                )
 
     # ── Checkpoints ────────────────────────────────────────────────────────────
 
     def _build_checkpoint_manager(self, ckpt_dir: str) -> ocp.CheckpointManager:
         if not ckpt_dir.startswith("gs://"):
             os.makedirs(ckpt_dir, exist_ok=True)
+        # "step" is the JSON sidecar holding *all* non-array resume metadata
+        # (step counter, training RNG, restart counter). Kept under this name for
+        # backwards compatibility with checkpoints written before those extra
+        # fields existed — readers use .get() defaults.
         item_names = ("params", "step")
         item_handlers = {
             "params": ocp.StandardCheckpointHandler(),
@@ -431,7 +520,7 @@ class CtrlWorldTrainer:
             item_handlers["opt_state"] = ocp.StandardCheckpointHandler()
         options = ocp.CheckpointManagerOptions(
             create=True,
-            max_to_keep=3,
+            max_to_keep=int(self.config.checkpoint_max_to_keep),
             enable_async_checkpointing=True,
         )
         return ocp.CheckpointManager(
@@ -441,37 +530,85 @@ class CtrlWorldTrainer:
             options=options,
         )
 
-    def _save_checkpoint(self, mgr: ocp.CheckpointManager, step: int, state):
+    def _save_checkpoint(self, mgr: ocp.CheckpointManager, step: int, state, rng):
+        """Write a fully resumable checkpoint: params (+opt_state) + resume meta."""
+        if step in set(mgr.all_steps()):
+            max_logging.log(
+                f"[ctrl_world] checkpoint for step {step} already exists; skipping save"
+            )
+            return
         if jax.process_index() == 0:
             max_logging.log(f"[ctrl_world] saving checkpoint at step {step}")
+        meta = {
+            "step": int(step),
+            "rng": _rng_to_list(rng),
+            "restart_count": int(self.restart_count),
+            "data_seed": int(self.data_seed),
+        }
         items = {
             "params": ocp.args.StandardSave(state.params),
-            "step":   ocp.args.JsonSave({"step": int(step)}),
+            "step":   ocp.args.JsonSave(meta),
         }
         if self.config.save_optimizer:
             items["opt_state"] = ocp.args.StandardSave(state.opt_state)
         mgr.save(step, args=ocp.args.Composite(**items))
 
+    def _checkpoint_items(self, mgr: ocp.CheckpointManager, step: int):
+        """Item names present in an on-disk checkpoint, or None if unknown."""
+        try:
+            return set(mgr.item_metadata(step).keys())
+        except Exception as e:  # older orbax / partial metadata — trust the config
+            max_logging.log(f"[ctrl_world] could not read checkpoint item metadata: {e}")
+            return None
+
     def _maybe_restore(self, mgr: ocp.CheckpointManager, state, state_shardings):
-        """Returns (state, start_step). state is unchanged if no ckpt exists."""
+        """Returns (state, start_step, meta). state is unchanged if no ckpt exists."""
         del state_shardings  # StandardRestore reuses the input arrays' shardings
         latest = mgr.latest_step()
         if latest is None:
-            return state, 0
+            max_logging.log("[ctrl_world] no checkpoint found; starting from step 0")
+            return state, 0, {}
         max_logging.log(f"[ctrl_world] restoring checkpoint at step {latest}")
+        available = self._checkpoint_items(mgr, latest)
         restore_args = {
             "params": ocp.args.StandardRestore(state.params),
             "step":   ocp.args.JsonRestore(),
         }
-        if self.config.save_optimizer:
+        want_opt = self.config.save_optimizer and (available is None or "opt_state" in available)
+        if want_opt:
             restore_args["opt_state"] = ocp.args.StandardRestore(state.opt_state)
+        elif self.config.save_optimizer:
+            max_logging.log(
+                "[ctrl_world] WARNING: checkpoint has no opt_state — Adam moments and the "
+                "LR-schedule position restart from scratch."
+            )
         restored = mgr.restore(latest, args=ocp.args.Composite(**restore_args))
-        new_state = state.replace(params=restored["params"])
-        if self.config.save_optimizer and "opt_state" in restored:
+        meta = dict(restored["step"])
+        start_step = int(meta.get("step", latest))
+        # Keep the step leaf's dtype identical to the freshly built state's so
+        # jit's in_shardings/avals for the donated state argument still match.
+        step_leaf = jnp.asarray(start_step, dtype=getattr(state.step, "dtype", jnp.int32))
+        new_state = state.replace(params=restored["params"], step=step_leaf)
+        if want_opt and restored.get("opt_state") is not None:
             new_state = new_state.replace(opt_state=restored["opt_state"])
-        return new_state, int(restored["step"]["step"])
+        return new_state, start_step, meta
 
     # ── Misc ───────────────────────────────────────────────────────────────────
+
+    def _data_seed(self, restart_count: int) -> int:
+        """Seed for the input pipeline for this launch.
+
+        With ``reshuffle_data_on_restart`` (default) the seed advances with the
+        restart counter, so every resumed run draws a different file order,
+        window shuffle, and skip/skip_his sequence instead of replaying the exact
+        stream the previous launch already trained on. Set the flag to False for
+        a bit-comparable rerun of the same data order.
+        """
+        base = int(self.config.seed)
+        if not getattr(self.config, "reshuffle_data_on_restart", True):
+            return base
+        # Large odd stride so consecutive restarts land far apart in seed space.
+        return (base + 1000003 * int(restart_count)) % (2**31 - 1)
 
     def _global_batch_size_to_load(self) -> int:
         if self.config.global_batch_size and self.config.global_batch_size > 0:

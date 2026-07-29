@@ -12,11 +12,24 @@
 #              --out_dir gs://<bucket>/ctrl_world/jax-ckpt
 #      The same script also dumps an action_encoder.safetensors that you can
 #      pass via action_encoder_init_path=... at training time.
+#
+# Resuming: re-run this script verbatim. Checkpoints live in
+# $output_dir/checkpoints (unless checkpoint_dir is set) and the trainer always
+# picks up the latest step, restoring params, optimizer state, the step counter,
+# and the training RNG. Each restart also bumps a saved restart counter that
+# reseeds the input pipeline, so the resumed run sees a freshly shuffled data
+# stream instead of replaying the windows it already trained on. Any warm-start
+# paths below are ignored once a checkpoint exists.
 
 # --- 1. Activate the training env ---
 source ~/.zshrc
 source ~/maxdiffusion_venv/bin/activate
 cd ~/maxdiffusion
+
+# W&B: export WANDB_API_KEY (or run `wandb login`) before launching. Leaving it
+# unset makes wandb.init() prompt/fail on a headless TPU worker; drop the
+# wandb_project flag below to disable logging entirely instead.
+: "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
 
 # --- 2. Bucket mount ---
 export GCS_BUCKET=v6_east1d
@@ -60,9 +73,9 @@ if [ ! -f "$ACTION_ENCODER_INIT" ]; then
 fi
 
 # --- 4. Data paths (pre-encoded TFRecords; see docs/ctrl_world_data_format.md) ---
-export TRAIN_DATA_DIR="gs://$GCS_BUCKET/ctrl_world_droid/train"
-export EVAL_DATA_DIR="gs://$GCS_BUCKET/ctrl_world_droid/val"
-export STATS_PATH="gs://$GCS_BUCKET/ctrl_world_droid/stats.json"
+export TRAIN_DATA_DIR="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned/train"
+export EVAL_DATA_DIR="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned/val"
+export STATS_PATH="gs://$GCS_BUCKET/wan2.2_tfr_dataset_lowres_downsampled/stats.json"
 
 # --- 5. XLA flags ---
 export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
@@ -100,7 +113,7 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_ctrl_world.py \
     src/maxdiffusion/configs/base_ctrl_world.yml \
     run_name=ctrl-world-run-1 \
-    output_dir=gs://$GCS_BUCKET/ctrl-world-runs/ctrl-world-run-1 \
+    output_dir=gs://$GCS_BUCKET/checkpoints/svd_ac/ctrl-world \
     pretrained_model_name_or_path=$SVD_MODEL_DIR \
     action_encoder_init_path=$ACTION_ENCODER_INIT \
     dataset_type=ctrl_world \
@@ -126,7 +139,12 @@ python src/maxdiffusion/train_ctrl_world.py \
     checkpoint_every=5000 \
     eval_every=2000 \
     eval_max_batches=50 \
-    save_optimizer=False
+    save_optimizer=True \
+    checkpoint_max_to_keep=3 \
+    reshuffle_data_on_restart=True \
+    wandb_project='svd-ac-ctrl-world'
 
 # --- 7. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
+
+# tpu create v6 --name train_ac_svd_ctrl_world -n 32 --setup-cmd "" --priority 0 --max-attempts 100 -- bash bash_scripts/train_ctrl_world.sh

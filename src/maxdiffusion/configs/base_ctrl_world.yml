@@ -17,6 +17,8 @@ write_timing_metrics: True
 gcs_metrics: False
 save_config_to_gcs: False
 log_period: 100
+wandb_project: ''   # set to enable W&B logging (e.g. 'svd-ctrl-world')
+wandb_entity: ''    # W&B team/user; empty = personal account
 
 # UNet + VAE come from base SVD by default. Point this at the directory produced
 # by scripts/convert_ctrl_world_ckpt.py to warm-start from a Ctrl-World ckpt.
@@ -145,6 +147,13 @@ names_which_can_be_offloaded: []
 checkpoint_every: 5000
 checkpoint_dir: ""
 enable_single_replica_ckpt_restoring: False
+# How many checkpoints to retain on disk. Each one holds params + optimizer
+# state, so keep this small when save_optimizer is True.
+checkpoint_max_to_keep: 3
+# On restart, advance the input-pipeline seed so training resumes on a freshly
+# shuffled data stream instead of replaying the exact windows the previous launch
+# already saw. Set False for a bit-comparable rerun.
+reshuffle_data_on_restart: True
 
 # Training loop.
 learning_rate: 1.e-5
@@ -159,7 +168,9 @@ global_batch_size: 0
 
 warmup_steps_fraction: 0.05
 learning_rate_schedule_steps: -1
-save_optimizer: False
+# Required for faithful mid-training resume: without it, Adam moments and the
+# LR-schedule position restart from zero every time the job comes back up.
+save_optimizer: True
 
 adam_b1: 0.9
 adam_b2: 0.999
