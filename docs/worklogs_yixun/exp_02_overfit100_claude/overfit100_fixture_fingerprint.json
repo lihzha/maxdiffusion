@@ -1,0 +1,29 @@
+{
+  "uri": "gs://v6_east1d/datasets/exp02_overfit100/fixtures/v1_cache_windows.npz",
+  "generation": 1785291278937267,
+  "md5": "Szm9uNUI2AtjyRNTtpm9SA==",
+  "size_bytes": 693246,
+  "names": [
+    "ep0_v0_s00000",
+    "ep0_v0_s00004",
+    "ep0_v0_s00008"
+  ],
+  "shapes": {
+    "z_i0": [
+      48,
+      1,
+      12,
+      20
+    ],
+    "z_video": [
+      48,
+      9,
+      12,
+      20
+    ]
+  },
+  "dtypes": {
+    "z_i0": "float16",
+    "z_video": "float16"
+  }
+}
