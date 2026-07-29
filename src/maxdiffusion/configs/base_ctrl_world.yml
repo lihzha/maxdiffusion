@@ -276,3 +276,34 @@ no_records_per_shard: 0
 enable_eval_timesteps: False
 timesteps_list: []
 num_eval_samples: 0
+
+# ── Pre-encoding (droid_to_ctrl_world_tfrecords.py) ──────────────────────────
+# Raw DROID root: {LAB}/{success,failure}/{date}/{timestamp}/{trajectory.h5,recordings/MP4/*.mp4}
+raw_data_root: '/n/fs/iromdata/droid_raw/1.0.1'
+# Output root; shards are written to data_root/{train,val}/shard-NNNN.tfrecord.
+data_root: ''
+# Authoritative episode_id (the "id" field) and camera/h5 paths.
+video_index_path: ''
+# Authoritative train/val membership by episode id. Required — the converter
+# never invents a split, so every chunked job agrees on it.
+split_metadata_path: ''
+# Percentile action stats (state_01/state_99, 7-dim). Reused if it exists.
+action_stats_path: ''
+action_stats_only: False
+setup_only: False
+# Episode-range selection for splitting the job across many runs. Selection is
+# by episode id, so chunks are disjoint and shard placement is id-derived.
+start_episode: 0
+max_episodes: -1
+# Temporal downsampling of the RGB/latent stream. MUST equal
+# ctrl_world_down_sample: the reader indexes states at rgb_id*down_sample.
+rgb_skip: 3
+# Cap on kept (post-skip) latent frames per episode; -1 = whole episode.
+max_frames: -1
+prefetch_workers: 8
+# Frames per VAE encode call. One compiled shape; higher = less dispatch overhead.
+# Data-affecting: the posterior noise draw is keyed per padded chunk, so changing
+# this changes the encoded latents. Keep it fixed across all jobs of one dataset.
+vae_encode_chunk: 8
+# CLIP text encoder producing the 512-d pooled embedding (text_embed_dim).
+clip_model_name_or_path: 'openai/clip-vit-base-patch32'
