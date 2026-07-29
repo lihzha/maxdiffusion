@@ -53,6 +53,9 @@ WAN2_1 = "wan2.1"
 WAN2_2 = "wan2.2"
 LTX2_VIDEO = "ltx2_video"
 SVD = "svd"
+# Action-conditioned SVD (Ctrl-World). Shares SVD's VAE/UNet but has its own
+# trainer, pipeline, and dataset, so it needs a distinct model_name.
+CTRL_WORLD = "ctrl_world"
 
 WAN_MODEL = WAN2_1
 

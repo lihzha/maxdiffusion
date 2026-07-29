@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Generate WAN2.2 text-to-video prompts from a folder of videos using the OpenAI API.
+"""Generate WAN2.1 14B I2V prompts from a folder of videos using the OpenAI API.
 
 For every video in the input folder this script samples a handful of frames,
 sends them to a vision-capable ChatGPT model, and asks the model to write a
 prompt (plus a negative prompt) that could be used to regenerate a similar clip
-with the WAN2.2 model.  Results are written to a JSONL file, one row per video.
+with the WAN2.1 14B image-to-video model, where the clip's first frame is the
+conditioning image.  Results are written to a JSONL file, one row per video.
 
-WAN2.2 prompt conventions (see src/maxdiffusion/configs/base_wan_*.yml):
-  * The positive prompt is a single, richly descriptive paragraph covering the
-    subject, its action/motion, the scene/background, camera movement, lighting
-    and overall aesthetic/style.  It reads like natural language, not tags.
+WAN prompt conventions (see src/maxdiffusion/configs/base_wan_i2v_14b.yml):
+  * The positive prompt is a single, richly descriptive paragraph. For I2V it
+    emphasises motion/action over time (the first frame already fixes the static
+    composition) plus cinematic quality descriptors. It reads as natural
+    language, not tags.
   * The negative prompt lists qualities to avoid.  WAN ships a canonical default
     (overexposure, static footage, blur, subtitles, low quality, deformed hands,
-    etc.); we reuse it as a base and let the model append clip-specific items.
+    etc.) — identical across all WAN variants; we reuse it as a base and let the
+    model append clip-specific items.
 
 Usage:
   export OPENAI_API_KEY=sk-...
@@ -33,9 +36,10 @@ from pathlib import Path
 
 import cv2
 
-# The canonical WAN2.2 negative prompt (from configs/base_wan_1_3b.yml). The model
-# is asked to build on top of this rather than reinvent it, so generated prompts
-# stay consistent with what the training/eval configs already expect.
+# The canonical WAN negative prompt (from configs/base_wan_i2v_14b.yml; identical
+# across all WAN 2.1/2.2 variants). The model is asked to build on top of this
+# rather than reinvent it, so generated prompts stay consistent with what the
+# training/eval configs already expect.
 WAN_DEFAULT_NEGATIVE_PROMPT = (
     "Bright tones, overexposed, static, blurred details, subtitles, style, works, "
     "paintings, images, static, overall gray, worst quality, low quality, JPEG "
@@ -48,23 +52,24 @@ WAN_DEFAULT_NEGATIVE_PROMPT = (
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v", ".gif"}
 
 SYSTEM_PROMPT = """\
-You are a prompt engineer for the WAN2.2 text-to-video diffusion model. You are \
-shown several frames sampled in temporal order from a single short video clip. \
-Your job is to write the prompt that would make WAN2.2 regenerate a video like \
-this one.
+You are a prompt engineer for the WAN2.1 14B image-to-video (I2V) diffusion \
+model. You are shown several frames sampled in temporal order from a single \
+short video clip. The FIRST frame is the conditioning image the model will be \
+given; your prompt describes how the clip evolves from that starting frame.
 
 Write a POSITIVE prompt that is one flowing, vivid paragraph (roughly 40-90 \
-words). Describe, in this rough order:
-  1. The main subject and its appearance.
-  2. What the subject is doing (the action / motion over time — use the fact that
-     the frames are a time sequence to infer movement).
-  3. The setting / background and any secondary elements.
-  4. Camera behaviour (e.g. static shot, slow pan, tracking shot, push-in, aerial).
-  5. Lighting, mood, colour palette and overall visual/artistic style.
+words). Because the first frame is already provided as the input image, focus on \
+MOTION and change over time rather than re-describing the static composition:
+  1. The main subject, only briefly (the input image already fixes its look).
+  2. What the subject DOES — the action, movement and how it unfolds over time
+     (infer this from how the frames change in sequence). This is the priority.
+  3. Camera behaviour (e.g. static shot, slow pan, tracking shot, push-in, orbit).
+  4. Lighting, mood and colour palette as they shift, plus cinematic quality
+     descriptors (e.g. "high quality, ultrarealistic detail, movie-like shot").
 Use natural descriptive language, not comma-separated tags. Do not mention that
 these are frames, do not mention timestamps, and do not add quotation marks.
 
-Also write a NEGATIVE prompt: start from the provided WAN2.2 default negative
+Also write a NEGATIVE prompt: start from the provided WAN default negative
 prompt and, if the clip warrants it, append a few extra clip-specific artefacts
 to avoid. Keep the defaults intact.
 

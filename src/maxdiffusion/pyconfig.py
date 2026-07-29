@@ -35,12 +35,16 @@ from maxdiffusion.common_types import (
     WAN2_2,
     LTX2_VIDEO,
     SVD,
+    CTRL_WORLD,
     RING_ATTENTION_AXIS_RULES,
     SEQUENCE_PARALLEL_AXIS_RULES,
     ULYSSES_ATTENTION_AXIS_RULES,
 )
 
-_ALLOWED_MODEL_NAMES = {WAN2_1, WAN2_2, LTX2_VIDEO, SVD}
+_ALLOWED_MODEL_NAMES = {WAN2_1, WAN2_2, LTX2_VIDEO, SVD, CTRL_WORLD}
+# Gates the shared WAN training entrypoints (train_wan.py, train_wan_vace.py),
+# which are the only callers passing validate_training=True. Ctrl-World trains
+# through train_ctrl_world.py instead, so it is deliberately absent here.
 _ALLOWED_TRAINING_MODEL_NAMES = {WAN2_1, WAN2_2}
 
 
