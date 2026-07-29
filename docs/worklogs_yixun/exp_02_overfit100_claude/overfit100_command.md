@@ -105,3 +105,23 @@ tpu create v6 -n 8 --name exp02-overfit100-probe-yixun \
 
 Notes: `--worker0-only` because the builder is single-process and v6e-8 is two queue workers; the script prefetches ONLY `model_index.json vae/*` at the manifest's pinned revision. Job id + outcome appended below after submission.
 - **Job id:** `20260729-062523-1937c065-exp02-overfit100-probe-yixun` (submitted 2026-07-29T06:25Z; outcome pending)
+
+## Job 4 — v6e-8 PROBE dataset build, attempt 2 (post tarball-guard fix) — launched 2026-07-29
+
+Commit: `53d69f53185b6edc1867eb6be8b0540c18a501ad` (pushed). Same command as Job 3 except the SHA and `--env COMMIT`; Job 3 FAILED on the guard's git assumption (real bug, fixed in `49f4412`+`53d69f5`).
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --name exp02-overfit100-probe-yixun \
+  --worker0-only \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env PROBE=1 \
+  --env MANIFEST_PATH="docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json" \
+  --env OUT_ROOT="gs://v6_east1d/datasets/exp02_overfit100" \
+  --env CONFIG_PATH="src/maxdiffusion/configs/base_wan_5b_full_ft.yml" \
+  --env CONFIG_OVERRIDES="hardware=tpu" \
+  --env COMMIT="53d69f53185b6edc1867eb6be8b0540c18a501ad" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/build_overfit100_dataset.sh
+```
