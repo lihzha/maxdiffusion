@@ -49,3 +49,9 @@ Source: Yixun, relaying/echoing Lihan's critique of exp_01. Append each new quer
 **Verbatim:** "Approve plan + dataset build + smoke conditional on dual sign-off"
 
 **Interpretation:** (1) **Plan v4 is approved** — the SOP plan gate is passed; cycles A–D may proceed. (2) The first two TPU jobs — the **v6e-8 dataset build** (cycle B, rung 4: 2-episode probe build then full build) and the **S1 smoke** (v6e-8, GBS 32, ~20 steps, storage-light) — are **pre-approved conditional on dual sign-off**, exp_01 Query-9 style: (a) Codex — every cycle review feeding that job is closed with all findings resolved; (b) Fable/Planner — final pre-launch verification (suite green, ladder rungs recorded, commit pushed, package written to `_command.md`/`_worklog.md` at launch time). Infra-failure resubmits covered by standing policy; any code/config change after sign-off voids the grant for the changed job. (3) **S2 (10-episode gate) and S3 (100-episode run) remain separate future approvals.**
+
+## Query 5 — 2026-07-29 (dataset stewardship, from Yixun)
+
+**Verbatim:** "I ask catherine to maintain the dataset, don't worry"
+
+**Interpretation:** Catherine will maintain `droid_ctrl_world_aligned` (no deletion/reprocess-in-place of the objects exp_02 pins). Consequence: the planned re-point-manifest-to-snapshot mini-round is **cancelled**; the manifest keeps the original URIs. The verified snapshot (`exp02_overfit100/source_snapshot/`, 200/200 md5-verified) is retained as free insurance — if the originals ever drift, the fingerprint gates will catch it and the snapshot enables a fast re-point.
