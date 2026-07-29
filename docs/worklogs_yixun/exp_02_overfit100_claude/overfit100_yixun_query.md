@@ -37,3 +37,9 @@ Source: Yixun, relaying/echoing Lihan's critique of exp_01. Append each new quer
 **Verbatim:** "use one view per episode (the first one (exterior view), which has the index 0), and lr 1e-5"
 
 **Decisions locked:** (1) **one camera view per episode — view index 0** (the first exterior view; `latent_videos/train/<ep>/0.pt`); (2) **learning rate 1e-5** (same as exp_01's full-FT recipe — deliberate memorization is pursued via dose/epochs, not a hotter LR).
+
+## Query 3 — 2026-07-28 (data-path decision, from Yixun)
+
+**Verbatim:** "A'"
+
+**Decision locked:** data path **A′ — re-encode the 100 selected episodes' view-0 MP4s with the Wan VAE** (from `gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/<ep>/0.mp4`), rather than mining the existing 334 GB Wan-latent cache. Chosen after the plan review + probes showed the aligned `latent_videos/*.pt` are Ctrl-World-space latents `(T, 4, 24, 40)` — unusable for Wan — while the MP4s turn out to be already at the exact cache geometry **320×192 @ 5 fps** with frame counts matching the annotations (ep0: 88, ep1: 128). Session model at this decision: Fable 5 (xhigh) — Planner tier restored per SOP.

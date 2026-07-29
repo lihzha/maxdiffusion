@@ -49,3 +49,12 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
   3. **The Wan-latent cache is not globally episode-sorted** (shard 0→ep0, 100→ep22422, 300→ep46937, 500→ep71256, 703→ep9944) and **its meta_json schema varies** (some records lack `episode_id`; `name` always encodes it). Cached episode ids exceed the train-annotation range (71256 > 69722) and cached `video_length` (56) disagrees with the annotation's (88) for ep0 ⇒ the two corpora are related but **not frame-aligned**; joining is safe only at episode granularity, and even that needs verification.
 - **Result** — `fix_ready` — plan v2 required; two viable data paths (below), both costed.
 - **Next** — Yixun's steer on the data path, then plan v2 addressing F1–F7.
+
+## 2026-07-28T05:30:00Z — Query 3 (A′) + plan v2 resolving F1–F7
+
+- **Goal** — Close the plan cycle: adopt the user's A′ data-path decision, resolve all review findings, produce plan v2, request re-review.
+- **Change** — `plan_overfit100.md` rewritten (v2); resolutions appended to `overfit100_codex_plan_review.md`; Query 3 recorded. Session model now Fable 5 (xhigh) — Planner tier restored (v1 was drafted under Opus 5 max while Fable was unavailable).
+- **Command / Validation** — New probes behind v2: aligned MP4s are **320×192 @ 5fps** (exact cache geometry; ep0 88 frames, ep1 128 — match annotations); `gsutil stat` exposes generation/md5/size (manifest fingerprints, F6). Earlier probes: `z_i0 == z_video[:,0]` bitwise in cache; aligned `.pt` = Ctrl-World `(T,4,24,40)`.
+- **Version Control** — branch `claude-exp_02_overfit100-20260728`; v1 @ `cb5d73f`; this commit = plan v2 + resolutions.
+- **Result** — `fix_ready`; Codex re-review launched (background) on v2.
+- **Next** — Re-review verdict → surface plan v2 + review + resolutions to Yixun for approval → cycle A (manifest builder).
