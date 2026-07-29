@@ -59,5 +59,72 @@ h) **Other choices:** Loud SSIM failure, removal of a production `--max-episodes
 - **Audit at scale — NEEDS-PRE-PROBE-MITIGATION:** benchmark the exact 1,629×11,520 float64 workload or redesign it before running it after all expensive production encodes.
 
 ---
+## Strengthening record (Coder: Claude Opus 5, 2026-07-29)
 
-*(Strengthening record appended at round close.)*
+Commits: `d2faac5` (cycle-A follow-up: manifest pin), `2222d54` (builder + bash arms),
+`2b7623f` (tests). Suite after strengthening: **577 passed, 2 skipped** (399+2 at cycle-B start).
+Every finding below was implemented; none was rejected.
+
+1. **B1 — FIXED.** The pin is now part of the manifest contract and binds the weights.
+   `build_overfit100_manifest` gained `vae_pin_errors` / `vae_config_sha256` /
+   `resolve_vae_snapshot` / `amend_manifest_vae_pin`; `validate_manifest_structure` REQUIRES
+   `{hf_repo, revision(40-hex), vae_config_sha256(64-hex)}` (one mutation test per malformation)
+   and validates the new `amended` log. The committed manifest was amended in place through the
+   tested `--amend-vae-pin` path — verified additive (only `vae_fingerprint` + `amended`; zero
+   selection content changed) — pinning `Wan-AI/Wan2.2-TI2V-5B-Diffusers@b8fff7315c768468a5333511427288870b2e9635`,
+   config sha256 `d996c340…ac11360`. `preflight()` aborts on absence/mismatch/malformation
+   (no warn path), resolves the pinned revision to ONE local snapshot dir (`local_files_only`
+   unless `--allow-hub-download`), fingerprints that dir, and passes it to `from_checkpoint`,
+   so checked-VAE ≡ loaded-VAE by construction. `--model-dir` is gone; a pre-staged
+   `--vae-snapshot-dir` is allowed only if its config sha256 matches. The launcher reads
+   repo+revision from the manifest and prefetches `model_index.json vae/*` at that revision
+   (`prefetch_hf_snapshot.sh` gained an optional PATTERNS arg + `HF_PREFETCH_REVISION`; its
+   default set and exp_01 callers are unchanged, and transformer verification is skipped only
+   when transformer patterns were not requested).
+2. **B2 — FIXED.** `check_v4` now computes `finite` over both tensors and every derived metric
+   and requires it for `passed` (NaN/Inf regression tests on either side, ×3 non-finite values).
+   `v4_diagnostics` adds p50/p90/p99/p999/p100 difference quantiles; `persist_v4_diagnostics`
+   writes `v4_frame0.npz` (both tensors) + `v4_diagnostics.json` to the output prefix on failure.
+   `V4_FAILURE_POLICY` is stated in the module docstring, in the gate-failure message, and in
+   `summary.gate_policy`: abort; no in-job re-thresholding; recovery only via a separately
+   reviewed rerun with same-shape controls and renewed launch approval. `V4_ATOL` remains 0.0.
+3. **B3 — FIXED.** All writes go to `<out_root>/<set>/_staging_<build_id>/` with
+   `build_id = <12-char commit>-<UTC stamp>`. Gates, counts, audit, sidecars and the B4 readback
+   complete against staging; `require_empty_canonical` runs both before the expensive work and
+   again inside `promote()` (staging paths are excluded from that view); `promote()` copies
+   enumerated objects and, on failure, removes only the ones it created; `_SUCCESS` is written
+   LAST with build_id, commit, records, shards, summary sha256 and manifest sha256; staging is
+   then cleaned. `summary.readers_must_require = "_SUCCESS"` — carried to the Planner for cycle C.
+4. **B4 — FIXED.** `ShardWriter` records local sha256+size at write time and the remote
+   generation/md5/size after upload. `readback_set` re-reads every staged shard (pinned
+   generation for GCS), re-hashes it against the written sha256, parses ALL records, and asserts
+   ordered names (`assert_readback_names`), schema/dtype/byte lengths, `z_i0 == z_video[:, :1]`
+   bitwise, and per-shard/per-set counts; `assert_subset_is_byte_identical` proves every train10
+   record is the same bytes as its train100 counterpart. Only then does promotion/_SUCCESS run.
+   Integration tests cover late-abort-after-flush (zero canonical objects), a flipped byte, a
+   truncated shard, and 5-shard rollover.
+5. **B5 — FIXED.** Probe shard size is 16 (`shard_ranges(41, 16) == 3`, asserted); the
+   full-geometry synthetic audit benchmark (1,629 × 11,520 float64) runs BEFORE the VAE loads;
+   `require_device_memory_stats` fails the probe unless EVERY local device reports
+   `peak_bytes_in_use`; `PhaseTimer` separates preflight / vae_load / v1_gate /
+   first_window_compile / steady_state_encode / download_decode / upload / readback / audit /
+   promote / total; the extrapolation uses the steady-state rate plus separately reported fixed
+   and audit costs. The probe also prechecks all ten fixed V3 windows (downloading those MP4s)
+   so a failure at index 90 surfaces before the full build, and labels V2 coverage
+   `"sampled (41/1,629 windows)"`.
+6. **B6 — FIXED.** `CYCLE_B_IMPLEMENTATION_PATHS` now includes
+   `build_overfit100_manifest.py`, `bash_scripts/build_overfit100_dataset.sh` and
+   `bash_scripts/prefetch_hf_snapshot.sh` (9 paths); `assert_manifest_matches_committed`
+   content-hashes the consumed manifest against the committed artifact and aborts on any
+   difference (sha256 recorded in the summary and in `_SUCCESS`); probes run the same
+   clean-commit guard, so `build_commit` is never null. Verified on the committed tree:
+   guard SHA `2b7623f`, manifest sha256 `c02a67be…95df`.
+7. **B7 — FIXED.** `decode_latents_to_frames(..., postprocess="bfloat16"|"float32")`; the gated
+   V3 value (`run_v3_window`) uses the bfloat16 branch, characterized bit-exactly against
+   `VideoProcessor.postprocess_video` on a real torch bf16 tensor, and the float32 number is
+   retained as `ssim_float32_diagnostic`. V1 keeps float32 + the uint8 door as accepted.
+
+**Decision judgments:** (a) adopted verbatim as `V4_FAILURE_POLICY`. (b) adopted — pin amended
+and mandatory. (c)/(g)/(h) adopted unchanged; probe provenance is now the real guarded SHA.
+(d) split as directed. (e) adopted — staging + promotion + `_SUCCESS`. (f) adopted — the four
+named integration cases were added on top of the existing seam tests.
