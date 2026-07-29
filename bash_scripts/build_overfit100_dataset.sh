@@ -50,7 +50,20 @@ DRY_RUN="${DRY_RUN:-0}"
 SHARD_SIZE="${SHARD_SIZE:-0}"
 # pyconfig key=value pairs forwarded to the VAE-only pipeline, space separated.
 CONFIG_OVERRIDES="${CONFIG_OVERRIDES:-hardware=tpu}"
+# The queue deploys an uploaded TARBALL with no .git, so the builder's clean-commit guard runs
+# in deployed-code mode and relays THIS value (probe failure 20260729-062523). It must be
+# EXPORTED -- python reads the process environment -- and it must be the sha the launcher
+# verified clean: `tpu create --env COMMIT=$(git rev-parse HEAD)`. Checked here so a bad launch
+# fails in seconds instead of after the HF prefetch.
 COMMIT="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+export COMMIT
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! printf '%s' "${COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "[build] FATAL: deployed-code mode (no git worktree) requires COMMIT=<40-hex sha> in the job env; got '${COMMIT}'" >&2
+    exit 1
+  fi
+  echo "[build] deployed-code mode: relaying launch-time COMMIT=${COMMIT}"
+fi
 
 # B1: the VAE repo/revision come from the MANIFEST, not from the launcher -- the manifest pin
 # is the contract, and the build re-verifies it against the resolved snapshot.

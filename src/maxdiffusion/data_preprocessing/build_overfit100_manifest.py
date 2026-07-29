@@ -55,6 +55,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import platform
 import re
 import shutil
@@ -83,6 +84,9 @@ from maxdiffusion.data_preprocessing.extract_v1_fixture import (
 
 DATASET_ROOT = "gs://v6_east1d/datasets/droid_ctrl_world_aligned"
 DEFAULT_VAE_REPO = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+# The launcher stamps the sha it verified clean into the job environment; workers that run
+# from an uploaded tarball (no .git) can only relay it. See `deployed_code_commit`.
+DEPLOYED_COMMIT_ENV = "COMMIT"
 N_EPISODES = 69723  # annotation ids 0..69722
 VIEW_INDEX = 0  # Query 2: one camera view per episode, the first exterior view
 MIN_FRAMES = 33  # one window = 33 consecutive frames -> 9 latent frames
@@ -405,16 +409,78 @@ def _git(repo_root: Path, *args: str) -> str:
     return proc.stdout
 
 
+def is_git_worktree(repo_root: str | Path) -> bool:
+    """Is this directory inside a real git worktree?
+
+    The TPU queue deploys an uploaded code TARBALL with no `.git`, so every git call on the
+    worker exits 128 (probe failure 20260729-062523). Detect that explicitly instead of
+    letting a `CalledProcessError` surface as a mystery crash mid-build.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # no git binary at all -> deployed-code mode
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
+def deployed_code_commit(env: dict | None = None, log: Callable = print) -> str:
+    """The launch-time sha for code that arrived as a tarball, or a fail-closed refusal.
+
+    A worker cannot verify cleanliness -- there is no repository to inspect. The honest
+    contract is the one the LAUNCHER established: it refused to submit a dirty tree and
+    shipped `COMMIT` with the job. Absent or malformed, this raises: the fallback may relay
+    provenance, never invent it.
+    """
+    env = os.environ if env is None else env
+    commit = str(env.get(DEPLOYED_COMMIT_ENV) or "").strip()
+    if not _SHA_RE.fullmatch(commit):
+        raise DirtyImplementationError(
+            f"deployed-code mode (no git worktree): {DEPLOYED_COMMIT_ENV} must carry the 40-hex sha the "
+            f"launcher verified clean before uploading the tarball; got {commit!r}. "
+            f"Pass it through the queue (e.g. `--env {DEPLOYED_COMMIT_ENV}=$(git rev-parse HEAD)`)."
+        )
+    log(
+        f"[provenance] deployed-code mode: clean-commit guard was enforced at launch on the "
+        f"submitting machine; {DEPLOYED_COMMIT_ENV}={commit} from env"
+    )
+    return commit
+
+
+def head_commit(repo_root: str | Path | None = None, env: dict | None = None, log: Callable = print) -> str:
+    """HEAD's sha, or the launcher's `COMMIT` when there is no worktree to ask.
+
+    Records provenance WITHOUT asserting cleanliness -- used where a sha is being written into
+    an artifact (e.g. an amendment log) rather than gating a production build.
+    """
+    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
+    if not is_git_worktree(root):
+        return deployed_code_commit(env, log=log)
+    return _git(root, "rev-parse", "HEAD").strip()
+
+
 def assert_implementation_committed(
     repo_root: str | Path | None = None,
     paths: Sequence[str] = IMPLEMENTATION_PATHS,
+    env: dict | None = None,
+    log: Callable = print,
 ) -> str:
-    """Return HEAD's sha, or raise if the manifest could not honestly claim to come from it.
+    """Return the sha this artifact may honestly claim to come from.
+
+    In a git worktree that is HEAD, and only once every implementation file is proven
+    committed and clean -- unchanged behavior, and `COMMIT` in the environment is NOT a way to
+    bypass it. Where there is no worktree (deployed tarball) it is the launcher's `COMMIT`.
 
     ``paths`` lets a later cycle reuse the same fail-closed guard for its own implementation
     files (cycle B's dataset builder passes `CYCLE_B_IMPLEMENTATION_PATHS`).
     """
     root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
+    if not is_git_worktree(root):
+        return deployed_code_commit(env, log=log)
     paths = tuple(paths)
     tracked = {line.strip() for line in _git(root, "ls-tree", "-r", "--name-only", "HEAD").splitlines()}
     dirty = parse_git_porcelain(_git(root, "status", "--porcelain", "--", *paths))
@@ -993,7 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
             args.out,
             resolved["pin"],
             reason=args.amend_reason,
-            commit=_git(Path(__file__).resolve().parents[3], "rev-parse", "HEAD").strip(),
+            commit=head_commit(log=log),
             log=log,
         )
         return 0

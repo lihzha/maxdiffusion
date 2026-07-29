@@ -87,6 +87,7 @@ from maxdiffusion.data_preprocessing.build_overfit100_manifest import (
     assert_implementation_committed,
     collect_tool_versions,
     implementation_provenance_errors,  # noqa: F401 -- re-exported: cycle B reuses the cycle-A guard
+    is_git_worktree,
     n_windows,
     resolve_vae_snapshot,
     vae_pin_errors,
@@ -1129,17 +1130,41 @@ def preflight(
     }
 
 
-def assert_manifest_matches_committed(path: str | Path, repo_root: str | Path | None = None) -> str:
-    """The consumed manifest must be byte-identical to the committed artifact (B6)."""
+def assert_manifest_matches_committed(
+    path: str | Path, repo_root: str | Path | None = None, log: Callable = print
+) -> str:
+    """The consumed manifest must be byte-identical to the committed artifact (B6).
+
+    On a worker the code arrives as an uploaded TARBALL rather than a checkout, so "the
+    committed artifact" is the copy shipped inside that tarball -- and the tarball IS the
+    launch-time tree whose cleanliness the launcher verified before submitting (see
+    `deployed_code_commit`). The comparison therefore still runs whenever the shipped copy
+    exists, so a hand-edited manifest passed by path is still caught; only when no reference
+    was shipped does deployed-code mode fall back to hashing and RECORDING the shipped
+    manifest, with the reasoning logged. In a real worktree a missing reference stays fatal.
+    """
     root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
-    committed = (root / DEFAULT_MANIFEST).read_bytes()
+    reference = root / DEFAULT_MANIFEST
     consumed = Path(path).read_bytes()
-    expected, actual = hashlib.sha256(committed).hexdigest(), hashlib.sha256(consumed).hexdigest()
+    actual = hashlib.sha256(consumed).hexdigest()
+    deployed = not is_git_worktree(root)
+    if not reference.is_file():
+        if not deployed:
+            raise BuildError(f"{reference}: the committed manifest is missing; cannot verify {path}")
+        log(
+            "[provenance] deployed-code mode: no committed manifest shipped alongside the code; the "
+            "uploaded tarball IS the launch-time tree the launcher verified clean, so recording the "
+            f"shipped manifest sha256={actual}"
+        )
+        return actual
+    expected = hashlib.sha256(reference.read_bytes()).hexdigest()
     if expected != actual:
         raise BuildError(
             f"{path}: sha256 {actual} does not match the committed manifest ({expected}). "
             "The build may only consume the manifest that is committed at HEAD."
         )
+    if deployed:
+        log(f"[provenance] deployed-code mode: consumed manifest matches the shipped copy (sha256={actual})")
     return actual
 
 
@@ -1340,11 +1365,15 @@ def run(args) -> int:
 
     # B6: probes are guarded exactly like production -- same clean-commit check, same manifest
     # content hash, and a real recorded SHA (a probe's numbers are evidence for a launch).
-    manifest_sha256 = "unverified (--dry-run)" if args.dry_run else assert_manifest_matches_committed(args.manifest)
+    manifest_sha256 = (
+        "unverified (--dry-run)" if args.dry_run else assert_manifest_matches_committed(args.manifest, log=log)
+    )
     build_commit = None
     if not args.dry_run:
-        build_commit = assert_implementation_committed(paths=CYCLE_B_IMPLEMENTATION_PATHS)
-        log(f"[build] implementation is committed and clean at {build_commit}")
+        # In a worktree this proves the tree is clean at HEAD; from a deployed tarball it
+        # relays the sha the launcher verified (there is no repository on the worker).
+        build_commit = assert_implementation_committed(paths=CYCLE_B_IMPLEMENTATION_PATHS, log=log)
+        log(f"[build] build_commit={build_commit}")
     build_id = build_identifier(build_commit or "dryrun")
 
     tmp_dir = Path(args.tmp_dir) if args.tmp_dir else Path(tempfile.mkdtemp(prefix="exp02_build_"))

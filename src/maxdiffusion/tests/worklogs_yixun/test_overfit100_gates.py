@@ -577,3 +577,50 @@ def test_assert_manifest_matches_committed_rejects_an_edited_manifest(tmp_path):
     edited.write_text(json.dumps(payload, indent=2) + "\n")
     with pytest.raises(BuildError, match="sha256"):
         assert_manifest_matches_committed(edited)
+
+
+# ----------------------------------------------------------------------------------
+# 11. Deployed-code mode for the manifest check (probe failure 20260729-062523).
+#
+# The worker runs from an uploaded tarball, not a checkout. `assert_manifest_matches_committed`
+# compares against the committed artifact, which on the worker is simply the copy SHIPPED IN
+# THE TARBALL -- and that tarball IS the launch-time tree whose cleanliness the launcher
+# verified. So in deployed-code mode the shipped copy is still compared when present (a
+# hand-edited manifest passed by path is still caught) and otherwise hashed and recorded,
+# with the reasoning logged. It must never crash and never silently skip.
+# ----------------------------------------------------------------------------------
+
+
+def test_manifest_check_records_the_shipped_hash_when_no_reference_is_shipped(tmp_path):
+    consumed = tmp_path / "overfit100_manifest.json"
+    consumed.write_bytes(b'{"episodes": []}\n')
+    logs = []
+    digest = assert_manifest_matches_committed(consumed, repo_root=tmp_path, log=logs.append)
+    assert digest == hashlib.sha256(consumed.read_bytes()).hexdigest()
+    message = " ".join(logs)
+    assert "deployed-code" in message and "tarball" in message
+
+
+def test_manifest_check_still_compares_against_a_shipped_reference(tmp_path):
+    reference = tmp_path / builder.DEFAULT_MANIFEST
+    reference.parent.mkdir(parents=True, exist_ok=True)
+    reference.write_bytes(b'{"episodes": [1]}\n')
+    other = tmp_path / "elsewhere.json"
+    other.write_bytes(b'{"episodes": [2]}\n')
+    # Same bytes -> accepted; different bytes -> refused, tarball or not.
+    assert assert_manifest_matches_committed(reference, repo_root=tmp_path, log=lambda _: None)
+    with pytest.raises(BuildError, match="sha256"):
+        assert_manifest_matches_committed(other, repo_root=tmp_path, log=lambda _: None)
+
+
+def test_manifest_check_in_a_git_repo_requires_the_committed_reference(tmp_path, monkeypatch):
+    monkeypatch.setattr(builder, "is_git_worktree", lambda _root: True)
+    consumed = tmp_path / "m.json"
+    consumed.write_bytes(b"{}")
+    with pytest.raises(BuildError, match="committed manifest"):
+        assert_manifest_matches_committed(consumed, repo_root=tmp_path, log=lambda _: None)
+
+
+def test_manifest_check_unchanged_for_the_real_repository():
+    committed = Path(__file__).resolve().parents[4] / builder.DEFAULT_MANIFEST
+    assert assert_manifest_matches_committed(committed) == hashlib.sha256(committed.read_bytes()).hexdigest()

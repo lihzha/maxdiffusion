@@ -29,13 +29,17 @@ from pathlib import Path
 
 import pytest
 
+from maxdiffusion.data_preprocessing import build_overfit100_manifest
 from maxdiffusion.data_preprocessing.build_overfit100_manifest import (
     REASONS,
+    DirtyImplementationError,
     SourceError,
     amend_manifest_vae_pin,
     annotation_uri,
+    assert_implementation_committed,
     build_manifest,
     implementation_provenance_errors,
+    is_git_worktree,
     parse_ffprobe_json,
     parse_git_porcelain,
     resolve_vae_snapshot,
@@ -903,3 +907,84 @@ def test_the_committed_manifest_is_pinned_and_valid():
     }
     assert manifest["totals"] == {"episodes": 100, "windows": 1629}
     assert [entry["fields"] for entry in manifest["amended"]] == [["vae_fingerprint"]]
+
+
+# ----------------------------------------------------------------------------------
+# 10. Deployed-code mode -- the guard must work where the code has no .git (probe failure
+#     20260729-062523: the IROM queue deploys an uploaded TARBALL, so `git ls-tree` exited
+#     128 on the worker and the build died before preflight).
+#
+# The cleanliness premise is only checkable on the machine that HAS the repository, i.e. at
+# launch. On the worker the honest contract is: "the launcher verified a clean tree and told
+# me which sha it shipped" -- carried in COMMIT. Absent/malformed COMMIT fails closed, so the
+# fallback can never invent provenance.
+# ----------------------------------------------------------------------------------
+
+
+def test_is_git_worktree_true_inside_the_repository():
+    assert is_git_worktree(Path(__file__).resolve().parents[4]) is True
+
+
+def test_is_git_worktree_false_for_a_plain_directory(tmp_path):
+    assert is_git_worktree(tmp_path) is False
+
+
+def test_deployed_code_mode_returns_the_launch_commit_and_says_so(tmp_path):
+    logs = []
+    sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+    returned = assert_implementation_committed(tmp_path, paths=("whatever.py",), env={"COMMIT": sha}, log=logs.append)
+    assert returned == sha
+    message = " ".join(logs)
+    assert "deployed-code mode" in message and sha in message
+    assert "launch" in message  # the reader must learn WHERE the guard was actually enforced
+
+
+def test_deployed_code_mode_ignores_a_dirty_looking_path_list(tmp_path):
+    # There is no worktree to inspect at all; the contract is the launch-time sha, nothing else.
+    sha = "b" * 40
+    assert assert_implementation_committed(tmp_path, paths=(), env={"COMMIT": sha}, log=lambda _: None) == sha
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "unknown", "abc123", "A" * 40, "g" * 40, "a" * 39, "a" * 41])
+def test_deployed_code_mode_fails_closed_without_a_usable_commit(tmp_path, value):
+    env = {} if value is None else {"COMMIT": value}
+    with pytest.raises(DirtyImplementationError, match="COMMIT"):
+        assert_implementation_committed(tmp_path, paths=("x.py",), env=env, log=lambda _: None)
+
+
+def test_deployed_code_mode_reads_the_process_environment_by_default(tmp_path, monkeypatch):
+    sha = "c" * 40
+    monkeypatch.setenv("COMMIT", sha)
+    assert assert_implementation_committed(tmp_path, paths=("x.py",), log=lambda _: None) == sha
+
+
+def test_a_real_repository_still_uses_git_and_ignores_the_commit_env(monkeypatch):
+    # B6 stays honored wherever git exists: the env is NOT a way to bypass the dirty check.
+    monkeypatch.setenv("COMMIT", "d" * 40)
+    paths = ("src/maxdiffusion/data_preprocessing/build_overfit100_manifest.py",)
+
+    def fake_git(_root, *args):
+        if args[0] == "ls-tree":
+            return "\n".join(paths) + "\n"
+        if args[0] == "status":
+            return ""
+        return "e" * 40 + "\n"
+
+    monkeypatch.setattr(build_overfit100_manifest, "_git", fake_git)
+    assert assert_implementation_committed(paths=paths, log=lambda _: None) == "e" * 40
+
+
+def test_a_real_repository_still_refuses_a_dirty_tree_even_with_a_commit_env(monkeypatch):
+    monkeypatch.setenv("COMMIT", "d" * 40)
+    paths = ("src/maxdiffusion/data_preprocessing/build_overfit100_manifest.py",)
+
+    def fake_git(_root, *args):
+        if args[0] == "ls-tree":
+            return "\n".join(paths) + "\n"
+        if args[0] == "status":
+            return f" M {paths[0]}\n"
+        return "e" * 40 + "\n"
+
+    monkeypatch.setattr(build_overfit100_manifest, "_git", fake_git)
+    with pytest.raises(DirtyImplementationError):
+        assert_implementation_committed(paths=paths, log=lambda _: None)
