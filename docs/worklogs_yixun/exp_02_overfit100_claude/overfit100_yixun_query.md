@@ -43,3 +43,9 @@ Source: Yixun, relaying/echoing Lihan's critique of exp_01. Append each new quer
 **Verbatim:** "A'"
 
 **Decision locked:** data path **A′ — re-encode the 100 selected episodes' view-0 MP4s with the Wan VAE** (from `gs://v6_east1d/datasets/droid_ctrl_world_aligned/videos/train/<ep>/0.mp4`), rather than mining the existing 334 GB Wan-latent cache. Chosen after the plan review + probes showed the aligned `latent_videos/*.pt` are Ctrl-World-space latents `(T, 4, 24, 40)` — unusable for Wan — while the MP4s turn out to be already at the exact cache geometry **320×192 @ 5 fps** with frame counts matching the annotations (ep0: 88, ep1: 128). Session model at this decision: Fable 5 (xhigh) — Planner tier restored per SOP.
+
+## Query 4 — 2026-07-28 (plan approval + conditional launch grant, from Yixun)
+
+**Verbatim:** "Approve plan + dataset build + smoke conditional on dual sign-off"
+
+**Interpretation:** (1) **Plan v4 is approved** — the SOP plan gate is passed; cycles A–D may proceed. (2) The first two TPU jobs — the **v6e-8 dataset build** (cycle B, rung 4: 2-episode probe build then full build) and the **S1 smoke** (v6e-8, GBS 32, ~20 steps, storage-light) — are **pre-approved conditional on dual sign-off**, exp_01 Query-9 style: (a) Codex — every cycle review feeding that job is closed with all findings resolved; (b) Fable/Planner — final pre-launch verification (suite green, ladder rungs recorded, commit pushed, package written to `_command.md`/`_worklog.md` at launch time). Infra-failure resubmits covered by standing policy; any code/config change after sign-off voids the grant for the changed job. (3) **S2 (10-episode gate) and S3 (100-episode run) remain separate future approvals.**
