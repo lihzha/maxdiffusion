@@ -27,9 +27,9 @@
 # step 0" vs "restoring checkpoint at step N") — check that line on startup.
 
 # --- 1. Activate the training env ---
-source ~/.zshrc
-source ~/maxdiffusion_venv/bin/activate
-cd ~/maxdiffusion
+uv venv --python 3.12 ./maxdiffusion_venv --seed
+source ./maxdiffusion_venv/bin/activate
+bash setup.sh MODE=stable DEVICE=tpu
 
 # W&B: export WANDB_API_KEY (or run `wandb login`) before launching. Leaving it
 # unset makes wandb.init() prompt/fail on a headless TPU worker; drop the
@@ -37,8 +37,9 @@ cd ~/maxdiffusion
 : "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
 
 # --- 2. Bucket mount ---
+export WANDB_API_KEY=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
 export GCS_BUCKET=v6_east1d
-export GCS_MOUNT=/home/irom-lab/gcs-mount
+export GCS_MOUNT=/home/zheng/gcs-mount
 
 if ! command -v gcsfuse >/dev/null; then
   export GCSFUSE_REPO=gcsfuse-$(lsb_release -c -s)
