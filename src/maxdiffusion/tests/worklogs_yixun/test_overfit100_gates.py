@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -624,3 +626,110 @@ def test_manifest_check_in_a_git_repo_requires_the_committed_reference(tmp_path,
 def test_manifest_check_unchanged_for_the_real_repository():
     committed = Path(__file__).resolve().parents[4] / builder.DEFAULT_MANIFEST
     assert assert_manifest_matches_committed(committed) == hashlib.sha256(committed.read_bytes()).hexdigest()
+
+
+# ----------------------------------------------------------------------------------
+# 12. T2 -- the deployed-code fallback may only accept a manifest FROM the tarball.
+#
+# Hashing "whatever path was passed" and logging it as "the shipped manifest" would let a
+# manifest from outside the deployed tree be recorded as provenance. The trust boundary is
+# the uploaded tree, so the consumed path must resolve beneath the deployed-code root.
+# ----------------------------------------------------------------------------------
+
+
+def test_manifest_fallback_rejects_a_path_outside_the_deployed_root(tmp_path):
+    root = tmp_path / "tarball"
+    root.mkdir()
+    outside = tmp_path / "elsewhere" / "overfit100_manifest.json"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b'{"episodes": []}\n')
+    with pytest.raises(BuildError, match="outside the deployed"):
+        assert_manifest_matches_committed(outside, repo_root=root, log=lambda _: None)
+
+
+def test_manifest_fallback_accepts_a_path_inside_the_deployed_root(tmp_path):
+    root = tmp_path / "tarball"
+    (root / "docs").mkdir(parents=True)
+    consumed = root / "docs" / "overfit100_manifest.json"
+    consumed.write_bytes(b'{"episodes": []}\n')
+    logs = []
+    digest = assert_manifest_matches_committed(consumed, repo_root=root, log=logs.append)
+    assert digest == hashlib.sha256(consumed.read_bytes()).hexdigest()
+    assert "deployed-code" in " ".join(logs)
+
+
+def test_manifest_fallback_rejects_a_symlink_escaping_the_deployed_root(tmp_path):
+    root = tmp_path / "tarball"
+    root.mkdir()
+    target = tmp_path / "outside.json"
+    target.write_bytes(b"{}")
+    link = root / "manifest.json"
+    link.symlink_to(target)  # resolves outside the root
+    with pytest.raises(BuildError, match="outside the deployed"):
+        assert_manifest_matches_committed(link, repo_root=root, log=lambda _: None)
+
+
+# ----------------------------------------------------------------------------------
+# 13. T3 -- the bash arm's pre-prefetch COMMIT check must accept EXACTLY one 40-hex value.
+#
+# `grep -Eq '^[0-9a-f]{40}$'` matches if ANY line matches, so `COMMIT=$'<40hex>\njunk'` used
+# to sail past the fast check and only fail later, after the multi-minute HF prefetch. The
+# block is executed here verbatim from the shipped script, between its sentinels.
+# ----------------------------------------------------------------------------------
+
+_SCRIPT = Path(__file__).resolve().parents[4] / "bash_scripts" / "build_overfit100_dataset.sh"
+_GUARD_START = "# >>> launch-commit guard"
+_GUARD_END = "# <<< launch-commit guard"
+
+
+def _guard_block() -> str:
+    text = _SCRIPT.read_text()
+    assert _GUARD_START in text and _GUARD_END in text, "the launch-commit guard sentinels moved"
+    return text[text.index(_GUARD_START) : text.index(_GUARD_END)]
+
+
+def _run_guard(commit, cwd, extra="printenv COMMIT"):
+    script = f"set -euo pipefail\nCOMMIT={shlex.quote(commit)}\n{_guard_block()}\n{extra}\n"
+    return subprocess.run(["bash", "-c", script], cwd=str(cwd), capture_output=True, text=True)
+
+
+def test_guard_block_accepts_a_single_clean_sha_and_exports_it(tmp_path):
+    sha = "a" * 40
+    result = _run_guard(sha, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == sha  # exported, so the child process sees it
+
+
+@pytest.mark.parametrize(
+    "commit",
+    [
+        "unknown",
+        "",
+        "a" * 39,
+        "a" * 41,
+        "A" * 40,
+        "g" * 40,
+        "a" * 40 + " ",
+        " " + "a" * 40,
+        "a" * 40 + "\njunk",
+        "junk\n" + "a" * 40,
+        "a" * 40 + "\n" + "b" * 40,
+    ],
+)
+def test_guard_block_rejects_anything_but_one_clean_sha(tmp_path, commit):
+    result = _run_guard(commit, tmp_path)
+    assert result.returncode == 1, f"{commit!r} was accepted: {result.stdout}{result.stderr}"
+    assert "FATAL" in result.stderr
+
+
+def test_guard_block_is_skipped_inside_a_git_worktree():
+    # In a checkout the python guard does the real work, so the bash fast-check stands down.
+    result = _run_guard("unknown", _SCRIPT.parent.parent)
+    assert result.returncode == 0, result.stderr
+
+
+def test_guard_block_ignores_a_poisoned_git_dir(tmp_path, monkeypatch):
+    # Same T1 hazard on the shell side: GIT_DIR must not make a real worktree look deployed.
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    result = _run_guard("unknown", _SCRIPT.parent.parent)
+    assert result.returncode == 0, f"a poisoned GIT_DIR turned the worktree into deployed mode: {result.stderr}"

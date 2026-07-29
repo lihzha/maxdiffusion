@@ -25,12 +25,15 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from maxdiffusion.data_preprocessing import build_overfit100_manifest
 from maxdiffusion.data_preprocessing.build_overfit100_manifest import (
+    GIT_ENV_STRIP,
     REASONS,
     DirtyImplementationError,
     SourceError,
@@ -40,6 +43,7 @@ from maxdiffusion.data_preprocessing.build_overfit100_manifest import (
     build_manifest,
     implementation_provenance_errors,
     is_git_worktree,
+    sanitized_git_env,
     parse_ffprobe_json,
     parse_git_porcelain,
     resolve_vae_snapshot,
@@ -988,3 +992,151 @@ def test_a_real_repository_still_refuses_a_dirty_tree_even_with_a_commit_env(mon
     monkeypatch.setattr(build_overfit100_manifest, "_git", fake_git)
     with pytest.raises(DirtyImplementationError):
         assert_implementation_committed(paths=paths, log=lambda _: None)
+
+
+# ----------------------------------------------------------------------------------
+# 11. T1 (tarball-guard review) -- ambient Git variables must not turn COMMIT into a bypass.
+#
+# `GIT_DIR=/nonexistent` makes `git -C <real worktree> rev-parse --is-inside-work-tree` exit
+# 128, which would send a REAL, DIRTY worktree down the deployed-code path and accept any
+# 40-hex COMMIT with no cleanliness check at all. Every git subprocess therefore runs with a
+# sanitized environment, and a `.git` marker whose discovery still fails is FATAL -- the one
+# thing the guard must never do is downgrade itself to "trust the env".
+# ----------------------------------------------------------------------------------
+
+
+def _run_git(cwd, *args):
+    env = {
+        **os.environ,
+        "HOME": str(cwd),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": str(Path(cwd) / ".gitconfig"),
+    }
+    for key in GIT_ENV_STRIP:
+        env.pop(key, None)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, env=env)
+
+
+def _make_repo(root: Path, filename: str = "impl.py", body: str = "print('v1')\n") -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    _run_git(root, "init", "-q", "-b", "main")
+    (root / filename).write_text(body)
+    _run_git(root, "add", filename)
+    _run_git(root, "-c", "user.email=t@e.st", "-c", "user.name=T", "commit", "-q", "-m", "init", "--no-gpg-sign")
+    return root
+
+
+def test_the_exp02_checkout_is_a_linked_worktree_whose_git_marker_is_a_file():
+    # Pins our actual setup: `git worktree add` writes a .git FILE, not a directory. Any
+    # marker check that assumed a directory would misclassify this very repository.
+    marker = Path(__file__).resolve().parents[4] / ".git"
+    assert marker.exists() and marker.is_file()
+
+
+def test_is_git_worktree_detects_a_linked_worktree(tmp_path):
+    main = _make_repo(tmp_path / "main")
+    linked = tmp_path / "linked"
+    _run_git(main, "worktree", "add", "-q", str(linked))
+    assert (linked / ".git").is_file()
+    assert is_git_worktree(linked) is True
+
+
+def test_is_git_worktree_ignores_a_poisoned_git_dir(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path / "repo")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "definitely-not-a-repository"))
+    assert is_git_worktree(repo) is True
+
+
+@pytest.mark.parametrize("variable", sorted(GIT_ENV_STRIP))
+def test_is_git_worktree_ignores_every_stripped_variable(tmp_path, monkeypatch, variable):
+    repo = _make_repo(tmp_path / f"repo_{variable.lower()}")
+    monkeypatch.setenv(variable, str(tmp_path / "nowhere"))
+    assert is_git_worktree(repo) is True
+
+
+def test_guard_refuses_a_dirty_tree_even_with_a_poisoned_git_dir_and_a_valid_commit(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path / "repo")
+    (repo / "impl.py").write_text("print('dirty')\n")  # uncommitted change
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "definitely-not-a-repository"))
+    monkeypatch.setenv("COMMIT", "a" * 40)
+    with pytest.raises(DirtyImplementationError, match="uncommitted"):
+        assert_implementation_committed(repo, paths=("impl.py",), log=lambda _: None)
+
+
+def test_guard_refuses_a_dirty_tree_when_git_work_tree_points_at_a_clean_tree(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path / "repo")
+    clean = _make_repo(tmp_path / "clean")
+    (repo / "impl.py").write_text("print('dirty')\n")
+    monkeypatch.setenv("GIT_WORK_TREE", str(clean))
+    monkeypatch.setenv("COMMIT", "b" * 40)
+    with pytest.raises(DirtyImplementationError, match="uncommitted"):
+        assert_implementation_committed(repo, paths=("impl.py",), log=lambda _: None)
+
+
+def test_guard_refuses_a_dirty_tree_when_git_index_file_points_elsewhere(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path / "repo")
+    (repo / "impl.py").write_text("print('dirty')\n")
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "elsewhere.index"))
+    monkeypatch.setenv("COMMIT", "c" * 40)
+    with pytest.raises(DirtyImplementationError, match="uncommitted"):
+        assert_implementation_committed(repo, paths=("impl.py",), log=lambda _: None)
+
+
+def test_guard_accepts_a_clean_tree_under_a_poisoned_environment(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path / "repo")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    monkeypatch.setenv("COMMIT", "d" * 40)
+    sha = assert_implementation_committed(repo, paths=("impl.py",), log=lambda _: None)
+    assert sha != "d" * 40 and len(sha) == 40  # the REAL HEAD, not the env
+
+
+def test_deployed_mode_never_answers_from_a_poisoned_repository(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path / "repo")
+    plain = tmp_path / "tarball"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+    monkeypatch.delenv("COMMIT", raising=False)
+    assert is_git_worktree(plain) is False
+    # Without COMMIT it must fail closed -- never borrow the poisoned repository's HEAD.
+    with pytest.raises(DirtyImplementationError, match="COMMIT"):
+        assert_implementation_committed(plain, paths=("impl.py",), log=lambda _: None)
+
+
+def test_a_git_marker_whose_discovery_fails_is_fatal_not_deployed_mode(tmp_path):
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / ".git").write_text("gitdir: /definitely/not/a/repository\n")
+    with pytest.raises(DirtyImplementationError, match="\\.git"):
+        is_git_worktree(broken)
+    with pytest.raises(DirtyImplementationError):
+        assert_implementation_committed(broken, paths=("impl.py",), env={"COMMIT": "e" * 40}, log=lambda _: None)
+
+
+def test_a_directory_shaped_git_marker_that_is_not_a_repository_is_fatal(tmp_path):
+    broken = tmp_path / "broken_dir"
+    (broken / ".git").mkdir(parents=True)
+    with pytest.raises(DirtyImplementationError):
+        is_git_worktree(broken)
+
+
+def test_git_env_strip_covers_the_repository_selection_variables():
+    assert {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_NAMESPACE",
+    } <= set(GIT_ENV_STRIP)
+
+
+def test_sanitized_git_env_drops_selectors_and_keeps_the_rest(monkeypatch):
+    monkeypatch.setenv("GIT_DIR", "/nowhere")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    sanitized = sanitized_git_env()
+    assert "GIT_DIR" not in sanitized
+    assert sanitized["PATH"] == "/usr/bin"
+    assert not any(key in sanitized for key in GIT_ENV_STRIP)

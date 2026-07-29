@@ -50,20 +50,30 @@ DRY_RUN="${DRY_RUN:-0}"
 SHARD_SIZE="${SHARD_SIZE:-0}"
 # pyconfig key=value pairs forwarded to the VAE-only pipeline, space separated.
 CONFIG_OVERRIDES="${CONFIG_OVERRIDES:-hardware=tpu}"
+# >>> launch-commit guard  (executed verbatim by test_overfit100_gates.py -- keep the sentinels)
 # The queue deploys an uploaded TARBALL with no .git, so the builder's clean-commit guard runs
 # in deployed-code mode and relays THIS value (probe failure 20260729-062523). It must be
 # EXPORTED -- python reads the process environment -- and it must be the sha the launcher
 # verified clean: `tpu create --env COMMIT=$(git rev-parse HEAD)`. Checked here so a bad launch
 # fails in seconds instead of after the HF prefetch.
-COMMIT="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+#
+# T1: the worktree probe strips git's repository-selection variables, so an ambient GIT_DIR
+# cannot make a real checkout look deployed. T3: COMMIT must be EXACTLY one 40-hex token --
+# `grep -Eq '^[0-9a-f]{40}$'` accepts a multi-line value if ANY line matches.
+GIT_ISOLATED=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE
+  -u GIT_INDEX_VERSION -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES
+  -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM -u GIT_NAMESPACE
+  -u GIT_PREFIX -u GIT_TOPLEVEL git)
+COMMIT="${COMMIT:-$("${GIT_ISOLATED[@]}" rev-parse HEAD 2>/dev/null || echo unknown)}"
 export COMMIT
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  if ! printf '%s' "${COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; then
-    echo "[build] FATAL: deployed-code mode (no git worktree) requires COMMIT=<40-hex sha> in the job env; got '${COMMIT}'" >&2
+if ! "${GIT_ISOLATED[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [[ ${#COMMIT} -ne 40 || ! ${COMMIT} =~ ^[0-9a-f]{40}$ || ${COMMIT} == *[[:space:]]* ]]; then
+    echo "[build] FATAL: deployed-code mode (no git worktree) requires COMMIT=<exactly one 40-hex sha> in the job env; got '${COMMIT}'" >&2
     exit 1
   fi
   echo "[build] deployed-code mode: relaying launch-time COMMIT=${COMMIT}"
 fi
+# <<< launch-commit guard
 
 # B1: the VAE repo/revision come from the MANIFEST, not from the launcher -- the manifest pin
 # is the contract, and the build re-verifies it against the resolved snapshot.

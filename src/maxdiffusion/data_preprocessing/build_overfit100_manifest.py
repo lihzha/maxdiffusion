@@ -87,6 +87,28 @@ DEFAULT_VAE_REPO = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 # The launcher stamps the sha it verified clean into the job environment; workers that run
 # from an uploaded tarball (no .git) can only relay it. See `deployed_code_commit`.
 DEPLOYED_COMMIT_ENV = "COMMIT"
+
+# T1 (tarball-guard review): every variable from `git help environment` that can redirect
+# WHICH repository / worktree / index / object store git answers about. Inheriting them lets
+# an ambient `GIT_DIR=/nowhere` make a real, DIRTY worktree look like a deployed tarball,
+# downgrading the clean-commit guard to "trust whatever COMMIT says". Stripped from every git
+# subprocess this module runs.
+GIT_ENV_STRIP = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_INDEX_VERSION",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_TOPLEVEL",
+)
+GIT_MARKER = ".git"  # a DIRECTORY in a normal clone, a FILE in a linked worktree or submodule
+
 N_EPISODES = 69723  # annotation ids 0..69722
 VIEW_INDEX = 0  # Query 2: one camera view per episode, the first exterior view
 MIN_FRAMES = 33  # one window = 33 consecutive frames -> 9 latent frames
@@ -404,8 +426,22 @@ def implementation_provenance_errors(
     return errors
 
 
+def sanitized_git_env(env: dict | None = None) -> dict:
+    """`env` (default `os.environ`) without any git repository/worktree/index selector (T1)."""
+    sanitized = dict(os.environ if env is None else env)
+    for key in GIT_ENV_STRIP:
+        sanitized.pop(key, None)
+    return sanitized
+
+
 def _git(repo_root: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, text=True, check=True)
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=sanitized_git_env(),
+    )
     return proc.stdout
 
 
@@ -415,17 +451,39 @@ def is_git_worktree(repo_root: str | Path) -> bool:
     The TPU queue deploys an uploaded code TARBALL with no `.git`, so every git call on the
     worker exits 128 (probe failure 20260729-062523). Detect that explicitly instead of
     letting a `CalledProcessError` surface as a mystery crash mid-build.
+
+    Two hardenings from the tarball-guard review (T1), because THIS ANSWER decides whether the
+    dirty check runs at all:
+
+    * discovery runs with a sanitized environment, so an ambient `GIT_DIR` / `GIT_WORK_TREE`
+      cannot make a real worktree look deployed (nor let a plain directory borrow a foreign
+      repository's answers);
+    * a `.git` marker at the root (a DIRECTORY in a clone, a FILE in a linked worktree or
+      submodule) whose discovery still fails is FATAL. Code shipped with a repository marker is
+      not an uploaded tarball, and "we could not tell" must never resolve to the weaker contract.
     """
+    root = Path(repo_root)
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "--is-inside-work-tree"],
+            ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
             capture_output=True,
             text=True,
             check=False,
+            env=sanitized_git_env(),
         )
-    except (OSError, subprocess.SubprocessError):  # no git binary at all -> deployed-code mode
-        return False
-    return proc.returncode == 0 and proc.stdout.strip() == "true"
+        inside = proc.returncode == 0 and proc.stdout.strip() == "true"
+        detail = (proc.stderr or proc.stdout or "").strip()[:400]
+    except (OSError, subprocess.SubprocessError) as exc:  # no git binary at all
+        inside, detail = False, repr(exc)
+    if inside:
+        return True
+    if (root / GIT_MARKER).exists():
+        raise DirtyImplementationError(
+            f"{root / GIT_MARKER} exists but git could not open a worktree there ({detail}). "
+            "Refusing to fall back to deployed-code mode: code shipped with a repository marker "
+            "is not an uploaded tarball, and an unreadable repository cannot prove a clean tree."
+        )
+    return False
 
 
 def deployed_code_commit(env: dict | None = None, log: Callable = print) -> str:

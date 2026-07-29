@@ -1151,6 +1151,16 @@ def assert_manifest_matches_committed(
     if not reference.is_file():
         if not deployed:
             raise BuildError(f"{reference}: the committed manifest is missing; cannot verify {path}")
+        # T2: the trust boundary is the UPLOADED TREE. A manifest from anywhere else carries
+        # none of the launcher's clean-tree verification, so it may not be recorded as "the
+        # shipped manifest". `resolve()` also collapses symlinks that would escape the root.
+        try:
+            Path(path).resolve().relative_to(root.resolve())
+        except ValueError:
+            raise BuildError(
+                f"{path}: resolves outside the deployed-code root {root}. In deployed-code mode only a "
+                "manifest shipped inside the uploaded tarball may be recorded as provenance."
+            ) from None
         log(
             "[provenance] deployed-code mode: no committed manifest shipped alongside the code; the "
             "uploaded tarball IS the launch-time tree the launcher verified clean, so recording the "
