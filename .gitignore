@@ -64,6 +64,8 @@ coverage.xml
 
 # Django stuff:
 *.log
+# but SOP artifact 9 (teed run logs) must be committable (exp_02 cycle-A finding):
+!docs/worklogs_yixun/**/*.log
 local_settings.py
 db.sqlite3
 
