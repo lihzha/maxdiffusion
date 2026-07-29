@@ -2,7 +2,16 @@
 
 Cross-experiment status index — one section per experiment/run, newest first. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`. Per-experiment detail lives in `exp_<NN>_<name>_claude/` folders per `experiment_SOP.md`; this file is the at-a-glance map.
 
-Last updated: 2026-07-27
+Last updated: 2026-07-28
+
+## exp_02 `overfit100` — text-conditioned 100-trajectory memorization test (ACTIVE)
+
+- **What:** Can full-FT Wan2.2 TI2V 5B **memorize** the windows of **100 successful DROID trajectories** conditioned on (per-trajectory **language instruction** via T5 + first-frame latent)? Lihan/Yixun's corrected overfit design after exp_01 (which was full-corpus and unconditioned). Framed as a finite-set memorization test, NOT "text determines the future" (plan-review F1).
+- **Status:** PLAN v2 UNDER RE-REVIEW (2026-07-28). v1 review = REQUEST-REVISION (F1–F7: determinacy framing, eval-tooling gap, coverage/threshold, latent-layout proof, text-table memory, manifest reproducibility, staged compute) — all resolved in v2. Key probes: cached `z_i0 == z_video[:,0]` bit-identical; aligned `latent_videos/*.pt` are Ctrl-World-space `(T,4,24,40)` (unusable); aligned MP4s already 320×192@5fps matching annotations ⇒ data path **A′** (user choice): re-encode view-0 MP4s with the Wan VAE.
+- **Locked decisions:** view 0 only; LR 1e-5; A′; selection = seeded, `success==1`, non-empty-instruction filter, 1-of-3 pick per episode; staged compute S1 smoke (v6e-8) → S2 10-episode gate (v6e-8, 2.5k steps) → S3 100-episode (v6e-64, GBS 256, 2.5k-step first segment); success rule ≥90% of canonical windows at SSIM ≥0.95 with text-ablation controls (correct/null/shuffled).
+- **Branch / worktree:** `claude-exp_02_overfit100-20260728` off `yixun-dev` @ `1bc0030`, **plus exp_01's branch merged in** (needs its trainer/tooling; `yixun-dev` stays clean of exp_01 code per the no-merge decision); worktree `/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100`.
+- **Docs:** `docs/worklogs_yixun/exp_02_overfit100_claude/` — queries 1–3, plan v2, plan review + resolutions, worklog.
+- **Next:** re-review verdict → Yixun approves plan → cycle A (manifest builder; manifest committed) → B (dataset build, TPU-gated) → C (trainer) → D (eval tooling) → E (staged launches, all approval-gated).
 
 ## exp_01 `full_ft_overfit` — full-FT overfit diagnostic
 
@@ -34,4 +43,4 @@ Side-adapter (~240M) and earlier pre-context history: see `docs/side_adaptor.md`
 - Codex reviewer: CLI 0.144.1 (`codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh`), MCP server `codex` wired at user scope; verified working 2026-07-12.
 - Submodule: `third_party/Wan2.2` = lihzha/Wan2.2 @ `f370228`.
 - Handoff automation: `.claude/settings.local.json` + `.claude/hooks/handoff_snapshot.sh` (both gitignored, local-only) fire on `ConfigChange` / `PreCompact` / `SessionEnd` — they append a git-state breadcrumb to `docs/worklogs_yixun/_handoff_events.log` and nudge to refresh the handoff docs. No hook exists for a model exhausting its quota, so that trigger is proactive-only. Full protocol in `CLAUDE.md`. To re-create on a fresh clone: recreate those two files (gitignored) and open `/hooks` once.
-- Branch: `yixun-dev` (integration). Experiments so far: `exp_01_full_ft_overfit` (COMPLETE Parts I+II, unmerged by decision, on branch `claude-exp_01_full_ft_overfit-20260715`). Next experiment number is `exp_02`.
+- Branch: `yixun-dev` (integration). Experiments so far: `exp_01_full_ft_overfit` (COMPLETE Parts I+II, unmerged by decision, on branch `claude-exp_01_full_ft_overfit-20260715`); `exp_02_overfit100` (ACTIVE, on branch `claude-exp_02_overfit100-20260728`). Next experiment number is `exp_03`.
