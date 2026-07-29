@@ -52,6 +52,8 @@ one-candidate-at-a-time walk (asserted by `test_block_size_never_changes_the_wal
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import platform
 import re
@@ -80,6 +82,7 @@ from maxdiffusion.data_preprocessing.extract_v1_fixture import (
 )
 
 DATASET_ROOT = "gs://v6_east1d/datasets/droid_ctrl_world_aligned"
+DEFAULT_VAE_REPO = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 N_EPISODES = 69723  # annotation ids 0..69722
 VIEW_INDEX = 0  # Query 2: one camera view per episode, the first exterior view
 MIN_FRAMES = 33  # one window = 33 consecutive frames -> 9 latent frames
@@ -122,6 +125,7 @@ _TOP_LEVEL_KEYS = {
     "tool_versions",
     "provisional",
     "fixture",
+    "vae_fingerprint",
     "episodes",
     "draw_log",
     "rejection_tally",
@@ -143,8 +147,13 @@ _FINGERPRINT_KEYS = {"uri", "generation", "md5", "size"}
 _FIXTURE_KEYS = {"uri", "generation", "md5", "size_bytes", "names", "shapes", "dtypes"}
 _FFPROBE_KEYS = {"width", "height", "nb_frames", "fps", "pix_fmt"}
 _TOOL_KEYS = ("python", "gsutil", "ffprobe", "ffmpeg", "numpy", "jax")
+# B1 (cycle-B review): the VAE that encodes the latents is part of the dataset's identity.
+VAE_PIN_KEYS = ("hf_repo", "revision", "vae_config_sha256")
+_AMENDMENT_KEYS = {"reason", "date", "commit", "fields"}
+VAE_CONFIG_RELPATH = ("vae", "config.json")
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class SourceError(RuntimeError):
@@ -260,6 +269,102 @@ def verify_annotation_binding(episode_id: int, annotation) -> list[str]:
 
 
 # ----------------------------------------------------------------------------------
+# VAE pin (B1) -- which weights encoded the dataset is part of the manifest's identity
+# ----------------------------------------------------------------------------------
+
+
+def vae_pin_errors(pin) -> list[str]:
+    """Fail-closed shape gate for `manifest["vae_fingerprint"]` (empty list = usable)."""
+    if not isinstance(pin, dict):
+        return ["vae_fingerprint is missing or is not an object"]
+    errors: list[str] = []
+    extra = set(pin) - set(VAE_PIN_KEYS)
+    missing = set(VAE_PIN_KEYS) - set(pin)
+    if missing:
+        errors.append(f"vae_fingerprint is missing {sorted(missing)}")
+    if extra:
+        # Exactly these three keys: a mutable field (e.g. a machine-local snapshot path)
+        # inside the pin would make the manifest's identity host-dependent.
+        errors.append(f"vae_fingerprint carries unexpected keys {sorted(extra)}")
+    if not str(pin.get("hf_repo") or "").strip():
+        errors.append("vae_fingerprint.hf_repo is empty")
+    revision = str(pin.get("revision") or "")
+    if not _SHA_RE.fullmatch(revision):
+        errors.append(f"vae_fingerprint.revision {revision!r} is not a 40-hex commit sha")
+    digest = str(pin.get("vae_config_sha256") or "")
+    if not _SHA256_RE.fullmatch(digest):
+        errors.append(f"vae_fingerprint.vae_config_sha256 {digest!r} is not a 64-hex sha256")
+    return errors
+
+
+def vae_config_sha256(path: str | Path) -> str:
+    """sha256 of the VAE `config.json` bytes -- the architecture half of the pin."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def resolve_vae_snapshot(hf_repo: str, revision: str | None = None, local_files_only: bool = False) -> dict:
+    """Resolve a repo (+ optional pinned revision) to ONE local snapshot directory.
+
+    Returns `{"snapshot_path": str, "pin": {hf_repo, revision, vae_config_sha256}}`. The
+    caller passes `snapshot_path` to BOTH the fingerprint check and the model loader, so the
+    weights that get loaded are the fingerprinted ones by construction (B1).
+
+    A local directory cannot prove a revision, so the caller's `revision` is echoed back --
+    that path exists for tests and for pre-staged snapshots, never for the production build.
+    """
+    local = Path(hf_repo)
+    if local.is_dir():
+        snapshot_path, resolved_revision = local, revision
+    else:
+        from huggingface_hub import snapshot_download
+
+        snapshot_path = Path(
+            snapshot_download(
+                repo_id=hf_repo,
+                revision=revision,
+                allow_patterns=["model_index.json", "vae/*"],  # VAE-only job: nothing else is fetched
+                local_files_only=local_files_only,
+            )
+        )
+        parts = snapshot_path.parts  # NOT resolved: snapshots/<revision>/ is a symlink farm
+        resolved_revision = parts[parts.index("snapshots") + 1] if "snapshots" in parts else revision
+    config_path = snapshot_path.joinpath(*VAE_CONFIG_RELPATH)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"{snapshot_path}: no {'/'.join(VAE_CONFIG_RELPATH)} in the resolved snapshot")
+    return {
+        "snapshot_path": str(snapshot_path),
+        "pin": {
+            "hf_repo": str(hf_repo),
+            "revision": str(resolved_revision or ""),
+            "vae_config_sha256": vae_config_sha256(config_path),
+        },
+    }
+
+
+def amend_manifest_vae_pin(manifest: dict, pin: dict, *, reason: str, commit: str, now: str) -> dict:
+    """Return a copy of `manifest` carrying `vae_fingerprint` plus an explicit amendment log.
+
+    Pure and idempotent: re-applying the SAME pin is a no-op, and a DIFFERENT pin raises --
+    an amendment may add provenance the artifact was missing, never silently restate what the
+    dataset was built against. Selection content (episodes/draw log/totals) is untouched.
+    """
+    errors = vae_pin_errors(pin)
+    if errors:
+        raise ValueError("refusing to amend with a malformed VAE pin:\n  " + "\n  ".join(errors))
+    existing = manifest.get("vae_fingerprint")
+    if existing == pin:
+        return copy.deepcopy(manifest)
+    if existing is not None:
+        raise ValueError(f"manifest is already pinned to {existing!r}; refusing to replace it with {pin!r}")
+    amended = copy.deepcopy(manifest)
+    amended["vae_fingerprint"] = copy.deepcopy(pin)
+    amended["amended"] = list(amended.get("amended") or []) + [
+        {"reason": str(reason), "date": str(now), "commit": str(commit), "fields": ["vae_fingerprint"]}
+    ]
+    return amended
+
+
+# ----------------------------------------------------------------------------------
 # Builder provenance (A1)
 # ----------------------------------------------------------------------------------
 
@@ -300,16 +405,24 @@ def _git(repo_root: Path, *args: str) -> str:
     return proc.stdout
 
 
-def assert_implementation_committed(repo_root: str | Path | None = None) -> str:
-    """Return HEAD's sha, or raise if the manifest could not honestly claim to come from it."""
+def assert_implementation_committed(
+    repo_root: str | Path | None = None,
+    paths: Sequence[str] = IMPLEMENTATION_PATHS,
+) -> str:
+    """Return HEAD's sha, or raise if the manifest could not honestly claim to come from it.
+
+    ``paths`` lets a later cycle reuse the same fail-closed guard for its own implementation
+    files (cycle B's dataset builder passes `CYCLE_B_IMPLEMENTATION_PATHS`).
+    """
     root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
+    paths = tuple(paths)
     tracked = {line.strip() for line in _git(root, "ls-tree", "-r", "--name-only", "HEAD").splitlines()}
-    dirty = parse_git_porcelain(_git(root, "status", "--porcelain", "--", *IMPLEMENTATION_PATHS))
-    errors = implementation_provenance_errors(tracked, dirty)
+    dirty = parse_git_porcelain(_git(root, "status", "--porcelain", "--", *paths))
+    errors = implementation_provenance_errors(tracked, dirty, paths=paths)
     if errors:
         raise DirtyImplementationError(
-            "refusing to build a production manifest from an uncommitted implementation "
-            "(builder_commit would not name the code that ran):\n  " + "\n  ".join(errors)
+            "refusing to build a production artifact from an uncommitted implementation "
+            "(the recorded commit would not name the code that ran):\n  " + "\n  ".join(errors)
         )
     return _git(root, "rev-parse", "HEAD").strip()
 
@@ -470,6 +583,7 @@ def build_manifest(
     seed: int,
     n_target: int,
     fixture: dict,
+    vae_fingerprint: dict,
     builder_commit: str,
     created_utc: str,
     tool_versions: dict,
@@ -487,6 +601,9 @@ def build_manifest(
 
     ``order`` overrides the seeded permutation (test seam only -- production passes None).
     """
+    pin_errors = vae_pin_errors(vae_fingerprint)
+    if pin_errors:
+        raise ValueError("refusing to build a manifest without a valid VAE pin:\n  " + "\n  ".join(pin_errors))
     order = [int(e) for e in (candidate_order(seed) if order is None else order)]
     episodes: list[dict] = []
     draw_log: list[dict] = []
@@ -561,6 +678,7 @@ def build_manifest(
         "tool_versions": tool_versions,
         "provisional": bool(dry_run),
         "fixture": fixture,
+        "vae_fingerprint": copy.deepcopy(vae_fingerprint),
         "episodes": episodes,
         "draw_log": draw_log,
         "rejection_tally": dict(sorted(tally.items())),
@@ -663,6 +781,29 @@ def _validate_episode(position: int, episode, seen_ids: set) -> list[str]:
     return errors
 
 
+def _validate_amendments(amended) -> list[str]:
+    """`amended` is optional, but if present every entry must name why/when/what/from-where."""
+    if amended is None:
+        return []
+    if not isinstance(amended, list) or not amended:
+        return ["amended must be a non-empty list when present"]
+    errors: list[str] = []
+    for position, entry in enumerate(amended):
+        tag = f"amended[{position}]"
+        if not isinstance(entry, dict) or set(entry) != _AMENDMENT_KEYS:
+            errors.append(f"{tag} must be exactly {sorted(_AMENDMENT_KEYS)}")
+            continue
+        if not str(entry["reason"] or "").strip():
+            errors.append(f"{tag}: reason is empty")
+        if not str(entry["date"] or "").strip():
+            errors.append(f"{tag}: date is empty")
+        if not _SHA_RE.fullmatch(str(entry["commit"] or "")):
+            errors.append(f"{tag}: commit {entry['commit']!r} is not a 40-hex git sha")
+        if not isinstance(entry["fields"], list) or not entry["fields"]:
+            errors.append(f"{tag}: fields must be a non-empty list of amended manifest keys")
+    return errors
+
+
 def validate_manifest_structure(manifest, expected_episodes: int | None = None) -> list[str]:
     """Pure fail-closed gate over every internal invariant of the manifest (Codex review A4).
 
@@ -692,6 +833,11 @@ def validate_manifest_structure(manifest, expected_episodes: int | None = None) 
     for key in _TOOL_KEYS:
         if not str(tools.get(key) or "").strip():
             errors.append(f"tool_versions is missing a non-empty {key} version")
+
+    # B1: the pin is mandatory -- a manifest that cannot name the VAE it was built against
+    # cannot bind the build to those weights, so the build has nothing to verify.
+    errors += vae_pin_errors(manifest["vae_fingerprint"])
+    errors += _validate_amendments(manifest.get("amended"))
 
     fixture = manifest["fixture"] if isinstance(manifest["fixture"], dict) else {}
     fixture_missing = _FIXTURE_KEYS - set(fixture)
@@ -808,7 +954,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--block-size", type=int, default=DEFAULT_BLOCK_SIZE)
     parser.add_argument("--tmp-dir", default=None, help="scratch dir for annotation/MP4 downloads")
     parser.add_argument("--dry-run", action="store_true", help="annotation-level decisions only; writes nothing")
+    parser.add_argument("--vae-repo", default=DEFAULT_VAE_REPO, help="HF repo whose VAE encodes the dataset")
+    parser.add_argument("--vae-revision", default=None, help="pin this exact revision (default: resolve current)")
+    parser.add_argument(
+        "--amend-vae-pin",
+        action="store_true",
+        help="add the resolved VAE pin to the EXISTING manifest at --out (no selection rebuild)",
+    )
+    parser.add_argument("--amend-reason", default="cycle-B review B1: VAE pin made mandatory")
     return parser.parse_args(argv)
+
+
+def amend_vae_pin_file(path: str | Path, pin: dict, *, reason: str, commit: str, log: Callable = print) -> dict:
+    """Apply `amend_manifest_vae_pin` to a manifest ON DISK, validating before and after."""
+    path = Path(path)
+    manifest = json.loads(path.read_text())
+    amended = amend_manifest_vae_pin(
+        manifest, pin, reason=reason, commit=commit, now=datetime.now(timezone.utc).isoformat()
+    )
+    errors = validate_manifest_structure(amended, expected_episodes=len(amended["episodes"]))
+    if errors:
+        raise RuntimeError("the amended manifest failed its structural gate:\n  " + "\n  ".join(errors))
+    path.write_text(json.dumps(amended, indent=2) + "\n")
+    log(f"[manifest] amended {path} with vae_fingerprint {pin['revision']}")
+    return amended
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -817,8 +986,21 @@ def main(argv: list[str] | None = None) -> int:
     def log(message: str) -> None:
         print(message, flush=True)
 
+    if args.amend_vae_pin:
+        resolved = resolve_vae_snapshot(args.vae_repo, args.vae_revision)
+        log(f"[manifest] resolved {args.vae_repo} -> {resolved['snapshot_path']}")
+        amend_vae_pin_file(
+            args.out,
+            resolved["pin"],
+            reason=args.amend_reason,
+            commit=_git(Path(__file__).resolve().parents[3], "rev-parse", "HEAD").strip(),
+            log=log,
+        )
+        return 0
+
     if args.dry_run:
         fixture, builder_commit = {}, "dry-run"
+        vae_pin = {"hf_repo": args.vae_repo, "revision": "0" * 40, "vae_config_sha256": "0" * 64}
     else:
         if not args.fixture_fingerprint:
             raise SystemExit("--fixture-fingerprint is required (the manifest embeds it verbatim)")
@@ -826,6 +1008,9 @@ def main(argv: list[str] | None = None) -> int:
         fixture_missing = _FIXTURE_KEYS - set(fixture)
         if fixture_missing:
             raise SystemExit(f"fixture fingerprint is missing {sorted(fixture_missing)}")
+        # B1: pin the VAE the dataset will be encoded with, before any selection work.
+        vae_pin = resolve_vae_snapshot(args.vae_repo, args.vae_revision)["pin"]
+        log(f"[manifest] VAE pin: {vae_pin['hf_repo']}@{vae_pin['revision']}")
         # A1: a production manifest may only claim a commit that actually contains the builder.
         builder_commit = assert_implementation_committed()
         log(f"[manifest] implementation is committed and clean at {builder_commit}")
@@ -836,6 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         n_target=args.n,
         fixture=fixture,
+        vae_fingerprint=vae_pin,
         builder_commit=builder_commit,
         created_utc=datetime.now(timezone.utc).isoformat(),
         tool_versions=collect_tool_versions(),

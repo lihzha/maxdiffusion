@@ -23,23 +23,38 @@ real output) and through a fake IO object.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+from pathlib import Path
 
 import pytest
 
 from maxdiffusion.data_preprocessing.build_overfit100_manifest import (
     REASONS,
     SourceError,
+    amend_manifest_vae_pin,
     annotation_uri,
     build_manifest,
     implementation_provenance_errors,
     parse_ffprobe_json,
     parse_git_porcelain,
+    resolve_vae_snapshot,
+    vae_config_sha256,
+    vae_pin_errors,
     validate_manifest_structure,
     verify_annotation_binding,
     verify_manifest,
     video_uri,
 )
 from maxdiffusion.data_preprocessing.extract_v1_fixture import Resolved, parse_gsutil_stat
+
+_COMMITTED_MANIFEST = (
+    Path(__file__).resolve().parents[4]
+    / "docs"
+    / "worklogs_yixun"
+    / "exp_02_overfit100_claude"
+    / "overfit100_manifest.json"
+)
 
 _FIXTURE_FP = {
     "uri": "gs://v6_east1d/datasets/exp02_overfit100/fixtures/v1_cache_windows.npz",
@@ -61,6 +76,13 @@ _TOOLS = {
 }
 
 _COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+# B1 (cycle-B review): the VAE the dataset is encoded with is part of the manifest's identity.
+_VAE_PIN = {
+    "hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    "revision": "b8fff7315c768468a5333511427288870b2e9635",
+    "vae_config_sha256": "d996c340fe9a7df5d7371f76a7d8d6956f6c98256080074d8434fa5eeac11360",
+}
 
 
 def _fp(uri, generation, size):
@@ -159,6 +181,7 @@ def _build(io, n_target=3, order=(10, 11, 12, 13, 14, 15, 16, 17), **kwargs):
         seed=0,
         n_target=n_target,
         fixture=_FIXTURE_FP,
+        vae_fingerprint=kwargs.pop("vae_fingerprint", copy.deepcopy(_VAE_PIN)),
         builder_commit=_COMMIT,
         created_utc="2026-07-28T10:00:00+00:00",
         tool_versions=_TOOLS,
@@ -523,6 +546,23 @@ _MUTATIONS = {
     "tally_disagrees": lambda m: m["rejection_tally"].update(accepted=99),
     "totals_episodes_wrong": lambda m: m["totals"].update(episodes=99),
     "totals_windows_wrong": lambda m: m["totals"].update(windows=1),
+    # B1 -- the VAE pin is mandatory and exactly shaped.
+    "missing_vae_fingerprint": lambda m: m.pop("vae_fingerprint"),
+    "vae_pin_not_a_mapping": lambda m: m.update(vae_fingerprint="b8fff73"),
+    "vae_pin_missing_revision": lambda m: m["vae_fingerprint"].pop("revision"),
+    "vae_pin_missing_sha": lambda m: m["vae_fingerprint"].pop("vae_config_sha256"),
+    "vae_pin_blank_repo": lambda m: m["vae_fingerprint"].update(hf_repo="  "),
+    "vae_pin_extra_key": lambda m: m["vae_fingerprint"].update(snapshot_path="/tmp/x"),
+    "vae_pin_revision_not_40_hex": lambda m: m["vae_fingerprint"].update(revision="main"),
+    "vae_pin_revision_uppercase": lambda m: m["vae_fingerprint"].update(
+        revision="B8FFF7315C768468A5333511427288870B2E9635"
+    ),
+    "vae_pin_sha_not_64_hex": lambda m: m["vae_fingerprint"].update(vae_config_sha256="d996c340"),
+    "amended_not_a_list": lambda m: m.update(amended={"reason": "x"}),
+    "amended_entry_missing_reason": lambda m: m.update(amended=[{"date": "2026-07-29", "commit": _COMMIT}]),
+    "amended_entry_bad_commit": lambda m: m.update(
+        amended=[{"reason": "x", "date": "2026-07-29", "commit": "nope", "fields": ["vae_fingerprint"]}]
+    ),
 }
 
 
@@ -721,3 +761,145 @@ def test_parse_ffprobe_json_rejects_a_stream_missing_geometry():
     text = _REAL_FFPROBE.replace('"width": 320,\n', "")
     with pytest.raises(ValueError, match="width"):
         parse_ffprobe_json(text)
+
+
+# ----------------------------------------------------------------------------------
+# 9. B1 (cycle-B review) -- the VAE pin is part of the manifest's identity.
+#
+# The dataset's bytes are a function of the VAE that encoded them, so "which VAE" is as much
+# a part of the experiment's identity as "which 100 episodes". The pin is therefore mandatory
+# in the manifest, exactly shaped, and the build binds weight loading to it (no warn path).
+# ----------------------------------------------------------------------------------
+
+
+def test_manifest_carries_the_vae_pin_verbatim():
+    assert _build(_default_world())["vae_fingerprint"] == _VAE_PIN
+
+
+def test_build_manifest_rejects_a_malformed_pin():
+    with pytest.raises(ValueError):
+        _build(_default_world(), vae_fingerprint={"hf_repo": "x", "revision": "main"})
+
+
+def test_vae_pin_errors_accepts_the_observed_pin():
+    assert vae_pin_errors(_VAE_PIN) == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {},
+        {"hf_repo": ""},
+        {"revision": "main"},
+        {"revision": "b8fff731"},
+        {"vae_config_sha256": "zz" * 32},
+        {"extra": "key"},
+    ],
+)
+def test_vae_pin_errors_rejects_every_malformation(mutation):
+    pin = {**copy.deepcopy(_VAE_PIN), **mutation} if mutation else {}
+    assert vae_pin_errors(pin), f"{mutation!r} was not caught"
+
+
+def test_vae_config_sha256_hashes_the_file_bytes(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_bytes(b'{"z_dim": 48}')
+    expected = hashlib.sha256(b'{"z_dim": 48}').hexdigest()
+    assert vae_config_sha256(path) == expected
+
+
+def test_resolve_vae_snapshot_accepts_a_local_directory(tmp_path):
+    (tmp_path / "vae").mkdir()
+    (tmp_path / "vae" / "config.json").write_bytes(b'{"z_dim": 48}')
+    resolved = resolve_vae_snapshot(str(tmp_path), revision="c" * 40, local_files_only=True)
+    assert resolved["snapshot_path"] == str(tmp_path)
+    assert resolved["pin"]["revision"] == "c" * 40  # a local dir cannot prove a revision
+    assert resolved["pin"]["vae_config_sha256"] == hashlib.sha256(b'{"z_dim": 48}').hexdigest()
+    assert vae_pin_errors(resolved["pin"]) == []
+
+
+def test_resolve_vae_snapshot_rejects_a_directory_without_a_vae_config(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        resolve_vae_snapshot(str(tmp_path), revision="c" * 40, local_files_only=True)
+
+
+# --- the amendment itself -----------------------------------------------------------
+
+
+def _unpinned(manifest):
+    manifest = copy.deepcopy(manifest)
+    manifest.pop("vae_fingerprint", None)
+    return manifest
+
+
+def test_amend_adds_the_pin_and_an_explicit_provenance_entry():
+    original = _unpinned(_valid_manifest())
+    amended = amend_manifest_vae_pin(
+        original, _VAE_PIN, reason="cycle-B review B1", commit=_COMMIT, now="2026-07-29T00:00:00+00:00"
+    )
+    assert amended["vae_fingerprint"] == _VAE_PIN
+    assert amended["amended"] == [
+        {
+            "reason": "cycle-B review B1",
+            "date": "2026-07-29T00:00:00+00:00",
+            "commit": _COMMIT,
+            "fields": ["vae_fingerprint"],
+        }
+    ]
+    assert validate_manifest_structure(amended) == []
+
+
+def test_amend_does_not_mutate_its_input():
+    original = _unpinned(_valid_manifest())
+    snapshot = copy.deepcopy(original)
+    amend_manifest_vae_pin(original, _VAE_PIN, reason="r", commit=_COMMIT, now="2026-07-29T00:00:00+00:00")
+    assert original == snapshot
+
+
+def test_amend_leaves_the_selection_content_untouched():
+    original = _unpinned(_valid_manifest())
+    amended = amend_manifest_vae_pin(original, _VAE_PIN, reason="r", commit=_COMMIT, now="n")
+    for key in ("episodes", "draw_log", "rejection_tally", "totals", "selection_seed", "fixture", "builder_commit"):
+        assert amended[key] == original[key]
+
+
+def test_amend_appends_to_an_existing_amendment_log():
+    original = _unpinned(_valid_manifest())
+    original["amended"] = [{"reason": "earlier", "date": "d", "commit": _COMMIT, "fields": ["x"]}]
+    amended = amend_manifest_vae_pin(original, _VAE_PIN, reason="r", commit=_COMMIT, now="n")
+    assert [entry["reason"] for entry in amended["amended"]] == ["earlier", "r"]
+
+
+def test_amend_is_idempotent_for_the_same_pin():
+    original = _unpinned(_valid_manifest())
+    once = amend_manifest_vae_pin(original, _VAE_PIN, reason="r", commit=_COMMIT, now="n")
+    twice = amend_manifest_vae_pin(once, _VAE_PIN, reason="r", commit=_COMMIT, now="n")
+    assert twice == once  # no second log entry, no rewrite
+
+
+def test_amend_refuses_to_silently_replace_a_different_pin():
+    original = _unpinned(_valid_manifest())
+    pinned = amend_manifest_vae_pin(original, _VAE_PIN, reason="r", commit=_COMMIT, now="n")
+    other = {**_VAE_PIN, "revision": "a" * 40}
+    with pytest.raises(ValueError, match="already pinned"):
+        amend_manifest_vae_pin(pinned, other, reason="r", commit=_COMMIT, now="n")
+
+
+def test_amend_rejects_a_malformed_pin():
+    with pytest.raises(ValueError):
+        amend_manifest_vae_pin(_unpinned(_valid_manifest()), {"revision": "main"}, reason="r", commit=_COMMIT, now="n")
+
+
+# --- the committed artifact ----------------------------------------------------------
+
+
+def test_the_committed_manifest_is_pinned_and_valid():
+    manifest = json.loads(_COMMITTED_MANIFEST.read_text())
+    assert validate_manifest_structure(manifest, expected_episodes=100) == []
+    assert manifest["vae_fingerprint"] == {
+        "hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        "revision": "b8fff7315c768468a5333511427288870b2e9635",
+        "vae_config_sha256": "d996c340fe9a7df5d7371f76a7d8d6956f6c98256080074d8434fa5eeac11360",
+    }
+    assert manifest["totals"] == {"episodes": 100, "windows": 1629}
+    assert [entry["fields"] for entry in manifest["amended"]] == [["vae_fingerprint"]]
