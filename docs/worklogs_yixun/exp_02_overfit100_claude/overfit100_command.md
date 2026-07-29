@@ -126,3 +126,23 @@ tpu create v6 -n 8 --name exp02-overfit100-probe-yixun \
   -- bash bash_scripts/build_overfit100_dataset.sh
 ```
 - **Job id:** `20260729-172443-23bcb17a-exp02-overfit100-probe-yixun` (submitted 2026-07-29T17:24Z; outcome pending)
+
+## Job 5 — v6e-8 PROBE dataset build, attempt 3 (post ffmpeg-ensure) — launched 2026-07-30
+
+Commit: `934f80f` (pushed). Same as Job 4 except SHA/COMMIT. Job 4: queue attempt 1 spot-preempted (infra), attempt 2 APPLICATION_ERROR = no ffmpeg on TPU image (fixed in `934f80f`; V1 PASSED before the crash).
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --name exp02-overfit100-probe-yixun \
+  --worker0-only \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env PROBE=1 \
+  --env MANIFEST_PATH="docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json" \
+  --env OUT_ROOT="gs://v6_east1d/datasets/exp02_overfit100" \
+  --env CONFIG_PATH="src/maxdiffusion/configs/base_wan_5b_full_ft.yml" \
+  --env CONFIG_OVERRIDES="hardware=tpu" \
+  --env COMMIT="934f80f60964af1d6b83635f15e0fb664970704c" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/build_overfit100_dataset.sh
+```
