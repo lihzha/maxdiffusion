@@ -555,16 +555,27 @@ def _first_line(text: str) -> str:
     return (text or "").strip().splitlines()[0].strip() if (text or "").strip() else ""
 
 
+def _tool_version(*command: str) -> str:
+    """First line of a `--version` probe, or "" if the tool is absent/unusable.
+
+    `check=False` suppresses a non-zero EXIT, not a missing executable: without the
+    FileNotFoundError guard, writing the provenance summary would crash on a host that simply
+    lacks one of these tools (probe attempt 2 -- the TPU image has no ffmpeg/ffprobe).
+    """
+    try:
+        proc = subprocess.run(list(command), capture_output=True, text=True, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return _first_line(proc.stdout) or _first_line(proc.stderr)
+
+
 def collect_tool_versions() -> dict:
     """Record the versions of every tool/library that shaped this manifest."""
-    gsutil = subprocess.run(["gsutil", "version"], capture_output=True, text=True, check=False)
-    ffprobe = subprocess.run(["ffprobe", "-version"], capture_output=True, text=True, check=False)
-    ffmpeg = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, check=False)
     return {
         "python": platform.python_version(),
-        "gsutil": _first_line(gsutil.stdout) or _first_line(gsutil.stderr),
-        "ffprobe": _first_line(ffprobe.stdout) or _first_line(ffprobe.stderr),
-        "ffmpeg": _first_line(ffmpeg.stdout) or _first_line(ffmpeg.stderr),
+        "gsutil": _tool_version("gsutil", "version"),
+        "ffprobe": _tool_version("ffprobe", "-version"),
+        "ffmpeg": _tool_version("ffmpeg", "-version"),
         "numpy": np.__version__,  # drives candidate_order
         "jax": jax.__version__,  # drives pick_instruction_index
     }

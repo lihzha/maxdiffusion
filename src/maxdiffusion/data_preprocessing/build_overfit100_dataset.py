@@ -128,6 +128,17 @@ STAGING_PREFIX = "_staging_"
 AUDIT_BENCHMARK_WINDOWS = 1629  # the full-build audit shape, benchmarked before any encode
 AUDIT_BENCHMARK_DIM = int(np.prod(Z_I0_SHAPE))
 
+# Every external binary this build shells out to. `subprocess.run(..., check=False)` does NOT
+# protect against a MISSING executable -- it raises FileNotFoundError -- and the TPU worker
+# image ships without ffmpeg (probe attempt 2, job 20260729-172443-23bcb17a: the build loaded
+# the pinned VAE and passed all three V1 windows, then died in the V3 precheck, ~20 minutes of
+# prefetch/JAX-init/VAE-load later). Checked before any GCS or VAE work.
+REQUIRED_EXTERNAL_TOOLS = (
+    "ffmpeg",  # decode_mp4_frames
+    "ffprobe",  # collect_tool_versions -> summary provenance
+    "gsutil",  # every GCS read/write
+)
+
 # Gate thresholds -- plan v4 D4, FINAL.
 V1_REL_L2_MAX = 0.25
 V1_PEARSON_MIN = 0.97
@@ -1072,6 +1083,20 @@ def promote(staging_dir: str, canonical_dir: str, names: Sequence[str], log: Cal
 # ---------------------------------------------------------------------------------- stages
 
 
+def require_external_tools(tools: Sequence[str] = REQUIRED_EXTERNAL_TOOLS, log: Callable = print) -> dict[str, str]:
+    """Resolve every external binary the build needs, or abort naming the missing ones."""
+    resolved = {tool: shutil.which(tool) for tool in tools}
+    missing = sorted(tool for tool, path in resolved.items() if not path)
+    if missing:
+        raise BuildError(
+            f"missing required executable(s) {missing} on PATH. The TPU worker image ships without "
+            "ffmpeg -- the launcher script installs it before python starts; install it there rather "
+            "than discovering this after the HF prefetch and the VAE load."
+        )
+    log("[build] external tools: " + ", ".join(f"{tool}={path}" for tool, path in resolved.items()))
+    return resolved
+
+
 def load_manifest(path: str, expected_episodes: int | None = EXPECTED_EPISODES) -> dict:
     manifest = json.loads(Path(path).read_text())
     errors = validate_manifest_structure(manifest, expected_episodes=expected_episodes)
@@ -1369,6 +1394,9 @@ def run(args) -> int:
     timer = PhaseTimer()
     probe = bool(args.probe)
     shard_size = int(args.shard_size) or (PROBE_SHARD_SIZE if probe else SHARD_SIZE)
+
+    # Cheapest possible gate, before any network or accelerator work (probe attempt 2).
+    require_external_tools(log=log)
 
     manifest = load_manifest(args.manifest, expected_episodes=args.expected_episodes)
     episodes = list(manifest["episodes"])[: args.probe_episodes] if probe else list(manifest["episodes"])

@@ -93,6 +93,47 @@ echo "TMP_DIR=${TMP_DIR:-<mktemp>}"
 echo "COMMIT=${COMMIT}"
 git status --short --branch 2>/dev/null || echo "(no git checkout; running from uploaded code)"
 
+# >>> ffmpeg ensure
+# Probe attempt 2 (job 20260729-172443-23bcb17a) loaded the pinned VAE and passed all three V1
+# windows, then died in the V3 precheck with `FileNotFoundError: 'ffmpeg'`: the TPU worker image
+# has no ffmpeg. Install it HERE -- before the multi-minute HF prefetch and the JAX init -- so
+# the failure mode is a 30-second apt error rather than 20 minutes of wasted TPU time.
+#
+# apt options mirror setup.sh's ephemeral-worker hardening: a single bounded wall-clock budget
+# (`apt_deadline_run`, never -1), `-o DPkg::Lock::Timeout=60` per invocation, and a LOUD exit on
+# any failure. setup.sh has already stopped/disabled the apt-daily timers under
+# EPHEMERAL_WORKER=1, so contention is expected to be gone by the time this runs.
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+  echo "[build] ffmpeg/ffprobe not on PATH; installing (the TPU worker image ships without them)"
+  FFMPEG_APT_BUDGET="${FFMPEG_APT_BUDGET:-420}"
+  APT_SECTION_START=$SECONDS
+  APT_SUDO=""
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then APT_SUDO="sudo"; fi
+  apt_deadline_run() {
+    rem=$((FFMPEG_APT_BUDGET - (SECONDS - APT_SECTION_START)))
+    if [ "$rem" -le 0 ]; then
+      echo "[build] FATAL: ffmpeg install exceeded its ${FFMPEG_APT_BUDGET}s budget" >&2
+      exit 1
+    fi
+    timeout "$rem" $APT_SUDO "$@"
+  }
+  apt_deadline_run apt-get -o DPkg::Lock::Timeout=60 update -y &&
+    apt_deadline_run apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends ffmpeg ||
+    {
+      echo "[build] FATAL: could not install ffmpeg (budget ${FFMPEG_APT_BUDGET}s, 60s dpkg-lock bound)" >&2
+      exit 1
+    }
+fi
+for tool in ffmpeg ffprobe; do
+  command -v "${tool}" >/dev/null 2>&1 || {
+    echo "[build] FATAL: ${tool} is still not on PATH after the install attempt" >&2
+    exit 1
+  }
+done
+ffmpeg -version | head -1
+ffprobe -version | head -1
+# <<< ffmpeg ensure
+
 # VAE-only, pinned prefetch. Nothing from transformer/ or text_encoder/ is requested.
 HF_PREFETCH_REVISION="${VAE_REVISION}" \
   bash bash_scripts/prefetch_hf_snapshot.sh "${VAE_REPO}" "model_index.json vae/*"

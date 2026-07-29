@@ -733,3 +733,64 @@ def test_guard_block_ignores_a_poisoned_git_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
     result = _run_guard("unknown", _SCRIPT.parent.parent)
     assert result.returncode == 0, f"a poisoned GIT_DIR turned the worktree into deployed mode: {result.stderr}"
+
+
+# ----------------------------------------------------------------------------------
+# 14. External binaries -- fail fast, not 20 minutes in (probe attempt 2, job
+#     20260729-172443-23bcb17a).
+#
+# The TPU worker image ships without ffmpeg. Attempt 2 loaded the pinned VAE, passed all
+# three V1 windows, and only THEN died inside the V3 precheck with
+# `FileNotFoundError: 'ffmpeg'` -- after the HF prefetch, the JAX init and the VAE load.
+# `subprocess.run(..., check=False)` does not protect against a MISSING executable, so every
+# external tool this build shells out to is checked before any expensive work.
+# ----------------------------------------------------------------------------------
+
+
+def test_required_external_tools_are_the_ones_the_build_shells_out_to():
+    # ffmpeg: decode_mp4_frames. ffprobe: collect_tool_versions (summary provenance).
+    # gsutil: every GCS read/write. All three raise FileNotFoundError when absent.
+    assert set(builder.REQUIRED_EXTERNAL_TOOLS) == {"ffmpeg", "ffprobe", "gsutil"}
+
+
+def test_require_external_tools_passes_on_a_normal_path():
+    assert set(builder.require_external_tools()) == set(builder.REQUIRED_EXTERNAL_TOOLS)
+
+
+def test_require_external_tools_names_every_missing_binary(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path))  # nothing resolvable
+    with pytest.raises(BuildError) as excinfo:
+        builder.require_external_tools()
+    message = str(excinfo.value)
+    assert "ffmpeg" in message and "ffprobe" in message and "gsutil" in message
+
+
+def test_require_external_tools_names_only_the_missing_one(monkeypatch, tmp_path):
+    for tool in ("ffprobe", "gsutil"):
+        stub = tmp_path / tool
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(BuildError, match="ffmpeg"):
+        builder.require_external_tools()
+
+
+def test_run_checks_tools_before_touching_the_manifest_or_gcs(monkeypatch, tmp_path):
+    def explode(*_a, **_k):
+        raise AssertionError("the build reached the manifest before checking its tools")
+
+    monkeypatch.setattr(builder, "load_manifest", explode)
+    monkeypatch.setattr(builder, "assert_manifest_matches_committed", explode)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    args = builder._parse_args(["--manifest", "m.json", "--out-root", str(tmp_path / "out")])
+    with pytest.raises(BuildError, match="ffmpeg"):
+        builder.run(args)
+
+
+def test_collect_tool_versions_survives_a_missing_binary(monkeypatch, tmp_path):
+    # The preflight fails first, but a completed build must never crash while WRITING its
+    # summary because one optional version probe is unavailable.
+    monkeypatch.setenv("PATH", str(tmp_path))
+    versions = manifest_builder.collect_tool_versions()
+    assert versions["python"]
+    assert versions["ffmpeg"] == "" and versions["gsutil"] == ""
