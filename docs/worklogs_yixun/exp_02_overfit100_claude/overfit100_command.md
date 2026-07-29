@@ -82,3 +82,25 @@ m = json.load(open('docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_mani
 print(verify_manifest(m))
 "
 ```
+
+## Job 3 — v6e-8 PROBE dataset build (rung 4) — launched 2026-07-29
+
+Commit: `4783ed4817a0f26da2b73e61d92340ed87a5e6eb` (pushed). Pre-approved by Query 4 (dual sign-off recorded in `_worklog.md`).
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --name exp02-overfit100-probe-yixun \
+  --worker0-only \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env PROBE=1 \
+  --env MANIFEST_PATH="docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json" \
+  --env OUT_ROOT="gs://v6_east1d/datasets/exp02_overfit100" \
+  --env CONFIG_PATH="src/maxdiffusion/configs/base_wan_5b_full_ft.yml" \
+  --env CONFIG_OVERRIDES="hardware=tpu" \
+  --env COMMIT="4783ed4817a0f26da2b73e61d92340ed87a5e6eb" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/build_overfit100_dataset.sh
+```
+
+Notes: `--worker0-only` because the builder is single-process and v6e-8 is two queue workers; the script prefetches ONLY `model_index.json vae/*` at the manifest's pinned revision. Job id + outcome appended below after submission.
