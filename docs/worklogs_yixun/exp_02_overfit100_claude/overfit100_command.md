@@ -146,3 +146,4 @@ tpu create v6 -n 8 --name exp02-overfit100-probe-yixun \
   --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
   -- bash bash_scripts/build_overfit100_dataset.sh
 ```
+- **Job id:** `20260729-184156-72473301-exp02-overfit100-probe-yixun` (submitted 2026-07-29T18:41Z local-queue time; outcome pending)
