@@ -55,3 +55,9 @@ Source: Yixun, relaying/echoing Lihan's critique of exp_01. Append each new quer
 **Verbatim:** "I ask catherine to maintain the dataset, don't worry"
 
 **Interpretation:** Catherine will maintain `droid_ctrl_world_aligned` (no deletion/reprocess-in-place of the objects exp_02 pins). Consequence: the planned re-point-manifest-to-snapshot mini-round is **cancelled**; the manifest keeps the original URIs. The verified snapshot (`exp02_overfit100/source_snapshot/`, 200/200 md5-verified) is retained as free insurance — if the originals ever drift, the fingerprint gates will catch it and the snapshot enables a fast re-point.
+
+## Query 6 — 2026-07-30 (S2 pre-approval, from Yixun)
+
+**Verbatim:** "Pre-approve S2 conditional on S1 pass"
+
+**Interpretation:** the **S2 10-episode gate run** (v6e-8, `train10`, 2,500 steps, GBS 32, LR 1e-5, warmup 250, checkpoints [250,500,1000,2500] retained, per plan D10) **plus its D11 gate evaluations** (S2 eval passes: 3 seeds × correct mode at every checkpoint on the 10 canonical windows; null/shuffled ablations at step 2500; `eval_pass_role=s2_gate`) are **pre-approved conditional on the S1 smoke passing its acceptance criteria log-verified** (not merely queue-SUCCEEDED): deployed-code COMMIT relay, preflight order (dataset integrity → pinned snapshot → pipeline), context table [10,512,4096] built + audited, 20/20 steps finite loss no OOM/NaN, no checkpoints written, both workers exit 0. Infra-failure resubmits covered by standing policy; any code/config change voids the grant for the changed job. **S3 (100-episode run) remains a separate future approval**, to be requested with the S2 gate results + the S3 eval-cost extrapolation from S2 timings.
