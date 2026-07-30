@@ -817,14 +817,158 @@ def test_cli_excludes_non_segment_final_checkpoints_from_c3_100(tmp_path):
     assert {entry["role"] for entry in verdict["artifact_roles"]} == {"s3_intermediate", "s3_segment_final"}
 
 
-def test_cli_feeds_the_derived_cohort_as_require_cohort_and_filters_rows_by_role():
-    # Deletion guards for two wirings the behavioural tests cannot isolate: the CLI must pass the
+def test_cli_feeds_the_derived_cohort_and_admits_whole_validated_artifacts():
+    # Deletion guards for wirings the behavioural tests cannot isolate: the CLI must pass the
     # DERIVED cohort as require_cohort (defence in depth against a future caller change), and it
-    # must build the canonical statistic from segment-final rows ONLY.
+    # must build the canonical statistic from ADMITTED ARTIFACTS -- never from rows selected by an
+    # artifact's self-declared label (E1 (3)).
     import inspect
 
     src = inspect.getsource(stat.verdict_from_artifact_files)
     assert "require_cohort=cohort" in src
-    assert "roles=(SEGMENT_FINAL_ROLE,)" in src
+    assert "rows_from_artifacts(admitted_segment_final)" in src
+    assert "admitted_artifacts(artifacts, results, role=SEGMENT_FINAL_ROLE)" in src
     assert "segment_final_checkpoints_from_artifacts" in src
     assert "full_set_input_from_artifacts" in src
+    # And the row concatenator no longer offers a label filter at all.
+    assert "roles" not in inspect.signature(stat.rows_from_artifacts).parameters
+
+
+# ======================================================================================
+# (E1) Role validation must bind rows to the artifact's DECLARED checkpoint, and the
+# statistic must admit whole VALIDATED artifacts -- not rows filtered by their label.
+# ======================================================================================
+
+
+def _mixed_checkpoint_artifact(cohort, *, declared=2500, ablation_checkpoint=1000, sha="a" * 64):
+    """The close-out reviewer's exact reproduction.
+
+    Complete CORRECT-mode rows at the declared checkpoint, complete null/shuffled rows at a
+    DIFFERENT checkpoint. Keying the grid on ``(window, seed, mode)`` alone made this validate as
+    a segment final, so an ``established`` headline could be claimed with ZERO contemporaneous
+    ablations at the checkpoint being judged.
+    """
+    rows = _artifact_rows(cohort, checkpoint=declared, seeds=(0, 1, 2), modes=("correct",))
+    rows += _artifact_rows(cohort, checkpoint=ablation_checkpoint, seeds=(0, 1, 2), modes=("null", "shuffled"))
+    return _artifact(
+        cohort=cohort,
+        covered=cohort,
+        checkpoint=declared,
+        seeds=(0, 1, 2),
+        modes=("correct", "null", "shuffled"),
+        manifest_sha256=sha,
+        rows=rows,
+    )
+
+
+def test_mixed_checkpoint_artifact_is_refused_by_role_validation():
+    cohort = _cohort(3)
+    result = stat.validate_artifact_role(
+        _mixed_checkpoint_artifact(cohort), canonical_cohort=cohort, all_window_keys=cohort
+    )
+    assert result["ok"] is False
+    joined = " ".join(result["reasons"])
+    # It must name BOTH problems: foreign-checkpoint rows, and the ablation cells missing AT 2500.
+    assert "checkpoint" in joined and "1000" in joined and "2500" in joined
+    assert any("row" in reason for reason in result["reasons"])
+
+
+def test_mixed_checkpoint_artifact_cannot_produce_a_headline_claim(tmp_path):
+    # End to end: the reproduction must yield NO verdict at all rather than an established one.
+    import hashlib
+
+    manifest_path, payload = _tiny_manifest(tmp_path)
+    sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    cohort = stat.canonical_cohort_from_manifest(payload)
+    path = _write(tmp_path, "mixed.json", _mixed_checkpoint_artifact(cohort, sha=sha))
+    with pytest.raises(ValueError) as ei:
+        stat.verdict_from_artifact_files([path], manifest_path=str(manifest_path))
+    msg = str(ei.value)
+    assert "s3_segment_final" in msg  # no role-validated segment final -> C3_100 is empty
+    assert "checkpoint" in msg
+
+
+def test_a_single_foreign_checkpoint_row_is_refused_even_with_a_complete_grid():
+    # An artifact is ONE checkpoint's evidence: a stray row from another checkpoint is refused
+    # loudly even when every required cell at the declared checkpoint is present.
+    cohort = _cohort(3)
+    artifact = _artifact(cohort=cohort, covered=cohort)
+    stray = dict(artifact["rows"][0], checkpoint_step=1000)
+    artifact["rows"] = list(artifact["rows"]) + [stray]
+    result = stat.validate_artifact_role(artifact, canonical_cohort=cohort, all_window_keys=cohort)
+    assert result["ok"] is False
+    assert any("1000" in reason and "checkpoint" in reason for reason in result["reasons"])
+
+
+def test_full_set_artifact_rows_are_checkpoint_bound_too(tmp_path):
+    # The same hole in the stronger tier: full-set rows at another checkpoint must not satisfy the
+    # declared one, so the tier stays unevaluable instead of being scored on stale measurements.
+    import hashlib
+
+    manifest_path, payload = _tiny_manifest(tmp_path)
+    sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    cohort = stat.canonical_cohort_from_manifest(payload)
+    all_keys = stat.all_window_keys_from_manifest(payload)
+    canonical = _artifact(cohort=cohort, covered=cohort, manifest_sha256=sha)
+    stale_rows = [
+        {
+            "name": gen.overfit100_window_name(key[0], key[1]),
+            "episode_id": key[0],
+            "episode_index": i,
+            "window_start": key[1],
+            "canonical": key in set(cohort),
+            "checkpoint_step": 1000,  # NOT the declared 2500
+            "seed": 0,
+            "context_mode": "correct",
+            "ssim": 0.99,
+            "latent_mse": 0.01,
+            "pixel_mse": 0.001,
+        }
+        for i, key in enumerate(all_keys)
+    ]
+    full = _artifact(
+        role="s3_full_set",
+        cohort=cohort,
+        covered=all_keys,
+        seeds=(0,),
+        modes=("correct",),
+        manifest_sha256=sha,
+        rows=stale_rows,
+    )
+    paths = [_write(tmp_path, "canonical.json", canonical), _write(tmp_path, "stale_full.json", full)]
+    verdict = stat.verdict_from_artifact_files(paths, manifest_path=str(manifest_path))
+    assert verdict["verdict"] == "established"  # the canonical tier is unaffected
+    assert verdict["full_set_claim"]["evaluable"] is False
+    assert verdict["full_set_claim"]["established"] is False
+
+
+def test_statistic_admits_whole_validated_artifacts_not_label_filtered_rows(tmp_path):
+    # E1 (3): an artifact that DECLARES s3_segment_final but fails validation contributes NO rows.
+    # Here the invalid artifact reports different SSIMs for the same cells; with label-filtered rows
+    # its numbers would collide with the valid artifact's (a conflicting-duplicate failure), and
+    # with whole-artifact admission it is simply not evidence.
+    import hashlib
+
+    manifest_path, payload = _tiny_manifest(tmp_path)
+    sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    cohort = stat.canonical_cohort_from_manifest(payload)
+    valid = _artifact(cohort=cohort, covered=cohort, manifest_sha256=sha)  # ssim 0.97 everywhere
+    invalid = _artifact(
+        cohort=cohort,
+        covered=cohort,
+        manifest_sha256=sha,
+        modes=("correct",),  # a segment final needs three modes -> refused
+        rows=_artifact_rows(cohort, checkpoint=2500, seeds=(0, 1, 2), modes=("correct",), ssim=0.11),
+    )
+    paths = [_write(tmp_path, "valid.json", valid), _write(tmp_path, "invalid.json", invalid)]
+    verdict = stat.verdict_from_artifact_files(paths, manifest_path=str(manifest_path))
+    assert verdict["segment_final_checkpoints"] == [2500]
+    # The verdict is computed from the VALID artifact only (0.97, not the invalid 0.11).
+    m_corr = verdict["per_checkpoint"][0]["m_corr"]
+    assert all(value == pytest.approx(0.97) for value in m_corr.values())
+    assert len(m_corr) == len(cohort)
+    assert verdict["verdict"] == "established"
+    # ...and the rejected artifact is still reported, with its reasons.
+    rejected = [entry for entry in verdict["artifact_roles"] if not entry["ok"]]
+    assert len(rejected) == 1 and any("mode" in reason for reason in rejected[0]["reasons"])
+    assert verdict["admitted_artifacts"] == {"s3_segment_final": 1, "s3_full_set": 0}

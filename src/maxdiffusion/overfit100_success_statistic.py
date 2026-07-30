@@ -279,24 +279,49 @@ def pass_role_plan_reasons(
 
 
 def _artifact_grid_reasons(artifact: Mapping, *, role: str, keys: Sequence[WindowKey]) -> list[str]:
-    """Every ``(window, seed, mode)`` cell the role promises must actually have a row."""
-    spec = role_requirements(role)
+    """Every ``(window, CHECKPOINT, seed, mode)`` cell the role promises must have a row.
+
+    **E1 (close-out review): the grid is CHECKPOINT-BOUND.** Keying it on ``(window, seed, mode)``
+    alone let an artifact declare step 2500, carry complete correct-mode rows at 2500 and its
+    null/shuffled rows at step 1000, and still validate as a segment final -- producing an
+    ``established`` headline with ZERO contemporaneous controls at the checkpoint being judged.
+    Two rules close that:
+
+    1. every required cell must exist AT THE ARTIFACT'S DECLARED ``checkpoint_step``;
+    2. a row carrying any OTHER ``checkpoint_step`` is REJECTED -- an artifact is one checkpoint's
+       evidence, so mixed-checkpoint rows are a provenance error, not a partial pass.
+    """
+    del role  # the caller already resolved the role's scope into ``keys``
+    checkpoint = int(artifact.get("checkpoint_step", -1))
     modes = [str(m) for m in artifact.get("context_modes") or ()]
     seeds = [int(s) for s in artifact.get("rollout_seeds") or ()]
-    present = {
-        (window_key(row), int(_field(row, "seed")), str(_field(row, "context_mode")))
-        for row in artifact.get("rows") or ()
-    }
+    present: set[tuple] = set()
+    foreign: dict[int, int] = {}
+    for row in artifact.get("rows") or ():
+        step = int(_field(row, "checkpoint_step"))
+        if step != checkpoint:
+            foreign[step] = foreign.get(step, 0) + 1
+            continue
+        present.add((window_key(row), step, int(_field(row, "seed")), str(_field(row, "context_mode"))))
+    reasons: list[str] = []
+    if foreign:
+        reasons.append(
+            f"{sum(foreign.values())} row(s) carry checkpoint_step {sorted(foreign)} but the artifact declares "
+            f"{checkpoint}; an artifact is ONE checkpoint's evidence, so mixed-checkpoint rows are refused"
+        )
     missing = [
-        [list(key), seed, mode] for key in keys for seed in seeds for mode in modes if (key, seed, mode) not in present
+        [list(key), checkpoint, seed, mode]
+        for key in keys
+        for seed in seeds
+        for mode in modes
+        if (key, checkpoint, seed, mode) not in present
     ]
-    del spec
     if missing:
-        return [
-            f"{len(missing)} declared (window, seed, mode) row(s) are absent, e.g. {missing[:3]}; the artifact's "
-            f"coverage claim is not backed by rows"
-        ]
-    return []
+        reasons.append(
+            f"{len(missing)} declared (window, checkpoint, seed, mode) row(s) are absent at checkpoint {checkpoint}, "
+            f"e.g. {missing[:3]}; the artifact's coverage claim is not backed by rows AT ITS OWN CHECKPOINT"
+        )
+    return reasons
 
 
 def validate_artifact_role(artifact: Mapping, *, canonical_cohort, all_window_keys) -> dict:
@@ -375,48 +400,73 @@ def assert_artifacts_consistent(artifacts: Sequence[Mapping]) -> dict:
     return shared
 
 
-def segment_final_checkpoints_from_artifacts(artifacts: Sequence[Mapping], *, canonical_cohort, all_window_keys):
+def validate_artifacts(artifacts: Sequence[Mapping], *, canonical_cohort, all_window_keys) -> list[dict]:
+    """Validate every artifact once; the result list is positionally aligned with ``artifacts``."""
+    return [
+        validate_artifact_role(artifact, canonical_cohort=canonical_cohort, all_window_keys=all_window_keys)
+        for artifact in artifacts
+    ]
+
+
+def admitted_artifacts(artifacts: Sequence[Mapping], results: Sequence[Mapping], *, role: str) -> list[Mapping]:
+    """The artifacts of ``role`` that FULLY validated -- whole-artifact admission (E1).
+
+    The statistic consumes admitted ARTIFACTS, never rows filtered by an artifact's self-declared
+    label: an artifact that claims a role it does not satisfy contributes nothing at all, so its
+    numbers can neither enter a median nor collide with a valid pass's measurements.
+    """
+    if len(artifacts) != len(results):
+        raise ValueError(f"validation results ({len(results)}) do not align with artifacts ({len(artifacts)})")
+    return [artifact for artifact, result in zip(artifacts, results) if result["role"] == role and result["ok"]]
+
+
+def _rejection_notes(results: Sequence[Mapping], *, role: str) -> list[str]:
+    notes = []
+    for index, result in enumerate(results):
+        if result["role"] != role:
+            notes.append(f"artifact {index}: role {result['role']!r}")
+        elif not result["ok"]:
+            notes.append(f"artifact {index} (step {result['checkpoint_step']}): {'; '.join(result['reasons'])}")
+    return notes
+
+
+def segment_final_checkpoints_from_artifacts(
+    artifacts: Sequence[Mapping], *, canonical_cohort, all_window_keys, results=None
+):
     """``C3_100`` = the steps of the ROLE-VALIDATED ``s3_segment_final`` artifacts, sorted.
 
     Anything else -- S2 gates, intermediate passes, full-set passes, and any artifact that
-    declares ``s3_segment_final`` without satisfying it -- is excluded, and an empty result is a
-    loud failure naming why each candidate was rejected.
+    declares ``s3_segment_final`` without satisfying it (including one whose rows are not all at
+    its declared checkpoint, E1) -- is excluded, and an empty result is a loud failure naming why
+    each candidate was rejected.
     """
-    steps: list[int] = []
-    rejected: list[str] = []
-    for index, artifact in enumerate(artifacts):
-        result = validate_artifact_role(artifact, canonical_cohort=canonical_cohort, all_window_keys=all_window_keys)
-        if result["role"] != SEGMENT_FINAL_ROLE:
-            rejected.append(f"artifact {index}: role {result['role']!r}")
-            continue
-        if not result["ok"]:
-            rejected.append(f"artifact {index} (step {result['checkpoint_step']}): {'; '.join(result['reasons'])}")
-            continue
-        steps.append(int(result["checkpoint_step"]))
+    if results is None:
+        results = validate_artifacts(artifacts, canonical_cohort=canonical_cohort, all_window_keys=all_window_keys)
+    admitted = admitted_artifacts(artifacts, results, role=SEGMENT_FINAL_ROLE)
+    steps = sorted({int(artifact["checkpoint_step"]) for artifact in admitted})
     if not steps:
         raise ValueError(
             f"no role-validated {SEGMENT_FINAL_ROLE} artifact was supplied, so C3_100 is empty and no headline claim "
-            f"can be made. Rejections: " + " | ".join(rejected)
+            f"can be made. Rejections: " + " | ".join(_rejection_notes(results, role=SEGMENT_FINAL_ROLE))
         )
-    return sorted(set(steps))
+    return steps
 
 
-def full_set_input_from_artifacts(artifacts: Sequence[Mapping], *, canonical_cohort, all_window_keys):
+def full_set_input_from_artifacts(artifacts: Sequence[Mapping], *, canonical_cohort, all_window_keys, results=None):
     """The stronger tier's input: the role-validated ``s3_full_set`` artifacts' windows + rows.
 
-    Returns ``None`` (with the reason recorded by :func:`_full_set_claim`) when no such artifact
-    validates -- the tier is then simply not evaluable, never scored from a partial pass.
+    Returns ``(None, reasons)`` when no such artifact validates -- the tier is then simply not
+    evaluable, never scored from a partial or mixed-checkpoint pass.
     """
-    rows: list[dict] = []
-    reasons: list[str] = []
-    for index, artifact in enumerate(artifacts):
-        result = validate_artifact_role(artifact, canonical_cohort=canonical_cohort, all_window_keys=all_window_keys)
-        if result["role"] != FULL_SET_ROLE:
-            continue
-        if not result["ok"]:
-            reasons.append(f"artifact {index}: {'; '.join(result['reasons'])}")
-            continue
-        rows.extend(artifact.get("rows") or ())
+    if results is None:
+        results = validate_artifacts(artifacts, canonical_cohort=canonical_cohort, all_window_keys=all_window_keys)
+    admitted = admitted_artifacts(artifacts, results, role=FULL_SET_ROLE)
+    rows = rows_from_artifacts(admitted)
+    reasons = [
+        f"artifact {index}: {'; '.join(result['reasons'])}"
+        for index, result in enumerate(results)
+        if result["role"] == FULL_SET_ROLE and not result["ok"]
+    ]
     if not rows:
         return None, reasons
     return {"windows": _normalize_keys(all_window_keys, what="all_window_keys"), "rows": rows}, reasons
@@ -764,22 +814,18 @@ def _full_set_claim(full_set, *, c_star, seed, threshold, required_fraction, hea
     return base
 
 
-def rows_from_artifacts(artifacts: Iterable[Mapping], *, roles=None) -> list[dict]:
+def rows_from_artifacts(artifacts: Iterable[Mapping]) -> list[dict]:
     """Concatenate the ``rows`` of several aggregation artifacts, in the given order.
 
-    ``roles`` restricts the concatenation to artifacts whose ``eval_pass_role`` is in that set --
-    which is how the CLI keeps the tiers separate: the canonical statistic reads ONLY
-    ``s3_segment_final`` rows and the stronger tier ONLY ``s3_full_set`` rows, so a 1-seed
-    full-set row can never enter a 3-seed median (and the two passes' overlapping canonical
-    measurements are never compared as duplicates).
+    E1: there is deliberately NO role filter here. Selecting rows by an artifact's self-declared
+    label is exactly the weaker mechanism the close-out review rejected -- callers pass the output
+    of :func:`admitted_artifacts`, i.e. whole artifacts that passed validation, so an artifact that
+    merely claims a role contributes nothing.
     """
-    allowed = None if roles is None else {str(role) for role in roles}
     out: list[dict] = []
     for index, artifact in enumerate(artifacts):
         if "rows" not in artifact:
             raise ValueError(f"aggregation artifact {index} has no 'rows' key: {sorted(artifact)}")
-        if allowed is not None and str(artifact.get("eval_pass_role", "")) not in allowed:
-            continue
         out.extend(artifact["rows"])
     return out
 
@@ -844,13 +890,17 @@ def verdict_from_artifact_files(paths, manifest_path, out_path=None, *, episode_
                 f"manifest totals.windows={totals.get('windows')} but {len(all_keys)} built window keys derived"
             )
 
+    # E1: validate ONCE, then admit whole artifacts by role. Every downstream input -- the
+    # statistic's rows, C3_100, and the stronger tier -- comes from artifacts that FULLY validated.
+    results = validate_artifacts(artifacts, canonical_cohort=cohort, all_window_keys=all_keys)
+    admitted_segment_final = admitted_artifacts(artifacts, results, role=SEGMENT_FINAL_ROLE)
     checkpoints = kwargs.pop("segment_final_checkpoints", None)
     if checkpoints is None:
         checkpoints = segment_final_checkpoints_from_artifacts(
-            artifacts, canonical_cohort=cohort, all_window_keys=all_keys
+            artifacts, canonical_cohort=cohort, all_window_keys=all_keys, results=results
         )
     full_set, full_set_reasons = full_set_input_from_artifacts(
-        artifacts, canonical_cohort=cohort, all_window_keys=all_keys
+        artifacts, canonical_cohort=cohort, all_window_keys=all_keys, results=results
     )
     flagged = kwargs.pop("flagged_windows", None)
     if flagged is None:
@@ -861,10 +911,11 @@ def verdict_from_artifact_files(paths, manifest_path, out_path=None, *, episode_
                     flagged.append(list(key))
 
     verdict = evaluate_success(
-        # The canonical statistic reads the SEGMENT-FINAL rows only: S2 gates, intermediate passes
-        # and the 1-seed full-set pass are excluded by role, so nothing outside C3_100 can reach
-        # the median (D2) and the tiers never collide on a shared window measurement.
-        rows_from_artifacts(artifacts, roles=(SEGMENT_FINAL_ROLE,)),
+        # The canonical statistic reads the rows of the ADMITTED segment-final artifacts only: S2
+        # gates, intermediate passes, the 1-seed full-set pass and any artifact that fails its own
+        # role contract contribute nothing, so nothing outside C3_100 can reach the median (D2/E1)
+        # and the tiers never collide on a shared window measurement.
+        rows_from_artifacts(admitted_segment_final),
         canonical_windows=cohort,
         segment_final_checkpoints=checkpoints,
         flagged_windows=flagged,
@@ -876,9 +927,11 @@ def verdict_from_artifact_files(paths, manifest_path, out_path=None, *, episode_
     verdict["manifest_path"] = str(manifest_path)
     verdict["manifest_sha256"] = manifest_sha256
     verdict["provenance"] = shared
-    verdict["artifact_roles"] = [
-        validate_artifact_role(artifact, canonical_cohort=cohort, all_window_keys=all_keys) for artifact in artifacts
-    ]
+    verdict["artifact_roles"] = results
+    verdict["admitted_artifacts"] = {
+        SEGMENT_FINAL_ROLE: len(admitted_segment_final),
+        FULL_SET_ROLE: len(admitted_artifacts(artifacts, results, role=FULL_SET_ROLE)),
+    }
     if out_path:
         with open(out_path, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
