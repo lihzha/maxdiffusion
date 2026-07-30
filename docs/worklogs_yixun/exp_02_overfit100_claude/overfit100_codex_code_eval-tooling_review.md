@@ -197,3 +197,67 @@ d: ADEQUATE AND HONEST — the three initial survivors are disclosed and their g
 
 ## Findings
 1. **E1 — BLOCKER — Artifact role validation does not bind rows to the declared checkpoint.** `_artifact_grid_reasons` records only `(window, seed, mode)` presence ([overfit100_success_statistic.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100/src/maxdiffusion/overfit100_success_statistic.py:281)), while `checkpoint_step` is handled separately. A focused reproduction with complete correct rows at step 2500 and complete null/shuffled rows at step 1000 returned `role_validation.ok=True`, `C3_100=[2500]`, and an `established` headline while both ablation counts at 2500 were zero. **Concrete change:** validate an exact `(window, artifact.checkpoint_step, seed, mode)` grid, reject rows carrying another checkpoint, feed the statistic only fully validated artifacts rather than label-filtered rows ([overfit100_success_statistic.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100/src/maxdiffusion/overfit100_success_statistic.py:867)), and add this mixed-checkpoint case as a regression/mutation test.
+
+---
+
+# Close-out review (2026-07-30, Codex gpt-5.6-sol xhigh): REQUEST-REVISION — E1
+
+D1 and D3-D6 **RESOLVED**; D2 **NOT** resolved: the re-derived row grid omitted `checkpoint_step`.
+New-behavior judgments: (a) RIGHT HOME — cohort derivation belongs to the verdict domain;
+(b) UNSOUND AS IMPLEMENTED → E1; (c) ACCEPTABLE RESIDUAL — process-0-only writes plus
+fail-closed differing bytes; (d) ADEQUATE AND HONEST — the three initial mutation survivors were
+disclosed and closed, but the checkpoint-bound-grid mutant was missing.
+
+**E1 — BLOCKER — Artifact role validation did not bind rows to the declared checkpoint.**
+`_artifact_grid_reasons` recorded only `(window, seed, mode)` presence while `checkpoint_step` was
+handled separately. The reviewer's reproduction: complete correct-mode rows at step 2500 plus
+complete null/shuffled rows at step 1000 returned `role_validation.ok=True`, `C3_100=[2500]`, and
+an **established** headline while both ablation counts at 2500 were **zero**.
+
+# Strengthening record 2 (2026-07-30 — Claude Opus 5, Coder)
+
+**E1 accepted and fixed exactly as prescribed**, test-first. Suite: **1001 passed / 2 skipped**
+(up from 996+2; +5 tests). Only `overfit100_success_statistic.py` and the contracts test file
+changed — the evaluator, the launchers and the config are untouched by this round.
+
+1. **The grid is CHECKPOINT-BOUND.** `_artifact_grid_reasons` now keys every required cell on the
+   exact tuple `(window, artifact.checkpoint_step, seed, mode)`: a cell satisfied only at some
+   other checkpoint no longer satisfies the declared one, and the failure names the checkpoint it
+   was missing at.
+2. **Foreign-checkpoint rows are REJECTED.** Rows whose `checkpoint_step` differs from the
+   artifact's declaration are refused with their own reason (counted per foreign step) — an
+   artifact is ONE checkpoint's evidence, so mixed-checkpoint rows are a provenance error rather
+   than a partial pass.
+3. **Whole-artifact admission.** New `validate_artifacts` (validate once) + `admitted_artifacts`
+   (whole artifacts of a role that FULLY validated). The CLI now feeds
+   `rows_from_artifacts(admitted_segment_final)` to the statistic, and
+   `segment_final_checkpoints_from_artifacts` / `full_set_input_from_artifacts` reuse the same
+   results. The `roles=` label filter on `rows_from_artifacts` is **deleted** — selecting rows by
+   an artifact's self-declared label was the weaker mechanism the review rejected, and its absence
+   is pinned by an `inspect.signature` assertion. The verdict gains
+   `admitted_artifacts: {s3_segment_final: n, s3_full_set: n}` beside the per-artifact
+   `artifact_roles` reasons.
+
+## Verification
+
+- **Red evidence.** 4 failed / 49 passed before the fix: the reviewer's reproduction returned
+  `ok=True` (`assert True is False`), the end-to-end case *did not raise*, a single stray row
+  validated, and the whole-artifact case died on a conflicting-duplicate — i.e. the finding
+  reproduced exactly as written.
+- **Regressions added (5).** The reviewer's exact mixed-checkpoint artifact refused at validation
+  (naming 1000 *and* 2500) and refused end-to-end through the CLI; a single foreign row refused
+  even with an otherwise complete grid; the same binding pinned for the `s3_full_set` tier; and
+  whole-artifact admission proven behaviourally — an invalid artifact reporting SSIM 0.11 for the
+  same cells contributes NOTHING (the verdict is computed from the valid 0.97 artifact) instead of
+  colliding as a duplicate.
+- **Mutation spot-checks, 3/3 caught** (restored byte-identically): checkpoint key dropped from the
+  grid → 3 failures; foreign-checkpoint rows tolerated → 2; label-filtered rows restored → 2. This
+  is the mutant judgment (d) noted as missing.
+- **Static.** `black --line-length 119 --target-version py312`, `ruff check`, `py_compile`,
+  `git diff --check` clean on both touched files.
+
+## Cannot-validate-until-TPU
+
+Unchanged from strengthening record 1 (including the still-open S3 cost extrapolation: 100 windows
+x 3 modes x 3 seeds x 25 steps per segment-final checkpoint plus a separate 1,629-window full-set
+pass).
