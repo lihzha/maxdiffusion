@@ -73,7 +73,9 @@ def _latents(seed=0, shape=(48, 9, 12, 20), mean=0.0, std=0.65):
 
 def test_gate_thresholds_are_the_plan_values():
     assert (V1_REL_L2_MAX, V1_PEARSON_MIN) == (0.25, 0.97)
-    assert (V2_STD_MIN, V2_STD_MAX, V2_ABS_MEAN_MAX) == (0.35, 0.95, 0.15)
+    # V2 recalibrated this round (full build 20260730-060037 aborted on a legitimate
+    # high-contrast episode); see the derivation block in the builder.
+    assert (V2_STD_MIN, V2_STD_MAX, V2_ABS_MEAN_MAX) == (0.25, 1.25, 0.30)
     assert V3_SSIM_MIN == 0.80
     assert V4_RTOL == 1e-3
     assert tuple(V3_EPISODE_INDICES) == (0, 10, 20, 30, 40, 50, 60, 70, 80, 90)
@@ -155,6 +157,12 @@ def test_v1_rejects_a_shape_mismatch():
 
 # ----------------------------------------------------------------------------------
 # 3. V2 -- per-window statistics envelope (runs on EVERY built window).
+#
+# The envelope was widened this round (std [0.35, 0.95] -> [0.25, 1.25], |mean| 0.15 -> 0.30)
+# after the full build (job 20260730-060037) aborted on manifest episode index 2 (id 3905),
+# a legitimate high-contrast success episode. The cases below pin BOTH directions of that
+# recalibration: the real scene-statistics tail must pass, and every failure mode V2 exists
+# to catch must still fail. See the derivation block next to the constants in the builder.
 # ----------------------------------------------------------------------------------
 
 
@@ -165,27 +173,58 @@ def test_v2_passes_on_cache_like_statistics():
     assert abs(result["mean"]) < V2_ABS_MEAN_MAX
 
 
+def test_v2_passes_on_the_ep3905_high_contrast_scene_tail():
+    # The exact statistics that aborted job 20260730-060037: std 0.951-0.958, |mean| ~ 0.13,
+    # while V1 (encode parity vs cache, r=0.995), V3 (10/10 in the probe) and V4 (frame-0
+    # invariance, exact) all passed in the same run -- a real scene tail, not an encoder fault.
+    result = check_v2("ep3905_v0_s00012", _latents(3905, mean=-0.1309, std=0.955))
+    assert result["passed"] is True
+    assert result["std"] == pytest.approx(0.955, abs=0.02)
+    assert abs(result["mean"]) == pytest.approx(0.1309, abs=0.02)
+
+
 def test_v2_catches_a_collapsed_std():
-    result = check_v2("w", _latents(8, std=0.2))
+    result = check_v2("w", _latents(8, std=0.20))
     assert result["passed"] is False and result["std"] < V2_STD_MIN
 
 
 def test_v2_catches_a_blown_up_std():
-    result = check_v2("w", _latents(9, std=1.4))
+    result = check_v2("w", _latents(9, std=1.30))
+    assert result["passed"] is False and result["std"] > V2_STD_MAX
+
+
+def test_v2_catches_a_missed_normalization_scale_error():
+    # The failure mode V2 is really for: ~16x the cache-observed std (0.60 * 16 = 9.6).
+    # Orders of magnitude outside the widened ceiling, so widening cannot mask it.
+    result = check_v2("w", _latents(12345, std=9.6))
     assert result["passed"] is False and result["std"] > V2_STD_MAX
 
 
 def test_v2_catches_a_biased_mean():
-    result = check_v2("w", _latents(10, mean=0.4))
+    result = check_v2("w", _latents(10, mean=0.35))
     assert result["passed"] is False and abs(result["mean"]) > V2_ABS_MEAN_MAX
 
 
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
 def test_v2_catches_non_finite_values(bad):
+    # Widening the envelope must not weaken the finiteness half of the gate.
     z = _latents(11)
     z[0, 0, 0, 0] = bad
     result = check_v2("w", z)
     assert result["finite"] is False and result["passed"] is False
+
+
+def test_v2_envelope_boundaries_follow_the_constants_inclusively():
+    def at_std(std, seed=70):
+        rng = np.random.default_rng(seed)
+        z = rng.normal(size=(48, 9, 12, 20)).astype(np.float32)
+        z -= z.mean()
+        return z * (std / z.std())
+
+    assert check_v2("w", at_std(V2_STD_MAX - 1e-3))["passed"] is True
+    assert check_v2("w", at_std(V2_STD_MAX + 1e-3))["passed"] is False
+    assert check_v2("w", at_std(V2_STD_MIN + 1e-3))["passed"] is True
+    assert check_v2("w", at_std(V2_STD_MIN - 1e-3))["passed"] is False
 
 
 def test_summarize_v2_reports_the_envelope_and_every_failure():
@@ -338,7 +377,7 @@ def test_raise_on_gate_failures_raises_gate_failure_listing_them():
 
 def test_main_returns_nonzero_when_a_gate_fails(monkeypatch):
     def boom(_args):
-        raise GateFailure("V2 ep1_v0_s00000: std 0.20 outside [0.35, 0.95]")
+        raise GateFailure("V2 ep1_v0_s00000: std 0.20 outside [0.25, 1.25]")
 
     monkeypatch.setattr(builder, "run", boom)
     assert main(["--manifest", "m.json", "--out-root", "gs://bucket/x"]) != 0

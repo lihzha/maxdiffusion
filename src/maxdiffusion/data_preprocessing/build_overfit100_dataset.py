@@ -139,11 +139,31 @@ REQUIRED_EXTERNAL_TOOLS = (
     "gsutil",  # every GCS read/write
 )
 
-# Gate thresholds -- plan v4 D4, FINAL.
+# Gate thresholds -- plan v4 D4, FINAL (V2 revised once; see below).
 V1_REL_L2_MAX = 0.25
 V1_PEARSON_MIN = 0.97
-V2_STD_MIN, V2_STD_MAX = 0.35, 0.95
-V2_ABS_MEAN_MAX = 0.15
+
+# V2 envelope -- RECALIBRATED (this round; plan-R1 reconciliation of the job 20260730-060037
+# abort). Original: std in [0.35, 0.95], |mean| <= 0.15.
+#
+# Derivation of the original bounds: the DROID Wan cache probes measured latent std 0.60-0.70,
+# and probe2's 41 built windows measured 0.737-0.803 -- a thin sample, and the ceiling was set
+# barely above it. The full build then aborted on manifest episode index 2 (id 3905): 9/12
+# windows at std 0.951-0.958 with |mean| ~ 0.13. Triage (Planner) showed the source is a
+# legitimate success episode with harsh high-contrast lighting (pixel std 0.251 vs 0.170
+# typical), and in the SAME run V1 (encode parity vs the cache, r = 0.995) and V4 (frame-0
+# future-invariance, exact) passed, with V3 having passed 10/10 in the probe. That is a real
+# scene-statistics tail of the corpus, not an encoder fault.
+#
+# What V2 is actually for -- and why widening keeps it discriminative: the failures V2 must
+# catch are order-of-magnitude scale errors, i.e. a missed normalization (~16x the cache std
+# -> ~9.6, or its inverse ~0.06x -> ~0.04), a collapsed/dead encode, and NaN/Inf. Those land
+# one to two orders of magnitude outside the bounds below, so the widened envelope still trips
+# on every one of them while no longer aborting on legitimate lighting extremes. The |mean|
+# bound moves in step (observed max 0.140, ep3905 at ~0.13 sat just inside the old 0.15).
+V2_STD_MIN, V2_STD_MAX = 0.25, 1.25
+V2_ABS_MEAN_MAX = 0.30
+
 V3_SSIM_MIN = 0.80
 V3_EPISODE_INDICES = tuple(range(0, 100, 10))
 V4_RTOL = 1e-3
