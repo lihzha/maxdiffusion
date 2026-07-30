@@ -101,9 +101,9 @@ echo "RUN_TAG=$RUN_TAG"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 
 # --- 4. Data paths (pre-encoded TFRecords; see docs/ctrl_world_data_format.md) ---
-export TRAIN_DATA_DIR="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned/train"
-export EVAL_DATA_DIR="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned/val"
-export STATS_PATH="gs://$GCS_BUCKET/wan2.2_tfr_dataset_lowres_downsampled/stats.json"
+export TRAIN_DATA_DIR="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned_2/train"
+export EVAL_DATA_DIR="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned_2/val"
+export STATS_PATH="gs://$GCS_BUCKET/datasets/droid_ctrl_world_aligned_2/stats.json"
 
 # --- 5. XLA flags ---
 export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true \
