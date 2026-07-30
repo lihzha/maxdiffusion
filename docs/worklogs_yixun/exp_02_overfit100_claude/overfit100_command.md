@@ -179,3 +179,22 @@ tpu create v6 -n 8 --name exp02-overfit100-fullbuild-yixun \
 
 Commit: `a08051e0005a20ba6bd58331eec1c349dc604430` (pushed; includes v2-envelope `bad4bff` — the only builder change vs the probe-passed SHA — plus cycle C trainer code, which the build does not import). Same command as Job 7 with the new COMMIT.
 - **Job id:** `20260730-075213-732dec74-exp02-overfit100-fullbuild-yixun` (submitted 2026-07-30T07:52Z). Note: `COMMIT` env resolved to `319ed93` (= `a08051e` + one docs-only commit — code-identical builder); `_SUCCESS.build_commit` will read `319ed93…`.
+- **Job 8 outcome:** attempt 1 spot-preempted (infra); attempt 2 SUCCEEDED in 642.9 s — train100 1,629/7 shards + train10 167/1 shard published with `_SUCCESS` (build_commit 319ed93). Dataset complete.
+
+## Job 9 — v6e-8 S1 SMOKE (train10, 20 steps, storage-light) — launched 2026-07-30
+
+Commit: `835085dbe2eb17b6d982eb6183e9d345cc655dac` (pushed). Pre-approved by Query 4 (dual sign-off in `_worklog.md` 21:30Z).
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --name exp02-overfit100-s1smoke-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env RUN_NAME="wan-overfit100-s1smoke-$(date -u +%Y%m%d-%H%M%S)" \
+  --env MAX_TRAIN_STEPS=20 \
+  --env DATA_DIR="gs://v6_east1d/datasets/exp02_overfit100/train10" \
+  --env EXPECTED_WINDOWS=167 --env NUM_TEXT_SLOTS=10 \
+  --env COMMIT="835085dbe2eb17b6d982eb6183e9d345cc655dac" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/train_wan_overfit100.sh
+```
