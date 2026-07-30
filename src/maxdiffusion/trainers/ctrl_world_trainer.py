@@ -112,6 +112,42 @@ def _unbox_tree(tree):
     )
 
 
+# Kept in float32 regardless of ``weights_dtype``: normalisation scales/biases
+# and the two small conditioning embedders (4.7M params total, so the memory cost
+# is negligible) are the parts most sensitive to reduced precision. Mirrors
+# ``cast_with_exclusion`` in the wan/ltx2 pipelines, with names for this UNet.
+_F32_PARAM_KEYWORDS = ("norm", "time_embedding", "add_embedding")
+
+
+def _cast_weight(path, x, dtype):
+    """Cast one loaded weight to ``dtype``, excluding precision-sensitive leaves."""
+    if not (hasattr(x, "dtype") and jnp.issubdtype(x.dtype, jnp.floating)):
+        return x
+    key = jax.tree_util.keystr(path).lower()
+    if any(k in key for k in _F32_PARAM_KEYWORDS):
+        return x.astype(jnp.float32)
+    return x.astype(dtype)
+
+
+def _rebox_like(abstract, loaded):
+    """Re-attach the model's logical axis names to loaded checkpoint params.
+
+    ``from_pretrained`` returns raw arrays — ``convert_pytorch_state_dict_to_flax``
+    rebuilds the tree from scratch and drops every ``LogicallyPartitioned``
+    wrapper the module definitions put there. Without the wrappers
+    ``nn.get_partition_spec`` reports ``P()`` for every leaf, so the whole model
+    ends up replicated on every device no matter what ``logical_axis_rules``
+    says. ``abstract`` is an ``init_weights(eval_only=True)`` tree, which *is*
+    boxed; copy its names onto the real arrays.
+    """
+    return jax.tree_util.tree_map(
+        lambda a, x: a.replace(value=x) if isinstance(a, LogicallyPartitioned) else x,
+        abstract,
+        loaded,
+        is_leaf=lambda x: isinstance(x, LogicallyPartitioned),
+    )
+
+
 def _place_on_sharding(x, sharding):
     """Multi-host-safe stand-in for ``jax.device_put(x, sharding)``.
 
@@ -128,6 +164,17 @@ def _place_on_sharding(x, sharding):
     """
     if sharding is None or not hasattr(x, "shape"):
         return x
+    if isinstance(x, jax.Array):
+        spec = getattr(x.sharding, "spec", None)
+        if spec is not None and any(axis is not None for axis in spec):
+            # Already non-trivially sharded, so ``addressable_data(0)`` is one
+            # shard rather than the whole tensor and the callback path would
+            # silently corrupt it. A global array can be resharded directly.
+            return jax.device_put(x, sharding)
+        # Drop to numpy first: the loaded weights are CPU-resident jax arrays and
+        # slicing those per shard would dispatch ~1400 leaves x mesh-size jitted
+        # slices, where numpy slicing is a plain host memcpy.
+        x = np.asarray(x.addressable_data(0))
     return max_utils.device_put_replicated(x, sharding)
 
 
@@ -197,6 +244,23 @@ class CtrlWorldTrainer:
                 precision=max_utils.get_precision(self.config),
                 norm_num_groups=self.config.norm_num_groups,
             )
+        # ``from_pretrained``'s ``dtype`` is the *computation* dtype and
+        # ``weights_dtype`` only reaches ``param_dtype`` on the ``.init()`` path,
+        # which loading never takes — the from_pt converter forces f32
+        # (``v.float().numpy()``). So the returned params keep the checkpoint's
+        # dtype and ``config.weights_dtype`` would be silently ignored. Cast here
+        # so it is honoured. These arrays are still CPU-resident, so this costs
+        # host RAM, not HBM.
+        unet_params = jax.tree_util.tree_map_with_path(
+            lambda path, x: _cast_weight(path, x, self.weights_dtype), unet_params
+        )
+        # ...and the same converter drops the logical axis annotations, so put
+        # them back or nothing downstream can shard. See ``_rebox_like``.
+        with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
+            abstract_unet_params = unet.init_weights(
+                jax.random.PRNGKey(self.config.seed), eval_only=True
+            )
+        unet_params = _rebox_like(abstract_unet_params, unet_params)
 
         action_encoder = FlaxActionEncoder(
             action_dim=self.config.action_dim,
@@ -241,9 +305,10 @@ class CtrlWorldTrainer:
         """Build a TrainState whose leaves are FSDP-sharded across the mesh.
 
         Path:
-          1. Build a *boxed* TrainState (UNet params keep their
-             ``LogicallyPartitioned`` wrappers from ``from_pretrained``;
-             ``tx.init`` propagates the wrappers through optimizer state).
+          1. Build a *boxed* TrainState (UNet params carry the
+             ``LogicallyPartitioned`` wrappers re-attached by ``_rebox_like`` in
+             ``_load_modules``; ``tx.init``'s tree_map propagates them through
+             optimizer state, so mu/nu shard the same way the params do).
           2. Read partition specs from the boxed tree and translate logical →
              mesh shardings via ``nn.logical_to_mesh_sharding``.
           3. Unbox both trees to drop the wrappers, leaving raw arrays and a
