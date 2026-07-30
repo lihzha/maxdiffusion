@@ -150,6 +150,7 @@ class WanCtrlWorldDroidDataset:
         tf.random.set_seed(seed)
 
         self._is_train = split == "train"
+        self._emit_n_real_frames = pad_short_episodes
         self.n_hist = n_hist
         self.n_fut = max_latent_frames - n_hist
         self.max_latent_frames = max_latent_frames
@@ -336,19 +337,25 @@ class WanCtrlWorldDroidDataset:
         rgb_id.set_shape([W])
         pos_id.set_shape([W])
 
-        return {
+        out = {
             "latent":          latent,
             "action":          action,
             "text_embeds":     traj["text_embed"],
             "frame_positions": pos_id,
-            # Number of window frames backed by real episode data; the remaining
-            # W - n_real frames are the repeat-the-last-action padding. Consumers
-            # use it to tell where ground truth stops being meaningful.
-            "n_real_frames":   tf.minimum(T - tf.cast(frame_now, tf.int32), n_fut) + n_hist,
             # Sequential episode index from preprocessing (int32-safe); threaded
             # through the batch so grad-spike steps can be attributed to episodes.
             "episode_id":      tf.cast(traj["episode_id"], tf.int32),
         }
+        if self._emit_n_real_frames:
+            # Window frames backed by real episode data; the remaining W - n_real
+            # are repeat-the-last-action padding, so consumers can tell where
+            # ground truth stops being meaningful. Emitted only when padding is on:
+            # the training step's jit in_shardings pin an exact key set, and an
+            # extra key is a pytree-prefix mismatch there.
+            out["n_real_frames"] = (
+                tf.minimum(T - tf.cast(frame_now, tf.int32), n_fut) + n_hist
+            )
+        return out
 
     def __iter__(self):
         return self.dataset.as_numpy_iterator()
