@@ -371,3 +371,29 @@ manifest triple-for-triple — if the recalibrated build consumes an amended man
 trainer will (correctly) refuse until `model_manifest_path` points at that same amended file.
 Also still open for the Planner: the parent trainer's `checkpoint_keep_period=-1` quirk
 (judgment 10) as a separate shared-trainer fix.
+# Third-pass review: exp_02 overfit100 — cycle C close-out
+Reviewer: OpenAI Codex gpt-5.6-sol (xhigh), 2026-07-30
+
+## Verdict
+
+APPROVE. Commit a08051e resolves F1–F4 as prescribed; both scoped behavior deltas are sound for cycle D, with no launch-blocking issue remaining.
+
+## Per-finding
+
+F1: RESOLVED — both snapshot paths must be non-empty, and normalized exact-component matching rejects embedded-SHA spoofs.
+
+F2: RESOLVED — the knob is absent from the YAML, launcher, and function signature; shard-byte verification is unconditional.
+
+F3: RESOLVED — the marker hash must be 64-hex and equal the supplied manifest’s SHA-256; every sidecar triple is manifest-bound, and `model_manifest_path` is mandatory.
+
+F4: RESOLVED — bounds are asserted on raw `int64` values before the dependent `int32` cast; `2^32` and related overflow cases are refused.
+
+## Delta judgments
+
+D-a: AGREE — contiguity belongs to the table-source set; sparse eval subsets remain safe through manifest binding, training-map membership, and parse-path range checks.
+
+D-b: AGREE — `eval==train` uses the authenticated table-source mapping itself, so a pairwise comparison adds nothing; the retained distinct-set check remains useful for subset membership and defence-in-depth.
+
+## Findings
+
+none
