@@ -220,3 +220,30 @@ note-present / note-absent tests.
 6. `tf.debugging` assert behaviour inside the real multi-host `MultiHostDataLoadIterator`
    (it fires in the tf.data graph; the failure surface on a TPU worker is untested).
 7. End-to-end resume with a rebuilt context table on TPU and the real ~30 GB/checkpoint write.
+# Follow-up review: exp_02 overfit100 — cycle C strengthening
+Reviewer: OpenAI Codex gpt-5.6-sol (xhigh), 2026-07-30
+
+## Verdict
+REQUEST-REVISION. The core C1–C4 resolutions and generation deviation are directionally sound, but several fail-closed edges remain that could admit wrong model, dataset, or context bytes before an expensive TPU run.
+
+## Per-item
+**a.** Manifest-authoritative pinned prefetch and local-only resolution are correct and precede model work; the two earlier pure config guards are harmless. Snapshot validation itself is not fully fail-closed—see F1.
+
+**b.** The integrity chain is sound when byte verification is enabled. Accept omitting `generation`: promotion necessarily changes it, while hashing canonical bytes provides the stronger behaviorally relevant guarantee.
+
+**c.** Full shared-index `(episode_index, episode_id, used_text)` compatibility is correct. Graph assertions are appropriate, but narrowing to `int32` before asserting leaves an overflow bypass; the context sidecar is also not content-bound.
+
+**d.** Non-empty `checkpoint_steps` correctly suppresses cadence, and the log explicitly identifies the ignored value. This matches H2 and preserves final-save behavior already accepted in C1–C4.
+
+**e.** `dataset_verify_bytes` should be unconditional for S1/S2/S3: disabling it admits the exact same-size mutation the regression demonstrates. The CRC-aware reserialization test is well designed and materially stronger than a raw bit flip.
+
+**f.** The 6/6 mutation record and reported 787-passed/2-skipped suite are coherent; the five files contain 125 test functions plus parametrized cases. Pytest was unavailable for an independent rerun; F1–F4 remain budget-protection holes.
+
+## Findings
+1. **F1 — MAJOR — Snapshot paths are validated by optional substring matching.** At `wan_ti2v_overfit100_trainer.py:814-818`, an empty path is skipped and any path merely containing the SHA passes, contradicting the claimed exact path-component check for both fields. Require both paths to be non-empty and the normalized local snapshot path to contain an exact component equal to the revision; add empty-field and embedded-SHA spoof regressions.
+
+2. **F2 — MAJOR — Canonical-byte integrity can be disabled.** At `wan_ti2v_overfit100_trainer.py:394-407` and `:839-842`, `dataset_verify_bytes=False` skips both SHA-256 and MD5, allowing a same-length replacement through preflight. Remove the knob or reject `False` for this trainer; the known ≤375 MB verification cost is negligible relative to S1/S2/S3.
+
+3. **F3 — MAJOR — The context-table input is not fingerprint-bound.** `episodes.json` directly supplies training text at `wan_ti2v_overfit100_trainer.py:476-489` and `:925-928`, but cycle B records no hash for it and the preflight hashes only summary/shards; default `eval==train` performs no second-map comparison. Publish and verify an `episodes_sha256`, or bind its full mapping to the committed manifest after verifying `_SUCCESS.manifest_sha256`.
+
+4. **F4 — MINOR — The range assertion occurs after lossy narrowing.** At `wan_ti2v_overfit100_trainer.py:617-634`, an `int64` value such as `2**32` casts to `int32(0)` and can pass both assertions. Assert bounds on the original `int64`, then cast under the control dependency; add an overflow regression.
