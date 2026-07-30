@@ -152,3 +152,24 @@ tpu create v6 -n 8 --name exp02-overfit100-probe-yixun \
 
 Commit: `934f80f60964af1d6b83635f15e0fb664970704c` (unchanged from Job 5 — no code change; stale `probe2/failed_gates.json` archived + deliberately deleted per the B3 guard's instruction). Same command as Job 5.
 - **Job id:** `20260730-011201-16c5f6c8-exp02-overfit100-probe-yixun` (submitted; outcome pending)
+- **Job 6 outcome:** attempt 1 SUCCEEDED in substance (probe2/ published with `_SUCCESS`, all gates passed) but the VM was suspended at completion; queue auto-retry hit the B3 guard (dataset present → deliberate refusal, exit 1) so the queue label is FAILED. `_SUCCESS` authoritative. PROBE PASSED.
+
+## Job 7 — v6e-8 FULL dataset build (train100 + train10) — launched 2026-07-30
+
+Commit: `934f80f60964af1d6b83635f15e0fb664970704c` (unchanged; probe-passed SHA). Pre-approved by Query 4 (dual sign-off; probe log-verified per `_worklog.md` 06:10Z entry). Same command as Job 5/6 with `PROBE=0`:
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --name exp02-overfit100-fullbuild-yixun \
+  --worker0-only \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env PROBE=0 \
+  --env MANIFEST_PATH="docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json" \
+  --env OUT_ROOT="gs://v6_east1d/datasets/exp02_overfit100" \
+  --env CONFIG_PATH="src/maxdiffusion/configs/base_wan_5b_full_ft.yml" \
+  --env CONFIG_OVERRIDES="hardware=tpu" \
+  --env COMMIT="934f80f60964af1d6b83635f15e0fb664970704c" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/build_overfit100_dataset.sh
+```
