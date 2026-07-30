@@ -112,6 +112,25 @@ def _unbox_tree(tree):
     )
 
 
+def _place_on_sharding(x, sharding):
+    """Multi-host-safe stand-in for ``jax.device_put(x, sharding)``.
+
+    ``jax.device_put`` rejects any ``NamedSharding`` whose mesh includes devices
+    this process cannot address, which is every mesh on a multi-host TPU slice.
+    Each process here holds an identical host-local copy of every leaf (weights
+    read from the same checkpoint, action encoder init'd from the same seed,
+    optimizer state derived from those), so each can carve its own shards out of
+    that copy — which is what ``max_utils.device_put_replicated`` does via
+    ``jax.make_array_from_callback``.
+
+    ``sharding`` is ``None`` for leaves that carry no shape (``state.step`` is a
+    plain python int), and those need no placement.
+    """
+    if sharding is None or not hasattr(x, "shape"):
+        return x
+    return max_utils.device_put_replicated(x, sharding)
+
+
 def _is_typed_key(x) -> bool:
     prng_dtype = getattr(jax.dtypes, "prng_key", None)
     return prng_dtype is not None and jnp.issubdtype(x.dtype, prng_dtype)
@@ -227,9 +246,10 @@ class CtrlWorldTrainer:
              ``tx.init`` propagates the wrappers through optimizer state).
           2. Read partition specs from the boxed tree and translate logical →
              mesh shardings via ``nn.logical_to_mesh_sharding``.
-          3. ``jax.device_put`` the boxed state onto the matching shardings —
-             this is where data actually leaves device 0 and gets sharded.
-          4. Unbox to drop the wrappers, leaving raw sharded arrays.
+          3. Unbox both trees to drop the wrappers, leaving raw arrays and a
+             matching shardings tree.
+          4. Place each leaf onto its sharding — this is where data actually
+             leaves device 0 and gets sharded.
         """
         config = self.config
 
@@ -245,15 +265,15 @@ class CtrlWorldTrainer:
             state_shardings = nn.logical_to_mesh_sharding(
                 state_logical_specs, mesh, config.logical_axis_rules
             )
-        # Step 3 — actually shard onto devices.
-        state = jax.device_put(state, state_shardings)
-        # Step 4 — drop LogicallyPartitioned wrappers; downstream tx.update
-        # and apply_fns expect raw arrays.
+        # Step 3 — drop LogicallyPartitioned wrappers; downstream tx.update and
+        # apply_fns expect raw arrays. The shardings tree was derived from the
+        # *boxed* state, so it carries the same wrappers in its tree structure;
+        # unbox those too so jit's in/out_shardings line up with the state and
+        # so the two trees can be walked leaf-by-leaf below.
         state = max_utils.unbox_logicallypartioned_trainstate(state)
-        # The shardings tree was derived from the *boxed* state, so it carries
-        # the same LogicallyPartitioned wrappers in its tree structure. Unbox
-        # those too so jit's in/out_shardings line up with the unboxed state.
         state_shardings = max_utils.unbox_logicallypartioned_trainstate(state_shardings)
+        # Step 4 — actually shard onto devices.
+        state = jax.tree_util.tree_map(_place_on_sharding, state, state_shardings)
         return state, state_shardings
 
     # ── Steps ──────────────────────────────────────────────────────────────────
