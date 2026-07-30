@@ -190,14 +190,12 @@ num_text_slots: 100
 # delta (D8/F5): the bounded T5 encode loop's chunk size. Positive prompts only; no
 # negative prompt is ever encoded.
 text_encode_batch: 8
-# delta (cycle-C review C2): the startup preflight streams every shard once and verifies its
-# sha256 + md5 against the fingerprints cycle B published in summary.json (itself bound to
-# _SUCCESS.summary_sha256). This is the only check that catches a byte mutation which preserves
-# both the record count and the byte length. ~375 MB for train100 / ~38 MB for train10, read
-# once before the 5B load; set False only if a future set makes that read prohibitive (the
-# marker/summary/shard-set/size/count bindings stay in force either way, and the startup log
-# records bytes_verified=False so a reader can tell).
-dataset_verify_bytes: True
+# NOTE (cycle-C review C2, hardened by follow-up F2): the startup preflight streams every shard
+# once and verifies its sha256 + md5 against the fingerprints cycle B published in summary.json
+# (itself bound to _SUCCESS.summary_sha256) -- the only check that catches a byte mutation
+# preserving both the record count and the byte length. There is deliberately NO config knob for
+# this: an opt-out admitted exactly that mutation, and ~375 MB (train100) / ~38 MB (train10) read
+# once before the 5B load is negligible against the S1/S2/S3 budget.
 
 # Wan2.2 TI2V 5B architecture. The loader reads the detailed transformer config
 # from the pretrained diffusers checkpoint; these values keep config-derived

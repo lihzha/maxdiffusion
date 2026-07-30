@@ -49,6 +49,7 @@ import functools
 import hashlib
 import json
 import os
+import pathlib
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Sequence
@@ -314,7 +315,7 @@ def _sha256_and_md5(path: str, chunk_bytes: int = 8 * 2**20) -> tuple[str, str, 
     return sha.hexdigest(), base64.b64encode(md5.digest()).decode("ascii"), size
 
 
-def verify_dataset_integrity(data_dir: str, expected_windows: int, *, verify_bytes: bool = True) -> dict:
+def verify_dataset_integrity(data_dir: str, expected_windows: int) -> dict:
     """Bind the bytes this run will train on to cycle B's published fingerprints (C2).
 
     Fail-closed chain, cheapest first:
@@ -326,8 +327,11 @@ def verify_dataset_integrity(data_dir: str, expected_windows: int, *, verify_byt
     3. the canonical shard set on disk is EXACTLY the set the summary lists (no strays, none
        missing) -- a stray ``*.tfrecord`` would silently join the training stream, since the
        reader globs the directory;
-    4. every shard's byte length matches (remote metadata only), and with ``verify_bytes`` its
-       ``sha256`` and ``md5`` match the published fingerprints;
+    4. every shard's byte length matches (remote metadata) AND its ``sha256`` and ``md5``
+       recomputed from the canonical bytes match the published fingerprints -- UNCONDITIONALLY
+       (F2: the former ``dataset_verify_bytes`` opt-out admitted exactly the same-length
+       replacement the regression demonstrates, and ~375 MB read once is negligible against the
+       S1/S2/S3 budget);
     5. the record counts agree with each other and with ``config.expected_windows``.
 
     On ``generation``: cycle B stats the STAGING object, then ``promote()`` COPIES it to the
@@ -391,20 +395,19 @@ def verify_dataset_integrity(data_dir: str, expected_windows: int, *, verify_byt
                 f"overfit100 dataset {data_dir}: shard {shard['name']} size {actual_size} != recorded "
                 f"{recorded_size} -- the published bytes changed; refusing to train."
             )
-        if verify_bytes:
-            sha256, md5_b64, streamed = _sha256_and_md5(uri)
-            if streamed != recorded_size:
-                raise ValueError(f"overfit100 dataset {data_dir}: shard {shard['name']} size changed while reading")
-            if sha256 != str(shard["sha256"]):
-                raise ValueError(
-                    f"overfit100 dataset {data_dir}: shard {shard['name']} sha256 {sha256} != recorded "
-                    f"{shard['sha256']} -- the shard's CONTENT was modified (record count and byte length can "
-                    f"both be preserved by such an edit); refusing to train."
-                )
-            if shard.get("md5") and md5_b64 != str(shard["md5"]):
-                raise ValueError(
-                    f"overfit100 dataset {data_dir}: shard {shard['name']} md5 {md5_b64} != recorded {shard['md5']}"
-                )
+        sha256, md5_b64, streamed = _sha256_and_md5(uri)
+        if streamed != recorded_size:
+            raise ValueError(f"overfit100 dataset {data_dir}: shard {shard['name']} size changed while reading")
+        if sha256 != str(shard["sha256"]):
+            raise ValueError(
+                f"overfit100 dataset {data_dir}: shard {shard['name']} sha256 {sha256} != recorded "
+                f"{shard['sha256']} -- the shard's CONTENT was modified (record count and byte length can "
+                f"both be preserved by such an edit); refusing to train."
+            )
+        if shard.get("md5") and md5_b64 != str(shard["md5"]):
+            raise ValueError(
+                f"overfit100 dataset {data_dir}: shard {shard['name']} md5 {md5_b64} != recorded {shard['md5']}"
+            )
         total_records += int(shard["records"])
 
     written = int(entry.get("written", total_records))
@@ -433,7 +436,7 @@ def verify_dataset_integrity(data_dir: str, expected_windows: int, *, verify_byt
         "records": total_records,
         "records_source": records_source,
         "shards": len(shards),
-        "bytes_verified": bool(verify_bytes),
+        "bytes_verified": True,  # F2: unconditional -- there is no path that skips it
         "build_id": marker["build_id"],
         "build_commit": marker["build_commit"],
         "summary_sha256": observed,
@@ -516,6 +519,91 @@ def read_episode_texts(data_dir: str, num_text_slots: int) -> list[str]:
         if not text.strip():
             raise ValueError(f"{EPISODES_SIDECAR} in {data_dir}: empty instruction at episode_index {index}")
     return texts
+
+
+def read_manifest_episodes(manifest_path: str) -> dict[int, dict]:
+    """``episode_index -> {episode_id, used_text}`` from the COMMITTED manifest.
+
+    The manifest is the reviewed artifact: its ``used_text`` is the instruction the experiment
+    was approved to condition on, chosen deterministically at selection time (plan D2).
+    """
+    manifest = _read_json_strict(manifest_path, "model manifest")
+    episodes = manifest.get("episodes") or []
+    mapping: dict[int, dict] = {}
+    for entry in episodes:
+        index = int(entry["episode_index"])
+        if index in mapping:
+            raise ValueError(f"manifest {manifest_path} repeats episode_index {index}")
+        mapping[index] = {"episode_id": int(entry["episode_id"]), "used_text": str(entry["used_text"])}
+    if not mapping:
+        raise ValueError(f"manifest {manifest_path} lists no episodes; cannot bind the context table")
+    return mapping
+
+
+def assert_episodes_bound_to_manifest(data_dir: str, manifest_path: str, *, require_contiguous: bool = True) -> int:
+    """Bind the context table's TEXT to the committed manifest (F3).
+
+    ``episodes.json`` is what ``_build_context_table`` reads, so it decides which instruction
+    each trajectory is trained against -- yet cycle B publishes no hash for that file, and the
+    C2 chain covers only ``summary.json`` and the shards. Editing one ``used_text`` would
+    therefore silently change the experiment.
+
+    Rather than adding a new cycle-B field (which would require rebuilding the dataset), this
+    binds through a hash cycle B already records: ``_SUCCESS.manifest_sha256`` is the sha256 of
+    the exact manifest bytes the build consumed. Verify that against the manifest THIS run was
+    handed, and the manifest's ``episodes[]`` becomes an authenticated reference for the whole
+    mapping. Then every ``episodes.json`` entry must match it triple-for-triple.
+
+    A set may be a contiguous PREFIX of the manifest (``train10`` is manifest indices 0-9 of
+    100), so the check is: index-contiguous ``0..N-1`` locally, every index present in the
+    manifest, and ``(episode_id, used_text)`` equal there.
+
+    ``require_contiguous`` applies to the set that BUILDS the table (``train_data_dir``), whose
+    indices must be exactly ``0..N-1`` because the table is gathered by them. A separate eval set
+    may legitimately be a SPARSE subset of those episodes, so contiguity is not required there --
+    its indices are still bound to the manifest here and range-checked against
+    ``num_text_slots`` in the parse path.
+    """
+    marker = read_success_marker(data_dir)
+    recorded = str(marker["manifest_sha256"])
+    if not re.fullmatch(r"[0-9a-f]{64}", recorded):
+        raise ValueError(
+            f"overfit100 dataset {data_dir}: {SUCCESS_MARKER}.manifest_sha256={recorded!r} is not a 64-hex sha256 "
+            f"(a --dry-run build records 'unverified'); refusing to bind the context table to it."
+        )
+    if not tf.io.gfile.exists(manifest_path):
+        raise ValueError(f"overfit100: model manifest {manifest_path} does not exist; cannot bind the context table")
+    with tf.io.gfile.GFile(manifest_path, "rb") as handle:
+        observed = hashlib.sha256(handle.read()).hexdigest()
+    if observed != recorded:
+        raise ValueError(
+            f"overfit100 dataset {data_dir} was built from a DIFFERENT manifest than this run was given: "
+            f"{SUCCESS_MARKER}.manifest_sha256={recorded} but sha256({manifest_path})={observed}. The context "
+            f"table's text would not be the reviewed selection; refusing to train."
+        )
+
+    manifest_map = read_manifest_episodes(manifest_path)
+    episodes_map = read_episode_mapping(data_dir)
+    if require_contiguous and set(episodes_map) != set(range(len(episodes_map))):
+        raise ValueError(
+            f"{EPISODES_SIDECAR} in {data_dir} has non-contiguous episode_index values {sorted(episodes_map)}; "
+            f"expected exactly 0..{len(episodes_map) - 1} (the context table is gathered by that index)"
+        )
+    for index in sorted(episodes_map):
+        if index not in manifest_map:
+            raise ValueError(
+                f"{EPISODES_SIDECAR} in {data_dir} claims episode_index {index}, which the committed manifest "
+                f"{manifest_path} does not select (it defines 0..{max(manifest_map)})"
+            )
+        for field in ("episode_id", "used_text"):
+            if episodes_map[index][field] != manifest_map[index][field]:
+                raise ValueError(
+                    f"overfit100 context-table binding broken at episode_index {index}: {EPISODES_SIDECAR} in "
+                    f"{data_dir} has {field}={episodes_map[index][field]!r} but the committed manifest "
+                    f"{manifest_path} has {field}={manifest_map[index][field]!r}. The table would train the model "
+                    f"on text that was never reviewed; refusing to train."
+                )
+    return len(episodes_map)
 
 
 def assert_context_map_compatible(train_data_dir: str, eval_data_dir: str) -> int:
@@ -614,9 +702,15 @@ def _schema_v2_prepare_sample(config):
     def prepare_sample(features):
         z_i0 = tf.reshape(tf.io.decode_raw(features["z_i0"], tf.float16), [c, 1, h, w])
         z_video = tf.reshape(tf.io.decode_raw(features["z_video"], tf.float16), [c, f, h, w])
-        # int32: the gather index rides the batch as a [B] column.
-        episode_index = tf.cast(features["episode_index"], tf.int32)
-        if num_slots > 0:
+        # F4: assert the bounds on the RAW int64 feature. Casting first let an int64 such as
+        # 2**32 narrow to int32(0) -- an in-range row -- so a corrupt index would have trained
+        # silently on episode 0's instruction.
+        raw_episode_index = features["episode_index"]
+        if num_slots <= 0:
+            # Only reachable from a config with no table (never in an exp_02 run); documented so
+            # the assert path below is the single place the index is narrowed in practice.
+            episode_index = tf.cast(raw_episode_index, tf.int32)
+        else:
             # C3: bound the index HERE, in the tf.data graph, where it is a cheap scalar
             # compare that fails loudly. A jnp gather CLAMPS out-of-range indices silently,
             # so index 99 against a 10-row table would train on row 9's instruction with no
@@ -625,13 +719,13 @@ def _schema_v2_prepare_sample(config):
             with tf.control_dependencies(
                 [
                     tf.debugging.assert_greater_equal(
-                        episode_index,
-                        tf.constant(0, tf.int32),
+                        raw_episode_index,
+                        tf.constant(0, tf.int64),
                         message="overfit100: negative episode_index in a schema-v2 record",
                     ),
                     tf.debugging.assert_less(
-                        episode_index,
-                        tf.constant(num_slots, tf.int32),
+                        raw_episode_index,
+                        tf.constant(num_slots, tf.int64),
                         message=(
                             "overfit100: episode_index >= num_text_slots in a schema-v2 record; the context "
                             "table has no such row (wrong set/num_text_slots pairing?)"
@@ -639,7 +733,7 @@ def _schema_v2_prepare_sample(config):
                     ),
                 ]
             ):
-                episode_index = tf.identity(episode_index)
+                episode_index = tf.cast(raw_episode_index, tf.int32)
         return {
             "z_i0": tf.cast(z_i0, tf.float32),
             "z_video": tf.cast(z_video, tf.float32),
@@ -771,6 +865,14 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
             )
         # Raises on a malformed list before any TPU time is spent.
         parse_checkpoint_steps(getattr(config, "checkpoint_steps", ()))
+        # F3: the manifest is load-bearing for the context table's TEXT, not only for the model
+        # revision, so it is no longer optional.
+        if not str(getattr(config, "model_manifest_path", "") or "").strip():
+            raise ValueError(
+                "overfit100 requires model_manifest_path: the committed manifest pins the model revision AND "
+                "authenticates episodes.json, which supplies the per-episode instructions the context table is "
+                "built from (F3). Without it the table's text is unverifiable."
+            )
 
     @staticmethod
     def _validate_pinned_snapshot(config) -> str:
@@ -813,13 +915,24 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
 
         for key in ("pretrained_model_name_or_path", "wan_transformer_pretrained_model_name_or_path"):
             path = str(getattr(config, key, "") or "")
+            # F1: BOTH fields must be set. An empty one used to be SKIPPED, which let
+            # `pretrained_model_name_or_path=''` sail through the pin check entirely. pyconfig
+            # copies the pipeline path into the transformer key, so at load time neither is
+            # legitimately empty.
             if not path:
-                continue  # pyconfig copies the pipeline path into the transformer key when empty
-            if expected not in path:
                 raise ValueError(
-                    f"overfit100: {key}={path!r} is not the pinned snapshot for revision {expected}. Pass the "
-                    f"RESOLVED local snapshot directory (…/snapshots/{expected}/) -- a bare repo id resolves to the "
-                    f"mutable hub default, which is not reproducible (C1)."
+                    f"overfit100: {key} is empty. Both the pipeline path and the transformer path must be the "
+                    f"RESOLVED local snapshot directory for revision {expected} (C1/F1)."
+                )
+            # F1: an EXACT path COMPONENT, not a substring. Substring matching accepted
+            # `/x/prefix<sha>suffix/y` and `/cache/<sha>-backup`, none of which is the pinned
+            # snapshot. normpath collapses `.`, `..`, duplicate and trailing separators first.
+            if expected not in pathlib.PurePath(os.path.normpath(path)).parts:
+                raise ValueError(
+                    f"overfit100: {key}={path!r} has no path component equal to the pinned revision {expected}, so "
+                    f"it is not the pinned snapshot. Pass the RESOLVED local snapshot directory "
+                    f"(.../snapshots/{expected}) -- a bare repo id resolves to the mutable hub default, and a "
+                    f"directory whose name merely embeds the sha is not the snapshot either (C1/F1)."
                 )
         max_logging.log(f"[wan_overfit100] model revision pinned: {expected}")
         max_logging.log(f"[wan_overfit100]   snapshot: {config.pretrained_model_name_or_path}")
@@ -836,23 +949,31 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
         table is always built from the training set (C3).
         """
         config = self.config
-        verify_bytes = bool(getattr(config, "dataset_verify_bytes", True))
-        report = verify_dataset_integrity(
-            config.train_data_dir, int(getattr(config, "expected_windows", 0) or 0), verify_bytes=verify_bytes
-        )
+        manifest_path = str(config.model_manifest_path)
+        report = verify_dataset_integrity(config.train_data_dir, int(getattr(config, "expected_windows", 0) or 0))
         max_logging.log(
             f"[wan_overfit100] train set integrity OK: {report['data_dir']} set={report['set_name']} "
             f"records={report['records']} (from {report['records_source']}) shards={report['shards']} "
             f"bytes_verified={report['bytes_verified']} build={report['build_commit'][:12]} "
             f"summary_sha256={report['summary_sha256'][:12]} -- {SUCCESS_MARKER} verified"
         )
+        # F3: bind the context table's text to the committed manifest via the marker's
+        # manifest_sha256. This is what makes the eval == train case safe without a second map
+        # comparison: the training mapping itself is now authenticated.
+        bound = assert_episodes_bound_to_manifest(config.train_data_dir, manifest_path)
+        max_logging.log(
+            f"[wan_overfit100] context table bound to the committed manifest {manifest_path}: "
+            f"{bound} episode(s), every (episode_index, episode_id, used_text) triple verified"
+        )
         eval_dir = getattr(config, "eval_data_dir", "") or ""
         if eval_dir and eval_dir != config.train_data_dir:
-            eval_report = verify_dataset_integrity(eval_dir, 0, verify_bytes=verify_bytes)
+            eval_report = verify_dataset_integrity(eval_dir, 0)
+            # A separate eval set may be a SPARSE subset of the training episodes.
+            assert_episodes_bound_to_manifest(eval_dir, manifest_path, require_contiguous=False)
             shared = assert_context_map_compatible(config.train_data_dir, eval_dir)
             max_logging.log(
                 f"[wan_overfit100] eval set integrity OK: {eval_report['data_dir']} records={eval_report['records']} "
-                f"context map compatible over {shared} episode(s)"
+                f"context map compatible over {shared} episode(s), manifest-bound"
             )
         return report
 

@@ -94,7 +94,6 @@ EVAL_DATA_DIR="${EVAL_DATA_DIR:-$DATA_DIR}"
 EXPECTED_WINDOWS="${EXPECTED_WINDOWS:-167}"
 NUM_TEXT_SLOTS="${NUM_TEXT_SLOTS:-10}"
 TEXT_ENCODE_BATCH="${TEXT_ENCODE_BATCH:-8}"
-DATASET_VERIFY_BYTES="${DATASET_VERIFY_BYTES:-True}"
 OUTPUT_DIR="${OUTPUT_DIR:-gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100}"
 SIDE_ADAPTER_NOISE_MODE="${SIDE_ADAPTER_NOISE_MODE:-fresh}"
 
@@ -133,7 +132,6 @@ echo "EVAL_DATA_DIR=${EVAL_DATA_DIR}"
 echo "EXPECTED_WINDOWS=${EXPECTED_WINDOWS}"
 echo "NUM_TEXT_SLOTS=${NUM_TEXT_SLOTS}"
 echo "TEXT_ENCODE_BATCH=${TEXT_ENCODE_BATCH}"
-echo "DATASET_VERIFY_BYTES=${DATASET_VERIFY_BYTES}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
 echo "SIDE_ADAPTER_NOISE_MODE=${SIDE_ADAPTER_NOISE_MODE}"
 echo "LEARNING_RATE=${LEARNING_RATE}"
@@ -203,7 +201,6 @@ python src/maxdiffusion/train_wan.py \
   expected_windows="${EXPECTED_WINDOWS}" \
   num_text_slots="${NUM_TEXT_SLOTS}" \
   text_encode_batch="${TEXT_ENCODE_BATCH}" \
-  dataset_verify_bytes="${DATASET_VERIFY_BYTES}" \
   output_dir="${OUTPUT_DIR}" \
   base_output_directory="${OUTPUT_DIR}" \
   side_adapter_noise_mode="${SIDE_ADAPTER_NOISE_MODE}" \

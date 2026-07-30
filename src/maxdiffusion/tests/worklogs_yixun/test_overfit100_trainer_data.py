@@ -209,6 +209,40 @@ def test_in_range_boundary_indices_are_accepted(tmp_path):
     assert [int(s["episode_index"]) for s in samples] == [0, 9]
 
 
+@pytest.mark.parametrize("bad", [2**32, 2**32 + 5, 2**31])
+def test_int64_values_that_narrow_into_range_are_still_rejected(tmp_path, bad):
+    # F4 (follow-up review, MINOR): the record carries an int64. Asserting AFTER the int32 cast
+    # let 2**32 narrow to int32(0) -- an in-range row -- so a corrupt index silently trained on
+    # episode 0's instruction. The bounds are now asserted on the ORIGINAL int64.
+    _write_records(tmp_path / "train10", [bad])
+    narrowed = int(np.int64(bad).astype(np.int32))  # non-vacuity: it really does narrow
+    assert narrowed < 10
+    with pytest.raises(tf.errors.InvalidArgumentError) as ei:
+        _parse_all(tmp_path / "train10", _geometry_config(num_text_slots=10))
+    assert "episode_index" in str(ei.value)
+
+
+def test_negative_int64_index_is_rejected(tmp_path):
+    _write_records(tmp_path / "train10", [-(2**32)])
+    with pytest.raises(tf.errors.InvalidArgumentError):
+        _parse_all(tmp_path / "train10", _geometry_config(num_text_slots=10))
+
+
+def test_the_range_assert_consumes_the_int64_feature_not_the_cast():
+    # Structural companion to the overflow regression: the bounds must be asserted on the raw
+    # int64 feature, so the tf.data graph rejects the value BEFORE any narrowing.
+    import inspect
+
+    src = inspect.getsource(overfit100._schema_v2_prepare_sample)
+    assert 'tf.cast(features["episode_index"]' not in src  # never assert on a narrowed value
+    assert src.count("tf.constant(0, tf.int64)") == 1  # lower bound compared as int64
+    assert "tf.constant(num_slots, tf.int64)" in src  # upper bound compared as int64
+    # Both assertions take the raw feature, and the narrowing happens under their control dep.
+    assert src.index("assert_greater_equal(\n                        raw_episode_index") > 0
+    assert src.index("assert_less(\n                        raw_episode_index") > 0
+    assert src.index("assert_less(") < src.rindex("tf.cast(raw_episode_index")
+
+
 # =======================================================================================
 # (B) readiness asserts: _SUCCESS required, expected_windows checked
 # =======================================================================================
@@ -442,6 +476,8 @@ def _recipe_config(**kw):
         "text_encode_batch": 8,
         "expected_windows": 1629,
         "checkpoint_steps": [250, 500, 1000, 1750, 2500],
+        # F3: the committed manifest authenticates episodes.json, so it is mandatory.
+        "model_manifest_path": "docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json",
         "learning_rate": 1.0e-5,
         "warmup_steps": 250,
         "learning_rate_schedule_steps": 2500,

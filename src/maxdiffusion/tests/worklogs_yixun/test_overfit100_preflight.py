@@ -51,6 +51,8 @@ from maxdiffusion.data_preprocessing.build_overfit100_dataset import (
 _PINNED = "b8fff7315c768468a5333511427288870b2e9635"
 _OTHER_REV = "0123456789abcdef0123456789abcdef01234567"
 _SNAPSHOT = f"/root/.cache/huggingface/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers/snapshots/{_PINNED}"
+_REPO = Path(overfit100.__file__).parents[3]
+_COMMITTED_MANIFEST = _REPO / "docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json"
 
 
 # =======================================================================================
@@ -77,6 +79,7 @@ def _publish_dataset(
     drop_shard=False,
     episodes=None,
     instruction_of=None,
+    manifest_sha256=None,
 ):
     """Write a cycle-B-shaped set: shard(s) + summary.json + episodes.json + _SUCCESS."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -160,7 +163,7 @@ def _publish_dataset(
             "records": len(episode_indices) if marker_records == "auto" else marker_records,
             "shards": len(shards),
             "summary_sha256": hashlib.sha256(summary_bytes.encode("utf-8")).hexdigest(),
-            "manifest_sha256": "f" * 64,
+            "manifest_sha256": manifest_sha256 or "f" * 64,
         }
         if marker_records is None:
             marker.pop("records")
@@ -180,7 +183,6 @@ def _dataset_config(train_dir, *, eval_dir=None, expected_windows=None, num_text
         "num_text_slots": num_text_slots if num_text_slots is not None else 3,
         "text_encode_batch": 8,
         "checkpoint_steps": [250],
-        "dataset_verify_bytes": True,
     }
     cfg.update(kw)
     return SimpleNamespace(**cfg)
@@ -483,18 +485,33 @@ def test_marker_count_disagreeing_with_shard_records_is_refused(tmp_path):
         overfit100.verify_dataset_integrity(str(data_dir), expected_windows=99)
 
 
-def test_bytes_verification_can_be_disabled_but_metadata_still_binds(tmp_path):
-    # dataset_verify_bytes=False is an escape hatch for a huge set; the size/name/count and
-    # summary-hash bindings remain. The report says so, so a log reader can tell.
+def test_byte_verification_is_unconditional_and_has_no_opt_out(tmp_path):
+    # F2 (follow-up review, MAJOR): the `dataset_verify_bytes` escape hatch is GONE. Disabling
+    # the content hash admitted exactly the same-length replacement the regression above
+    # demonstrates, and ~375 MB read once is negligible against the S1/S2/S3 budget. There must
+    # be no parameter, and no config key, that can skip it.
+    import inspect
+
+    signature = inspect.signature(overfit100.verify_dataset_integrity)
+    assert "verify_bytes" not in signature.parameters
+    assert not any("verify" in name for name in signature.parameters if name not in ("expected_windows",))
+    config_text = (_REPO / "src/maxdiffusion/configs/base_wan_5b_overfit100.yml").read_text()
+    assert "dataset_verify_bytes" not in config_text
+    wrapper_text = (_REPO / "bash_scripts/train_wan_overfit100.sh").read_text()
+    assert "DATASET_VERIFY_BYTES" not in wrapper_text and "dataset_verify_bytes" not in wrapper_text
+    # ...and a mutated shard is refused with no way to wave it through.
     data_dir = _publish_dataset(tmp_path / "train10", [0, 1, 2])
     shard = next(data_dir.glob("*.tfrecord"))
     payload = bytearray(shard.read_bytes())
     payload[-64] ^= 0x01
     shard.write_bytes(bytes(payload))
-    report = overfit100.verify_dataset_integrity(str(data_dir), expected_windows=3, verify_bytes=False)
-    assert report["bytes_verified"] is False
     with pytest.raises(ValueError, match="sha256"):
-        overfit100.verify_dataset_integrity(str(data_dir), expected_windows=3, verify_bytes=True)
+        overfit100.verify_dataset_integrity(str(data_dir), expected_windows=3)
+
+
+def test_report_always_says_bytes_were_verified(tmp_path):
+    data_dir = _publish_dataset(tmp_path / "train10", [0, 1, 2])
+    assert overfit100.verify_dataset_integrity(str(data_dir), expected_windows=3)["bytes_verified"] is True
 
 
 # =======================================================================================
@@ -542,7 +559,7 @@ def test_eval_index_outside_the_training_mapping_is_refused(tmp_path):
 
 
 def _full_config(tmp_path, **kw):
-    train = _publish_dataset(Path(tmp_path) / "train10", [0, 1, 2])
+    manifest, train = _publish_manifest_bound(Path(tmp_path), "train10", [0, 1, 2])
     cfg = {
         # probe-config gates (inherited from full-FT)
         "side_adapter_guide_scale": 1.0,
@@ -552,15 +569,15 @@ def _full_config(tmp_path, **kw):
         "text_encode_batch": 8,
         "expected_windows": 3,
         "checkpoint_steps": [250],
-        # C1
+        # C1 / F1
         "pretrained_model_name_or_path": _SNAPSHOT,
         "wan_transformer_pretrained_model_name_or_path": _SNAPSHOT,
         "expected_model_revision": _PINNED,
-        "model_manifest_path": "",
+        # C1 / F3: the manifest is mandatory -- it pins the revision AND binds the text table
+        "model_manifest_path": str(manifest),
         # C2/C3
         "train_data_dir": str(train),
         "eval_data_dir": str(train),
-        "dataset_verify_bytes": True,
     }
     cfg.update(kw)
     return SimpleNamespace(**cfg), train
@@ -596,15 +613,43 @@ def test_start_training_rejects_an_unpinned_snapshot_before_loading_the_pipeline
         overfit100.WanTI2VOverfit100Trainer(config).start_training()
 
 
-def test_start_training_rejects_an_incompatible_eval_mapping_before_loading_the_pipeline(tmp_path, monkeypatch):
+def test_start_training_rejects_an_incompatible_eval_set_before_loading_the_pipeline(tmp_path, monkeypatch):
+    # An eval set whose instructions differ from the training set is refused before any model
+    # work. After F3 the FIRST binding that fires is the MANIFEST one -- a strictly stronger
+    # statement (that set was not built from the reviewed manifest at all) -- so that is what
+    # this asserts; `assert_context_map_compatible` remains defence-in-depth and is covered
+    # directly by the C3 unit tests above.
     ev = _publish_dataset(Path(tmp_path) / "evalset", [0, 1, 2], instruction_of=lambda i: f"different {i}")
     config, _ = _full_config(tmp_path, eval_data_dir=str(ev))
 
     def _boom(self):
-        raise AssertionError("pipeline loader ran despite an incompatible eval mapping")
+        raise AssertionError("pipeline loader ran despite an incompatible eval set")
 
     monkeypatch.setattr(overfit100.WanTI2VOverfit100Trainer, "_load_wan_pipeline", _boom)
-    with pytest.raises(ValueError, match="used_text"):
+    with pytest.raises(ValueError, match="DIFFERENT manifest|used_text"):
+        overfit100.WanTI2VOverfit100Trainer(config).start_training()
+
+
+def test_eval_set_bound_to_the_same_manifest_passes_both_checks(tmp_path, monkeypatch):
+    # The positive counterpart: an eval set built from the SAME manifest satisfies the manifest
+    # binding AND map compatibility, so the preflight completes and the run reaches the pipeline
+    # load. With both sets manifest-bound, map incompatibility is structurally impossible --
+    # which is precisely why the eval == train skip is safe after F3.
+    manifest, train = _publish_manifest_bound(Path(tmp_path), "train10", [0, 1, 2])
+    ev = _publish_dataset(
+        Path(tmp_path) / "evalset", [0, 2], manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest()
+    )
+    config, _ = _full_config(tmp_path, eval_data_dir=str(ev))
+    assert overfit100.assert_episodes_bound_to_manifest(str(train), str(manifest)) == 3
+
+    class _Sentinel(RuntimeError):
+        pass
+
+    def _reached(self):
+        raise _Sentinel("preflight complete")
+
+    monkeypatch.setattr(overfit100.WanTI2VOverfit100Trainer, "_load_wan_pipeline", _reached)
+    with pytest.raises(_Sentinel):
         overfit100.WanTI2VOverfit100Trainer(config).start_training()
 
 
@@ -626,3 +671,239 @@ def test_preflight_passes_on_a_valid_publication_and_logs_the_bindings(tmp_path,
         overfit100.WanTI2VOverfit100Trainer(config).start_training()
     assert any(_PINNED in line for line in logged), logged
     assert any("_SUCCESS verified" in line or "integrity" in line for line in logged), logged
+
+
+# =======================================================================================
+# FOLLOW-UP REVIEW F1-F3: the remaining fail-closed edges
+# =======================================================================================
+
+
+def _publish_manifest_bound(root: Path, set_name: str, episode_indices, *, manifest_episodes=None, n_manifest=None):
+    """A manifest + a set whose ``_SUCCESS.manifest_sha256`` binds it to that manifest (F3).
+
+    The manifest is the reviewed, committed artifact; cycle B records the sha256 of the exact
+    bytes it consumed into ``_SUCCESS.manifest_sha256``. Verifying that hash lets the trainer
+    treat the manifest's ``episodes[]`` as the authority for the context table's text.
+    """
+    indices = sorted({int(i) for i in episode_indices})
+    count = n_manifest if n_manifest is not None else len(indices)
+    episodes = manifest_episodes
+    if episodes is None:
+        episodes = [
+            {
+                "episode_index": index,
+                "episode_id": 25189 + index,
+                "used_text": f"instruction {index}",
+                "n_windows": 16,
+            }
+            for index in range(count)
+        ]
+    manifest = root / "overfit100_manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "vae_fingerprint": {"hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers", "revision": _PINNED},
+                "episodes": episodes,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    data_dir = _publish_dataset(
+        root / set_name,
+        episode_indices,
+        manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    )
+    return manifest, data_dir
+
+
+# --------------------------------------------------------------------------------------
+# F1 -- exact path COMPONENT, both fields non-empty
+# --------------------------------------------------------------------------------------
+
+
+def test_empty_snapshot_path_is_refused(tmp_path):
+    # F1: an empty field used to be SKIPPED, so `pretrained_model_name_or_path=''` sailed
+    # through the pin check entirely.
+    for key in ("pretrained_model_name_or_path", "wan_transformer_pretrained_model_name_or_path"):
+        with pytest.raises(ValueError, match=key):
+            overfit100.WanTI2VOverfit100Trainer._validate_pinned_snapshot(_snapshot_config(**{key: ""}))
+
+
+def test_embedded_sha_spoof_is_refused():
+    # F1: substring matching accepted any path merely CONTAINING the sha. A component-exact
+    # check refuses a directory whose name only embeds it.
+    for spoof in (
+        f"/x/prefix{_PINNED}suffix/y",
+        f"/x/{_PINNED}extra",
+        f"/x/pre{_PINNED}",
+        f"/cache/snapshots/{_PINNED}-backup",
+        f"/cache/{_PINNED}.old/model",
+    ):
+        with pytest.raises(ValueError, match="path component|not the pinned snapshot"):
+            overfit100.WanTI2VOverfit100Trainer._validate_pinned_snapshot(
+                _snapshot_config(
+                    pretrained_model_name_or_path=spoof, wan_transformer_pretrained_model_name_or_path=spoof
+                )
+            )
+
+
+def test_real_snapshot_layouts_are_accepted():
+    # What the launcher actually passes: snapshot_download() returns the snapshot ROOT.
+    # A trailing slash and a sub-directory of it must also pass (the sha is still a component).
+    for good in (_SNAPSHOT, _SNAPSHOT + "/", _SNAPSHOT + "/transformer", f"{_SNAPSHOT}/./"):
+        assert (
+            overfit100.WanTI2VOverfit100Trainer._validate_pinned_snapshot(
+                _snapshot_config(
+                    pretrained_model_name_or_path=good, wan_transformer_pretrained_model_name_or_path=good
+                )
+            )
+            == _PINNED
+        )
+
+
+def test_relative_snapshot_path_with_the_component_is_accepted():
+    good = f"cache/snapshots/{_PINNED}"
+    assert (
+        overfit100.WanTI2VOverfit100Trainer._validate_pinned_snapshot(
+            _snapshot_config(pretrained_model_name_or_path=good, wan_transformer_pretrained_model_name_or_path=good)
+        )
+        == _PINNED
+    )
+
+
+def test_one_pinned_and_one_spoofed_field_is_refused():
+    # The transformer path is what wan_pipeline actually loads; a spoof there must not hide
+    # behind a correct pipeline path.
+    with pytest.raises(ValueError, match="wan_transformer_pretrained_model_name_or_path"):
+        overfit100.WanTI2VOverfit100Trainer._validate_pinned_snapshot(
+            _snapshot_config(wan_transformer_pretrained_model_name_or_path=f"/x/{_PINNED}suffix")
+        )
+
+
+# --------------------------------------------------------------------------------------
+# F3 -- the context table's text is bound to the committed manifest
+# --------------------------------------------------------------------------------------
+
+
+def test_manifest_bound_publication_verifies(tmp_path):
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", [0, 1, 2])
+    assert overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest)) == 3
+
+
+def test_manifest_sha_mismatch_is_refused(tmp_path):
+    # The dataset was built from a DIFFERENT manifest than the one this run was given.
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", [0, 1, 2])
+    manifest.write_text(manifest.read_text().replace("instruction 0", "instruction ZERO"))
+    with pytest.raises(ValueError) as ei:
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest))
+    assert "manifest_sha256" in str(ei.value)
+
+
+def test_tampered_used_text_in_episodes_json_is_refused(tmp_path):
+    # THE F3 regression: episodes.json is what the context table is BUILT from. Editing an
+    # instruction there changes what the model is trained to associate with a trajectory, and
+    # nothing in cycle B's own fingerprints covers that file.
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", [0, 1, 2])
+    payload = json.loads((data_dir / "episodes.json").read_text())
+    payload["episodes"][1]["used_text"] = "put the banana in the drawer"
+    (data_dir / "episodes.json").write_text(json.dumps(payload, indent=2) + "\n")
+    with pytest.raises(ValueError) as ei:
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest))
+    msg = str(ei.value)
+    assert "used_text" in msg and "episode_index 1" in msg
+
+
+def test_tampered_episode_id_in_episodes_json_is_refused(tmp_path):
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", [0, 1, 2])
+    payload = json.loads((data_dir / "episodes.json").read_text())
+    payload["episodes"][2]["episode_id"] += 7
+    (data_dir / "episodes.json").write_text(json.dumps(payload, indent=2) + "\n")
+    with pytest.raises(ValueError, match="episode_id"):
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest))
+
+
+def test_index_gap_in_episodes_json_is_refused(tmp_path):
+    # The set that BUILDS the table must be index-contiguous: the table is gathered by that
+    # index, so a gap would leave an unfilled row.
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", [0, 1, 3], n_manifest=4)
+    with pytest.raises(ValueError) as ei:
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest))
+    assert "contiguous" in str(ei.value)
+
+
+def test_a_sparse_eval_subset_is_allowed_when_contiguity_is_not_required(tmp_path):
+    # A separate EVAL set may be a sparse subset of the training episodes (e.g. one canonical
+    # window per selected episode); its indices are still manifest-bound, and the parse path
+    # range-checks them against num_text_slots.
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "evalset", [0, 2], n_manifest=4)
+    assert overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest), require_contiguous=False) == 2
+    with pytest.raises(ValueError, match="contiguous"):
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest))
+
+
+def test_index_absent_from_the_manifest_is_refused(tmp_path):
+    # A set claiming an episode the reviewed manifest never selected.
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", [0, 1, 2], n_manifest=2)
+    with pytest.raises(ValueError, match="manifest"):
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest))
+
+
+def test_train10_prefix_of_a_100_episode_manifest_is_accepted(tmp_path):
+    # train10 is manifest indices 0-9 of a 100-episode manifest: a contiguous PREFIX, not the
+    # whole thing. That must verify.
+    manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", list(range(10)), n_manifest=100)
+    assert overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest)) == 10
+
+
+def test_non_sha_manifest_hash_in_the_marker_is_refused(tmp_path):
+    # A --dry-run build writes "unverified (--dry-run)"; that must never gate a real run.
+    manifest, _ = _publish_manifest_bound(tmp_path, "unused", [0])
+    data_dir = _publish_dataset(tmp_path / "train10", [0, 1, 2], manifest_sha256="unverified (--dry-run)")
+    with pytest.raises(ValueError, match="manifest_sha256"):
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(manifest))
+
+
+def test_missing_manifest_path_is_refused(tmp_path):
+    _manifest, data_dir = _publish_manifest_bound(tmp_path, "train10", [0, 1, 2])
+    with pytest.raises(ValueError, match="nope.json"):
+        overfit100.assert_episodes_bound_to_manifest(str(data_dir), str(tmp_path / "nope.json"))
+
+
+def test_model_manifest_path_is_mandatory(tmp_path):
+    # F3 makes the manifest load-bearing for the TEXT, not just the revision, so an empty
+    # model_manifest_path is now a config error.
+    with pytest.raises(ValueError, match="model_manifest_path"):
+        overfit100.WanTI2VOverfit100Trainer._validate_overfit100_config(
+            SimpleNamespace(
+                num_text_slots=3,
+                text_encode_batch=8,
+                expected_windows=3,
+                checkpoint_steps=[250],
+                model_manifest_path="",
+            )
+        )
+
+
+def test_start_training_refuses_tampered_context_text_before_loading_the_pipeline(tmp_path, monkeypatch):
+    config, train = _full_config(tmp_path)
+    payload = json.loads((train / "episodes.json").read_text())
+    payload["episodes"][0]["used_text"] = "an instruction nobody reviewed"
+    (train / "episodes.json").write_text(json.dumps(payload, indent=2) + "\n")
+
+    def _boom(self):
+        raise AssertionError("pipeline loader ran despite tampered context text")
+
+    monkeypatch.setattr(overfit100.WanTI2VOverfit100Trainer, "_load_wan_pipeline", _boom)
+    with pytest.raises(ValueError, match="used_text"):
+        overfit100.WanTI2VOverfit100Trainer(config).start_training()
+
+
+def test_committed_manifest_has_the_episode_fields_the_binding_needs():
+    # Guards the binding against manifest-schema drift.
+    manifest = json.loads(_COMMITTED_MANIFEST.read_text())
+    assert len(manifest["episodes"]) == 100
+    for entry in manifest["episodes"][:5]:
+        assert {"episode_index", "episode_id", "used_text"} <= set(entry)
+    assert [e["episode_index"] for e in manifest["episodes"]] == list(range(100))

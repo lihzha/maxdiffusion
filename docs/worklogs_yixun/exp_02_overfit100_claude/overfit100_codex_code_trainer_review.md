@@ -247,3 +247,127 @@ REQUEST-REVISION. The core C1–C4 resolutions and generation deviation are dire
 3. **F3 — MAJOR — The context-table input is not fingerprint-bound.** `episodes.json` directly supplies training text at `wan_ti2v_overfit100_trainer.py:476-489` and `:925-928`, but cycle B records no hash for it and the preflight hashes only summary/shards; default `eval==train` performs no second-map comparison. Publish and verify an `episodes_sha256`, or bind its full mapping to the committed manifest after verifying `_SUCCESS.manifest_sha256`.
 
 4. **F4 — MINOR — The range assertion occurs after lossy narrowing.** At `wan_ti2v_overfit100_trainer.py:617-634`, an `int64` value such as `2**32` casts to `int32(0)` and can pass both assertions. Assert bounds on the original `int64`, then cast under the control dependency; add an overflow regression.
+
+---
+
+# Strengthening record 2 (2026-07-30 — Claude Opus 5, Coder)
+
+Follow-up review verdict **REQUEST-REVISION (F1–F4)**; all four **accepted and fixed**, tests
+first. Suite: **812 passed / 2 skipped** (up from 787+2; +25 tests, all in the two files this
+round touched).
+
+## F1 — MAJOR, snapshot paths validated by optional substring matching — **FIXED**
+
+Two holes, both closed in `_validate_pinned_snapshot`:
+
+- **Empty fields were skipped.** `if not path: continue` meant
+  `pretrained_model_name_or_path=''` sailed through the pin check entirely. Both fields are now
+  **required to be non-empty** (pyconfig copies the pipeline path into the transformer key, so
+  neither is legitimately empty at load time).
+- **Substring matching.** `expected not in path` accepted `/x/prefix<sha>suffix/y`,
+  `/cache/<sha>-backup`, `/cache/<sha>.old/model`. The check is now an **exact path component**:
+  `expected in pathlib.PurePath(os.path.normpath(path)).parts`.
+
+`normpath` first, so `.`/`..`/duplicate/trailing separators normalise away. What the launcher
+actually passes is `snapshot_download()`'s return — the snapshot **root**
+(`…/snapshots/<sha>`) — which passes; so do a trailing slash, `…/snapshots/<sha>/transformer`,
+and a relative `cache/snapshots/<sha>`, all pinned by tests.
+
+Tests: empty field refused (both keys, parametrized); five embedded-SHA spoofs refused; four
+real layouts accepted; relative path accepted; one-pinned-one-spoofed refused naming the
+transformer key.
+
+## F2 — MAJOR, canonical-byte integrity could be disabled — **FIXED (knob deleted)**
+
+`dataset_verify_bytes` is **gone** — from the yml, the launcher, and the function signature.
+`verify_dataset_integrity(data_dir, expected_windows)` no longer takes a `verify_bytes`
+parameter, so **no code path can skip** the sha256+md5 verification; the report's
+`bytes_verified` field is now the constant `True` (kept so the startup log line is unchanged).
+The yml keeps an explanatory NOTE in place of the key, stating why there is deliberately no
+opt-out (~375 MB train100 / ~38 MB train10 read once is negligible against the S1/S2/S3 budget,
+and the opt-out admitted exactly the same-length replacement the regression demonstrates).
+
+Tests: `inspect.signature` has no `verify_bytes`; the yml contains no such key; the launcher
+contains neither `DATASET_VERIFY_BYTES` nor `dataset_verify_bytes`; a mutated shard is refused
+with no way to wave it through; the report always says `bytes_verified=True`.
+
+## F3 — MAJOR, the context-table input was not fingerprint-bound — **FIXED (manifest binding)**
+
+Took the stronger of the two offered options, and the one that needs **no new cycle-B field**
+(publishing `episodes_sha256` would require rebuilding the dataset):
+
+1. `_SUCCESS.manifest_sha256` is the sha256 of the exact manifest bytes cycle B consumed
+   (`assert_manifest_matches_committed`). The trainer verifies it against the manifest **this
+   run was handed** — refusing a non-64-hex value, so a `--dry-run` build's
+   `"unverified (--dry-run)"` can never gate a real run.
+2. With the manifest thereby authenticated, its `episodes[]` becomes the reference for the
+   table's text: every `episodes.json` entry must match the manifest's entry at the same index
+   on **both** `episode_id` and `used_text`, every index must exist in the manifest, and the
+   table-source set must be index-contiguous `0..N-1`.
+
+`model_manifest_path` is now **mandatory** (`_validate_overfit100_config`): the manifest is
+load-bearing for the *text*, not only the revision. New helpers: `read_manifest_episodes`,
+`assert_episodes_bound_to_manifest(..., require_contiguous=True)`, wired into
+`_preflight_dataset` for the train dir and (with `require_contiguous=False`) for a distinct
+eval dir.
+
+> **On the eval == train skip.** The reviewer noted the C3 map check is skipped when the dirs
+> match. After F3 that is safe *and* the skip is now the uninteresting case: the training
+> mapping itself is authenticated against the committed manifest, so there is no unverified
+> mapping left to compare against. Two sets bound to the *same* manifest cannot disagree with
+> each other — which my own test caught: the "incompatible eval mapping" case now fails on the
+> **manifest** binding (a strictly stronger statement: that set was not built from the reviewed
+> manifest at all) rather than on the pairwise comparison. `assert_context_map_compatible`
+> stays as cheap defence-in-depth and keeps its direct unit tests.
+
+> **One over-strictness found by my own test.** Requiring index-contiguity of *every* set is
+> wrong: a separate eval set may legitimately be a **sparse** subset of the training episodes
+> (e.g. one canonical window per selected episode). `require_contiguous` therefore applies to
+> the table-source set only; a sparse eval set is still manifest-bound per index and still
+> range-checked against `num_text_slots` in the parse path. Both directions are tested.
+
+Tests: manifest-bound publication verifies; manifest-sha mismatch refused; **tampered
+`used_text` refused** (naming the index); tampered `episode_id` refused; index gap refused;
+index absent from the manifest refused; `train10` as a 10-of-100 contiguous prefix accepted;
+sparse eval subset accepted only with `require_contiguous=False`; non-sha marker hash refused;
+missing manifest path refused; `model_manifest_path` mandatory; `start_training` refuses
+tampered context text with the pipeline loader booby-trapped; the committed manifest still has
+the fields the binding needs (100 episodes, contiguous, all three fields).
+
+## F4 — MINOR, range assertion after lossy narrowing — **FIXED**
+
+The bounds are now asserted on the **raw int64 feature**, and the `int32` narrowing happens
+*inside* the `control_dependencies` block. There is no longer any `tf.cast(features["episode_
+index"] …)` before the asserts; the only pre-assert cast path is the `num_slots <= 0`
+branch (unreachable in an exp_02 run, since `num_text_slots > 0` is a config gate) and it is
+documented as such.
+
+Tests: `2**32`, `2**32 + 5` and `2**31` all refused with a non-vacuity assertion that each
+really does narrow into the accepted range; `-(2**32)` refused; a structural test pinning that
+both assertions consume `raw_episode_index`, that both bounds are `tf.int64` constants, and
+that no assert reads a narrowed value.
+
+## Verification
+
+- **Red evidence.** 19 failures before implementation (15 in `test_overfit100_preflight.py`,
+  4 in `test_overfit100_trainer_data.py`).
+- **Mutation spot-checks** (each applied to the real module, then restored byte-identical):
+  substring match restored → 2 failures; empty-path skip restored → 1; `verify_bytes` opt-out
+  reintroduced → 1; `manifest_sha256` check dropped → 1; the `(episode_id, used_text)` triple
+  check dropped → 3; assert moved back after the `int32` narrowing → 4. **All caught.**
+- **Static.** `py_compile`, `yaml.safe_load` (197 keys, `dataset_verify_bytes` absent),
+  `bash -n`, `git diff --check` clean; `black --line-length 119` + `ruff check` clean on the
+  three files touched.
+- **Real pyconfig parse** with the launcher's override set: no `dataset_verify_bytes` key
+  exists, the mandatory manifest path resolves, all three validators pass, and
+  `read_manifest_episodes` reads all 100 episodes off the committed manifest.
+
+## Unchanged from strengthening record 1
+
+The cannot-validate-until-S1 list stands, with item 3 now **strictly stronger**: the S1 smoke
+must confirm the published `_SUCCESS` carries a real 64-hex `manifest_sha256` equal to
+`sha256(overfit100_manifest.json)` **and** that the published `episodes.json` matches the
+manifest triple-for-triple — if the recalibrated build consumes an amended manifest, the
+trainer will (correctly) refuse until `model_manifest_path` points at that same amended file.
+Also still open for the Planner: the parent trainer's `checkpoint_keep_period=-1` quirk
+(judgment 10) as a separate shared-trainer fix.
