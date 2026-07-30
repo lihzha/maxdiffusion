@@ -199,3 +199,22 @@ tpu create v6 -n 8 --name exp02-overfit100-s1smoke-yixun \
   -- bash bash_scripts/train_wan_overfit100.sh
 ```
 - **Job id:** `20260730-142902-8eec4725-exp02-overfit100-s1smoke-yixun` (submitted; outcome pending)
+- **Job 9 outcome:** SUCCEEDED attempt 1 (15.4 min) — S1 PASSED log-verified (see `_worklog.md` 23:40Z). 1.82 steps/s on v6e-8.
+
+## Job 10 — v6e-8 S2 GATE RUN (train10, 2,500 steps, checkpoints [250,500,1000,2500]) — launched 2026-07-30
+
+Commit: `e70062ef096ffb51c2a74862d41ec32c33922f16` (pushed). Pre-approved by Query 6 (S1 condition met, log-verified).
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --name exp02-overfit100-s2gate-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env RUN_NAME="wan-overfit100-s2gate-20260730" \
+  --env MAX_TRAIN_STEPS=2500 \
+  --env DATA_DIR="gs://v6_east1d/datasets/exp02_overfit100/train10" \
+  --env EXPECTED_WINDOWS=167 --env NUM_TEXT_SLOTS=10 \
+  --env COMMIT="e70062ef096ffb51c2a74862d41ec32c33922f16" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/train_wan_overfit100.sh
+```
