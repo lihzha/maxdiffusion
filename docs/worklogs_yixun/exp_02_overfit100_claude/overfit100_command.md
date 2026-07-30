@@ -218,3 +218,4 @@ tpu create v6 -n 8 --name exp02-overfit100-s2gate-yixun \
   --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
   -- bash bash_scripts/train_wan_overfit100.sh
 ```
+- **Job id:** `20260730-173902-9b00e8e7-exp02-overfit100-s2gate-yixun` (submitted; outcome pending)
