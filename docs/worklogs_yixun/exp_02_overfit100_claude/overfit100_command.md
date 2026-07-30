@@ -173,3 +173,4 @@ tpu create v6 -n 8 --name exp02-overfit100-fullbuild-yixun \
   --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
   -- bash bash_scripts/build_overfit100_dataset.sh
 ```
+- **Job id:** `20260730-060037-ca6303aa-exp02-overfit100-fullbuild-yixun` (submitted 2026-07-30T06:00Z; outcome pending — `_SUCCESS` in train100/ + train10/ is the authoritative signal)
