@@ -35,6 +35,11 @@ Last updated: 2026-07-14
 - **Workaround:** user runs `gcloud auth login` (account yh4742@princeton.edu). **Monitoring rule:** poll scripts must treat gsutil stderr containing "Reauth" as an ALARM state (stop and surface), never as pending/absent.
 - **Status:** standing; recurs on a multi-hour cadence during long sessions.
 
+### 7. Shared side-adapter trainer: checkpoint retention works by accident with keep_period=-1 (real bug, latent)
+- **Symptom:** `wan_ti2v_side_adapter_trainer` forwards `checkpoint_keep_period or None` to Orbax, so the repo-wide default `-1` reaches it verbatim; retention then rests on Python's `step % -1 == 0` being truthy — every checkpoint survives BY ACCIDENT. Flip the default or pass a positive keep_period and eviction semantics change silently (max_to_keep=3 then evicts early checkpoints, which would have deleted exp-critical baselines).
+- **Found:** exp_02 cycle C (2026-07-30) while building the H2 checkpoint-schedule tests; both behaviors pinned by tests in `test_overfit100_checkpoint_schedule.py`. exp_02's own manager is immune (explicit max_to_keep=None, no keep_period). exp_01's runs relied on the accident but retained everything, so no data was lost.
+- **Status:** open, LOW urgency; classified real bug in the shared trainer; fix belongs to a future shared-trainer round (not exp_02's scope — Codex reviewer concurred, cycle C judgment 10).
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
