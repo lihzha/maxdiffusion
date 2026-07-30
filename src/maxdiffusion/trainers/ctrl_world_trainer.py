@@ -94,8 +94,10 @@ def _load_action_encoder_params(path: str, dtype) -> Dict[str, Any]:
     }
 
 
-def _dtype_from_str(name: str):
-    return {"bfloat16": jnp.bfloat16, "float16": jnp.float16, "float32": jnp.float32}[name]
+def _dtype_from_str(name):
+    # pyconfig.user_init already coerces these keys to jnp.dtype, but accept plain
+    # strings too so the helper works on raw config values.
+    return {"bfloat16": jnp.bfloat16, "float16": jnp.float16, "float32": jnp.float32}[jnp.dtype(name).name]
 
 
 def _maybe_unbox(x):
