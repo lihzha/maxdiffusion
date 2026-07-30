@@ -96,7 +96,7 @@ fi
 # So a genuinely fresh run needs its own tag; bump RUN_TAG (never reuse one).
 # RUN_TAG also names the W&B run (it is passed through as run_name).
 export RUN_TAG="${RUN_TAG:-ctrl-world-zeroinit-1}"
-export OUTPUT_DIR="gs://$GCS_BUCKET/checkpoints/svd_ac/$RUN_TAG"
+export OUTPUT_DIR="gs://$GCS_BUCKET/checkpoints/svd_ac"
 echo "RUN_TAG=$RUN_TAG"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 
