@@ -66,6 +66,18 @@ from maxdiffusion.models.wan.side_adapter_wan import (
     _dtype,
 )
 from maxdiffusion.trainers.wan_ti2v_full_ft_trainer import WanTI2VFullFTTrainer
+from maxdiffusion.trainers.wan_ti2v_overfit100_trainer import WanTI2VOverfit100Trainer
+
+# The model types this evaluator serves: exp_01's full finetune and exp_02's text-conditioned
+# overfit100 variant (same objective, same aggregation core; the delta is schema v2 + the
+# per-episode gathered context + the per-WINDOW rng key).
+FULL_FT_MODEL_TYPE = "FULL_FT_TI2V"
+OVERFIT100_MODEL_TYPE = gen.OVERFIT100_MODEL_TYPE
+SUPPORTED_MODEL_TYPES = (FULL_FT_MODEL_TYPE, OVERFIT100_MODEL_TYPE)
+
+
+def _is_overfit100(config) -> bool:
+    return str(getattr(config, "model_type", "")) == OVERFIT100_MODEL_TYPE
 
 
 def per_example_rng(
@@ -100,6 +112,35 @@ def per_example_rng(
         raise ValueError(f"per_example_rng: num_steps must be positive, got {num_steps}")
     k = jax.random.fold_in(jax.random.key(seed), position)
     k_t, k_eps = jax.random.split(k)
+    t_idx = jax.random.randint(k_t, (), 0, num_steps, dtype=jnp.int32)
+    eps = jax.random.normal(k_eps, example_shape, jnp.float32)
+    return t_idx, eps
+
+
+def per_window_rng(
+    seed: int,
+    episode_id: int,
+    window_start: int,
+    num_steps: int,
+    example_shape: tuple[int, ...],
+) -> tuple[jax.Array, jax.Array]:
+    """exp_02's ``(t_idx, eps)`` draw, keyed by the WINDOW IDENTITY rather than the position.
+
+    exp_01 keys :func:`per_example_rng` on the dataset POSITION, which is sound there: the
+    held-out split is read once, whole, in shard order. exp_02 evaluates the TRAIN set through
+    selections and (per cycle C's ratified semantics) possibly sparse subsets, and a rebuilt or
+    resharded set can change record order -- with a position key that would silently redraw
+    every ``(t, eps)`` and the per-checkpoint loss curve would no longer be a pure model effect.
+
+    The key is therefore ``fold_in(fold_in(key(seed), episode_id), window_start)`` -- exactly
+    the key ``generate_wan_side_adapter.window_fold_key`` builds for the rollout rng, so the two
+    instruments address windows the same way. Distribution parity with training is unchanged
+    from exp_01: independent uniform ``t`` in ``[0, num_steps)`` and standard-normal ``eps`` per
+    example, at the UNBATCHED example shape.
+    """
+    if num_steps <= 0:
+        raise ValueError(f"per_window_rng: num_steps must be positive, got {num_steps}")
+    k_t, k_eps = jax.random.split(gen.window_fold_key(seed, episode_id, window_start))
     t_idx = jax.random.randint(k_t, (), 0, num_steps, dtype=jnp.int32)
     eps = jax.random.normal(k_eps, example_shape, jnp.float32)
     return t_idx, eps
@@ -221,15 +262,50 @@ def load_all_records(config) -> list[dict]:
     w = int(config.latent_width)
 
     records: list[dict] = []
-    for position, raw in enumerate(gen._iter_parsed_records(config)):
-        records.append(
-            {
-                "position": position,
-                "ordinal": int(raw["ordinal"]),  # provenance only -- never an index
-                "z_i0": np.frombuffer(raw["z_i0"], dtype=np.float16).reshape(c, 1, h, w),
-                "z_video": np.frombuffer(raw["z_video"], dtype=np.float16).reshape(c, f, h, w),
-            }
-        )
+    if _is_overfit100(config):
+        # SCHEMA V2 (plan D6): no ``actions``, and ``name``/``episode_id``/``episode_index``/
+        # ``window_start`` come along -- the first three identify the window in the per-window
+        # output, ``episode_index`` is the context-table row the loss gathers (cycle-C review
+        # judgment 7: cycle D parses these; the training parse deliberately does not).
+        slots = int(getattr(config, "num_text_slots", 0) or 0)
+        seen_names: dict[str, int] = {}
+        for position, raw in enumerate(gen._iter_overfit100_records(config)):
+            name = raw["name"].decode("utf-8") if isinstance(raw["name"], bytes) else str(raw["name"])
+            if name in seen_names:
+                raise ValueError(
+                    f"overfit100 eval set {config.eval_data_dir} contains a duplicate record named {name!r} "
+                    f"(positions {seen_names[name]} and {position}); a window must be unique."
+                )
+            seen_names[name] = position
+            episode_index = int(raw["episode_index"])
+            if slots > 0 and not 0 <= episode_index < slots:
+                # The jnp gather CLAMPS out-of-range indices silently, so an index of 99 against
+                # a 10-row table would evaluate against row 9's instruction with no error.
+                raise ValueError(
+                    f"record {name!r} at position {position} has episode_index {episode_index}, outside "
+                    f"[0, num_text_slots={slots}); the context table has no such row."
+                )
+            records.append(
+                {
+                    "position": position,
+                    "name": name,
+                    "episode_id": int(raw["episode_id"]),
+                    "episode_index": episode_index,
+                    "window_start": int(raw["window_start"]),
+                    "z_i0": np.frombuffer(raw["z_i0"], dtype=np.float16).reshape(c, 1, h, w),
+                    "z_video": np.frombuffer(raw["z_video"], dtype=np.float16).reshape(c, f, h, w),
+                }
+            )
+    else:
+        for position, raw in enumerate(gen._iter_parsed_records(config)):
+            records.append(
+                {
+                    "position": position,
+                    "ordinal": int(raw["ordinal"]),  # provenance only -- never an index
+                    "z_i0": np.frombuffer(raw["z_i0"], dtype=np.float16).reshape(c, 1, h, w),
+                    "z_video": np.frombuffer(raw["z_video"], dtype=np.float16).reshape(c, f, h, w),
+                }
+            )
 
     n = len(records)
     if n != expected:
@@ -266,6 +342,69 @@ def assemble_batch(records, positions, seed, num_steps, sigmas):
     eps = np.stack(eps_list)
     sigma_t = np.asarray(sigmas)[np.asarray(t_indices)]
     return z_i0, z_video, eps, sigma_t
+
+
+def assemble_overfit100_batch(records, positions, seed, num_steps, sigmas):
+    """exp_02's host batch assembly: the exp_01 stack plus the per-example context INDEX.
+
+    The ``(t, eps)`` draw comes from :func:`per_window_rng` keyed on that record's
+    ``(episode_id, window_start)`` -- NOT on its position -- so the draws survive any dataset
+    reordering, resharding, or subset selection. ``episode_index`` rides along as int32 and is
+    what the jitted step gathers ``state.context_table`` with, exactly as training does.
+    Returns numpy ``(z_i0[B], z_video[B], eps[B], sigma_t[B], episode_index[B])``.
+    """
+    example_shape = tuple(int(d) for d in records[positions[0]]["z_video"].shape)
+    z_i0 = np.stack([records[p]["z_i0"] for p in positions])
+    z_video = np.stack([records[p]["z_video"] for p in positions])
+    eps_list = []
+    t_indices = []
+    for p in positions:
+        record = records[p]
+        t_idx, eps = per_window_rng(
+            seed, int(record["episode_id"]), int(record["window_start"]), num_steps, example_shape
+        )
+        eps_list.append(np.asarray(eps))
+        t_indices.append(int(t_idx))
+    eps = np.stack(eps_list)
+    sigma_t = np.asarray(sigmas)[np.asarray(t_indices)]
+    episode_index = np.asarray([int(records[p]["episode_index"]) for p in positions], dtype=np.int32)
+    return z_i0, z_video, eps, sigma_t, episode_index
+
+
+def _eval_batch_per_example_loss_overfit100(
+    state, z_i0, z_video, eps, sigma_t, episode_index, *, config, num_train_timesteps
+):
+    """exp_02's jitted eval step: :func:`_eval_batch_per_example_loss` with GATHERED context.
+
+    Objective parity with ``wan_ti2v_overfit100_trainer._denoising_loss`` by shared code: the
+    same ``build_noisy_pinned_latents`` frame-0 pin, the same ``eps - z_video`` target, one plain
+    transformer forward (no actions, no adapter, no CFG) -- and the same
+    ``state.context_table[episode_index].astype(activations_dtype)`` batched gather instead of a
+    broadcast null embedding, so the one-step loss measures the model under the conditioning it
+    was trained with. Returns a ``[B]`` float32 per-example loss vector.
+    """
+    weights_dtype = _dtype(config.weights_dtype)
+    activations_dtype = _dtype(config.activations_dtype)
+    transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+
+    z_i0_f32 = z_i0.astype(jnp.float32)
+    z_video_f32 = z_video.astype(jnp.float32)
+    eps_f32 = eps.astype(jnp.float32)
+    _, _, f_lat, h_lat, w_lat = z_video_f32.shape
+
+    z_t_f32 = build_noisy_pinned_latents(z_video_f32, z_i0_f32, eps_f32, sigma_t)
+    step_t = sigma_t.astype(jnp.float32) * jnp.asarray(num_train_timesteps, dtype=jnp.float32)
+    timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
+    context = state.context_table[episode_index.astype(jnp.int32)].astype(activations_dtype)
+
+    v_pred = transformer(
+        hidden_states=z_t_f32.astype(weights_dtype),
+        timestep=timestep_2d,
+        encoder_hidden_states=context,
+        deterministic=True,
+    )
+    v_target = eps_f32 - z_video_f32
+    return masked_velocity_mse_per_example(v_pred, v_target)
 
 
 def _build_sigma_grid(config, scheduler) -> np.ndarray:
@@ -341,6 +480,58 @@ _VAL_LOSS_COLUMNS: Sequence[str] = (
 )
 
 
+# exp_02 ONLY: the per-window artifact. The 9-column aggregate schema above is exp_01's and is
+# deliberately left untouched (a per-checkpoint row cannot carry a window identity); the exp_02
+# mode writes this second table alongside it so every window's one-step loss is attributable to
+# its ``episode_id`` / ``window_start``.
+_PER_WINDOW_COLUMNS: Sequence[str] = (
+    "checkpoint_step",
+    "name",
+    "episode_id",
+    "episode_index",
+    "window_start",
+    "loss",
+    "sigma_t",
+    "validation_seed",
+)
+
+
+def make_per_window_rows(records, *, positions, validity, losses, sigma_t, checkpoint_step, seed) -> list[dict]:
+    """One row per VALID batch slot (padded duplicates are dropped, as in :func:`aggregate`)."""
+    losses = np.asarray(losses).reshape(-1)
+    sigma_t = np.asarray(sigma_t).reshape(-1)
+    rows: list[dict] = []
+    for slot, (position, valid) in enumerate(zip(positions, validity)):
+        if not valid:
+            continue
+        record = records[position]
+        rows.append(
+            {
+                "checkpoint_step": int(checkpoint_step),
+                "name": str(record["name"]),
+                "episode_id": int(record["episode_id"]),
+                "episode_index": int(record["episode_index"]),
+                "window_start": int(record["window_start"]),
+                "loss": float(losses[slot]),
+                "sigma_t": float(sigma_t[slot]),
+                "validation_seed": int(seed),
+            }
+        )
+    return rows
+
+
+def write_per_window_outputs(rows, out_dir) -> None:
+    """Write ``val_loss_per_window.json`` + ``.csv`` (exp_02's per-window artifact)."""
+    out_dir = str(out_dir).rstrip("/")
+    ordered = [{key: row[key] for key in _PER_WINDOW_COLUMNS} for row in rows]
+    _write_text(f"{out_dir}/val_loss_per_window.json", json.dumps(ordered, indent=2) + "\n")
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(_PER_WINDOW_COLUMNS), extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(ordered)
+    _write_text(f"{out_dir}/val_loss_per_window.csv", buf.getvalue())
+
+
 def _make_row(step, agg, seed, dataset_path, checkpoint_path, train_commit, eval_commit) -> dict:
     """One output row in the EXACT 9-column order (plan D5/F6). Dict order is the schema."""
     return {
@@ -392,6 +583,8 @@ def _evaluate_all_checkpoints(
     train_commit,
     eval_commit,
     smoke_limit=None,
+    assemble_fn=None,
+    per_window_rows=None,
 ):
     """Sequential per-checkpoint restore + full-pass loop over ONE built state (D4).
 
@@ -408,7 +601,13 @@ def _evaluate_all_checkpoints(
     the FIRST checkpoint only, and the ``n == expected`` assertion is SKIPPED -- the aggregate uses
     the actual valid count of the smoke subset (everything else is identical). Returns the 9-column
     rows, one per evaluated checkpoint.
+
+    exp_02 (cycle D) supplies ``assemble_fn=assemble_overfit100_batch`` -- whose extra
+    ``episode_index`` array is forwarded positionally to ``eval_step_fn`` -- and a
+    ``per_window_rows`` list that collects the per-window artifact as the batches complete. With
+    both omitted the loop is byte-identical to the exp_01 behaviour.
     """
+    assemble = assemble_fn or assemble_batch
     plan = plan_batches(len(records), batch)
     smoke = smoke_limit is not None and int(smoke_limit) > 0
     if smoke:
@@ -429,14 +628,27 @@ def _evaluate_all_checkpoints(
         batch_losses = []
         batch_validity = []
         for positions, validity in plan:
-            z_i0, z_video, eps, sigma_t = assemble_batch(records, positions, seed, num_steps, sigmas)
-            loss = eval_step_fn(state, z_i0, z_video, eps, sigma_t)
+            arrays = assemble(records, positions, seed, num_steps, sigmas)
+            loss = eval_step_fn(state, *arrays)
             # F1: gather THIS batch's [B] losses to every host before any numpy use -- the
             # jitted output is sharded over the global mesh on the two-host v6e-8. The gather
             # also materializes the batch, so the final one is complete before the next
             # restore (D4 loop discipline).
-            batch_losses.append(_loss_to_host(loss))
+            host_losses = _loss_to_host(loss)
+            batch_losses.append(host_losses)
             batch_validity.append(np.asarray(validity, dtype=bool))
+            if per_window_rows is not None:
+                per_window_rows.extend(
+                    make_per_window_rows(
+                        records,
+                        positions=positions,
+                        validity=validity,
+                        losses=host_losses,
+                        sigma_t=arrays[3],
+                        checkpoint_step=step,
+                        seed=seed,
+                    )
+                )
 
         # Full run enforces n == expected (14636); smoke skips it by counting its own subset.
         agg_expected = int(sum(int(v.sum()) for v in batch_validity)) if smoke else expected_count
@@ -485,8 +697,17 @@ def _free_rollout_modules(pipeline) -> None:
 
 
 def _build_and_free_state(config):
-    """Build the full-FT validation state via the shared builder, then free rollout-only modules."""
-    trainer, pipeline, mesh, state, state_shardings = gen._build_full_ft_validation_state(config)
+    """Build the validation state via the shared builder, then free rollout-only modules.
+
+    exp_02 uses ``gen._build_overfit100_validation_state`` (whose state carries the per-episode
+    ``context_table`` and which additionally returns the null embedding -- unused here, since the
+    one-step loss must use the SAME gathered context training used). Either way the rollout-only
+    modules are released afterwards: this evaluator never decodes video or embeds text.
+    """
+    if _is_overfit100(config):
+        trainer, pipeline, mesh, state, state_shardings, _null_context = gen._build_overfit100_validation_state(config)
+    else:
+        trainer, pipeline, mesh, state, state_shardings = gen._build_full_ft_validation_state(config)
     _free_rollout_modules(pipeline)  # T1: no rollouts -- release the VAE / text modules (plan F5)
     return trainer, pipeline, mesh, state, state_shardings
 
@@ -644,12 +865,25 @@ def _plot_only(json_path, png_path) -> None:
 
 
 def _assert_full_ft(config) -> None:
-    """Guard: this evaluator is FULL_FT_TI2V-only and enforces the probe invariants the trainer does."""
+    """Guard: this evaluator serves FULL_FT_TI2V and OVERFIT100_TI2V, and enforces their invariants.
+
+    exp_02 (cycle D) extends the gate rather than forking the module: the objective, the
+    aggregation core, and the per-checkpoint restore loop are shared, so the gate must admit
+    ``OVERFIT100_TI2V`` -- and then ALSO enforce the exp_02 config contract (a positive
+    ``num_text_slots`` / ``text_encode_batch`` / ``expected_windows`` and a mandatory
+    ``model_manifest_path``, which is what binds the context table's text to the reviewed
+    manifest). Every other model type is still refused.
+    """
     model_type = getattr(config, "model_type", "")
-    if model_type != "FULL_FT_TI2V":
-        raise ValueError(f"eval_wan_full_ft_val_loss requires model_type == 'FULL_FT_TI2V'; got {model_type!r}")
+    if model_type not in SUPPORTED_MODEL_TYPES:
+        raise ValueError(
+            f"eval_wan_full_ft_val_loss requires model_type in {list(SUPPORTED_MODEL_TYPES)} "
+            f"('FULL_FT_TI2V' for exp_01, 'OVERFIT100_TI2V' for exp_02); got {model_type!r}"
+        )
     # Same guide-scale (1.0) + fresh-noise asserts the trainer applies (CFG bypassed; plan §2.1/F1).
     WanTI2VFullFTTrainer._validate_probe_config(config)
+    if model_type == OVERFIT100_MODEL_TYPE:
+        WanTI2VOverfit100Trainer._validate_overfit100_config(config)
 
 
 def evaluate(config):
@@ -676,20 +910,31 @@ def evaluate(config):
     ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, config.run_name, "checkpoints")
 
     data_sharding = NamedSharding(mesh, P(*config.data_sharding))
-    p_eval = jax.jit(
-        functools.partial(_eval_batch_per_example_loss, config=config, num_train_timesteps=num_train_timesteps),
-        in_shardings=(state_shardings, data_sharding, data_sharding, data_sharding, data_sharding),
-        out_shardings=data_sharding,
-    )
+    overfit100 = _is_overfit100(config)
+    if overfit100:
+        # exp_02: one extra batch array -- the int32 ``episode_index`` the step gathers the
+        # context table with (sharded on the same batch axis as the latents, exactly as the
+        # trainer's ``_data_shardings`` does).
+        p_eval = jax.jit(
+            functools.partial(
+                _eval_batch_per_example_loss_overfit100, config=config, num_train_timesteps=num_train_timesteps
+            ),
+            in_shardings=(state_shardings,) + (data_sharding,) * 5,
+            out_shardings=data_sharding,
+        )
+    else:
+        p_eval = jax.jit(
+            functools.partial(_eval_batch_per_example_loss, config=config, num_train_timesteps=num_train_timesteps),
+            in_shardings=(state_shardings, data_sharding, data_sharding, data_sharding, data_sharding),
+            out_shardings=data_sharding,
+        )
 
-    def eval_step_fn(current_state, z_i0, z_video, eps, sigma_t):
+    def eval_step_fn(current_state, *arrays):
         with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-            z_i0 = jax.device_put(jnp.asarray(z_i0), data_sharding)
-            z_video = jax.device_put(jnp.asarray(z_video), data_sharding)
-            eps = jax.device_put(jnp.asarray(eps), data_sharding)
-            sigma_t = jax.device_put(jnp.asarray(sigma_t), data_sharding)
-            return p_eval(current_state, z_i0, z_video, eps, sigma_t)
+            placed = [jax.device_put(jnp.asarray(array), data_sharding) for array in arrays]
+            return p_eval(current_state, *placed)
 
+    per_window_rows: list[dict] | None = [] if overfit100 else None
     rows = _evaluate_all_checkpoints(
         config,
         records,
@@ -707,11 +952,16 @@ def evaluate(config):
         train_commit=train_commit,
         eval_commit=eval_commit,
         smoke_limit=smoke_limit,
+        assemble_fn=assemble_overfit100_batch if overfit100 else None,
+        per_window_rows=per_window_rows,
     )
 
     out_dir = _resolve_output_dir(config, smoke=smoke_limit is not None)
     if jax.process_index() == 0:
         write_outputs(rows, out_dir)
+        if per_window_rows:
+            write_per_window_outputs(per_window_rows, out_dir)
+            max_logging.log(f"[wan_full_ft_val] wrote {len(per_window_rows)} per-window rows under {out_dir}")
         for row in rows:
             max_logging.log(
                 f"[wan_full_ft_val] step={row['checkpoint_step']} mean_loss={row['mean_loss']:.6f} "

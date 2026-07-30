@@ -317,6 +317,49 @@ validation_checkpoint_steps: ''
 validation_expected_count: 0
 validation_loss_output_dir: ''
 validation_seed: 0
+
+# delta (cycle D, plan D11): the exp_02 ROLLOUT-eval knobs, consumed by
+# generate_wan_side_adapter.py's OVERFIT100_TI2V branch (validate_wan_overfit100.sh passes them
+# from env vars). validation_ordinals / validation_start_index / num_eval_videos above are the
+# exp_01 selectors and are IGNORED in this mode -- eval_windows selects instead.
+#
+# eval_pass_role: MANDATORY (cycle-D review D2). Which D11 coverage cell this pass is:
+#   s2_gate            -- the 10-episode gate cohort, 3 seeds, correct (+ ablations at 2500);
+#   s3_intermediate    -- 1 seed, correct mode, the full canonical cohort;
+#   s3_segment_final   -- 3 seeds x {correct,null,shuffled} over the full canonical cohort. ONLY
+#                         this role's artifacts may enter C3_100 (the success statistic);
+#   s3_full_set        -- seed 0, correct mode, EVERY built window (the stronger claim's input).
+#   The pass is REFUSED before the model load if its seeds/modes/windows/sampling steps do not
+#   satisfy the declared role, the artifact records the role, and the role is part of the output
+#   path (so the canonical and full-set passes cannot overwrite each other).
+# eval_windows: the --eval-windows spec. 'canonical' = the median window of every episode in the
+#   set (start = 4*floor((n_windows-1)/2), n_windows from the COMMITTED manifest, which is also
+#   what fixes the success statistic's denominator); 'all' = every built window of the set (the
+#   s3_full_set scope); otherwise a comma-separated list of schema-v2 window names
+#   (ep<ID>_v0_s<START>), rolled out in the listed order.
+# rollout_seeds: the fixed seeds per window. D11: 3 seeds at segment-final checkpoints, 1 at
+#   intermediate ones. Each rollout's noise is keyed on (seed, episode_id, window_start), so the
+#   list ORDER never changes a number.
+# context_modes: 'correct' (the episode's own instruction) and/or the ablations 'null' (the
+#   exp_01 empty-prompt embedding) / 'shuffled' (a seeded derangement of instruction VALUES --
+#   never a string equal to the episode's own, plan §1). Ablations are reported context and never
+#   enter the success statistic. S2/S3 segment finals run 'correct,null,shuffled'.
+# write_videos: gate the GT/pred/comparison mp4s so intermediate checkpoints stay storage-light
+#   (metrics + the aggregation artifact are ALWAYS written).
+# eval_aux_rgb: also score against the true DROID RGB frames (pinned MP4 pull) paired with the
+#   per-window VAE ceiling. Best-effort: an unavailable source marks the aux block null and never
+#   fails the run.
+# flagged_windows: collision-flagged window names from the build's duplicate audit. RECORDED in
+#   the aggregation artifact only -- the plan fixes the denominator at build time, so a flagged
+#   window always stays in the statistic (G4).
+eval_pass_role: ''   # MANDATORY: one of s2_gate / s3_intermediate / s3_segment_final / s3_full_set
+eval_windows: 'canonical'
+rollout_seeds: '0,1,2'
+context_modes: 'correct'
+context_shuffle_seed: 0
+write_videos: False
+eval_aux_rgb: True
+flagged_windows: ''
 min_guidance_scale: 1.0
 max_guidance_scale: 2.5
 guidance_scale: 5.0
