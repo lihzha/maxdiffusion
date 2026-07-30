@@ -261,3 +261,9 @@ changed — the evaluator, the launchers and the config are untouched by this ro
 Unchanged from strengthening record 1 (including the still-open S3 cost extrapolation: 100 windows
 x 3 modes x 3 seeds x 25 steps per segment-final checkpoint plus a separate 1,629-window full-set
 pass).
+# E1 verification: exp_02 overfit100 — cycle D final
+Reviewer: OpenAI Codex gpt-5.6-sol (xhigh), 2026-07-30
+## Verdict
+RESOLVED. The checkpoint-bound grid, foreign-row refusal, and whole-artifact admission match the prescription; mentally replaying the mixed-checkpoint reproduction now rejects the artifact before scoring. The regression and checkpoint-key mutation coverage pin the fix, and the `roles=` filter is deleted.
+## Findings
+none
