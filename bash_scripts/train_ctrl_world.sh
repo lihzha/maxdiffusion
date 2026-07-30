@@ -157,7 +157,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=1 \
     scan_layers=True \
-    max_train_steps=100000 \
+    max_train_steps=101000 \
     learning_rate=1e-5 \
     per_device_batch_size=1.0 \
     num_history=7 \
@@ -175,4 +175,4 @@ python src/maxdiffusion/train_ctrl_world.py \
 # --- 7. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name train_ac_svd_ctrl_world -n 32 --setup-cmd "" --priority 0 --max-attempts 100 -- bash bash_scripts/train_ctrl_world.sh
+# tpu create v6 --name train_ac_svd_ctrl_world -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ctrl_world.sh
