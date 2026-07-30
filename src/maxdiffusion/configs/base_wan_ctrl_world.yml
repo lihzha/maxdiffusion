@@ -271,9 +271,9 @@ adam_eps: 1.e-6
 # Raised from 0.0: restoring force toward 0, matters with the normalization layers;
 # further damps the post-convergence drift.
 adam_weight_decay: 0.01
-opt_enable_grad_clipping: False
+opt_enable_grad_clipping: True
 max_grad_value: 1.0
-opt_enable_grad_global_norm_clipping: True
+opt_enable_grad_global_norm_clipping: False
 max_grad_norm: 1.0
 # Skip the optimizer update entirely (params/opt_state/step revert) when the raw
 # pre-clip global grad norm is non-finite or exceeds this. Retrain-from-20k data
