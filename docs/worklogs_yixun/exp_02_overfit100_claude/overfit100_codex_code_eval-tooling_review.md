@@ -175,3 +175,25 @@ segment-final coverage — 100 windows x 3 modes x 3 seeds x 25 steps per segmen
 **plus** a separate 1,629-window full-set pass for the stronger tier; the Planner should
 extrapolate that from S2 timings before approving either pass.
 
+# Close-out review: exp_02 overfit100 — cycle D
+Reviewer: OpenAI Codex gpt-5.6-sol (xhigh), 2026-07-30
+
+## Verdict
+REQUEST-REVISION. D1 and D3–D6 are resolved, but D2’s artifact-grid validation is not checkpoint-bound; mixed-checkpoint rows can validate as segment-final and yield an established verdict without the required contemporaneous controls.
+
+## Per-finding
+D1: RESOLVED — manifest-authenticated, single-source fixed cohorts and schema-v2 coverage fields are correctly wired through generation and verdict enforcement.  
+D2: NOT — the re-derived row grid omits `checkpoint_step`, so role validity is not fully established from artifact rows.  
+D3: RESOLVED — `s3_full_set`, `all`, and complete seed-0/correct coverage at `c*` operationalize the stronger tier fail-closed.  
+D4: RESOLVED — role-keyed paths and byte-immutable JSON/CSV semantics prevent evidence collisions; videos remain intentionally overwritable.  
+D5: RESOLVED — auxiliary coverage counts, reasons, and loud WARNING/ERROR lines are present.  
+D6: RESOLVED — builder parity, six-digit starts, and canonical parser round trips are pinned.
+
+## New-behavior judgments
+a: RIGHT HOME — cohort derivation is a pure verdict-domain contract, and generation importing it removes the previous parallel definition.  
+b: UNSOUND AS IMPLEMENTED — the grid must be keyed to the artifact checkpoint; see E1.  
+c: ACCEPTABLE RESIDUAL — process 0 alone writes, differing bytes fail closed, and an interrupted GCS object requires deliberate resubmission to a fresh output root rather than risking silent replacement.  
+d: ADEQUATE AND HONEST — the three initial survivors are disclosed and their gaps closed before the 9/9 rerun, although the checkpoint-bound-grid mutant in E1 remains missing.
+
+## Findings
+1. **E1 — BLOCKER — Artifact role validation does not bind rows to the declared checkpoint.** `_artifact_grid_reasons` records only `(window, seed, mode)` presence ([overfit100_success_statistic.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100/src/maxdiffusion/overfit100_success_statistic.py:281)), while `checkpoint_step` is handled separately. A focused reproduction with complete correct rows at step 2500 and complete null/shuffled rows at step 1000 returned `role_validation.ok=True`, `C3_100=[2500]`, and an `established` headline while both ablation counts at 2500 were zero. **Concrete change:** validate an exact `(window, artifact.checkpoint_step, seed, mode)` grid, reject rows carrying another checkpoint, feed the statistic only fully validated artifacts rather than label-filtered rows ([overfit100_success_statistic.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100/src/maxdiffusion/overfit100_success_statistic.py:867)), and add this mixed-checkpoint case as a regression/mutation test.
