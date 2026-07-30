@@ -42,6 +42,9 @@ def train(config):
   elif config.model_type == "FULL_FT_TI2V":
     from maxdiffusion.trainers.wan_ti2v_full_ft_trainer import WanTI2VFullFTTrainer
     trainer = WanTI2VFullFTTrainer(config)
+  elif config.model_type == "OVERFIT100_TI2V":
+    from maxdiffusion.trainers.wan_ti2v_overfit100_trainer import WanTI2VOverfit100Trainer
+    trainer = WanTI2VOverfit100Trainer(config)
   else:
     from maxdiffusion.trainers.wan_trainer import WanTrainer
     trainer = WanTrainer(config)
