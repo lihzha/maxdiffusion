@@ -456,6 +456,12 @@ def run(argv: Sequence[str]) -> None:
         max_latent_frames = n_hist + ar_num_chunks * ar_chunk_size
     else:
         max_latent_frames = config.num_predicted_latents + config.num_history_latent_frames
+    # Without padding, only episodes at least max_latent_frames long survive the
+    # dataset's length filter — at a 57-frame window that is 8 of 110 val
+    # episodes, since the median val episode is 18 latent frames. Padding keeps
+    # the short ones and repeats their last action for the remainder of the
+    # rollout; their GT track freezes at the last real frame.
+    pad_short = bool(getattr(config, "eval_pad_short_episodes", False))
     dataset = WanCtrlWorldDroidDataset(
         data_dir=config.eval_data_dir,
         stats_path=config.action_stats_path,
@@ -468,7 +474,15 @@ def run(argv: Sequence[str]) -> None:
         shuffle=False,
         shard_for_training=False,
         first_window_only=autoregressive,
+        pad_short_episodes=pad_short and autoregressive,
+        min_latent_frames=int(getattr(config, "eval_min_latent_frames", 0)),
     )
+    if pad_short and autoregressive:
+        max_logging.log(
+            f"[wan_ctrl_world_infer] padding short episodes: keeping any episode "
+            f">= {dataset.min_traj_len} latent frames, repeating the last action "
+            f"out to the {max_latent_frames}-frame window"
+        )
 
     # ── Precompile action encoding ─────────────────────────────────────────────
     p_encode = jax.jit(
@@ -537,12 +551,25 @@ def run(argv: Sequence[str]) -> None:
         gt_full = jnp.concatenate([clean_hist, gt_future], axis=2)
         pred_full = jnp.concatenate([clean_hist, pred_future], axis=2)
 
-        gt_temporal_std = float(jnp.std(gt_future, axis=2).mean())
+        # With padding on, the tail of gt_future is the last real latent repeated,
+        # which would drag the GT temporal_std toward 0 and make the GT look
+        # artificially static next to the prediction. Measure it on the real span.
+        n_real_fut = n_fut
+        if "n_real_frames" in batch:
+            n_real_fut = max(1, int(np.asarray(batch["n_real_frames"]).reshape(-1)[0]) - n_hist)
+            n_real_fut = min(n_real_fut, n_fut)
+        gt_temporal_std = float(jnp.std(gt_future[:, :, :n_real_fut], axis=2).mean())
         pred_temporal_std = float(jnp.std(pred_future, axis=2).mean())
+        pad_note = ""
+        if n_real_fut < n_fut:
+            pad_note = (
+                f"  [GT covers {n_real_fut}/{n_fut} future latents; the last "
+                f"{n_fut - n_real_fut} repeat the final action, GT frozen]"
+            )
         max_logging.log(
             f"[wan_ctrl_world_infer] vid {vid_idx}: "
             f"GT future temporal_std={gt_temporal_std:.4f}  "
-            f"pred future temporal_std={pred_temporal_std:.4f}"
+            f"pred future temporal_std={pred_temporal_std:.4f}{pad_note}"
         )
 
         gt_video = _decode_latents(pipeline, gt_full.astype(jnp.float32))

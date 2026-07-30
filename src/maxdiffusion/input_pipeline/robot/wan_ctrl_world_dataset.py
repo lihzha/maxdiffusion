@@ -99,6 +99,16 @@ class WanCtrlWorldDroidDataset:
         shuffle:            Whether to shuffle.
         shuffle_buffer:     Trajectory-level shuffle buffer size.
         shard_for_training: Shard files across JAX processes.
+        pad_short_episodes: Keep episodes shorter than ``max_latent_frames``
+                            instead of filtering them out, padding the window by
+                            repeating the last real action and latent frame while
+                            the RoPE positions keep advancing. Requires
+                            ``first_window_only``. Each batch reports
+                            ``n_real_frames`` so consumers know where the
+                            ground-truth portion of the window ends.
+        min_latent_frames:  With ``pad_short_episodes``, the minimum episode
+                            length to keep (floored at 2 so at least one real
+                            frame is predicted). 0 uses that floor.
         repeat:             Repeat the dataset indefinitely. Defaults to
                             ``split == "train"``. Training needs it; in-training
                             eval also passes ``True`` so every host yields the
@@ -124,10 +134,17 @@ class WanCtrlWorldDroidDataset:
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
         first_window_only: bool = False,
+        pad_short_episodes: bool = False,
+        min_latent_frames: int = 0,
         repeat: bool | None = None,
     ):
         if max_latent_frames <= 0:
             raise ValueError("max_latent_frames must be > 0")
+        if pad_short_episodes and not first_window_only:
+            # _random_window samples frame_now from [1, T - n_fut + 1), which is
+            # empty once T <= n_fut, so the random-window path genuinely needs the
+            # length filter.
+            raise ValueError("pad_short_episodes requires first_window_only=True")
 
         _configure_tf()
         tf.random.set_seed(seed)
@@ -168,10 +185,22 @@ class WanCtrlWorldDroidDataset:
         ds = ds.with_options(_tf_options(deterministic=not self._is_train))
         ds = ds.map(self._parse, num_parallel_calls=AUTOTUNE)
 
-        # first_window_only requires the full window starting at frame 0 to fit;
-        # otherwise the future portion plus the anchor frame (frame_now >= 1,
-        # so the anchor latent is never predicted) needs to fit.
-        min_traj_len = self.max_latent_frames if first_window_only else self.n_fut + 1
+        # Only the future portion plus the anchor frame has to fit: frame_now >= 1
+        # in both window modes, so the highest index touched is
+        # frame_now + n_fut - 1 <= T - 1, i.e. T >= n_fut + 1. This holds for
+        # first_window_only too — it pins frame_now = 1 and clips every history
+        # frame to 0, so history needs no episode length of its own. Requiring the
+        # whole n_hist + n_fut window to fit (as this did) dropped episodes that
+        # covered the window fine: at n_hist=7, n_fut=50 it wanted 57 frames where
+        # 51 suffice, losing 2 of 10 eligible val episodes.
+        if pad_short_episodes:
+            # Short episodes are kept and padded by _build_window's clamped gather
+            # (last action and last latent repeat). Still require >= 2 frames so
+            # there is at least one real predicted frame beyond the frame-0 anchor.
+            min_traj_len = max(min_latent_frames, 2)
+        else:
+            min_traj_len = self.n_fut + 1
+        self.min_traj_len = min_traj_len
         ds = ds.filter(lambda traj: tf.greater_equal(traj["traj_len"], min_traj_len))
 
         if self._is_train if repeat is None else repeat:
@@ -258,11 +287,21 @@ class WanCtrlWorldDroidDataset:
         # History: the n_hist frames immediately before frame_now; clipping to 0
         # repeats frame 0 (and its actions) when there isn't enough past.
         # Future: n_fut contiguous frames starting at frame_now.
-        rgb_id = tf.concat([
+        raw_id = tf.concat([
             tf.cast(frame_now, tf.int32) - tf.range(n_hist, 0, -1),
             tf.cast(frame_now, tf.int32) + tf.range(n_fut),
         ], axis=0)                                                   # (W,)
-        rgb_id = tf.clip_by_value(rgb_id, 0, T - 1)
+        # Index used to *gather* latents and actions: clamped to the episode, so a
+        # window running off either end repeats the first/last real frame and its
+        # actions rather than reading out of bounds.
+        rgb_id = tf.clip_by_value(raw_id, 0, T - 1)
+        # Index used as the temporal RoPE position: clamped below at 0 (episode
+        # start, same as the gather index) but *not* above. When a window runs past
+        # the end of a short episode the actions repeat while time keeps advancing,
+        # so the model never sees several latent frames claiming one position —
+        # which training, where windows always fit, never produces. For any window
+        # that does fit, raw_id <= T-1 already and this is identical to rgb_id.
+        pos_id = tf.maximum(raw_id, 0)
 
         # Gather latents: (W, C, H_lat, W_lat) per camera.
         cam0_w = tf.cast(tf.gather(traj["cam0"], rgb_id, axis=0), tf.float32)
@@ -295,12 +334,17 @@ class WanCtrlWorldDroidDataset:
         latent.set_shape([None, W, None, None])
         action.set_shape([4 * W, self.action_dim])
         rgb_id.set_shape([W])
+        pos_id.set_shape([W])
 
         return {
             "latent":          latent,
             "action":          action,
             "text_embeds":     traj["text_embed"],
-            "frame_positions": rgb_id,
+            "frame_positions": pos_id,
+            # Number of window frames backed by real episode data; the remaining
+            # W - n_real frames are the repeat-the-last-action padding. Consumers
+            # use it to tell where ground truth stops being meaningful.
+            "n_real_frames":   tf.minimum(T - tf.cast(frame_now, tf.int32), n_fut) + n_hist,
             # Sequential episode index from preprocessing (int32-safe); threaded
             # through the batch so grad-spike steps can be attributed to episodes.
             "episode_id":      tf.cast(traj["episode_id"], tf.int32),

@@ -256,7 +256,18 @@ class CtrlWorldTrainer:
         )
         # ...and the same converter drops the logical axis annotations, so put
         # them back or nothing downstream can shard. See ``_rebox_like``.
-        with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
+        #
+        # Deliberately NOT under nn_partitioning.axis_rules: the flash-attention
+        # path calls nn.logical_to_mesh_axes without explicit rules, so an active
+        # rule set resolves 'activation_batch' to ('data', 'fsdp') and shard_map
+        # then demands the init batch (batch=1 x num_frames=2) divide by the fsdp
+        # mesh size. With no rules in context the logical names resolve to None
+        # and shard_map replicates, which is how from_pretrained's own internal
+        # init_weights call already runs. The LogicallyPartitioned names this
+        # produces are identical either way — the rules only matter later, in
+        # _build_sharded_state, where they are passed to
+        # nn.logical_to_mesh_sharding explicitly.
+        with mesh:
             abstract_unet_params = unet.init_weights(
                 jax.random.PRNGKey(self.config.seed), eval_only=True
             )

@@ -345,6 +345,16 @@ autoregressive: False
 ar_chunk_size: 0   # 0 = auto-derive from num_predicted_latents
 ar_num_chunks: 1
 
+# By default the eval dataset drops any episode shorter than the full AR window
+# (num_history_latent_frames + ar_num_chunks * ar_chunk_size), which at a
+# 57-frame window leaves 8 of 110 val episodes. With this on, short episodes are
+# kept and the window is padded by repeating their last real action, so the
+# rollout runs the full length; the GT half of the comparison video freezes at
+# the last real frame. RoPE positions keep advancing through the padding.
+# Only applies when autoregressive=True.
+eval_pad_short_episodes: False
+eval_min_latent_frames: 0   # 0 = keep any episode with >= 2 latent frames
+
 # ── Fields kept for pyconfig compat (unused by this trainer) ──────────────────
 unet_checkpoint: ''
 revision: ''
