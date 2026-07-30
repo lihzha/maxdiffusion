@@ -27,14 +27,14 @@
 # step 0" vs "restoring checkpoint at step N") — check that line on startup.
 
 # --- 1. Activate the training env ---
+set -e
+echo "[$(hostname)] Script started at $(date)"
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"   # add uv to PATH
+
 uv venv --python 3.12 ./maxdiffusion_venv --seed
 source ./maxdiffusion_venv/bin/activate
 bash setup.sh MODE=stable DEVICE=tpu
-
-# W&B: export WANDB_API_KEY (or run `wandb login`) before launching. Leaving it
-# unset makes wandb.init() prompt/fail on a headless TPU worker; drop the
-# wandb_project flag below to disable logging entirely instead.
-: "${WANDB_API_KEY:?WANDB_API_KEY is not set. Run 'wandb login' or export WANDB_API_KEY=<your-key>.}"
 
 # --- 2. Bucket mount ---
 export WANDB_API_KEY=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
