@@ -212,6 +212,8 @@ class CtrlWorldTrainer:
         self.train_cfg = _build_ctrl_world_train_config(config)
         # Overwritten in start_training once the checkpoint (if any) is read.
         self.restart_count = 0
+        # Step at which loss/grad_norm first went non-finite, or None.
+        self._first_nonfinite_step = None
         self.data_seed = int(config.seed)
         # Set up in start_training; stays None on non-zero hosts and when
         # wandb_project is empty, so every log site must guard on it.
@@ -507,26 +509,54 @@ class CtrlWorldTrainer:
                 state, metrics = train_step_fn(state, batch, step_rng)
                 metrics["loss"].block_until_ready()
 
-            recent_loss.append(float(metrics["loss"]))
-            recent_grad.append(float(metrics["grad_norm"]))
+            loss_v = float(metrics["loss"])
+            grad_v = float(metrics["grad_norm"])
+            # The periodic line below reports a mean over log_period steps, so a
+            # single non-finite step poisons the window and every later one — with
+            # log_period=100 that hides both *when* divergence started and whether
+            # step 0 was already bad. Report the first occurrence the moment it
+            # happens; it is the difference between "the forward pass or the data
+            # is broken" and "training diverged after N steps".
+            if self._first_nonfinite_step is None and not (
+                np.isfinite(loss_v) and np.isfinite(grad_v)
+            ):
+                self._first_nonfinite_step = step
+                max_logging.log(
+                    f"[ctrl_world] FIRST non-finite metric at step {step}: "
+                    f"loss={loss_v} grad_norm={grad_v}"
+                )
+            recent_loss.append(loss_v)
+            recent_grad.append(grad_v)
             now = datetime.datetime.now()
             if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
                 lr = float(lr_schedule(step))
-                avg_loss = sum(recent_loss) / len(recent_loss)
-                avg_grad = sum(recent_grad) / len(recent_grad)
+                # Average the finite steps only, so one NaN does not erase the
+                # signal from the other 99.
+                ok_loss = [x for x in recent_loss if np.isfinite(x)]
+                ok_grad = [x for x in recent_grad if np.isfinite(x)]
+                n_bad = len(recent_loss) - len(ok_loss)
+                avg_loss = sum(ok_loss) / len(ok_loss) if ok_loss else float("nan")
+                avg_grad = sum(ok_grad) / len(ok_grad) if ok_grad else float("nan")
                 steps_per_sec = config.log_period / (now - last_step_time).total_seconds()
                 max_logging.log(
                     f"step {step + 1}/{config.max_train_steps} "
                     f"loss={avg_loss:.4f} grad_norm={avg_grad:.3f} "
                     f"lr={lr:.2e} steps/s={steps_per_sec:.2f}"
+                    + (
+                        f" nonfinite={n_bad}/{len(recent_loss)}"
+                        f" (first at step {self._first_nonfinite_step})"
+                        if n_bad
+                        else ""
+                    )
                 )
                 if wandb_run is not None:
                     wandb_run.log(
                         {
                             "train/loss": avg_loss,
-                            "train/loss_max": max(recent_loss),
+                            "train/loss_max": max(ok_loss) if ok_loss else float("nan"),
                             "train/grad_norm": avg_grad,
-                            "train/grad_norm_max": max(recent_grad),
+                            "train/grad_norm_max": max(ok_grad) if ok_grad else float("nan"),
+                            "train/nonfinite_steps": n_bad,
                             "train/lr": lr,
                             "train/steps_per_sec": steps_per_sec,
                         },
