@@ -153,3 +153,9 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Result** — Review: APPROVE, zero findings. Suite 644+2 verified by Planner. Commit `934f80f` + review file pushed.
 - **Dual sign-off (re-established)** — Codex: ffmpeg-ensure APPROVE (this file set); Planner: suite green own-run, V1-on-TPU + audit-benchmark evidence from attempt 2 on record, commit pushed, package below at launch time. Acceptance criteria: as the 06:10Z entry plus `build_commit=934f80f…`; V1 numbers should reproduce (~0.10 rel-L2); NEW must-pass: ffmpeg ensure prints two version lines before prefetch.
 - **Next** — Submit attempt 3; monitor.
+
+## 2026-07-30T02:00:00Z — Attempt 3: all preflights PASSED; abort = B3 guard vs stale failure report; deliberate cleanup + resubmit
+
+- **Result** — Job `20260729-184156` FAILED by design, at the last gate before real work: ffmpeg ensure worked on the worker (4.4.2 installed, both version lines printed), tools preflight passed (`ffmpeg=/usr/bin/ffmpeg, ffprobe=/usr/bin/ffprobe, gsutil=/snap/bin/gsutil`), deployed-code provenance + manifest (100/1,629) + V1 fixture + VAE pin all verified — then `require_empty_canonical` refused `probe2/` because attempt 2's crash report (`failed_gates.json`, build_id `53d69f53…-20260729T182103Z`) still occupied it.
+- **Analysis** — Guard behaved exactly as reviewed (B3: never write into a non-empty published prefix; remedy is deliberate). Operational, not a bug: archived the stale report locally (content = attempt-2 ffmpeg crash + its V1 passes), deliberately deleted the single object, `probe2/` now empty. No code/config change ⇒ Query-4 sign-off remains valid; resubmitting same SHA `934f80f`. Operational note for future failed runs: a crash's `failed_gates.json` at the canonical prefix must be read + archived + deleted before relaunch — deliberate friction, kept.
+- **Next** — Attempt 4 submission (same command), light monitoring.
