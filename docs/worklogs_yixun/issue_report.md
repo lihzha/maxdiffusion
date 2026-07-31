@@ -2,7 +2,7 @@
 
 Open issues, recurring failures, and standing workarounds. Each entry: symptom, infra-vs-bug classification, workaround/fix, status. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`.
 
-Last updated: 2026-07-14
+Last updated: 2026-07-31
 
 ## OPEN / STANDING
 
@@ -31,14 +31,19 @@ Last updated: 2026-07-14
 - **Status:** standing rule for every reviewer call; classified infrastructure (launch-env), no code change.
 
 ### 6. gcloud/gsutil reauth expires silently and recurs (infra, standing)
-- **Symptom:** third recurrence 2026-07-29 — `ReauthUnattendedError` / "Reauthentication required" from gsutil; the `tpu` CLI then reports jobs as "not found". A 2.5 h monitoring loop read auth failures as "PENDING" because the poll's error fallback conflated them with a missing status file.
+- **Symptom:** fourth recurrence 2026-07-31 (previously 2026-07-29 ×2 + earlier) — `ReauthUnattendedError` / "Reauthentication required" from gsutil; the `tpu` CLI then reports jobs as "not found". A 2.5 h monitoring loop once read auth failures as "PENDING" because the poll's error fallback conflated them with a missing status file.
 - **Workaround:** user runs `gcloud auth login` (account yh4742@princeton.edu). **Monitoring rule:** poll scripts must treat gsutil stderr containing "Reauth" as an ALARM state (stop and surface), never as pending/absent.
-- **Status:** standing; recurs on a multi-hour cadence during long sessions.
+- **Status:** standing; recurs on a multi-hour cadence during long sessions. Auth verified working as of 2026-07-31 21:50 UTC.
 
 ### 7. Shared side-adapter trainer: checkpoint retention works by accident with keep_period=-1 (real bug, latent)
 - **Symptom:** `wan_ti2v_side_adapter_trainer` forwards `checkpoint_keep_period or None` to Orbax, so the repo-wide default `-1` reaches it verbatim; retention then rests on Python's `step % -1 == 0` being truthy — every checkpoint survives BY ACCIDENT. Flip the default or pass a positive keep_period and eviction semantics change silently (max_to_keep=3 then evicts early checkpoints, which would have deleted exp-critical baselines).
 - **Found:** exp_02 cycle C (2026-07-30) while building the H2 checkpoint-schedule tests; both behaviors pinned by tests in `test_overfit100_checkpoint_schedule.py`. exp_02's own manager is immune (explicit max_to_keep=None, no keep_period). exp_01's runs relied on the accident but retained everything, so no data was lost.
 - **Status:** open, LOW urgency; classified real bug in the shared trainer; fix belongs to a future shared-trainer round (not exp_02's scope — Codex reviewer concurred, cycle C judgment 10).
+
+### 8. Eval launcher lacked ffmpeg-ensure → aux/ceiling rows silently degraded (real bug, fix committed, review pending)
+- **Symptom:** exp_02 S3 intermediate evals (2026-07-31): all aux rows failed with `FileNotFoundError: 'ffmpeg'` — the ffmpeg-ensure block existed only in `build_overfit100_dataset.sh`, never in `validate_wan_overfit100.sh`; TPU images ship without ffmpeg. Primary SSIM metrics unaffected (latent path); only VAE-ceiling/aux columns degraded.
+- **Fix:** commit `9c26070` on the exp_02 branch — ffmpeg-ensure block byte-identical across both launchers (enforced by test), executed-under-bash tests with PATH shims, loud one-line aux-degradation startup warning (names ffmpeg/gsutil), FATAL exit if install fails; +14 tests (suite 1,021). Focused Codex review pending as of this update.
+- **Status:** fix committed, unreviewed; ceilings for already-run S3 intermediates recoverable via a cheap checkpoint-independent backfill job.
 
 ## RESOLVED (kept for the record)
 
