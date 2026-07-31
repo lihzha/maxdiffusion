@@ -446,12 +446,24 @@ class CtrlWorldTrainer:
             names["grads"] = n
             return s
 
-        with mesh, nn_partitioning.axis_rules(rules):
-            grad_stats = jax.jit(
-                grad_probe_step,
-                in_shardings=(state_shardings.params, data_shardings, None),
-                out_shardings=None,
-            )(state.params, batch, rng)
+        # A diagnostic must never take the run down with it. This program needs the
+        # full backward (saved/remat activations for every leaf plus the gradient
+        # tree) and can exceed HBM even when the real train step fits, so treat an
+        # allocation failure as "no gradient table" rather than a crash.
+        try:
+            with mesh, nn_partitioning.axis_rules(rules):
+                grad_stats = jax.jit(
+                    grad_probe_step,
+                    in_shardings=(state_shardings.params, data_shardings, None),
+                    out_shardings=None,
+                )(state.params, batch, rng)
+        except Exception as e:  # noqa: BLE001 - diagnostics are best-effort
+            max_logging.log(
+                f"[nan-probe] backward probe could not run ({type(e).__name__}: "
+                f"{str(e).splitlines()[0]}); skipping the gradient table. The forward "
+                "was clean, so training itself is unaffected."
+            )
+            return first
         max_utils.log_probe_summary_table(
             names["grads"], grad_stats,
             label="svd ctrl_world gradients by parameter", top_n=25,

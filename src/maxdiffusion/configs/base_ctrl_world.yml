@@ -94,17 +94,20 @@ logical_axis_rules: [
                       ['norm', 'tensor'],
                       ['conv_batch', ['data', 'context', 'fsdp']],
                       ['out_channels', 'tensor'],
-                      # NOTE: a ['conv_in', ['fsdp']] rule used to sit here. Conv
-                      # weights are annotated P('keep_1','keep_2','conv_in','conv_out')
-                      # and 'conv_out' maps to 'context', which is size 1 here
-                      # (ici/dcn_context = 1), so without a conv_in rule every conv
-                      # kernel resolves to P(None,None,None,'context') and stays
-                      # replicated — 764M params, incl. the [3,3,2560,1280] up-block
-                      # kernels. Sharding conv.shape[2] over fsdp cut per-device
-                      # state roughly in half, but the nan-probe then put the first
-                      # non-finite activation at up_blocks_0 — precisely where those
-                      # 2560-input-channel kernels live — and tenny-dev, which has no
-                      # such rule, trains fine. Removed pending that being cleared.
+                      # Do NOT add ['conv_in', ['fsdp']] here. Conv weights are
+                      # annotated P('keep_1','keep_2','conv_in','conv_out'), so such a
+                      # rule shards axis 2 — the input-channel axis the convolution
+                      # CONTRACTS over. That was measured to corrupt the forward pass:
+                      # activations escalated through the down blocks (37 -> 96 -> 114)
+                      # and went NaN at up_blocks_0 (33M NaN, absmax 2048), which is
+                      # where the 2560-input-channel kernels live. Removing it makes
+                      # the same batch fully finite (loss 0.196, up_0 absmax 72.5) with
+                      # bit-identical weights, so the checkpoint was never at fault.
+                      # Cost of leaving it out: those 764M conv params stay replicated,
+                      # ~8.55 GiB/device of state instead of ~4.41. To recover that,
+                      # shard the OUTPUT axis instead — ['conv_out', 'fsdp'] rather than
+                      # 'context' (what base14.yml does) — which is a plain output split
+                      # and needs no contraction-dim reduction. Untested here.
                       ['conv_out', 'context'],
                     ]
 data_sharding: [['data', 'fsdp', 'context', 'tensor']]

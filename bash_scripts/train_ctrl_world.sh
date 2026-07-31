@@ -170,7 +170,6 @@ python src/maxdiffusion/train_ctrl_world.py \
     save_optimizer=True \
     checkpoint_max_to_keep=3 \
     reshuffle_data_on_restart=True \
-    debug_nan_probe=True \
     wandb_project='svd-ac-ctrl-world'
 
 # --- 7. Unmount ---
