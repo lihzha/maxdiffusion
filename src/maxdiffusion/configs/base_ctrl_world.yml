@@ -94,16 +94,17 @@ logical_axis_rules: [
                       ['norm', 'tensor'],
                       ['conv_batch', ['data', 'context', 'fsdp']],
                       ['out_channels', 'tensor'],
-                      # conv weights are annotated
-                      # P('keep_1','keep_2','conv_in','conv_out'). 'conv_out' maps
-                      # to 'context', which is size 1 here (ici/dcn_context = 1),
-                      # so without a 'conv_in' rule every conv kernel resolves to
-                      # P(None,None,None,'context') and stays fully replicated —
-                      # 764M params, incl. the f32[3,3,2560,1280] up-block kernels
-                      # at 112.5MiB each. Shard conv.shape[2] over fsdp instead;
-                      # every annotated conv_in dim (320/640/960/1280/1920/2560)
-                      # divides evenly by the fsdp mesh size.
-                      ['conv_in', ['fsdp']],
+                      # NOTE: a ['conv_in', ['fsdp']] rule used to sit here. Conv
+                      # weights are annotated P('keep_1','keep_2','conv_in','conv_out')
+                      # and 'conv_out' maps to 'context', which is size 1 here
+                      # (ici/dcn_context = 1), so without a conv_in rule every conv
+                      # kernel resolves to P(None,None,None,'context') and stays
+                      # replicated — 764M params, incl. the [3,3,2560,1280] up-block
+                      # kernels. Sharding conv.shape[2] over fsdp cut per-device
+                      # state roughly in half, but the nan-probe then put the first
+                      # non-finite activation at up_blocks_0 — precisely where those
+                      # 2560-input-channel kernels live — and tenny-dev, which has no
+                      # such rule, trains fine. Removed pending that being cleared.
                       ['conv_out', 'context'],
                     ]
 data_sharding: [['data', 'fsdp', 'context', 'tensor']]
