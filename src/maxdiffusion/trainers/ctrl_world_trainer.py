@@ -397,15 +397,26 @@ class CtrlWorldTrainer:
             # params and must never be pulled to the host.
             grad_names, grad_stats = max_utils.grad_probe(grads)
             names["grads"] = grad_names
-            return loss, stats, grad_stats
+            # Same summary over the loaded weights. A UNet that emits NaN from
+            # finite inputs is usually carrying bad weights, and this trainer can
+            # be pointed at a converted Ctrl-World export rather than stock SVD —
+            # so check what was actually loaded before blaming the forward.
+            param_names, param_stats = max_utils.grad_probe(params)
+            names["params"] = param_names
+            return loss, stats, grad_stats, param_stats
 
         with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
-            loss, stats, grad_stats = jax.jit(
+            loss, stats, grad_stats, param_stats = jax.jit(
                 probe_step, in_shardings=(state_shardings.params, data_shardings, None),
-                out_shardings=(None, None, None),
+                out_shardings=(None, None, None, None),
             )(state.params, batch, rng)
 
         max_logging.log(f"[nan-probe] loss={float(loss)}")
+        max_utils.log_probe_summary_table(
+            names["params"], param_stats,
+            label=f"svd ctrl_world LOADED WEIGHTS from {self.config.pretrained_model_name_or_path}",
+            top_n=15,
+        )
         first = max_utils.log_probe_report(names["stages"], stats, label="svd ctrl_world forward")
         if first is None:
             max_logging.log(
