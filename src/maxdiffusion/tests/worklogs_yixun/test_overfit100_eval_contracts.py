@@ -1138,3 +1138,68 @@ def test_aux_rgb_window_slice_and_cache_survive_the_fix(tmp_path, monkeypatch):
     late = gen.overfit100_aux_rgb(manifest, 25189, 36, pred, pred, cache)
     assert "source clip has 40 frames" in late["aux_status"]
     assert late["vae_ceiling_ssim"] is None
+
+
+# ======================================================================================
+# (eval-ffmpeg) The operator must learn about a degraded aux path from the JOB LOG at
+# startup, not by reading 90 null rows out of the artifact afterwards. D5's philosophy is
+# unchanged: aux never fails the run.
+# ======================================================================================
+
+
+def test_aux_prerequisite_warning_names_a_missing_ffmpeg():
+    import shutil
+
+    real_which = shutil.which
+    lines = gen.aux_prerequisite_warning(
+        True, which=lambda binary: None if binary == "ffmpeg" else "/usr/bin/" + binary
+    )
+    assert lines is not None
+    assert "ffmpeg" in lines
+    assert "ALL aux metrics will be null" in lines
+    assert "WARNING" in lines
+    assert real_which is shutil.which  # the helper does not monkey with the module
+
+
+def test_aux_prerequisite_warning_names_a_missing_gsutil_too():
+    # The pinned MP4 pull needs gsutil; a missing one degrades every row exactly the same way.
+    lines = gen.aux_prerequisite_warning(
+        True, which=lambda binary: None if binary == "gsutil" else "/usr/bin/" + binary
+    )
+    assert lines is not None and "gsutil" in lines
+    both = gen.aux_prerequisite_warning(True, which=lambda binary: None)
+    assert "ffmpeg" in both and "gsutil" in both
+
+
+def test_aux_prerequisite_warning_is_silent_when_the_tools_are_there_or_aux_is_off():
+    assert gen.aux_prerequisite_warning(True, which=lambda binary: "/usr/bin/" + binary) is None
+    # aux disabled -> nothing to warn about, even with no binaries at all.
+    assert gen.aux_prerequisite_warning(False, which=lambda binary: None) is None
+
+
+def test_driver_logs_the_aux_degradation_warning_once_at_startup(tmp_path, monkeypatch):
+    # The S3 scenario end to end: aux requested, ffmpeg absent. The run must COMPLETE (D5) with
+    # recorded per-row statuses, and the operator must see one loud line in the job log.
+    import maxdiffusion.max_logging as max_logging
+
+    logged: list[str] = []
+    monkeypatch.setattr(max_logging, "log", lambda message: logged.append(str(message)))
+    monkeypatch.setattr(gen.max_logging, "log", lambda message: logged.append(str(message)))
+    monkeypatch.setattr(gen.shutil, "which", lambda binary: None if binary == "ffmpeg" else "/usr/bin/" + binary)
+
+    manifest = _aux_manifest(tmp_path)
+    _install_aux_spies(monkeypatch, fail=FileNotFoundError(2, "No such file or directory", "ffmpeg"))
+    import numpy as _np
+
+    pred = _np.zeros((33, 8, 8, 3), dtype=_np.float32)
+    out = gen.overfit100_aux_rgb(manifest, 25189, 0, pred, pred, {})
+    assert "FileNotFoundError" in out["aux_status"]  # still contained, never raised
+
+    warning = gen.aux_prerequisite_warning(True, which=gen.shutil.which)
+    assert warning is not None and "ffmpeg" in warning
+    # And the driver emits exactly that line before any rollout work.
+    import inspect
+
+    src = inspect.getsource(gen.run_overfit100)
+    assert "aux_prerequisite_warning" in src
+    assert src.index("aux_prerequisite_warning") < src.index("_restore_overfit100_validation_state")

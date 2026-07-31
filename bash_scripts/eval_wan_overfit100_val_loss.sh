@@ -69,6 +69,11 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_enable_async_collective_f
 # exp_02 set knobs (EXPECTED_WINDOWS / NUM_TEXT_SLOTS) travel with it; (4) EXPECTED_COUNT is the
 # built window count of the set being evaluated (train100 -> 1629, train10 -> 167).
 #
+# NO ffmpeg-ensure block here, deliberately: this arm never decodes video. It reads TFRecords,
+# runs the transformer in latent space, frees the VAE right after state construction, and writes
+# json/csv/png -- so unlike validate_wan_overfit100.sh it has no ffmpeg/ffprobe dependency to
+# install. A test pins that claim against the module (no decoder call is reachable from it).
+#
 # SMOKE gate: SMOKE_LIMIT=<N> evaluates only the first N batches of only the first checkpoint
 # into an isolated validation_loss_smoke/ directory (the n==expected assertion is skipped).
 

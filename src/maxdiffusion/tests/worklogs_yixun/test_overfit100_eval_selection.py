@@ -724,3 +724,129 @@ def test_config_carries_the_new_eval_keys_for_pyconfig_overridability():
     assert cfg["eval_windows"] == "canonical"
     assert cfg["rollout_seeds"] == "0,1,2"
     assert cfg["context_modes"] == "correct"
+
+
+# ======================================================================================
+# (eval-ffmpeg) S3 finding: the TPU worker image ships without ffmpeg, so every auxiliary
+# row of the S3 intermediate evals carried
+# "FileNotFoundError: [Errno 2] No such file or directory: 'ffmpeg'".
+#
+# The bounded apt "ffmpeg ensure" block was added to the BUILD launcher in the ffmpeg-ensure
+# round but never to the eval launcher. It is now shared VERBATIM between the two, which these
+# tests pin (byte-equality + execution of the shipped text, the same pattern
+# test_overfit100_gates.py uses for the launch-commit guard block).
+# ======================================================================================
+
+_BUILD_SCRIPT = _REPO / "bash_scripts/build_overfit100_dataset.sh"
+_FFMPEG_START = "# >>> ffmpeg ensure"
+_FFMPEG_END = "# <<< ffmpeg ensure"
+
+
+def _ffmpeg_block(script: Path) -> str:
+    text = script.read_text()
+    assert _FFMPEG_START in text and _FFMPEG_END in text, f"the ffmpeg-ensure sentinels moved in {script.name}"
+    return text[text.index(_FFMPEG_START) : text.index(_FFMPEG_END)]
+
+
+def test_ffmpeg_ensure_block_is_byte_identical_in_the_build_and_validate_launchers():
+    # One block, two scripts: a future edit to either must be mirrored or this fails.
+    assert _ffmpeg_block(_VALIDATE) == _ffmpeg_block(_BUILD_SCRIPT)
+    block = _ffmpeg_block(_VALIDATE)
+    assert "apt_deadline_run" in block  # the bounded-budget hardening came along
+    assert "DPkg::Lock::Timeout=60" in block
+    assert "FFMPEG_APT_BUDGET" in block
+
+
+def test_validate_launcher_ensures_ffmpeg_after_the_venv_and_before_the_hf_prefetch():
+    text = _VALIDATE.read_text()
+    venv = text.index("source .venv/bin/activate")
+    ensure = text.index(_FFMPEG_START)
+    prefetch = text.index("bash bash_scripts/prefetch_hf_snapshot.sh")
+    python_call = text.index("python src/maxdiffusion/generate_wan_side_adapter.py")
+    assert venv < ensure < prefetch < python_call, "the ffmpeg ensure must bracket venv -> prefetch"
+
+
+def _fake_bin(tmp_path, *, with_ffmpeg: bool, apt_installs: bool):
+    """A PATH shim: stubs for sudo/timeout/apt-get (+ optionally ffmpeg/ffprobe).
+
+    ``sudo``/``timeout`` are stubbed so the block's real argv runs without touching the host's
+    package manager, and ``apt-get`` records that it was called so the no-op path is provable.
+    """
+    binroot = tmp_path / "fakebin"
+    binroot.mkdir()
+    marker = tmp_path / "apt_called"
+
+    def _write(name, body):
+        path = binroot / name
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+
+    _write("sudo", 'exec "$@"\n')
+    _write("timeout", 'shift\nexec "$@"\n')
+    installed = f'printf "#!/bin/sh\\necho v-stub\\n" > "{binroot}/ffmpeg"; chmod 755 "{binroot}/ffmpeg"; '
+    installed += f'printf "#!/bin/sh\\necho v-stub\\n" > "{binroot}/ffprobe"; chmod 755 "{binroot}/ffprobe"; '
+    _write(
+        "apt-get",
+        f'echo "$@" >> "{marker}"\n' + (installed if apt_installs else "") + "exit 0\n",
+    )
+    if with_ffmpeg:
+        _write("ffmpeg", "echo ffmpeg version stub\n")
+        _write("ffprobe", "echo ffprobe version stub\n")
+    return binroot, marker
+
+
+def _run_ffmpeg_block(script: Path, tmp_path, *, with_ffmpeg: bool, apt_installs: bool = True):
+    binroot, marker = _fake_bin(tmp_path, with_ffmpeg=with_ffmpeg, apt_installs=apt_installs)
+    body = f"set -euo pipefail\n{_ffmpeg_block(script)}\necho BLOCK_OK\n"
+    env = {"PATH": f"{binroot}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    proc = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env, timeout=60)
+    return proc, marker
+
+
+@pytest.mark.parametrize("script", [_BUILD_SCRIPT, _VALIDATE], ids=["build", "validate"])
+def test_ffmpeg_ensure_block_is_a_noop_when_both_tools_are_present(script, tmp_path):
+    proc, marker = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=True)
+    assert proc.returncode == 0, proc.stderr
+    assert "BLOCK_OK" in proc.stdout
+    assert not marker.exists(), "apt-get ran even though ffmpeg/ffprobe were already on PATH"
+    assert "ffmpeg version stub" in proc.stdout and "ffprobe version stub" in proc.stdout
+
+
+@pytest.mark.parametrize("script", [_BUILD_SCRIPT, _VALIDATE], ids=["build", "validate"])
+def test_ffmpeg_ensure_block_installs_when_the_tools_are_missing(script, tmp_path):
+    proc, marker = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=False, apt_installs=True)
+    assert proc.returncode == 0, proc.stderr
+    assert "BLOCK_OK" in proc.stdout
+    assert marker.exists(), "the block did not attempt an install with ffmpeg absent"
+    assert "update" in marker.read_text() and "install" in marker.read_text()
+
+
+@pytest.mark.parametrize("script", [_BUILD_SCRIPT, _VALIDATE], ids=["build", "validate"])
+def test_ffmpeg_ensure_block_fails_loudly_when_the_install_does_not_provide_the_tools(script, tmp_path):
+    # The S3 failure mode must be impossible to reach silently: no ffmpeg after the attempt is a
+    # FATAL exit BEFORE the HF prefetch, not 90 null aux rows discovered when reading artifacts.
+    proc, _ = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=False, apt_installs=False)
+    assert proc.returncode == 1
+    assert "FATAL" in proc.stderr
+    assert "not on PATH" in proc.stderr
+    assert "BLOCK_OK" not in proc.stdout
+
+
+def test_loss_eval_arm_documents_why_it_needs_no_ffmpeg():
+    # The one-step loss evaluator never decodes video: it reads TFRecords, runs the transformer in
+    # latent space, frees the VAE immediately, and writes json/csv/png. The omission is deliberate
+    # and must stay documented, so a future change that adds decoding is forced to revisit it.
+    text = _LOSS_EVAL.read_text()
+    assert _FFMPEG_START not in text
+    assert "ffmpeg" in text and "latent space" in text
+
+
+def test_loss_eval_module_cannot_reach_a_video_decoder():
+    # The claim above, pinned against the module rather than a comment.
+    import maxdiffusion.eval_wan_full_ft_val_loss as ev
+
+    source = Path(ev.__file__).read_text()
+    for forbidden in ("decode_mp4_frames", "overfit100_aux_rgb", "_save_video", "export_to_video", "ffprobe"):
+        assert forbidden not in source, f"{forbidden} appeared in the loss evaluator; it now needs ffmpeg"
+    # And it frees the VAE, so it cannot decode latents to frames either.
+    assert '"vae", "vae_cache"' in source

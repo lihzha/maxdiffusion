@@ -55,6 +55,7 @@ import json
 import math
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -1334,6 +1335,37 @@ def _restore_overfit100_validation_state(config):
 # ---------------------------------------------------------------------------- metrics + rows
 
 
+# The external binaries the auxiliary RGB path shells out to: ``gsutil`` pulls the pinned MP4 and
+# ``ffmpeg`` decodes it. Neither is on the stock TPU worker image.
+OVERFIT100_AUX_BINARIES = ("ffmpeg", "gsutil")
+
+
+def aux_prerequisite_warning(want_aux: bool, *, which=None) -> str | None:
+    """One loud startup line when the auxiliary metrics cannot possibly succeed (S3 finding).
+
+    D5's contract is unchanged -- a missing binary must never fail the run, and every row still
+    records its own ``aux_status``. But the S3 intermediate evals showed the gap that leaves: the
+    job log looked clean and the degradation was only discoverable by reading 90 null rows out of
+    the artifact afterwards. So when auxiliary metrics are REQUESTED and a required binary is
+    absent, the driver says so once, up front, before any rollout.
+
+    Returns ``None`` when nothing is wrong (or when aux was not requested); ``which`` is injectable
+    for tests.
+    """
+    if not want_aux:
+        return None
+    probe = which or shutil.which
+    missing = [binary for binary in OVERFIT100_AUX_BINARIES if not probe(binary)]
+    if not missing:
+        return None
+    return (
+        f"[wan_overfit100_val] WARNING: aux RGB requested but {', '.join(missing)} missing — ALL aux metrics will "
+        f"be null (ssim_vs_rgb / pixel_mse_vs_rgb / vae_ceiling_ssim), and every row's aux_status will record the "
+        f"failure. The rollouts and the PRIMARY metrics are unaffected. Install the missing binary on the worker "
+        f"(bash_scripts/validate_wan_overfit100.sh ensures ffmpeg) or set eval_aux_rgb=False to stop requesting it."
+    )
+
+
 def assert_ssim_available() -> None:
     """Refuse to start an exp_02 pass that cannot compute SSIM (D11's ONLY statistic input).
 
@@ -1746,6 +1778,11 @@ def run_overfit100(config) -> None:
     write_videos = bool(getattr(config, "write_videos", False))
     want_aux = bool(getattr(config, "eval_aux_rgb", True))
     manifest_path = str(getattr(config, "model_manifest_path", ""))
+    # Aux degradation is CONTAINED (D5) but must not be silent: say it once, in the job log,
+    # before the rollouts -- not 90 null rows later when someone reads the artifact.
+    aux_warning = aux_prerequisite_warning(want_aux)
+    if aux_warning:
+        max_logging.log(aux_warning)
 
     # D1: the cohorts come from the MANIFEST (the set's own episodes for an S2 pass), never from
     # this pass's selection, and the pass must satisfy the role it claims.
