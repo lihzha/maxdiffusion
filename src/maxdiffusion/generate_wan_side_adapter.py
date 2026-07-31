@@ -1608,6 +1608,18 @@ OVERFIT100_RUN_SIGNATURE_TYPES: tuple[tuple[str, type], ...] = (
     ("flash_block_sizes", str),
     ("split_head_dim", bool),
     ("fps", int),  # enters the saved videos
+    # pass-3 review: the effective runtime identity. Quantization can REPLACE the rollout graph
+    # (wan_pipeline.quantize_transformer), num_train_timesteps scales every rollout timestep, and
+    # the transformer weight source decides which weights entered the rollout at all.
+    ("num_train_timesteps", int),
+    ("use_qwix_quantization", bool),
+    ("quantization", str),
+    ("qwix_module_path", str),
+    ("weight_quantization_calibration_method", str),
+    ("act_quantization_calibration_method", str),
+    ("bwd_quantization_calibration_method", str),
+    ("transformer_weight_source", str),
+    ("from_pt", bool),
 )
 
 # Per-row JSON types. ``bool`` is checked with ``type(x) is`` so it never satisfies ``int``.
@@ -1705,33 +1717,111 @@ def resume_state(config) -> tuple[bool, str]:
     return True, f"row staging enabled by {source} (single-process job)"
 
 
-def overfit100_publication_state(step_root: str) -> dict:
+# The marker's exact shape. Presence alone proves nothing (pass-3 review finding 2): an empty,
+# truncated, foreign or copied marker must not select the write-suppressed published path.
+OVERFIT100_MARKER_TYPES: tuple[tuple[str, type], ...] = (
+    ("eval_pass_role", str),
+    ("checkpoint_step", int),
+    ("manifest_sha256", str),
+    ("n_rows", int),
+    ("artifacts", list),
+    ("aggregation_sha256", str),
+    ("run_signature_sha256", str),
+)
+
+
+def _marker_error(step_root: str, detail: str) -> ValueError:
+    return ValueError(
+        f"overfit100 eval: {OVERFIT100_PUBLISHED_MARKER} in {step_root} {detail}. A published role directory is "
+        f"evidence: this pass refuses to touch it until the marker is valid and the complete artifact set "
+        f"({', '.join(OVERFIT100_FINAL_ARTIFACTS)}) is present. Inspect {step_root}, archive it whole if it is a "
+        f"foreign or aborted publication, and re-run into a clean role directory -- never repair it file by file."
+    )
+
+
+def overfit100_publication_state(step_root: str, *, expected=None) -> dict:
     """Where this role directory stands: ``fresh`` / ``partial_publication`` / ``published``.
 
-    Probed ONCE at entry, before any staging interaction, so the pass knows whether it may write at
-    all (see the marker-last note above).
+    Probed ONCE at entry, before any staging interaction or write, so the pass knows whether it may
+    write at all. ``published`` requires BOTH a marker that AUTHENTICATES this directory -- exact
+    schema and key set, exact types, agreement with the run on role/checkpoint/manifest/row count,
+    and an ``aggregation_sha256`` that matches the bytes of the aggregation on disk -- AND the
+    complete final-artifact set. A marker that is present but unparseable, foreign, mis-bound, or
+    unaccompanied by all three artifacts is a HARD FAILURE here, before anything is written: it
+    means the directory belongs to something else, which an operator must resolve.
+
+    ``expected`` (optional) is ``{"eval_pass_role", "checkpoint_step", "manifest_sha256", "n_rows"}``
+    for the binding check; without it only the structural checks run.
     """
     root = str(step_root).rstrip("/")
     present = [name for name in OVERFIT100_FINAL_ARTIFACTS if tf.io.gfile.exists(f"{root}/{name}")]
-    published = tf.io.gfile.exists(f"{root}/{OVERFIT100_PUBLISHED_MARKER}")
-    if published:
-        state = "published"
-    elif present:
-        state = "partial_publication"
-    else:
-        state = "fresh"
-    return {"state": state, "published": published, "artifacts_present": present}
+    marker_path = f"{root}/{OVERFIT100_PUBLISHED_MARKER}"
+    if not tf.io.gfile.exists(marker_path):
+        return {
+            "state": "partial_publication" if present else "fresh",
+            "published": False,
+            "artifacts_present": present,
+        }
+
+    missing = [name for name in OVERFIT100_FINAL_ARTIFACTS if name not in present]
+    if missing:
+        raise _marker_error(root, f"claims publication but {missing} are missing")
+    try:
+        with tf.io.gfile.GFile(marker_path, "r") as handle:
+            marker = json.load(handle)
+    except Exception as exc:  # noqa: BLE001 -- an unreadable marker cannot authenticate anything
+        raise _marker_error(root, f"is unreadable or not JSON ({type(exc).__name__}: {exc})") from exc
+    if not isinstance(marker, dict):
+        raise _marker_error(root, "is not a JSON object")
+    if marker.get("schema") != OVERFIT100_PUBLISHED_MARKER_SCHEMA:
+        raise _marker_error(root, f"has schema {marker.get('schema')!r}, not {OVERFIT100_PUBLISHED_MARKER_SCHEMA!r}")
+    expected_keys = {"schema"} | {name for name, _ in OVERFIT100_MARKER_TYPES}
+    if set(marker) != expected_keys:
+        raise _marker_error(
+            root,
+            f"has an unexpected key set (unexpected {sorted(set(marker) - expected_keys)}, "
+            f"missing {sorted(expected_keys - set(marker))})",
+        )
+    for field, kind in OVERFIT100_MARKER_TYPES:
+        if type(marker[field]) is not kind:
+            raise _marker_error(
+                root, f"field {field}={marker[field]!r} is {type(marker[field]).__name__}, expected {kind.__name__}"
+            )
+    if sorted(marker["artifacts"]) != sorted(OVERFIT100_FINAL_ARTIFACTS):
+        raise _marker_error(root, f"lists artifacts {marker['artifacts']}, not {list(OVERFIT100_FINAL_ARTIFACTS)}")
+    observed = _sha256_of_file(f"{root}/aggregation.json")
+    if marker["aggregation_sha256"] != observed:
+        raise _marker_error(
+            root,
+            f"field aggregation_sha256={marker['aggregation_sha256']!r} does not match the aggregation.json on disk "
+            f"({observed!r})",
+        )
+    for field, value in (expected or {}).items():
+        if marker.get(field) != value:
+            raise _marker_error(root, f"field {field}={marker.get(field)!r} does not bind this run's {value!r}")
+    return {"state": "published", "published": True, "artifacts_present": present, "marker": marker}
 
 
-def overfit100_published_marker(*, pass_role: str, checkpoint_step: int, n_rows: int, run_signature) -> dict:
-    """The commit marker: what was published, and the signature of the run that published it."""
+def overfit100_published_marker(
+    *, pass_role: str, checkpoint_step: int, manifest_sha256: str, n_rows: int, aggregation_sha256: str, run_signature
+) -> dict:
+    """The commit marker: what was published, bound to the run and to the published bytes.
+
+    ``aggregation_sha256`` is what makes the marker AUTHENTICATE rather than merely announce: a
+    marker copied from another directory cannot match the aggregation that sits beside it.
+    ``run_signature_sha256`` rides along for provenance but is deliberately NOT required to match on
+    a later re-verification -- a newer commit must still be able to verify a published directory by
+    recomputation, which is exactly what compare-only published mode does.
+    """
     return {
         "schema": OVERFIT100_PUBLISHED_MARKER_SCHEMA,
         "eval_pass_role": str(pass_role),
         "checkpoint_step": int(checkpoint_step),
+        "manifest_sha256": str(manifest_sha256),
         "n_rows": int(n_rows),
         "artifacts": list(OVERFIT100_FINAL_ARTIFACTS),
-        "run_signature_sha256": (run_signature_sha256(run_signature) if run_signature is not None else None),
+        "aggregation_sha256": str(aggregation_sha256),
+        "run_signature_sha256": str(run_signature_sha256(run_signature)) if run_signature is not None else "",
     }
 
 
@@ -1739,12 +1829,16 @@ def _resolved_checkpoint_dir(config) -> str:
     """The checkpoint directory the restore ACTUALLY reads (post-resolution).
 
     ``config.checkpoint_dir`` may be empty, in which case the restore falls back to
-    ``<output_dir>/<run_name>/checkpoints``. The signature binds this resolved value, so two runs
-    that differ only in how they spelled the same directory still agree -- and two that resolve
+    ``<output_dir>/<run_name>/checkpoints``. A trailing slash is normalized away, so two runs that
+    differ only in how they spelled the same directory really do agree (the comment used to promise
+    that without doing it, which made a stray slash force a needless full recompute) -- and two that resolve
     differently never share staged rows. Shared with
     :func:`_restore_overfit100_validation_state` so the two cannot drift.
     """
-    return str(config.checkpoint_dir or os.path.join(config.output_dir, config.run_name, "checkpoints"))
+    resolved = str(
+        config.checkpoint_dir or os.path.join(str(config.output_dir).rstrip("/"), config.run_name, "checkpoints")
+    )
+    return resolved.rstrip("/") or resolved
 
 
 def run_signature_sha256(run_signature: dict) -> str:
@@ -1768,6 +1862,7 @@ def overfit100_run_signature(
     resolved_checkpoint_dir: str,
     scheduler_sigma_min: float,
     scheduler_sigma_max: float,
+    num_train_timesteps: int,
 ) -> dict:
     """The canonical, strictly typed signature of THIS run (review finding 1).
 
@@ -1829,6 +1924,20 @@ def overfit100_run_signature(
         "flash_block_sizes": json.dumps(getattr(config, "flash_block_sizes", {}) or {}, sort_keys=True),
         "split_head_dim": bool(getattr(config, "split_head_dim", False)),
         "fps": int(getattr(config, "fps", 16)),
+        "num_train_timesteps": int(num_train_timesteps),
+        "use_qwix_quantization": bool(getattr(config, "use_qwix_quantization", False)),
+        "quantization": str(getattr(config, "quantization", "") or ""),
+        "qwix_module_path": str(getattr(config, "qwix_module_path", "") or ""),
+        "weight_quantization_calibration_method": str(getattr(config, "weight_quantization_calibration_method", "")),
+        "act_quantization_calibration_method": str(getattr(config, "act_quantization_calibration_method", "")),
+        "bwd_quantization_calibration_method": str(getattr(config, "bwd_quantization_calibration_method", "")),
+        # Which transformer weights actually entered the rollout: pyconfig copies the pipeline path
+        # into this key, and the Wan loader reads THIS one.
+        "transformer_weight_source": str(
+            getattr(config, "wan_transformer_pretrained_model_name_or_path", "")
+            or getattr(config, "pretrained_model_name_or_path", "")
+        ),
+        "from_pt": bool(getattr(config, "from_pt", False)),
     }
     return signature
 
@@ -1923,12 +2032,24 @@ def _enumerate_staging_files(root: str) -> list[str]:
         return []
     for dirpath, _dirnames, filenames in walked:
         for filename in filenames:
-            # TOLERATED DIRECTORY MARKERS: an empty name, or a zero-byte object whose name ends in
-            # "/" -- the two forms a GCS "folder" takes. Anything else zero-byte (a leftover temp
-            # object, a truncated row) is an offender, not a marker.
-            if not filename or filename.endswith("/"):
+            # TOLERATED DIRECTORY MARKERS: an empty name, or a trailing-slash object that is
+            # ACTUALLY ZERO BYTES -- the two forms a GCS "folder" takes. A non-empty object whose
+            # name merely ends in "/" is a foreign object, not a placeholder, and a stat failure is
+            # fatal rather than an excuse to skip it (pass-3 review finding 3).
+            if not filename:
                 continue
             full = f"{dirpath.rstrip('/')}/{filename}"
+            if filename.endswith("/"):
+                try:
+                    length = int(tf.io.gfile.stat(full).length)
+                except Exception as exc:  # noqa: BLE001 -- cannot classify it, so cannot skip it
+                    raise _staging_error(
+                        root, f"could not stat the candidate directory marker {full} ({type(exc).__name__}: {exc})"
+                    ) from exc
+                if length == 0:
+                    continue
+                offenders.append(full)
+                continue
             relative = full[len(root) + 1 :] if full.startswith(root + "/") else full
             parts = relative.split("/")
             conforms = (
@@ -2129,7 +2250,7 @@ def overfit100_step_root(output_root: str, checkpoint_step: int, pass_role: str)
     return f"{str(output_root).rstrip('/')}/step_{int(checkpoint_step):06d}_{str(pass_role)}"
 
 
-def _refuse_artifact_replacement(path: str, payload: bytes) -> bool:
+def _refuse_artifact_replacement(path: str, payload: bytes, *, compare_only: bool = False) -> bool:
     """True if ``path`` already holds exactly ``payload`` (skip the write); raise if it differs.
 
     D4: an eval artifact is immutable evidence. Re-running the same pass (an infra retry) must be
@@ -2137,6 +2258,13 @@ def _refuse_artifact_replacement(path: str, payload: bytes) -> bool:
     surfaced, never silently replaced.
     """
     if not tf.io.gfile.exists(path):
+        if compare_only:
+            # PUBLISHED mode is compare-only: the create-if-absent path must be unreachable, or a
+            # marker-backed directory could be silently completed from a recomputation.
+            raise ValueError(
+                f"overfit100 eval: {path} is missing from a role directory this pass treats as PUBLISHED. Published "
+                f"artifacts are compared, never created -- archive the directory whole and re-run into a clean one."
+            )
         return False
     with tf.io.gfile.GFile(path, "rb") as handle:
         existing = handle.read()
@@ -2150,18 +2278,18 @@ def _refuse_artifact_replacement(path: str, payload: bytes) -> bool:
     )
 
 
-def _write_json_immutable(path: str, value: dict) -> None:
-    """:func:`_write_json` with the D4 immutability guard."""
+def _write_json_immutable(path: str, value: dict, *, compare_only: bool = False) -> None:
+    """:func:`_write_json` with the D4 immutability guard (``compare_only``: never create)."""
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    if _refuse_artifact_replacement(path, payload):
+    if _refuse_artifact_replacement(path, payload, compare_only=compare_only):
         return
     _write_json(path, value)
 
 
-def _write_text_immutable(path: str, text: str) -> None:
-    """Write a text artifact (the CSV) with the D4 immutability guard."""
+def _write_text_immutable(path: str, text: str, *, compare_only: bool = False) -> None:
+    """Write a text artifact (the CSV) with the D4 immutability guard (``compare_only``: never create)."""
     payload = text.encode("utf-8")
-    if _refuse_artifact_replacement(path, payload):
+    if _refuse_artifact_replacement(path, payload, compare_only=compare_only):
         return
     parent = os.path.dirname(path)
     if parent:
@@ -2325,13 +2453,13 @@ def aux_coverage_log_lines(coverage: dict) -> list[str]:
     return lines
 
 
-def _write_rows_csv(rows, path: str, columns, *, immutable: bool = True) -> None:
+def _write_rows_csv(rows, path: str, columns, *, immutable: bool = True, compare_only: bool = False) -> None:
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=list(columns), extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
     if immutable:
-        _write_text_immutable(path, buf.getvalue())
+        _write_text_immutable(path, buf.getvalue(), compare_only=compare_only)
         return
     parent = os.path.dirname(path)
     if parent:
@@ -2430,7 +2558,15 @@ def run_overfit100(config) -> None:
     # pass takes the original recompute-in-memory path with staging fully disabled -- neither read
     # nor written -- so the immutable writers decide, and a finished directory is never partially
     # mutated by a rerun.
-    publication = overfit100_publication_state(step_root)
+    publication = overfit100_publication_state(
+        step_root,
+        expected={
+            "eval_pass_role": pass_role,
+            "checkpoint_step": int(checkpoint_step),
+            "manifest_sha256": manifest_sha256,
+            "n_rows": len(windows) * len(modes) * len(seeds),
+        },
+    )
     # PUBLISHED (marker present): recompute in memory and write NOTHING -- not a staged row, not a
     # video, not a per-window metrics.json (``_save_video`` overwrites, which is how a completed
     # video-enabled directory used to stay mutable) -- until the immutable writers compare.
@@ -2501,6 +2637,7 @@ def run_overfit100(config) -> None:
         resolved_checkpoint_dir=_resolved_checkpoint_dir(config),
         scheduler_sigma_min=float(scheduler.config.sigma_min),
         scheduler_sigma_max=float(scheduler.config.sigma_max),
+        num_train_timesteps=int(scheduler.config.num_train_timesteps),
     )
     if resume_on:
         staged_rows = read_staged_rows(
@@ -2625,8 +2762,12 @@ def run_overfit100(config) -> None:
         role_validation=role_validation,
     )
     summary = _overfit100_summary(rows)
-    _write_json_immutable(f"{step_root}/aggregation.json", artifact)
-    _write_rows_csv(rows, f"{step_root}/summary.csv", OVERFIT100_ROW_FIELDS)
+    # PUBLISHED mode is COMPARE-ONLY: every artifact must already exist and match. Anything missing
+    # is refused rather than created, so a marker-backed directory can never be completed from a
+    # recomputation (pass-3 review finding 2).
+    compare_only = writes_suppressed
+    _write_json_immutable(f"{step_root}/aggregation.json", artifact, compare_only=compare_only)
+    _write_rows_csv(rows, f"{step_root}/summary.csv", OVERFIT100_ROW_FIELDS, compare_only=compare_only)
     _write_json_immutable(
         f"{step_root}/summary.json",
         {
@@ -2639,15 +2780,21 @@ def run_overfit100(config) -> None:
             "per_mode": summary,
             "aggregation_json": f"{step_root}/aggregation.json",
         },
+        compare_only=compare_only,
     )
     _write_json_immutable(
         f"{step_root}/{OVERFIT100_PUBLISHED_MARKER}",
         overfit100_published_marker(
             pass_role=pass_role,
             checkpoint_step=checkpoint_step,
+            manifest_sha256=manifest_sha256,
             n_rows=len(rows),
+            # Hashed from the bytes ON DISK, so the marker authenticates what was actually published
+            # (in compare-only mode that is the artifact this run just verified byte-for-byte).
+            aggregation_sha256=_sha256_of_file(f"{step_root}/aggregation.json"),
             run_signature=run_signature,
         ),
+        compare_only=compare_only,
     )
     max_logging.log(f"[wan_overfit100_val] resumed n_rows={resumed_count} recomputed={recomputed_count}")
     for line in aux_coverage_log_lines(summary["aux_coverage"]):  # D5: loud, not silent

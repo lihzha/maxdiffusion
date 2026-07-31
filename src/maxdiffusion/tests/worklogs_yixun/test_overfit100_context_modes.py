@@ -2028,6 +2028,14 @@ def _full_signature_config(**overrides):
         "flash_block_sizes": {},
         "split_head_dim": True,
         "fps": 16,
+        "use_qwix_quantization": False,
+        "quantization": "",
+        "qwix_module_path": ".*",
+        "weight_quantization_calibration_method": "absmax",
+        "act_quantization_calibration_method": "absmax",
+        "bwd_quantization_calibration_method": "absmax",
+        "wan_transformer_pretrained_model_name_or_path": "/cache/snapshots/" + "b" * 40,
+        "from_pt": True,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -2048,6 +2056,7 @@ def _build_signature(config=None, **overrides):
         "resolved_checkpoint_dir": "gs://b/ck",
         "scheduler_sigma_min": 0.0,
         "scheduler_sigma_max": 1.0,
+        "num_train_timesteps": 1000,
     }
     kwargs.update(overrides)
     return gen.overfit100_run_signature(config or _full_signature_config(), **kwargs)
@@ -2224,12 +2233,12 @@ def test_the_published_marker_is_written_last_and_defines_completion(tmp_path, m
     monkeypatch.setattr(
         gen,
         "_write_json_immutable",
-        lambda path, value: (order.append(path.rsplit("/", 1)[-1]), real_json(path, value))[1],
+        lambda path, value, **kw: (order.append(path.rsplit("/", 1)[-1]), real_json(path, value))[1],
     )
     monkeypatch.setattr(
         gen,
         "_write_text_immutable",
-        lambda path, text: (order.append(path.rsplit("/", 1)[-1]), real_text(path, text))[1],
+        lambda path, text, **kw: (order.append(path.rsplit("/", 1)[-1]), real_text(path, text))[1],
     )
     gen.run_overfit100(config)
     assert order[-1] == gen.OVERFIT100_PUBLISHED_MARKER, order
@@ -2270,10 +2279,10 @@ def test_a_mid_publication_preemption_is_repaired_from_staging(tmp_path, monkeyp
     boom = RuntimeError("preempted mid-publication")
     real_text = gen._write_text_immutable
 
-    def _die_on_csv(path, text):
+    def _die_on_csv(path, text, **kw):
         if path.endswith("summary.csv"):
             raise boom
-        return real_text(path, text)
+        return real_text(path, text, **kw)
 
     monkeypatch.setattr(gen, "_write_text_immutable", _die_on_csv)
     with pytest.raises(RuntimeError):
@@ -2305,8 +2314,10 @@ def test_publication_resume_refuses_when_staging_cannot_rebuild_the_grid(tmp_pat
     monkeypatch.setattr(
         gen,
         "_write_text_immutable",
-        lambda path, text: (
-            (_ for _ in ()).throw(RuntimeError("boom")) if path.endswith("summary.csv") else real_text(path, text)
+        lambda path, text, **kw: (
+            (_ for _ in ()).throw(RuntimeError("boom"))
+            if path.endswith("summary.csv")
+            else real_text(path, text, **kw)
         ),
     )
     with pytest.raises(RuntimeError):
@@ -2331,12 +2342,12 @@ def test_a_foreign_writer_publishing_different_bytes_is_refused(tmp_path, monkey
     step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
     real_json = gen._write_json_immutable
 
-    def _foreign_marker_appears(path, value):
+    def _foreign_marker_appears(path, value, **kw):
         if path.endswith("aggregation.json"):
             marker = Path(step_root) / gen.OVERFIT100_PUBLISHED_MARKER
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(json.dumps({"eval_pass_role": "s3_intermediate", "n_rows": 999}) + "\n")
-        return real_json(path, value)
+        return real_json(path, value, **kw)
 
     monkeypatch.setattr(gen, "_write_json_immutable", _foreign_marker_appears)
     with pytest.raises(ValueError) as ei:
@@ -2384,6 +2395,8 @@ def test_gcs_zero_byte_directory_markers_are_tolerated_but_other_zero_byte_objec
         yield (f"{staging}/correct/seed_0", [], ["ep100_v0_s00000.json"])
 
     monkeypatch.setattr(gen.tf.io.gfile, "walk", _walk_with_marker)
+    # ...and it really is zero bytes (finding 3: the size, not just the name, decides).
+    monkeypatch.setattr(gen.tf.io.gfile, "stat", lambda path: SimpleNamespace(length=0))
     assert _read(root)  # markers skipped, the real row admitted
     assert Path(real_path).exists()
 
@@ -2432,3 +2445,298 @@ def test_the_aux_recovery_note_points_at_the_backfill_not_at_staging():
     assert "backfill" in note
     # It must NOT tell the operator that clearing staging recovers a published row's ceiling.
     assert "clears the staging root and re-runs" not in note
+
+
+# ======================================================================================
+# (eval-resume pass 3) Complete runtime identity, an AUTHENTICATED marker, and a
+# compare-only published mode.
+# ======================================================================================
+
+
+def test_signature_binds_the_effective_runtime_identity():
+    signature = _build_signature()
+    for field in (
+        "num_train_timesteps",
+        "use_qwix_quantization",
+        "quantization",
+        "qwix_module_path",
+        "weight_quantization_calibration_method",
+        "act_quantization_calibration_method",
+        "bwd_quantization_calibration_method",
+        "transformer_weight_source",
+        "from_pt",
+    ):
+        assert field in signature, field
+    assert set(signature) == {"schema"} | {name for name, _ in gen.OVERFIT100_RUN_SIGNATURE_TYPES}
+    assert type(signature["use_qwix_quantization"]) is bool
+    assert type(signature["num_train_timesteps"]) is int
+
+
+@pytest.mark.parametrize(
+    "field,bad",
+    [
+        ("num_train_timesteps", 500),  # scales every rollout timestep
+        ("use_qwix_quantization", True),  # can replace the rollout graph entirely
+        ("quantization", "fp8_full"),
+        ("qwix_module_path", ".*transformer.*"),
+        ("weight_quantization_calibration_method", "minmax"),
+        ("act_quantization_calibration_method", "minmax"),
+        ("bwd_quantization_calibration_method", "minmax"),
+        ("transformer_weight_source", "/cache/snapshots/" + "e" * 40),
+        ("from_pt", False),
+    ],
+)
+def test_every_runtime_identity_field_is_enforced(tmp_path, field, bad):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    expected = _build_signature()
+    _stage(step_root, _sample_row(), signature={**expected, field: bad})
+    with pytest.raises(ValueError) as ei:
+        _read(step_root, signature=expected)
+    assert field in str(ei.value)
+
+
+def test_resolved_checkpoint_dir_normalizes_trailing_slashes():
+    # The comment promises that equivalent spellings agree; make that true rather than merely
+    # claimed, so a trailing slash in the launcher cannot force a needless full recompute.
+    plain = _full_signature_config(checkpoint_dir="gs://b/ck")
+    slashed = _full_signature_config(checkpoint_dir="gs://b/ck/")
+    assert gen._resolved_checkpoint_dir(plain) == gen._resolved_checkpoint_dir(slashed) == "gs://b/ck"
+    fallback = _full_signature_config(checkpoint_dir="", output_dir="gs://b/", run_name="r")
+    assert gen._resolved_checkpoint_dir(fallback) == "gs://b/r/checkpoints"
+
+
+# --------------------------------------------------------------------------------------
+# Finding 2: the marker must be authenticated, and published mode compare-only.
+# --------------------------------------------------------------------------------------
+
+
+def _publish_then(tmp_path, monkeypatch, *, episodes=None, role="s3_intermediate", seeds="0", modes="correct"):
+    episodes = episodes or [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role=role, seeds=seeds, modes=modes)
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / f"step_002500_{role}"
+    return config, step_root
+
+
+def test_the_marker_records_what_it_authenticates(tmp_path, monkeypatch):
+    _, step_root = _publish_then(tmp_path, monkeypatch)
+    marker = json.loads((step_root / gen.OVERFIT100_PUBLISHED_MARKER).read_text())
+    assert marker["schema"] == gen.OVERFIT100_PUBLISHED_MARKER_SCHEMA
+    assert marker["eval_pass_role"] == "s3_intermediate"
+    assert marker["checkpoint_step"] == 2500
+    assert marker["n_rows"] == 1
+    assert marker["manifest_sha256"] == json.loads((step_root / "aggregation.json").read_text())["manifest_sha256"]
+    assert marker["aggregation_sha256"] == hashlib.sha256((step_root / "aggregation.json").read_bytes()).hexdigest()
+    assert sorted(marker["artifacts"]) == sorted(gen.OVERFIT100_FINAL_ARTIFACTS)
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["", "   ", "{ not json", "[]", json.dumps({"schema": "foreign_v1"}), json.dumps({})],
+    ids=["empty", "blank", "corrupt", "list", "foreign_schema", "no_fields"],
+)
+def test_an_unparseable_or_foreign_marker_hard_fails_at_entry(tmp_path, monkeypatch, content):
+    config, step_root = _publish_then(tmp_path, monkeypatch)
+    (step_root / gen.OVERFIT100_PUBLISHED_MARKER).write_text(content)
+    before = _dir_snapshot(step_root)
+    monkeypatch.setattr(gen, "_write_json", lambda path, value: pytest.fail(f"wrote {path} before validating"))
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    message = str(ei.value)
+    assert gen.OVERFIT100_PUBLISHED_MARKER in message
+    assert str(step_root) in message  # operator guidance names the directory
+    assert _dir_snapshot(step_root) == before
+
+
+def test_a_marker_valid_in_every_way_except_its_schema_tag_hard_fails(tmp_path, monkeypatch):
+    # Isolates the SCHEMA check: everything else about this marker is correct, so nothing but the
+    # tag can reject it (without this case the key-set check masks the schema check).
+    config, step_root = _publish_then(tmp_path, monkeypatch)
+    marker_path = step_root / gen.OVERFIT100_PUBLISHED_MARKER
+    marker = json.loads(marker_path.read_text())
+    marker["schema"] = "overfit100_eval_published_v9"
+    marker_path.write_text(json.dumps(marker, indent=2) + "\n")
+    before = _dir_snapshot(step_root)
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    assert "overfit100_eval_published_v9" in str(ei.value)
+    assert _dir_snapshot(step_root) == before
+
+
+def test_a_marker_with_an_extra_key_hard_fails(tmp_path, monkeypatch):
+    # Isolates the KEY-SET check: schema, types and every bound value are correct, so only the
+    # exact key set can reject this one.
+    config, step_root = _publish_then(tmp_path, monkeypatch)
+    marker_path = step_root / gen.OVERFIT100_PUBLISHED_MARKER
+    marker = json.loads(marker_path.read_text())
+    marker["published_by"] = "someone else"
+    marker_path.write_text(json.dumps(marker, indent=2) + "\n")
+    before = _dir_snapshot(step_root)
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    assert "published_by" in str(ei.value)
+    assert _dir_snapshot(step_root) == before
+
+
+@pytest.mark.parametrize(
+    "field,bad",
+    [
+        ("eval_pass_role", "s3_full_set"),
+        ("checkpoint_step", 1000),
+        ("manifest_sha256", "b" * 64),
+        ("n_rows", 99),
+        ("aggregation_sha256", "c" * 64),
+    ],
+)
+def test_a_marker_that_does_not_bind_this_run_hard_fails_at_entry(tmp_path, monkeypatch, field, bad):
+    config, step_root = _publish_then(tmp_path, monkeypatch)
+    marker_path = step_root / gen.OVERFIT100_PUBLISHED_MARKER
+    marker = json.loads(marker_path.read_text())
+    marker[field] = bad
+    marker_path.write_text(json.dumps(marker, indent=2) + "\n")
+    before = _dir_snapshot(step_root)
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    assert field in str(ei.value)
+    assert _dir_snapshot(step_root) == before
+
+
+def test_a_marker_with_a_missing_final_artifact_hard_fails_before_any_write(tmp_path, monkeypatch):
+    # A copied marker must not let an INCOMPLETE directory pass as published and then be silently
+    # completed by the create-if-absent writers.
+    config, step_root = _publish_then(tmp_path, monkeypatch)
+    (step_root / "summary.csv").unlink()
+    before = _dir_snapshot(step_root)
+    monkeypatch.setattr(gen, "_write_json", lambda path, value: pytest.fail(f"wrote {path}"))
+    monkeypatch.setattr(gen, "_write_text_immutable", lambda path, text: pytest.fail(f"wrote {path}"))
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    message = str(ei.value)
+    assert "summary.csv" in message and gen.OVERFIT100_PUBLISHED_MARKER in message
+    assert _dir_snapshot(step_root) == before
+
+
+def test_published_mode_is_compare_only_and_never_creates(tmp_path, monkeypatch):
+    # Even with every artifact present, published mode must COMPARE: the create-if-absent path of
+    # the immutable writers has to be unreachable there.
+    config, step_root = _publish_then(tmp_path, monkeypatch)
+    before = _dir_snapshot(step_root)
+    created: list[str] = []
+    real_write_json = gen._write_json
+
+    monkeypatch.setattr(gen, "_write_json", lambda path, value: created.append(path))
+    gen.run_overfit100(config)
+    assert created == []  # nothing written at all
+    assert _dir_snapshot(step_root) == before
+    del real_write_json
+
+
+def test_compare_only_writers_refuse_a_missing_artifact(tmp_path):
+    path = str(tmp_path / "aggregation.json")
+    with pytest.raises(ValueError) as ei:
+        gen._write_json_immutable(path, {"a": 1}, compare_only=True)
+    assert "aggregation.json" in str(ei.value)
+    assert not Path(path).exists()
+    gen._write_json_immutable(path, {"a": 1})  # normal mode creates
+    gen._write_json_immutable(path, {"a": 1}, compare_only=True)  # identical bytes compare fine
+    with pytest.raises(ValueError):
+        gen._write_json_immutable(path, {"a": 2}, compare_only=True)
+
+    text_path = str(tmp_path / "summary.csv")
+    with pytest.raises(ValueError):
+        gen._write_text_immutable(text_path, "a,b\n", compare_only=True)
+    gen._write_text_immutable(text_path, "a,b\n")
+    gen._write_text_immutable(text_path, "a,b\n", compare_only=True)
+
+
+def test_a_partial_publication_is_still_repairable_after_the_marker_rules(tmp_path, monkeypatch):
+    # Regression guard for the pass-2 behaviour: no marker + some artifacts is STILL the
+    # publication-resume path, not a hard fail.
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    real_text = gen._write_text_immutable
+    monkeypatch.setattr(
+        gen,
+        "_write_text_immutable",
+        lambda path, text, **kw: (
+            (_ for _ in ()).throw(RuntimeError("boom"))
+            if path.endswith("summary.csv")
+            else real_text(path, text, **kw)
+        ),
+    )
+    with pytest.raises(RuntimeError):
+        gen.run_overfit100(config)
+    monkeypatch.setattr(gen, "_write_text_immutable", real_text)
+    _CALLS.clear()
+    gen.run_overfit100(config)
+    assert _CALLS == []
+    assert _published(step_root)
+
+
+# --------------------------------------------------------------------------------------
+# Finding 3: trailing-slash objects are markers only when they are ZERO BYTES.
+# --------------------------------------------------------------------------------------
+
+
+def _walk_yielding(staging, entries):
+    def _walk(top, onerror=None, **kwargs):
+        for dirpath, dirnames, filenames in entries:
+            yield (dirpath, dirnames, filenames)
+
+    return _walk
+
+
+def test_a_zero_byte_trailing_slash_object_is_a_directory_marker(tmp_path, monkeypatch):
+    root = tmp_path / "step_002500_s3_segment_final"
+    _stage(root, _sample_row())
+    staging = str(root / gen.OVERFIT100_STAGING_DIR)
+    monkeypatch.setattr(
+        gen.tf.io.gfile,
+        "walk",
+        _walk_yielding(
+            staging, [(staging, ["correct"], ["marker/"]), (f"{staging}/correct/seed_0", [], ["ep100_v0_s00000.json"])]
+        ),
+    )
+    monkeypatch.setattr(gen.tf.io.gfile, "stat", lambda path: SimpleNamespace(length=0))
+    assert _read(root)  # tolerated: a genuinely zero-byte placeholder
+
+
+def test_a_nonzero_trailing_slash_object_is_refused(tmp_path, monkeypatch):
+    # A foreign object whose name merely ends in "/" is NOT a GCS folder placeholder.
+    root = tmp_path / "step_002500_s3_segment_final"
+    _stage(root, _sample_row())
+    staging = str(root / gen.OVERFIT100_STAGING_DIR)
+    monkeypatch.setattr(
+        gen.tf.io.gfile,
+        "walk",
+        _walk_yielding(
+            staging,
+            [(staging, ["correct"], ["not_a_marker/"]), (f"{staging}/correct/seed_0", [], ["ep100_v0_s00000.json"])],
+        ),
+    )
+    monkeypatch.setattr(gen.tf.io.gfile, "stat", lambda path: SimpleNamespace(length=17))
+    with pytest.raises(ValueError) as ei:
+        _read(root)
+    assert "not_a_marker/" in str(ei.value)
+
+
+def test_a_stat_failure_on_a_candidate_marker_fails_closed(tmp_path, monkeypatch):
+    root = tmp_path / "step_002500_s3_segment_final"
+    _stage(root, _sample_row())
+    staging = str(root / gen.OVERFIT100_STAGING_DIR)
+    monkeypatch.setattr(
+        gen.tf.io.gfile,
+        "walk",
+        _walk_yielding(
+            staging, [(staging, ["correct"], ["marker/"]), (f"{staging}/correct/seed_0", [], ["ep100_v0_s00000.json"])]
+        ),
+    )
+
+    def _boom(path):
+        raise OSError("transient stat failure")
+
+    monkeypatch.setattr(gen.tf.io.gfile, "stat", _boom)
+    with pytest.raises(ValueError) as ei:
+        _read(root)
+    assert "transient stat failure" in str(ei.value)
