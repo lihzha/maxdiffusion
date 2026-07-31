@@ -273,6 +273,7 @@ def action_world_train_step(
         b, cfg.fps_id, cfg.motion_bucket_id, cfg.noise_aug_strength
     ).astype(input_flat.dtype)
     image_only_indicator = jnp.zeros((b, t_total), dtype=input_flat.dtype)
+    _p(probe, "18_adm_vector", adm_vec)
 
     v_pred = apply_fns["unet"](
         {"params": params["unet"]},
@@ -283,8 +284,8 @@ def action_world_train_step(
         image_only_indicator=image_only_indicator,
         num_frames=t_total,
         frame_level_cond=True,
+        probe=probe,
     ).sample  # (B*F, 4, H, W)
-    _p(probe, "18_adm_vector", adm_vec)
     _p(probe, "19_unet_v_pred", v_pred)
     v_pred = v_pred.reshape((b, t_total) + v_pred.shape[1:])
 
