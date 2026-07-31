@@ -249,3 +249,4 @@ tpu create v6 -n 64 --name exp02-overfit100-s3train-yixun \
 ## Job 16 — v6e-64 S3 TRAINING resubmit — launched 2026-07-31
 
 Commit: `b52dcc6430da83251ca2a061f88cef6758b718b3` (post aux-fix; trainer path code-identical to Job 15's SHA). Same command as Job 15 with the new COMMIT.
+- **Job id:** `20260731-012023-3bbac3d0-exp02-overfit100-s3train-yixun` (submitted; outcome pending)
