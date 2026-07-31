@@ -118,7 +118,7 @@ python src/maxdiffusion/train_wan.py \
     attention=tokamax_flash \
     weights_dtype=float32 \
     activations_dtype=bfloat16 \
-    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
+    remat_policy=FULL \
     ici_data_parallelism=1 \
     ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
@@ -146,8 +146,8 @@ python src/maxdiffusion/train_wan.py \
     history_noise_max_timestep=200 \
     flash_min_seq_length=128 \
     hardware='tpu' \
-    log_attn_param_stats=True \
-    log_attn_activation_stats=True \
+    log_attn_param_stats=False \
+    log_attn_activation_stats=False \
     debug_nan_probe=True \
     wandb_project='wan-ac-history-low-res-ctrl-world' \
     wandb_video_every=1000 \
