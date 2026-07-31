@@ -802,8 +802,15 @@ def stat_object(uri: str) -> dict:
     return resolved.fingerprint
 
 
-def fetch_pinned(uri: str, fingerprint: dict, destination: Path) -> Path:
-    """Download the EXACT statted generation and bind the bytes to the recorded md5/size."""
+def fetch_pinned(uri: str, fingerprint: dict, destination: str | Path) -> Path:
+    """Download the EXACT statted generation and bind the bytes to the recorded md5/size.
+
+    ``destination`` is normalized with `Path(...)`, so a str is accepted: the cycle-D eval path
+    passed one (its config-derived paths are strings throughout) and every auxiliary row died on
+    `destination.parent` before any download. The builder's own callers pass Paths; widening the
+    contract here means no future caller can reintroduce that mismatch.
+    """
+    destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     proc = run_gsutil(["cp", pinned_uri(uri, fingerprint), str(destination)], check=False)
     if proc.returncode != 0 or not destination.exists():

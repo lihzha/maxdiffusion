@@ -972,3 +972,169 @@ def test_statistic_admits_whole_validated_artifacts_not_label_filtered_rows(tmp_
     rejected = [entry for entry in verdict["artifact_roles"] if not entry["ok"]]
     assert len(rejected) == 1 and any("mode" in reason for reason in rejected[0]["reasons"])
     assert verdict["admitted_artifacts"] == {"s3_segment_final": 1, "s3_full_set": 0}
+
+
+# ======================================================================================
+# (aux-path) S2 finding: the auxiliary RGB / VAE-ceiling fetch passed a str where the
+# builder's fetch_pinned expects a path-like, so EVERY aux row failed before any network
+# call with "AttributeError: 'str' object has no attribute 'parent'".
+# ======================================================================================
+
+S2_AUX_FAILURE = "AttributeError: 'str' object has no attribute 'parent'"
+_S2_ARTIFACTS = _REPO / "docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_s2_gate_artifacts"
+
+
+def _aux_manifest(tmp_path, *, episode_id=25189, uri="gs://bucket/videos/25189/0.mp4"):
+    payload = {
+        "vae_fingerprint": {"hf_repo": "r", "revision": "a" * 40},
+        "totals": {"episodes": 1, "windows": 3},
+        "episodes": [
+            {
+                "episode_index": 0,
+                "episode_id": episode_id,
+                "used_text": "fold cloth",
+                "n_windows": 3,
+                "video_fingerprint": {"uri": uri, "generation": 17, "md5": "Szm9uNUI2AtjyRNTtpm9SA==", "size": 4},
+            }
+        ],
+    }
+    path = tmp_path / "aux_manifest.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return str(path)
+
+
+def _install_aux_spies(monkeypatch, *, frames_len=33, seen=None, fail=None):
+    """Stand in for the builder's fetch/decode, mimicking fetch_pinned's REAL contract.
+
+    The spy performs the very operation the real helper performs first --
+    ``destination.parent.mkdir(...)`` -- so a str destination reproduces the S2 failure exactly
+    instead of being silently tolerated by a lenient fake.
+    """
+    import numpy as _np
+
+    from maxdiffusion.data_preprocessing import build_overfit100_dataset as builder
+
+    def _fetch(uri, fingerprint, destination):
+        if seen is not None:
+            seen["destination"] = destination
+            seen["uri"] = uri
+        if fail is not None:
+            raise fail
+        destination.parent.mkdir(parents=True, exist_ok=True)  # the real helper's first line
+        destination.write_bytes(b"\x00\x00\x00\x00")
+        return destination
+
+    def _decode(path, **kwargs):
+        if seen is not None:
+            seen["decoded"] = path
+        return _np.zeros((frames_len, 8, 8, 3), dtype=_np.uint8)
+
+    monkeypatch.setattr(builder, "fetch_pinned", _fetch)
+    monkeypatch.setattr(builder, "decode_mp4_frames", _decode)
+
+
+def test_aux_rgb_hands_fetch_pinned_a_path_not_a_str(tmp_path, monkeypatch):
+    # THE S2 REGRESSION. Before the fix this returned the exact status string every one of the
+    # 90 S2 rows carried; the aux metrics must now be computed instead.
+    import numpy as _np
+
+    manifest = _aux_manifest(tmp_path)
+    seen: dict = {}
+    _install_aux_spies(monkeypatch, seen=seen)
+    pred = _np.zeros((33, 8, 8, 3), dtype=_np.float32)
+    out = gen.overfit100_aux_rgb(manifest, 25189, 0, pred, pred, {})
+
+    assert out["aux_status"] == "ok", out["aux_status"]
+    assert out["aux_status"] != S2_AUX_FAILURE
+    assert isinstance(seen["destination"], Path), type(seen["destination"]).__name__
+    assert seen["destination"].name == "0.mp4"
+    assert seen["uri"] == "gs://bucket/videos/25189/0.mp4"
+    # The metrics are populated (their VALUES need scikit-image; presence is the contract here).
+    for key in ("ssim_vs_rgb", "pixel_mse_vs_rgb", "vae_ceiling_ssim"):
+        assert out[key] is not None, key
+
+
+def test_the_s2_gate_artifacts_carry_exactly_the_reproduced_failure():
+    # Ties the regression to its evidence: the committed S2 artifacts, whose rows ALL carry the
+    # status the test above now prevents.
+    if not _S2_ARTIFACTS.exists():
+        pytest.skip(f"S2 gate artifacts not present at {_S2_ARTIFACTS}")
+    statuses = set()
+    rows_seen = 0
+    for path in sorted(_S2_ARTIFACTS.glob("*.json")):
+        artifact = json.loads(path.read_text())
+        for row in artifact.get("rows", ()):
+            statuses.add(row.get("aux_status"))
+            rows_seen += 1
+    assert rows_seen > 0
+    assert statuses == {S2_AUX_FAILURE}
+
+
+def test_fetch_pinned_accepts_both_str_and_path_destinations(tmp_path, monkeypatch):
+    # The sweep: the shared helper normalizes its destination, so no caller can reintroduce the
+    # same mismatch. Exercised against the REAL fetch_pinned with gsutil stubbed out.
+    from maxdiffusion.data_preprocessing import build_overfit100_dataset as builder
+    from maxdiffusion.data_preprocessing.extract_v1_fixture import md5_b64
+
+    payload = b"\x01\x02\x03\x04"
+    fingerprint = {"uri": "gs://b/o.mp4", "generation": 5, "md5": md5_b64(payload), "size": len(payload)}
+
+    def _fake_gsutil(args, **kwargs):
+        Path(args[-1]).write_bytes(payload)
+        return SimpleNamespace(returncode=0, stderr=b"", stdout=b"")
+
+    monkeypatch.setattr(builder, "run_gsutil", _fake_gsutil)
+    nested = tmp_path / "does" / "not" / "exist"
+    as_str = builder.fetch_pinned(fingerprint["uri"], fingerprint, str(nested / "a.mp4"))
+    as_path = builder.fetch_pinned(fingerprint["uri"], fingerprint, nested / "b.mp4")
+    for result in (as_str, as_path):
+        assert isinstance(result, Path)
+        assert result.read_bytes() == payload  # parent dirs created, bytes verified
+
+
+def test_aux_rgb_still_records_a_genuine_fetch_failure_without_crashing(tmp_path, monkeypatch):
+    # D5 must keep containing REAL failures: a download error is a recorded status, never a raise.
+    import numpy as _np
+
+    from maxdiffusion.data_preprocessing.build_overfit100_dataset import BuildError
+
+    manifest = _aux_manifest(tmp_path)
+    _install_aux_spies(monkeypatch, fail=BuildError("gs://b/o.mp4: pinned download failed (gsutil exit 1)"))
+    pred = _np.zeros((33, 8, 8, 3), dtype=_np.float32)
+    out = gen.overfit100_aux_rgb(manifest, 25189, 0, pred, pred, {})
+    assert out["aux_status"].startswith("BuildError:")
+    assert "pinned download failed" in out["aux_status"]
+    for key in ("ssim_vs_rgb", "pixel_mse_vs_rgb", "vae_ceiling_ssim"):
+        assert out[key] is None, key
+    # An episode the manifest does not carry is still its own recorded status.
+    missing = gen.overfit100_aux_rgb(manifest, 999999, 0, pred, pred, {})
+    assert "not in the manifest" in missing["aux_status"]
+
+
+def test_aux_rgb_window_slice_and_cache_survive_the_fix(tmp_path, monkeypatch):
+    # The window slice still comes from the source clip, and the per-episode cache still avoids a
+    # second fetch (one download per episode, not per window/mode/seed).
+    import numpy as _np
+
+    manifest = _aux_manifest(tmp_path)
+    calls: list = []
+
+    from maxdiffusion.data_preprocessing import build_overfit100_dataset as builder
+
+    def _fetch(uri, fingerprint, destination):
+        calls.append(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"\x00")
+        return destination
+
+    monkeypatch.setattr(builder, "fetch_pinned", _fetch)
+    monkeypatch.setattr(builder, "decode_mp4_frames", lambda path, **kw: _np.zeros((40, 8, 8, 3), dtype=_np.uint8))
+    pred = _np.zeros((33, 8, 8, 3), dtype=_np.float32)
+    cache: dict = {}
+    assert gen.overfit100_aux_rgb(manifest, 25189, 0, pred, pred, cache)["aux_status"] == "ok"
+    assert gen.overfit100_aux_rgb(manifest, 25189, 4, pred, pred, cache)["aux_status"] == "ok"
+    assert len(calls) == 1  # the second window reused the cached frames
+    # A window running past the end of the clip is a recorded status, not a crash.
+    late = gen.overfit100_aux_rgb(manifest, 25189, 36, pred, pred, cache)
+    assert "source clip has 40 frames" in late["aux_status"]
+    assert late["vae_ceiling_ssim"] is None

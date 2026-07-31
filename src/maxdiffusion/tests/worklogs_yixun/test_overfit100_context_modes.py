@@ -543,7 +543,8 @@ class _DecodingPipeline(_FakePipeline):
         return np.full((1, 5, 8, 8, 3), np.tanh(value) * 0.5 + 0.5, dtype=np.float32)
 
 
-def _driver_manifest(tmp_path, episodes):
+def _driver_manifest(tmp_path, episodes, *, with_video=False):
+    """``with_video`` adds the per-episode ``video_fingerprint`` the auxiliary RGB path pulls."""
     payload = {
         "vae_fingerprint": {"hf_repo": "r", "revision": "a" * 40},
         "episodes": [
@@ -552,6 +553,18 @@ def _driver_manifest(tmp_path, episodes):
                 "episode_id": 100 + index,
                 "used_text": text,
                 "n_windows": n_windows,
+                **(
+                    {
+                        "video_fingerprint": {
+                            "uri": f"gs://bucket/videos/{100 + index}/0.mp4",
+                            "generation": 17 + index,
+                            "md5": "Szm9uNUI2AtjyRNTtpm9SA==",
+                            "size": 4,
+                        }
+                    }
+                    if with_video
+                    else {}
+                ),
             }
             for index, (text, n_windows) in enumerate(episodes)
         ],
@@ -998,3 +1011,47 @@ def test_driver_rerunning_the_same_pass_is_idempotent_but_a_changed_result_is_re
         gen.run_overfit100(config3)
     assert "aggregation.json" in str(ei.value)
     assert path.read_text() == first  # the original evidence is intact
+
+
+def test_driver_computes_real_aux_ceilings_end_to_end(tmp_path, monkeypatch):
+    # The S2 finding, at the level it actually bit: the DRIVER passes config-derived strings, and
+    # the auxiliary fetch used to receive one where a path-like was required -- so all 90 rows of
+    # every S2 artifact carried "AttributeError: 'str' object has no attribute 'parent'" and the
+    # run produced no VAE ceilings at all. The whole pass must now report ok coverage.
+    from maxdiffusion.data_preprocessing import build_overfit100_dataset as builder
+
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    destinations = []
+
+    def _fetch(uri, fingerprint, destination):
+        destinations.append(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)  # the real helper's first act
+        destination.write_bytes(b"\x00\x00\x00\x00")
+        return destination
+
+    monkeypatch.setattr(builder, "fetch_pinned", _fetch)
+    monkeypatch.setattr(builder, "decode_mp4_frames", lambda path, **kw: np.zeros((40, 8, 8, 3), dtype=np.uint8))
+
+    config = _driver_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    config.model_manifest_path = _driver_manifest(tmp_path, episodes, with_video=True)
+    config.eval_aux_rgb = True
+    gen.run_overfit100(config)
+
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    artifact = json.loads((step_root / "aggregation.json").read_text())
+    assert [row["aux_status"] for row in artifact["rows"]] == ["ok", "ok"]
+    for row in artifact["rows"]:
+        assert row["vae_ceiling_ssim"] is not None and row["ssim_vs_rgb"] is not None
+    # One pinned download per episode, each handed a real Path.
+    assert len(destinations) == 2
+    assert all(isinstance(dest, Path) and dest.name == "0.mp4" for dest in destinations)
+    # D5's coverage block reports full coverage, so no WARNING/ERROR lines are emitted.
+    coverage = json.loads((step_root / "summary.json").read_text())["per_mode"]["aux_coverage"]
+    assert coverage == {
+        "requested": 2,
+        "ok": 2,
+        "failed": 0,
+        "coverage_fraction": 1.0,
+        "failure_reason_counts": {},
+    }
+    assert gen.aux_coverage_log_lines(coverage) == []

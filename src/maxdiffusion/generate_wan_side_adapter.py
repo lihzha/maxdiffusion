@@ -57,6 +57,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 import jax
@@ -1383,7 +1384,12 @@ def overfit100_aux_rgb(manifest_path, episode_id, window_start, pred_frames, gt_
                 return result
             fingerprint = entry["video_fingerprint"]
             with tempfile.TemporaryDirectory(prefix="overfit100_aux_") as tmpdir:
-                local = fetch_pinned(fingerprint["uri"], fingerprint, os.path.join(tmpdir, "0.mp4"))
+                # ``fetch_pinned`` is path-like-typed (its first act is ``destination.parent.mkdir``).
+                # The S2 gate evals passed ``os.path.join(...)`` -- a str -- so every auxiliary row
+                # failed with "AttributeError: 'str' object has no attribute 'parent'" BEFORE any
+                # download, losing the VAE ceiling for the whole run. Normalize at the boundary; the
+                # helper now also normalizes defensively.
+                local = fetch_pinned(fingerprint["uri"], fingerprint, Path(tmpdir) / "0.mp4")
                 frames = decode_mp4_frames(local)
             if cache is not None:
                 cache["episode_id"] = int(episode_id)
