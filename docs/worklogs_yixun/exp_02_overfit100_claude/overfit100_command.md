@@ -225,3 +225,21 @@ tpu create v6 -n 8 --name exp02-overfit100-s2gate-yixun \
 
 Commit: `a1d0fa84829e34b4871c551c1836ec277c138c0b`. Pre-approved by Query 6. One job per checkpoint; modes correct@all + ablations@2500; seeds 0,1,2; canonical windows; no videos.
 - **Job ids:** `20260730-184240-…-s2eval-250`, `20260730-184307-…-s2eval-500`, `20260730-184333-…-s2eval-1000`, `20260730-184400-…-s2eval-2500` (submitted; outcomes pending)
+## Job 15 — v6e-64 S3 TRAINING (train100, 2,500 steps, ckpts [250,500,1000,1750,2500]) — launched 2026-07-30
+
+Commit: `d670809b208c9c68dbacf7563a6e7178eb1ecb5b` (pushed). Approved by Query 7 (option A).
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 64 --name exp02-overfit100-s3train-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env RUN_NAME="wan-overfit100-s3-20260730" \
+  --env MAX_TRAIN_STEPS=2500 \
+  --env CHECKPOINT_STEPS="[250,500,1000,1750,2500]" \
+  --env DATA_DIR="gs://v6_east1d/datasets/exp02_overfit100/train100" \
+  --env EXPECTED_WINDOWS=1629 --env NUM_TEXT_SLOTS=100 \
+  --env COMMIT="d670809b208c9c68dbacf7563a6e7178eb1ecb5b" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/train_wan_overfit100.sh
+```

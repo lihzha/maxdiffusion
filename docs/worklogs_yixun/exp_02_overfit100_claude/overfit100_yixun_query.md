@@ -61,3 +61,9 @@ Source: Yixun, relaying/echoing Lihan's critique of exp_01. Append each new quer
 **Verbatim:** "Pre-approve S2 conditional on S1 pass"
 
 **Interpretation:** the **S2 10-episode gate run** (v6e-8, `train10`, 2,500 steps, GBS 32, LR 1e-5, warmup 250, checkpoints [250,500,1000,2500] retained, per plan D10) **plus its D11 gate evaluations** (S2 eval passes: 3 seeds × correct mode at every checkpoint on the 10 canonical windows; null/shuffled ablations at step 2500; `eval_pass_role=s2_gate`) are **pre-approved conditional on the S1 smoke passing its acceptance criteria log-verified** (not merely queue-SUCCEEDED): deployed-code COMMIT relay, preflight order (dataset integrity → pinned snapshot → pipeline), context table [10,512,4096] built + audited, 20/20 steps finite loss no OOM/NaN, no checkpoints written, both workers exit 0. Infra-failure resubmits covered by standing policy; any code/config change voids the grant for the changed job. **S3 (100-episode run) remains a separate future approval**, to be requested with the S2 gate results + the S3 eval-cost extrapolation from S2 timings.
+
+## Query 7 — 2026-07-30 (S3 approval, from Yixun)
+
+**Verbatim:** "A"
+
+**Interpretation:** Option A of the S2-gate decision package — **proceed to S3 as designed** despite the formal gate rule missing condition (ii) by 0.027 (analysis: rule miscalibration; conditions (i)/(iii) passed with margin, all windows monotone, ablations show real text use). Scope approved: **S3 training** (train100, v6e-64, GBS 256, LR 1e-5, 2,500-step first segment, checkpoints [250,500,1000,1750,2500] retained) **and its D11 evaluations** (intermediates 1-seed/correct; segment-final 3×3 at 2500; the s3_full_set pass at c* for the two-tier claim) at the extrapolated costs presented (training ~45 min; evals ~20/65/100 min). The aux-ceiling str-vs-Path fix goes through a reviewed mini-round BEFORE any S3 eval. Extension of S3 beyond 2,500 steps remains a further approval per D10.
