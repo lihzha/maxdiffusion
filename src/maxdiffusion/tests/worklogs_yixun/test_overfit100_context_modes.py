@@ -1055,3 +1055,67 @@ def test_driver_computes_real_aux_ceilings_end_to_end(tmp_path, monkeypatch):
         "failure_reason_counts": {},
     }
     assert gen.aux_coverage_log_lines(coverage) == []
+
+
+# --------------------------------------------------------------------------------------
+# (eval-ffmpeg strengthening, finding 2) The aux-degradation warning, OBSERVED THROUGH THE
+# DRIVER.
+#
+# The first version of this test patched max_logging.log but never called run_overfit100 and
+# never asserted the captured list, so deleting the production log call would still have
+# passed. This drives the real driver, records log and restore events IN ORDER, and asserts
+# exactly one warning that precedes the restore.
+# --------------------------------------------------------------------------------------
+
+
+def _run_driver_recording_events(tmp_path, monkeypatch, *, which, aux):
+    """Drive run_overfit100, returning the ordered ("log", msg) / ("restore",) event list."""
+    events: list[tuple] = []
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    config = _driver_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    config.eval_aux_rgb = aux
+
+    inner_restore = gen._restore_overfit100_validation_state
+
+    def _recording_restore(cfg):
+        events.append(("restore",))
+        return inner_restore(cfg)
+
+    monkeypatch.setattr(gen, "_restore_overfit100_validation_state", _recording_restore)
+    monkeypatch.setattr(gen.max_logging, "log", lambda message: events.append(("log", str(message))))
+    monkeypatch.setattr(gen.shutil, "which", which)
+    gen.run_overfit100(config)
+    return events
+
+
+def test_driver_logs_exactly_one_aux_warning_before_the_restore(tmp_path, monkeypatch):
+    events = _run_driver_recording_events(
+        tmp_path,
+        monkeypatch,
+        which=lambda binary: None if binary == "ffmpeg" else "/usr/bin/" + binary,
+        aux=True,
+    )
+    warnings = [
+        i for i, event in enumerate(events) if event[0] == "log" and "ALL aux metrics will be null" in event[1]
+    ]
+    restores = [i for i, event in enumerate(events) if event[0] == "restore"]
+    assert len(warnings) == 1, f"expected exactly one aux warning, got {len(warnings)}"
+    assert len(restores) == 1
+    assert warnings[0] < restores[0], "the warning must precede the checkpoint restore"
+    message = events[warnings[0]][1]
+    assert "ffmpeg" in message and "WARNING" in message
+    assert "gsutil" not in message  # only the MISSING binary is named
+
+
+@pytest.mark.parametrize(
+    "which,aux,label",
+    [
+        (lambda binary: "/usr/bin/" + binary, True, "tools present"),
+        (lambda binary: None, False, "aux disabled"),
+    ],
+)
+def test_driver_is_silent_when_there_is_nothing_to_warn_about(tmp_path, monkeypatch, which, aux, label):
+    events = _run_driver_recording_events(tmp_path, monkeypatch, which=which, aux=aux)
+    warnings = [event for event in events if event[0] == "log" and "ALL aux metrics will be null" in event[1]]
+    assert warnings == [], f"{label}: unexpected aux warning"
+    assert any(event[0] == "restore" for event in events)  # the run still happened

@@ -31,6 +31,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -536,3 +538,218 @@ def test_write_per_window_outputs_writes_json_and_csv(tmp_path):
     reader = csv.DictReader(io.StringIO((tmp_path / "val_loss_per_window.csv").read_text()))
     assert reader.fieldnames == list(ev._PER_WINDOW_COLUMNS)
     assert [r["name"] for r in reader] == ["ep100_v0_s00000"]
+
+
+# ======================================================================================
+# (eval-ffmpeg strengthening, finding 1) EXECUTABLE proof that an OVERFIT100 loss
+# evaluation needs no video codec.
+#
+# The previous claim was a source-token scan of the module, which a reviewer correctly
+# called out as weak: it cannot see `subprocess.run(["ffmpeg", ...])`, an aliased import, or
+# a transitive call through the imported generator module. This drives the REAL
+# ``evaluate()`` loop -- record load, state build, per-checkpoint restore, jitted batches,
+# aggregation, json/csv outputs -- with every codec entry point booby-trapped and
+# ffmpeg/ffprobe stripped from PATH. If any decoder were reachable, the run would raise.
+# ======================================================================================
+
+MESH_AXES = ("data", "fsdp", "context", "tensor")
+
+
+class _CodecTrap(Exception):
+    """Raised by any booby-trapped codec entry point."""
+
+
+def _install_codec_traps(monkeypatch, calls):
+    """Booby-trap every path that could reach ffmpeg/ffprobe, directly or transitively."""
+    import subprocess
+
+    from maxdiffusion import utils as mx_utils
+    from maxdiffusion.data_preprocessing import build_overfit100_dataset as builder
+
+    def _trap(name):
+        def _boom(*args, **kwargs):
+            calls.append(name)
+            raise _CodecTrap(f"{name} was reached by the loss evaluator")
+
+        return _boom
+
+    # Direct decoders / encoders, in both the generator module and the builder.
+    monkeypatch.setattr(gen, "_save_video", _trap("gen._save_video"))
+    monkeypatch.setattr(gen, "overfit100_aux_rgb", _trap("gen.overfit100_aux_rgb"))
+    monkeypatch.setattr(gen, "export_to_video", _trap("gen.export_to_video"), raising=False)
+    monkeypatch.setattr(mx_utils, "export_to_video", _trap("utils.export_to_video"), raising=False)
+    monkeypatch.setattr(builder, "decode_mp4_frames", _trap("builder.decode_mp4_frames"))
+    monkeypatch.setattr(builder, "fetch_pinned", _trap("builder.fetch_pinned"))
+
+    # ...and the spawn layer itself, so an inline argv (the thing a token scan cannot see) is
+    # caught too. Non-codec spawns (e.g. `git rev-parse` for the eval commit) pass through.
+    real_run, real_popen = subprocess.run, subprocess.Popen
+
+    def _guard(delegate, label):
+        def _checked(popenargs, *args, **kwargs):
+            argv = popenargs if isinstance(popenargs, (list, tuple)) else [popenargs]
+            program = str(argv[0]) if argv else ""
+            if os.path.basename(program) in ("ffmpeg", "ffprobe"):
+                calls.append(f"{label}:{os.path.basename(program)}")
+                raise _CodecTrap(f"{label} spawned {program}")
+            return delegate(popenargs, *args, **kwargs)
+
+        return _checked
+
+    monkeypatch.setattr(subprocess, "run", _guard(real_run, "subprocess.run"))
+    monkeypatch.setattr(subprocess, "Popen", _guard(real_popen, "subprocess.Popen"))
+
+
+def _strip_ffmpeg_from_path(monkeypatch, tmp_path):
+    """No ffmpeg/ffprobe anywhere a lookup could find one."""
+    import shutil
+
+    empty = tmp_path / "empty_bin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil, "which", lambda binary, *a, **kw: None if binary in ("ffmpeg", "ffprobe") else real_which(binary)
+    )
+    return empty
+
+
+def _loss_eval_config(tmp_path, **overrides):
+    base = {
+        "model_type": "OVERFIT100_TI2V",
+        "latent_channels": _C,
+        "latent_frames": _F,
+        "latent_height": _H,
+        "latent_width": _W,
+        "validation_expected_count": 4,
+        "validation_checkpoint_steps": "2500",
+        "eval_data_dir": "gs://fake/train10",
+        "checkpoint_dir": str(tmp_path / "ck"),
+        "output_dir": str(tmp_path / "out"),
+        "run_name": "loss-probe",
+        "validation_loss_output_dir": str(tmp_path / "out" / "validation_loss"),
+        "side_adapter_guide_scale": 1.0,
+        "side_adapter_noise_mode": "fresh",
+        "validation_seed": 0,
+        "flow_shift": 5.0,
+        "side_adapter_sampling_steps": 25,
+        "global_batch_size_to_train_on": 2,
+        "data_sharding": [["data", "fsdp", "context", "tensor"]],
+        "logical_axis_rules": (),
+        "weights_dtype": "float32",
+        "activations_dtype": "float32",
+        "seed": 0,
+        "num_text_slots": 4,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _install_loss_eval_stubs(monkeypatch, *, n_records=4, slots=4):
+    """Real loop, stub weights: records, a 1-device mesh, a genuine state + sharding tree."""
+    from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+
+    raws = [
+        _fake_raw(episode_index=i // 2, episode_id=100 + i // 2, window_start=4 * (i % 2)) for i in range(n_records)
+    ]
+    monkeypatch.setattr(gen, "_iter_overfit100_records", lambda config: iter(raws))
+
+    mesh = Mesh(np.array(jax.devices()[:1]).reshape(1, 1, 1, 1), MESH_AXES)
+    state = _stub_overfit100_state(slots=slots)
+    shardings = jax.tree.map(lambda _: NamedSharding(mesh, P()), state)
+    trainer = SimpleNamespace(
+        _create_scheduler=lambda: (
+            FlaxFlowMatchScheduler(dtype=jnp.float32, shift=5.0, sigma_min=0.0, sigma_max=1.0),
+            None,
+        )
+    )
+    pipeline = SimpleNamespace(vae=object(), vae_cache=object(), text_encoder=object(), tokenizer=object())
+    monkeypatch.setattr(
+        gen,
+        "_build_overfit100_validation_state",
+        lambda config: (trainer, pipeline, mesh, state, shardings, jnp.zeros((1, _L, _D))),
+    )
+    monkeypatch.setattr(
+        gen,
+        "_restore_checkpoint_state",
+        lambda config, st, ckpt, **kw: (
+            st.replace(step=int(kw.get("requested_step", 0))),
+            int(kw.get("requested_step", 0)),
+        ),
+    )
+    return pipeline
+
+
+def test_overfit100_loss_evaluation_completes_with_every_codec_entry_point_booby_trapped(tmp_path, monkeypatch):
+    # The executable form of "this arm needs no ffmpeg": the REAL evaluate() loop runs to its
+    # json/csv artifacts while every decoder -- and the spawn layer itself -- would raise.
+    calls: list[str] = []
+    _install_codec_traps(monkeypatch, calls)
+    _strip_ffmpeg_from_path(monkeypatch, tmp_path)
+    monkeypatch.setenv("TRAIN_COMMIT", "a" * 40)
+    monkeypatch.setenv("COMMIT", "b" * 40)
+    monkeypatch.delenv("SMOKE_LIMIT", raising=False)
+    pipeline = _install_loss_eval_stubs(monkeypatch)
+
+    config = _loss_eval_config(tmp_path)
+    ev._assert_full_ft(
+        SimpleNamespace(
+            model_type="OVERFIT100_TI2V",
+            side_adapter_guide_scale=1.0,
+            side_adapter_noise_mode="fresh",
+            num_text_slots=4,
+            text_encode_batch=8,
+            expected_windows=167,
+            checkpoint_steps=[250],
+            model_manifest_path="docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json",
+        )
+    )
+    rows, out_dir = ev.evaluate(config)
+
+    # (1) No codec entry point was reached -- direct, aliased, or via a subprocess spawn.
+    assert calls == [], f"the loss evaluator reached a codec path: {calls}"
+    # (2) The loop really ran: one aggregate row + the per-window artifact for all 4 windows.
+    assert len(rows) == 1 and rows[0]["checkpoint_step"] == 2500 and rows[0]["n"] == 4
+    written = sorted(os.listdir(out_dir))
+    assert "val_loss.json" in written and "val_loss.csv" in written
+    assert "val_loss_per_window.json" in written and "val_loss_per_window.csv" in written
+    per_window = json.loads((Path(out_dir) / "val_loss_per_window.json").read_text())
+    assert len(per_window) == 4
+    assert [row["name"] for row in per_window] == [
+        "ep100_v0_s00000",
+        "ep100_v0_s00004",
+        "ep101_v0_s00000",
+        "ep101_v0_s00004",
+    ]
+    assert all(np.isfinite(row["loss"]) for row in per_window)
+    # (3) The VAE was released before the loop, so latents could not be decoded even in principle.
+    for attr in ("vae", "vae_cache", "text_encoder", "tokenizer"):
+        assert not hasattr(pipeline, attr)
+
+
+def test_the_codec_traps_are_not_vacuous(tmp_path, monkeypatch):
+    # A booby trap that never fires proves nothing, so prove the traps DO catch both shapes of
+    # call: a direct decoder invocation and an inline `subprocess.run(["ffmpeg", ...])` argv --
+    # exactly the transitive/inline cases the source scan cannot see.
+    import subprocess
+
+    from maxdiffusion.data_preprocessing import build_overfit100_dataset as builder
+
+    calls: list[str] = []
+    _install_codec_traps(monkeypatch, calls)
+    with pytest.raises(_CodecTrap):
+        builder.decode_mp4_frames("/nonexistent.mp4")
+    with pytest.raises(_CodecTrap):
+        subprocess.run(["ffmpeg", "-version"], capture_output=True)
+    with pytest.raises(_CodecTrap):
+        subprocess.run(["/usr/local/bin/ffprobe", "-version"], capture_output=True)
+    assert calls == ["builder.decode_mp4_frames", "subprocess.run:ffmpeg", "subprocess.run:ffprobe"]
+    # ...while a NON-codec spawn still passes through untouched.
+    assert subprocess.run(["echo", "ok"], capture_output=True, text=True).stdout.strip() == "ok"
+
+
+def test_loss_eval_source_scan_remains_as_supplementary_evidence():
+    # Kept per the reviewer: cheap, and it documents the intent. It is no longer the only proof.
+    source = Path(ev.__file__).read_text()
+    for forbidden in ("decode_mp4_frames", "overfit100_aux_rgb", "_save_video", "export_to_video", "ffprobe"):
+        assert forbidden not in source, f"{forbidden} appeared in the loss evaluator; it now needs ffmpeg"

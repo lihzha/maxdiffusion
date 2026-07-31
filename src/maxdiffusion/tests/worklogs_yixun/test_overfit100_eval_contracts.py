@@ -1177,29 +1177,26 @@ def test_aux_prerequisite_warning_is_silent_when_the_tools_are_there_or_aux_is_o
     assert gen.aux_prerequisite_warning(False, which=lambda binary: None) is None
 
 
-def test_driver_logs_the_aux_degradation_warning_once_at_startup(tmp_path, monkeypatch):
-    # The S3 scenario end to end: aux requested, ffmpeg absent. The run must COMPLETE (D5) with
-    # recorded per-row statuses, and the operator must see one loud line in the job log.
-    import maxdiffusion.max_logging as max_logging
+def test_missing_ffmpeg_is_contained_per_row_and_wired_into_the_driver(tmp_path, monkeypatch):
+    # D5 containment: with ffmpeg absent the aux call RECORDS the failure rather than raising, so
+    # the run completes. (The warning's emission is asserted BEHAVIOURALLY, through the real
+    # driver, in test_overfit100_context_modes.py::test_driver_logs_exactly_one_aux_warning_before
+    # _the_restore -- this file keeps the pure-function and wiring checks.)
+    import inspect
 
-    logged: list[str] = []
-    monkeypatch.setattr(max_logging, "log", lambda message: logged.append(str(message)))
-    monkeypatch.setattr(gen.max_logging, "log", lambda message: logged.append(str(message)))
-    monkeypatch.setattr(gen.shutil, "which", lambda binary: None if binary == "ffmpeg" else "/usr/bin/" + binary)
-
-    manifest = _aux_manifest(tmp_path)
-    _install_aux_spies(monkeypatch, fail=FileNotFoundError(2, "No such file or directory", "ffmpeg"))
     import numpy as _np
 
+    monkeypatch.setattr(gen.shutil, "which", lambda binary: None if binary == "ffmpeg" else "/usr/bin/" + binary)
+    manifest = _aux_manifest(tmp_path)
+    _install_aux_spies(monkeypatch, fail=FileNotFoundError(2, "No such file or directory", "ffmpeg"))
     pred = _np.zeros((33, 8, 8, 3), dtype=_np.float32)
     out = gen.overfit100_aux_rgb(manifest, 25189, 0, pred, pred, {})
-    assert "FileNotFoundError" in out["aux_status"]  # still contained, never raised
+    assert "FileNotFoundError" in out["aux_status"]  # contained, never raised
+    assert out["vae_ceiling_ssim"] is None
 
     warning = gen.aux_prerequisite_warning(True, which=gen.shutil.which)
     assert warning is not None and "ffmpeg" in warning
-    # And the driver emits exactly that line before any rollout work.
-    import inspect
-
+    # ...and the driver consults it before any checkpoint work.
     src = inspect.getsource(gen.run_overfit100)
     assert "aux_prerequisite_warning" in src
     assert src.index("aux_prerequisite_warning") < src.index("_restore_overfit100_validation_state")

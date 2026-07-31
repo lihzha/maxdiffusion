@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -767,14 +768,19 @@ def test_validate_launcher_ensures_ffmpeg_after_the_venv_and_before_the_hf_prefe
 
 
 def _fake_bin(tmp_path, *, with_ffmpeg: bool, apt_installs: bool):
-    """A PATH shim: stubs for sudo/timeout/apt-get (+ optionally ffmpeg/ffprobe).
+    """A HERMETIC PATH shim: the block sees these binaries and nothing else.
 
-    ``sudo``/``timeout`` are stubbed so the block's real argv runs without touching the host's
-    package manager, and ``apt-get`` records that it was called so the no-op path is provable.
+    Finding 3: the first version appended ``/usr/bin:/bin`` to the fake PATH, so on a host that
+    ships ``/usr/bin/ffmpeg`` the "missing tool" cases would silently take the no-op branch and
+    the install / FATAL assertions would never exercise what they claim. Every external command
+    the block actually runs -- ``id``, ``sudo``, ``timeout``, ``apt-get``, ``head`` (from
+    ``ffmpeg -version | head -1``) -- is stubbed here instead, and ``bash`` is invoked by its
+    ABSOLUTE path so an empty PATH cannot break the harness itself.
     """
     binroot = tmp_path / "fakebin"
     binroot.mkdir()
     marker = tmp_path / "apt_called"
+    chmod = shutil.which("chmod") or "/bin/chmod"
 
     def _write(name, body):
         path = binroot / name
@@ -783,29 +789,60 @@ def _fake_bin(tmp_path, *, with_ffmpeg: bool, apt_installs: bool):
 
     _write("sudo", 'exec "$@"\n')
     _write("timeout", 'shift\nexec "$@"\n')
-    installed = f'printf "#!/bin/sh\\necho v-stub\\n" > "{binroot}/ffmpeg"; chmod 755 "{binroot}/ffmpeg"; '
-    installed += f'printf "#!/bin/sh\\necho v-stub\\n" > "{binroot}/ffprobe"; chmod 755 "{binroot}/ffprobe"; '
-    _write(
-        "apt-get",
-        f'echo "$@" >> "{marker}"\n' + (installed if apt_installs else "") + "exit 0\n",
-    )
+    _write("id", "echo 1000\n")  # non-root, so the block reaches its sudo branch
+    _write("head", 'IFS= read -r line && printf "%s\\n" "$line"\n')  # `ffmpeg -version | head -1`
+    installed = ""
+    if apt_installs:
+        for tool in ("ffmpeg", "ffprobe"):
+            installed += (
+                f'printf "#!/bin/sh\\necho {tool} version stub\\n" > "{binroot}/{tool}"; '
+                f'"{chmod}" 755 "{binroot}/{tool}"; '
+            )
+    _write("apt-get", f'echo "$@" >> "{marker}"\n' + installed + "exit 0\n")
     if with_ffmpeg:
         _write("ffmpeg", "echo ffmpeg version stub\n")
         _write("ffprobe", "echo ffprobe version stub\n")
     return binroot, marker
 
 
+def _hermetic_env(binroot: Path, tmp_path: Path) -> dict:
+    """The child environment: ONLY the shim directory on PATH, nothing inherited."""
+    return {"PATH": str(binroot), "HOME": str(tmp_path)}
+
+
 def _run_ffmpeg_block(script: Path, tmp_path, *, with_ffmpeg: bool, apt_installs: bool = True):
     binroot, marker = _fake_bin(tmp_path, with_ffmpeg=with_ffmpeg, apt_installs=apt_installs)
     body = f"set -euo pipefail\n{_ffmpeg_block(script)}\necho BLOCK_OK\n"
-    env = {"PATH": f"{binroot}:/usr/bin:/bin", "HOME": str(tmp_path)}
-    proc = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env, timeout=60)
-    return proc, marker
+    bash = shutil.which("bash") or "/bin/bash"  # absolute: the child PATH holds only the shims
+    env = _hermetic_env(binroot, tmp_path)
+    proc = subprocess.run([bash, "-c", body], capture_output=True, text=True, env=env, timeout=60)
+    return proc, marker, env
+
+
+def test_the_ffmpeg_block_harness_is_hermetic(tmp_path, monkeypatch):
+    # The harness itself, pinned against the env IT actually uses: the child must see ONLY the
+    # shim directory, so a host that ships /usr/bin/ffmpeg cannot turn a "missing tool" case into
+    # a silent no-op. A decoy ffmpeg on the PARENT's PATH proves nothing is inherited either.
+    decoy = tmp_path / "decoy_bin"
+    decoy.mkdir()
+    (decoy / "ffmpeg").write_text("#!/bin/sh\necho decoy\n")
+    (decoy / "ffmpeg").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{decoy}:{os.environ.get('PATH', '')}")
+    assert shutil.which("ffmpeg") == str(decoy / "ffmpeg")  # the parent CAN see a host ffmpeg...
+
+    proc, marker, env = _run_ffmpeg_block(_VALIDATE, tmp_path, with_ffmpeg=False, apt_installs=True)
+    binroot = str(tmp_path / "fakebin")
+    assert env["PATH"] == binroot, f"the child PATH is not hermetic: {env['PATH']}"
+    assert str(decoy) not in env["PATH"]
+    # ...and the block still took the INSTALL branch, i.e. it never saw the decoy.
+    assert proc.returncode == 0, proc.stderr
+    assert marker.exists(), "the decoy ffmpeg leaked into the child and suppressed the install"
+    assert "decoy" not in proc.stdout
 
 
 @pytest.mark.parametrize("script", [_BUILD_SCRIPT, _VALIDATE], ids=["build", "validate"])
 def test_ffmpeg_ensure_block_is_a_noop_when_both_tools_are_present(script, tmp_path):
-    proc, marker = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=True)
+    proc, marker, _ = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=True)
     assert proc.returncode == 0, proc.stderr
     assert "BLOCK_OK" in proc.stdout
     assert not marker.exists(), "apt-get ran even though ffmpeg/ffprobe were already on PATH"
@@ -814,7 +851,7 @@ def test_ffmpeg_ensure_block_is_a_noop_when_both_tools_are_present(script, tmp_p
 
 @pytest.mark.parametrize("script", [_BUILD_SCRIPT, _VALIDATE], ids=["build", "validate"])
 def test_ffmpeg_ensure_block_installs_when_the_tools_are_missing(script, tmp_path):
-    proc, marker = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=False, apt_installs=True)
+    proc, marker, _ = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=False, apt_installs=True)
     assert proc.returncode == 0, proc.stderr
     assert "BLOCK_OK" in proc.stdout
     assert marker.exists(), "the block did not attempt an install with ffmpeg absent"
@@ -825,7 +862,7 @@ def test_ffmpeg_ensure_block_installs_when_the_tools_are_missing(script, tmp_pat
 def test_ffmpeg_ensure_block_fails_loudly_when_the_install_does_not_provide_the_tools(script, tmp_path):
     # The S3 failure mode must be impossible to reach silently: no ffmpeg after the attempt is a
     # FATAL exit BEFORE the HF prefetch, not 90 null aux rows discovered when reading artifacts.
-    proc, _ = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=False, apt_installs=False)
+    proc, _, _ = _run_ffmpeg_block(script, tmp_path, with_ffmpeg=False, apt_installs=False)
     assert proc.returncode == 1
     assert "FATAL" in proc.stderr
     assert "not on PATH" in proc.stderr
