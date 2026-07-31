@@ -343,29 +343,32 @@ def config_get(config, key: str, default):
     return default
 
 
+def probe_stat(x):
+  """Reduce one tensor to [nonfinite_count, finite_absmax] as f32 scalars.
+
+  Reduced at the call site rather than later, so the probe never extends a
+  tensor's live range: storing the tensor itself and reducing at the end kept all
+  ~33 stages resident at once (the UNet up-blocks alone are 500M+ elements) and
+  blew past HBM. Also avoids upcasting x to f32 first — that would materialise a
+  full-size temporary; the elementwise ops run in x's own dtype and only the two
+  resulting scalars are widened. absmax ignores non-finite entries so a NaN does
+  not hide how large the rest of the tensor already was.
+  """
+  finite = jnp.isfinite(x)
+  n_bad = jnp.sum(~finite).astype(jnp.float32)
+  amax = jnp.max(jnp.where(finite, jnp.abs(x), jnp.zeros((), x.dtype))).astype(jnp.float32)
+  return jnp.stack([n_bad, amax])
+
+
 def probe_add(probe, name: str, x) -> None:
   """Record an intermediate for NaN localisation. No-op when probe is None."""
   if probe is not None and hasattr(x, "shape"):
-    probe.append((name, x))
+    probe.append((name, probe_stat(x)))
 
 
 def probe_stack(probe):
-  """Stack a probe into a (n_stages, 2) array of [nonfinite_count, finite_absmax].
-
-  Safe inside jit: every entry is a traced scalar. absmax ignores non-finite
-  elements so a NaN somewhere does not hide the magnitude of the rest, which is
-  what tells you whether a stage was already blowing up before it overflowed.
-  """
-  rows = []
-  for _, x in probe:
-    v = x.astype(jnp.float32)
-    finite = jnp.isfinite(v)
-    rows.append(
-        jnp.stack([
-            jnp.sum(~finite).astype(jnp.float32),
-            jnp.max(jnp.where(finite, jnp.abs(v), 0.0)),
-        ])
-    )
+  """Stack an already-reduced probe into a (n_stages, 2) array."""
+  rows = [s for _, s in probe]
   return jnp.stack(rows) if rows else jnp.zeros((0, 2), jnp.float32)
 
 
@@ -398,7 +401,8 @@ def grad_probe(grads):
   """
   flat = jax.tree_util.tree_flatten_with_path(grads)[0]
   names = [jax.tree_util.keystr(p) for p, _ in flat]
-  return names, probe_stack([(n, g) for n, (_, g) in zip(names, flat)])
+  rows = [probe_stat(g) for _, g in flat]
+  return names, (jnp.stack(rows) if rows else jnp.zeros((0, 2), jnp.float32))
 
 
 def log_probe_summary_table(names, stats, label: str = "", top_n: int = 25) -> None:

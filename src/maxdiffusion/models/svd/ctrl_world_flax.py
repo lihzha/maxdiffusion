@@ -52,8 +52,20 @@ def probe_add(probe, name: str, x) -> None:
     Defined here rather than imported from max_utils: max_utils imports
     models.attention_flax, so importing it from a models module risks a cycle.
     """
-    if probe is not None and hasattr(x, "shape"):
-        probe.append((name, x))
+    if probe is None or not hasattr(x, "shape"):
+        return
+    # Reduce here, not later: keeping the tensor itself alive until a final
+    # reduction extends every stage's live range and exhausts HBM (the up-blocks
+    # are 500M+ elements). Elementwise ops stay in x's dtype so no full-size f32
+    # temporary is materialised; only the two scalars are widened.
+    finite = jnp.isfinite(x)
+    probe.append((
+        name,
+        jnp.stack([
+            jnp.sum(~finite).astype(jnp.float32),
+            jnp.max(jnp.where(finite, jnp.abs(x), jnp.zeros((), x.dtype))).astype(jnp.float32),
+        ]),
+    ))
 
 
 @dataclass
