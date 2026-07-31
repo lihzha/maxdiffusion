@@ -243,3 +243,4 @@ tpu create v6 -n 64 --name exp02-overfit100-s3train-yixun \
   --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
   -- bash bash_scripts/train_wan_overfit100.sh
 ```
+- **Job id:** `20260731-005432-ce7e6955-exp02-overfit100-s3train-yixun` (submitted; outcome pending)
