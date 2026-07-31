@@ -250,3 +250,9 @@ tpu create v6 -n 64 --name exp02-overfit100-s3train-yixun \
 
 Commit: `b52dcc6430da83251ca2a061f88cef6758b718b3` (post aux-fix; trainer path code-identical to Job 15's SHA). Same command as Job 15 with the new COMMIT.
 - **Job id:** `20260731-012023-3bbac3d0-exp02-overfit100-s3train-yixun` (submitted; outcome pending)
+- **Job 16 outcome:** SUCCEEDED attempt 1 (39 min); loss 0.586→0.145; 5 checkpoints. S3 training PASSED log-verified.
+
+## Jobs 17–22 — v6e-8 S3 EVALS (4 intermediates + segment-final@2500 + full-set@2500) — launched 2026-07-31
+
+Commit: `e27fdc37df3c9a10d6059833c4078160a955b8fc`. Approved by Query 7.
+- **Job ids:** `…-160842-…-i250`, `…-160849-…-i500`, `…-160855-…-i1000`, `…-160901-…-i1750`, `…-160907-…-final2500`, `…-160912-…-fullset` (all 20260731; outcomes pending)
