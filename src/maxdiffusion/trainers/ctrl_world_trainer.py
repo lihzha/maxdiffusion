@@ -367,62 +367,91 @@ class CtrlWorldTrainer:
         preconditioning problem (07_sigma..12_loss_weight). Runs once, on the first
         batch, under the same mesh/shardings/dtypes as the real step so the numbers
         are the ones training actually sees.
+
+        Run as three separate small programs rather than one, because a single
+        forward+backward probe needed ~25 GiB and would not load: the backward has
+        to keep (or rematerialise) activations for all 1434 leaves *and* hold the
+        gradient tree, which is strictly more than the real train step. Since a
+        forward NaN needs no gradients at all, stage 2 below is forward-only, and
+        the gradient program is compiled only when the forward turns out clean.
         """
         cfg = self.train_cfg
         vae_scaling_factor = float(self.config.vae_scaling_factor)
         weights_dtype = self.weights_dtype
-        names: dict[str, list[str]] = {"stages": [], "grads": []}
+        names: dict[str, list[str]] = {"stages": [], "grads": [], "params": []}
+        rules = self.config.logical_axis_rules
 
-        def probe_step(params, batch, rng):
-            batch = jax.tree_util.tree_map(
-                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, batch
+        def _cast(b):
+            return jax.tree_util.tree_map(
+                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, b
             )
-            def loss_fn(p):
-                # probe_stack must run *inside* the differentiated function: the
-                # recorded intermediates are tracers owned by this trace, and
-                # touching them after value_and_grad returns is a tracer leak.
-                probe: list = []
-                loss = action_world_train_step(
-                    rng=rng, params=p, apply_fns=apply_fns, batch=batch,
-                    cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=True,
-                    probe=probe,
-                )
-                # Names are static python strings captured during tracing, so they
-                # cannot be jit outputs — close over the dict instead.
-                names["stages"] = [n for n, _ in probe]
-                return loss, max_utils.probe_stack(probe)
 
-            (loss, stats), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
-            # Gradients are summarised here, inside the jit; the full tree is ~1.5B
-            # params and must never be pulled to the host.
-            grad_names, grad_stats = max_utils.grad_probe(grads)
-            names["grads"] = grad_names
-            # Same summary over the loaded weights. A UNet that emits NaN from
-            # finite inputs is usually carrying bad weights, and this trainer can
-            # be pointed at a converted Ctrl-World export rather than stock SVD —
-            # so check what was actually loaded before blaming the forward.
-            param_names, param_stats = max_utils.grad_probe(params)
-            names["params"] = param_names
-            return loss, stats, grad_stats, param_stats
+        # ── 1. weight health: params only, no forward. Cheapest possible check. ──
+        def params_probe(params):
+            n, s = max_utils.grad_probe(params)
+            names["params"] = n
+            return s
 
-        with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
-            loss, stats, grad_stats, param_stats = jax.jit(
-                probe_step, in_shardings=(state_shardings.params, data_shardings, None),
-                out_shardings=(None, None, None, None),
-            )(state.params, batch, rng)
-
-        max_logging.log(f"[nan-probe] loss={float(loss)}")
+        with mesh, nn_partitioning.axis_rules(rules):
+            param_stats = jax.jit(
+                params_probe, in_shardings=(state_shardings.params,), out_shardings=None
+            )(state.params)
         max_utils.log_probe_summary_table(
             names["params"], param_stats,
             label=f"svd ctrl_world LOADED WEIGHTS from {self.config.pretrained_model_name_or_path}",
             top_n=15,
         )
-        first = max_utils.log_probe_report(names["stages"], stats, label="svd ctrl_world forward")
-        if first is None:
-            max_logging.log(
-                "[nan-probe] forward is finite — the non-finite value is created in "
-                "the backward pass; see the gradient breakdown below"
+
+        # ── 2. forward only. No value_and_grad, so no backward buffers. ──────────
+        def fwd_probe(params, batch, rng):
+            probe: list = []
+            loss = action_world_train_step(
+                rng=rng, params=params, apply_fns=apply_fns, batch=_cast(batch),
+                cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=True,
+                probe=probe,
             )
+            names["stages"] = [n for n, _ in probe]
+            return loss, max_utils.probe_stack(probe)
+
+        with mesh, nn_partitioning.axis_rules(rules):
+            loss, stats = jax.jit(
+                fwd_probe, in_shardings=(state_shardings.params, data_shardings, None),
+                out_shardings=(None, None),
+            )(state.params, batch, rng)
+
+        max_logging.log(f"[nan-probe] forward loss={float(loss)}")
+        first = max_utils.log_probe_report(names["stages"], stats, label="svd ctrl_world forward")
+        if first is not None:
+            max_logging.log(
+                "[nan-probe] forward is already non-finite, so the gradients carry no "
+                "extra information — skipping the (expensive) backward probe"
+            )
+            return first
+
+        # ── 3. only reached when the forward is clean: then the NaN or the blow-up
+        #      is in the backward, and the gradient table is the payload. ─────────
+        max_logging.log(
+            "[nan-probe] forward is finite — running the backward probe to locate it"
+        )
+
+        def grad_probe_step(params, batch, rng):
+            def loss_fn(p):
+                return action_world_train_step(
+                    rng=rng, params=p, apply_fns=apply_fns, batch=_cast(batch),
+                    cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=True,
+                )
+
+            grads = jax.grad(loss_fn)(params)
+            n, s = max_utils.grad_probe(grads)
+            names["grads"] = n
+            return s
+
+        with mesh, nn_partitioning.axis_rules(rules):
+            grad_stats = jax.jit(
+                grad_probe_step,
+                in_shardings=(state_shardings.params, data_shardings, None),
+                out_shardings=None,
+            )(state.params, batch, rng)
         max_utils.log_probe_summary_table(
             names["grads"], grad_stats,
             label="svd ctrl_world gradients by parameter", top_n=25,

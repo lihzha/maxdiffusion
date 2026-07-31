@@ -31,7 +31,7 @@ from absl import app
 from flax import nnx
 from flax.linen import partitioning as nn_partitioning
 
-from maxdiffusion import max_logging, pyconfig
+from maxdiffusion import max_logging, max_utils, pyconfig
 from maxdiffusion.models.wan.action_encoder_wan import NNXWanActionEncoder, NNXWanActionAdaLNProjector
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers.scheduling_flow_match_flax import FlaxFlowMatchScheduler
