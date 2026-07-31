@@ -1517,6 +1517,205 @@ def assert_flagged_windows_in_cohort(flagged_windows, cohort) -> None:
             )
 
 
+# --------------------------------------------------------------------------------------
+# Per-(window, mode, seed) staging: preemption tolerance for the long step-2500 passes.
+#
+# The segment-final pass is 900 rollouts (~85 min) and the full-set pass 1,629 (~2.4 h), while
+# spot uptime has been as short as 34 minutes. Holding every row in memory and writing
+# aggregation.json only at the end meant each preemption restarted from zero. Each completed
+# rollout is now staged as one small JSON file; a restart admits staged rows ONLY when their
+# envelope binds them to this exact run.
+#
+# The final aggregation path is deliberately untouched: same whole-grid role validation, same
+# artifact schema, same immutable writers. Staging is an input-side optimization, never a new
+# claim about coverage.
+# --------------------------------------------------------------------------------------
+
+OVERFIT100_STAGED_ROW_SCHEMA = "overfit100_eval_staged_row_v1"
+OVERFIT100_STAGING_DIR = "staging_rows"
+OVERFIT100_RESUME_ENV = "OVERFIT100_EVAL_RESUME"
+# The envelope fields that BIND a staged row to one specific run. All four must match exactly or
+# the pass fails closed -- a foreign staging directory is an operator problem, not something to
+# silently recompute around.
+OVERFIT100_STAGING_BINDING = ("checkpoint_step", "pass_role", "manifest_sha256", "code_commit")
+
+
+def _eval_code_commit() -> str:
+    """The eval code's commit, from the env the launcher exports (ONE provenance source).
+
+    Shared with :func:`overfit100_aggregation_artifact`'s ``commit`` field so a staged row and the
+    artifact it lands in can never disagree about which code produced them.
+    """
+    return str(os.environ.get("COMMIT", "") or "unknown")
+
+
+def resume_state(config) -> tuple[bool, str]:
+    """Is per-row staging/resume active for this pass, and why? Returns ``(enabled, reason)``.
+
+    Precedence: the ``OVERFIT100_EVAL_RESUME`` env var (``1``/``0``) overrides the
+    ``overfit100_eval_resume`` config key, mirroring how the loss evaluator takes ``SMOKE_LIMIT``
+    and ``TRAIN_COMMIT`` from the environment. Default ON.
+
+    **Single-process only, deliberately.** Every host must execute the SAME rollout set: the decode
+    inside the loop runs a ``process_allgather``, so if one host skipped a rollout another host
+    performed, the collectives would desynchronize and the job would hang. Staging is therefore
+    gated on ``jax.process_count() == 1`` (what today's v6e-8 eval jobs are) rather than assuming
+    it. The considered alternative -- process 0 writing a ``resume_manifest.json`` snapshot that
+    every host then reads -- still needs a barrier between that write and the reads to be race-free,
+    which buys nothing for a single-host job while adding a new way to hang a multi-host one.
+    Multi-host runs therefore disable staging entirely (no reads AND no writes) and log the reason.
+    """
+    raw = str(os.environ.get(OVERFIT100_RESUME_ENV, "")).strip()
+    if raw:
+        if raw not in ("0", "1"):
+            raise ValueError(f"{OVERFIT100_RESUME_ENV} must be '1' (resume) or '0' (disable); got {raw!r}")
+        want, source = raw == "1", f"env {OVERFIT100_RESUME_ENV}={raw}"
+    else:
+        want, source = bool(getattr(config, "overfit100_eval_resume", True)), "config overfit100_eval_resume"
+    if not want:
+        return False, f"row staging disabled by {source}"
+    processes = int(jax.process_count())
+    if processes != 1:
+        return False, (
+            f"row staging disabled: multi-host job (process_count={processes}). Every host must roll out the same "
+            f"set -- the decode's process_allgather would desynchronize if one host skipped a staged row -- so "
+            f"resume is single-process only."
+        )
+    return True, f"row staging enabled by {source} (single-process job)"
+
+
+def staged_row_path(step_root: str, context_mode: str, seed: int, name: str) -> str:
+    """``<step_root>/staging_rows/<context_mode>/seed_<seed>/<window_name>.json``."""
+    return f"{str(step_root).rstrip('/')}/{OVERFIT100_STAGING_DIR}/{context_mode}/seed_{int(seed)}/{name}.json"
+
+
+def staged_row_envelope(
+    row: dict, *, checkpoint_step: int, pass_role: str, manifest_sha256: str, code_commit: str
+) -> dict:
+    """One staged row plus the envelope binding it to this run (schema tag + the 4 binding fields)."""
+    return {
+        "schema": OVERFIT100_STAGED_ROW_SCHEMA,
+        "checkpoint_step": int(checkpoint_step),
+        "pass_role": str(pass_role),
+        "manifest_sha256": str(manifest_sha256),
+        "code_commit": str(code_commit),
+        "row": dict(row),
+    }
+
+
+def write_staged_row(step_root: str, row: dict, *, checkpoint_step, pass_role, manifest_sha256, code_commit) -> str:
+    """Persist one completed rollout row.
+
+    Written by process 0 AFTER that row's videos, so an admitted row implies its artifacts are
+    already on disk. Not immutability-guarded: re-staging an identical row is a no-op in effect,
+    and a crash mid-write is caught by the strict reader on the next start.
+    """
+    path = staged_row_path(step_root, str(row["context_mode"]), int(row["seed"]), str(row["name"]))
+    _write_json(
+        path,
+        staged_row_envelope(
+            row,
+            checkpoint_step=checkpoint_step,
+            pass_role=pass_role,
+            manifest_sha256=manifest_sha256,
+            code_commit=code_commit,
+        ),
+    )
+    return path
+
+
+def _staged_row_error(path: str, detail: str) -> ValueError:
+    return ValueError(
+        f"overfit100 eval staging: refusing to resume from {path}: {detail}. Staged rows are admitted only when "
+        f"their envelope matches this run EXACTLY; a mismatch means the directory holds another run's evidence, so "
+        f"clear it deliberately (or set {OVERFIT100_RESUME_ENV}=0) rather than silently recomputing around it."
+    )
+
+
+def read_staged_rows(
+    step_root: str, *, checkpoint_step, pass_role, manifest_sha256, code_commit, windows, seeds, modes
+) -> dict:
+    """Admit staged rows for this run -> ``{(name, mode, seed): row}``; ANY anomaly hard-fails.
+
+    Every file under the staging root is validated: the schema tag, all four binding fields, the
+    exact ``OVERFIT100_ROW_FIELDS`` column set, and agreement between the row's identity
+    (``name`` / ``context_mode`` / ``seed``, plus the ``episode_id`` / ``window_start`` implied by
+    the window name) and the path it was found at. A row outside this pass's coverage is refused
+    too: it could not be reconciled with the artifact this pass will write.
+    """
+    root = f"{str(step_root).rstrip('/')}/{OVERFIT100_STAGING_DIR}"
+    files = sorted(tf.io.gfile.glob(f"{root}/*/*/*.json"))
+    if not files:
+        return {}
+    wanted_names = {str(window["name"]) for window in windows}
+    wanted_seeds = {int(seed) for seed in seeds}
+    wanted_modes = {str(mode) for mode in modes}
+    expected = {
+        "checkpoint_step": int(checkpoint_step),
+        "pass_role": str(pass_role),
+        "manifest_sha256": str(manifest_sha256),
+        "code_commit": str(code_commit),
+    }
+
+    admitted: dict[tuple, dict] = {}
+    for path in files:
+        _, mode_dir, seed_dir, filename = path.rsplit("/", 3)
+        name_from_path = filename[: -len(".json")]
+        if not seed_dir.startswith("seed_") or not seed_dir[len("seed_") :].isdigit():
+            raise _staged_row_error(path, f"path segment {seed_dir!r} is not seed_<n>")
+        seed_from_path = int(seed_dir[len("seed_") :])
+        try:
+            with tf.io.gfile.GFile(path, "r") as handle:
+                payload = json.load(handle)
+        except Exception as exc:  # noqa: BLE001 -- unreadable/corrupt staging must fail loudly
+            raise _staged_row_error(path, f"unreadable or corrupt JSON ({type(exc).__name__}: {exc})") from exc
+        if not isinstance(payload, dict):
+            raise _staged_row_error(path, "the staged file is not a JSON object")
+        if payload.get("schema") != OVERFIT100_STAGED_ROW_SCHEMA:
+            raise _staged_row_error(path, f"schema {payload.get('schema')!r} is not {OVERFIT100_STAGED_ROW_SCHEMA!r}")
+        for field, value in expected.items():
+            if field not in payload:
+                raise _staged_row_error(path, f"envelope field {field} is missing")
+            staged = int(payload[field]) if field == "checkpoint_step" else str(payload[field])
+            if staged != value:
+                raise _staged_row_error(path, f"envelope field {field}={staged!r} does not match this run's {value!r}")
+        row = payload.get("row")
+        if not isinstance(row, dict):
+            raise _staged_row_error(path, "the envelope carries no 'row' object")
+        missing = [field for field in OVERFIT100_ROW_FIELDS if field not in row]
+        extra = [field for field in row if field not in OVERFIT100_ROW_FIELDS]
+        if missing or extra:
+            raise _staged_row_error(
+                path, f"row columns do not match OVERFIT100_ROW_FIELDS (missing {missing}, extra {extra})"
+            )
+        if (
+            str(row["name"]) != name_from_path
+            or str(row["context_mode"]) != mode_dir
+            or int(row["seed"]) != seed_from_path
+        ):
+            raise _staged_row_error(
+                path,
+                f"row identity (name={row['name']!r}, mode={row['context_mode']!r}, seed={row['seed']}) disagrees "
+                f"with its path (name={name_from_path!r}, mode={mode_dir!r}, seed={seed_from_path})",
+            )
+        episode_id, _, window_start = parse_overfit100_window_name(name_from_path)
+        if int(row["episode_id"]) != episode_id or int(row["window_start"]) != window_start:
+            raise _staged_row_error(path, "row episode_id / window_start disagree with its window name")
+        if int(row["checkpoint_step"]) != int(checkpoint_step):
+            raise _staged_row_error(
+                path, f"row checkpoint_step={row['checkpoint_step']} is not this run's {int(checkpoint_step)}"
+            )
+        if name_from_path not in wanted_names or mode_dir not in wanted_modes or seed_from_path not in wanted_seeds:
+            raise _staged_row_error(
+                path, f"({name_from_path}, {mode_dir}, seed {seed_from_path}) is not part of this pass's coverage"
+            )
+        key = (name_from_path, mode_dir, seed_from_path)
+        if key in admitted:
+            raise _staged_row_error(path, f"duplicate staged row for {key}")
+        admitted[key] = row
+    return admitted
+
+
 def _sha256_of_file(path: str) -> str:
     """sha256 of a file's exact bytes -- the manifest hash the verdict re-verifies (D1).
 
@@ -1633,7 +1832,7 @@ def overfit100_aggregation_artifact(
         "checkpoint_step": int(checkpoint_step),
         "run_name": str(getattr(config, "run_name", "")),
         "model_type": str(getattr(config, "model_type", "")),
-        "commit": str(os.environ.get("COMMIT", "") or "unknown"),
+        "commit": _eval_code_commit(),
         "eval_data_dir": str(getattr(config, "eval_data_dir", "")),
         "train_data_dir": str(getattr(config, "train_data_dir", "")),
         "model_manifest_path": str(getattr(config, "model_manifest_path", "")),
@@ -1800,6 +1999,8 @@ def run_overfit100(config) -> None:
         all_window_keys=all_window_keys,
     )
     manifest_sha256 = _sha256_of_file(manifest_path)
+    code_commit = _eval_code_commit()
+    resume_on, resume_reason = resume_state(config)
 
     (
         trainer,
@@ -1842,10 +2043,37 @@ def run_overfit100(config) -> None:
             f"[wan_overfit100_val] cohort={len(canonical_cohort)} canonical windows (manifest-derived), "
             f"all_windows={len(all_window_keys)}, manifest_sha256={manifest_sha256[:12]}"
         )
+        max_logging.log(f"[wan_overfit100_val] {resume_reason}")
+
+    # RESUME (preemption tolerance). The staged rows admitted here are byte-for-byte what an
+    # uninterrupted pass would have produced for those tuples: every rollout's rng is
+    # window_fold_key(seed, episode_id, window_start), which does not depend on visit order, so
+    # skipping a tuple cannot change any OTHER tuple's numbers. Rows are appended in the same
+    # loop order whether they were resumed or recomputed, so the artifact is identical too.
+    staged_rows: dict[tuple, dict] = {}
+    if resume_on:
+        staged_rows = read_staged_rows(
+            step_root,
+            checkpoint_step=checkpoint_step,
+            pass_role=pass_role,
+            manifest_sha256=manifest_sha256,
+            code_commit=code_commit,
+            windows=windows,
+            seeds=seeds,
+            modes=modes,
+        )
 
     rows: list[dict] = []
     aux_cache: dict = {}
+    resumed_count = 0
+    recomputed_count = 0
     for sample in samples:
+        planned = [(mode, seed) for mode in modes for seed in seeds]
+        if staged_rows and all((sample.name, mode, seed) in staged_rows for mode, seed in planned):
+            # Whole window already done: skip its VAE decode as well as its rollouts.
+            rows.extend(staged_rows[(sample.name, mode, seed)] for mode, seed in planned)
+            resumed_count += len(planned)
+            continue
         batch_base = {
             "z_i0": jnp.asarray(sample.z_i0[None]),
             "z_video": jnp.asarray(sample.z_video[None]),
@@ -1859,6 +2087,11 @@ def run_overfit100(config) -> None:
                 state.context_table, null_context, mode, sample.episode_index, derangement
             )
             for seed in seeds:
+                staged = staged_rows.get((sample.name, mode, seed))
+                if staged is not None:
+                    rows.append(staged)
+                    resumed_count += 1
+                    continue
                 batch = {**batch_base, "context": context}
                 batch = jax.tree.map(lambda x: jax.device_put(x, replicated), batch)
                 rng = window_fold_key(seed, sample.episode_id, sample.window_start)
@@ -1888,6 +2121,7 @@ def run_overfit100(config) -> None:
                     aux=aux,
                 )
                 rows.append(row)
+                recomputed_count += 1
                 if write_videos:
                     window_dir = f"{step_root}/mode_{mode}/seed_{seed}/{sample.name}"
                     _save_video(gt0, f"{window_dir}/ground_truth.mp4", fps=fps)
@@ -1898,6 +2132,16 @@ def run_overfit100(config) -> None:
                         fps=fps,
                     )
                     _write_json(f"{window_dir}/metrics.json", row)
+                if resume_on:
+                    # AFTER the videos: an admitted row implies its artifacts are already on disk.
+                    write_staged_row(
+                        step_root,
+                        row,
+                        checkpoint_step=checkpoint_step,
+                        pass_role=pass_role,
+                        manifest_sha256=manifest_sha256,
+                        code_commit=code_commit,
+                    )
                 max_logging.log(
                     f"[wan_overfit100_val] step={checkpoint_step} {sample.name} mode={mode} seed={seed} "
                     f"ssim={row['ssim']:.4f} latent_mse={row['latent_mse']:.6f} pixel_mse={row['pixel_mse']:.6f}"
@@ -1936,6 +2180,7 @@ def run_overfit100(config) -> None:
             "aggregation_json": f"{step_root}/aggregation.json",
         },
     )
+    max_logging.log(f"[wan_overfit100_val] resumed n_rows={resumed_count} recomputed={recomputed_count}")
     for line in aux_coverage_log_lines(summary["aux_coverage"]):  # D5: loud, not silent
         max_logging.log(line)
     max_logging.log(

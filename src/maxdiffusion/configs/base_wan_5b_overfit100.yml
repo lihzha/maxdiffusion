@@ -353,6 +353,15 @@ validation_seed: 0
 #   the aggregation artifact only -- the plan fixes the denominator at build time, so a flagged
 #   window always stays in the statistic (G4).
 eval_pass_role: ''   # MANDATORY: one of s2_gate / s3_intermediate / s3_segment_final / s3_full_set
+# overfit100_eval_resume: per-(window, mode, seed) STAGING + resume, default ON. Each completed
+#   rollout is written to <step_root>/staging_rows/<mode>/seed_<n>/<window>.json with an envelope
+#   binding it to (checkpoint_step, pass_role, manifest_sha256, code commit); a restarted pass
+#   admits only rows whose envelope matches EXACTLY and hard-fails on any mismatch or corruption.
+#   Needed because the step-2500 passes (900 and 1,629 rollouts) outlive typical spot uptime.
+#   Override at launch with the env var OVERFIT100_EVAL_RESUME=0 (or =1), which takes precedence
+#   over this key. Resume is single-process only: multi-host jobs disable staging entirely so the
+#   decode's collectives cannot desynchronize between hosts.
+overfit100_eval_resume: True
 eval_windows: 'canonical'
 rollout_seeds: '0,1,2'
 context_modes: 'correct'

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,6 +47,7 @@ from maxdiffusion.schedulers import FlaxFlowMatchScheduler
 
 _REPO = Path(gen.__file__).parents[2]
 _MANIFEST = _REPO / "docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json"
+_CONFIG_YML = _REPO / "src/maxdiffusion/configs/base_wan_5b_overfit100.yml"
 
 MESH_AXES = ("data", "fsdp", "context", "tensor")
 
@@ -533,12 +535,21 @@ class _ContextSensitiveStub(nnx.Module):
 
 
 class _DecodingPipeline(_FakePipeline):
-    """Adds the VAE decode seam: latents -> [1, T, H, W, 3] frames, value = mean(latent)."""
+    """Adds the VAE decode seam: latents -> [1, T, H, W, 3] frames, value = mean(latent).
+
+    ``decode_calls`` counts invocations: a resumed pass must skip the GROUND-TRUTH decode of any
+    window whose tuples are all staged, which is where the wall-clock saving comes from.
+    """
+
+    def __init__(self, mesh, *, text_dim=8, max_len=2):
+        super().__init__(mesh, text_dim=text_dim, max_len=max_len)
+        self.decode_calls = 0
 
     def _denormalize_latents(self, latents):
         return latents
 
     def _decode_latents_to_video(self, latents):
+        self.decode_calls += 1
         value = float(jnp.mean(latents.astype(jnp.float32)))
         return np.full((1, 5, 8, 8, 3), np.tanh(value) * 0.5 + 0.5, dtype=np.float32)
 
@@ -847,6 +858,9 @@ def test_ablation_rows_do_not_enter_the_success_statistic():
 # --------------------------------------------------------------------------------------
 
 
+_DRIVER_PIPELINE: dict = {}
+
+
 def _driver_env(tmp_path, monkeypatch, episodes, *, role, seeds, modes, steps=25, boobytrap_restore=False):
     """Common driver fixture: manifest + set sidecar + records + stubs. Returns the config."""
     manifest = _driver_manifest(tmp_path, episodes)
@@ -885,6 +899,7 @@ def _driver_env(tmp_path, monkeypatch, episodes, *, role, seeds, modes, steps=25
             lambda s, batch, rng: gen._rollout_overfit100_sample(s, batch, rng, scheduler, config)
         ),
     )
+    _DRIVER_PIPELINE["pipeline"] = pipeline
     return SimpleNamespace(
         model_type="OVERFIT100_TI2V",
         run_name="drv",
@@ -986,6 +1001,14 @@ def test_driver_all_spec_satisfies_the_full_set_role(tmp_path, monkeypatch):
 def test_driver_rerunning_the_same_pass_is_idempotent_but_a_changed_result_is_refused(tmp_path, monkeypatch):
     # D4: an eval artifact is immutable evidence. An infra retry that reproduces the same bytes is
     # a no-op; a DIFFERENT result at the same path must surface rather than overwrite.
+    #
+    # Row STAGING is switched off here so this stays a test of the D4 guard alone. With staging on,
+    # a rerun resumes every row (the envelope -- checkpoint/role/manifest/commit -- still matches)
+    # and therefore reproduces identical bytes even when the in-memory state was swapped, which is
+    # the intended resume semantics but would hide what this test is about. The staging-on
+    # behaviour is covered by test_a_completed_pass_reruns_idempotently_through_staging and
+    # test_the_immutability_guard_still_blocks_a_changed_rerun.
+    monkeypatch.setenv("OVERFIT100_EVAL_RESUME", "0")
     episodes = [("fold cloth", 1), ("press button", 1)]
     config = _driver_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
     gen.run_overfit100(config)
@@ -1119,3 +1142,390 @@ def test_driver_is_silent_when_there_is_nothing_to_warn_about(tmp_path, monkeypa
     warnings = [event for event in events if event[0] == "log" and "ALL aux metrics will be null" in event[1]]
     assert warnings == [], f"{label}: unexpected aux warning"
     assert any(event[0] == "restore" for event in events)  # the run still happened
+
+
+# ======================================================================================
+# (eval-resume) Preemption-tolerant per-(window, mode, seed) staging.
+#
+# The step-2500 passes are 900 and 1,629 rollouts (~85 min / ~2.4 h), but spot uptime has been
+# as short as 34 minutes: holding every row in memory and writing aggregation.json only at the
+# end means each preemption restarts from zero. Each completed rollout is now staged as one
+# JSON file under the role-keyed step_root, and a restart admits staged rows ONLY when their
+# binding envelope matches this run exactly -- any mismatch or corruption HARD FAILS the pass
+# rather than silently recomputing, because a foreign staging directory means something is
+# wrong that an operator must resolve deliberately.
+#
+# Resume parity is exact BY CONSTRUCTION: the per-rollout rng is
+# window_fold_key(seed, episode_id, window_start), independent of visit order, so a resumed
+# pass and a straight-through pass produce byte-identical aggregation.json (the artifact
+# embeds no wallclock or ordering-dependent field).
+# ======================================================================================
+
+
+def _resume_env(
+    tmp_path,
+    monkeypatch,
+    episodes,
+    *,
+    role="s3_segment_final",
+    seeds="0,1,2",
+    modes="correct,null,shuffled",
+    out="out",
+):
+    config = _driver_env(tmp_path, monkeypatch, episodes, role=role, seeds=seeds, modes=modes)
+    config.output_dir = str(tmp_path / out)
+    config.validation_output_dir = str(tmp_path / out / "validation")
+    monkeypatch.setenv("COMMIT", "c" * 40)
+    monkeypatch.delenv("OVERFIT100_EVAL_RESUME", raising=False)
+    return config
+
+
+def _staging_files(step_root: Path) -> list[str]:
+    root = step_root / gen.OVERFIT100_STAGING_DIR
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*.json")) if root.exists() else []
+
+
+def _sample_row(name="ep100_v0_s00000", mode="correct", seed=0):
+    return {
+        "name": name,
+        "episode_id": 100,
+        "episode_index": 0,
+        "window_start": 0,
+        "canonical": True,
+        "checkpoint_step": 2500,
+        "seed": seed,
+        "context_mode": mode,
+        "context_source_episode_index": 0,
+        "ssim": 0.91,
+        "latent_mse": 0.01,
+        "latent_mae": 0.1,
+        "pixel_mse": 0.002,
+        "pixel_mae": 0.02,
+        "z_pred_std": 1.0,
+        "z_target_std": 1.0,
+        "z_init_anchor_mse": 0.0,
+        "ssim_vs_rgb": None,
+        "pixel_mse_vs_rgb": None,
+        "vae_ceiling_ssim": None,
+        "aux_status": "not_requested",
+    }
+
+
+_BINDING = {
+    "checkpoint_step": 2500,
+    "pass_role": "s3_segment_final",
+    "manifest_sha256": "a" * 64,
+    "code_commit": "c" * 40,
+}
+
+
+def _stage(step_root, row, **binding):
+    kwargs = {**_BINDING, **binding}
+    return gen.write_staged_row(str(step_root), row, **kwargs)
+
+
+def test_staged_row_round_trips_through_its_envelope(tmp_path):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    row = _sample_row()
+    path = Path(_stage(step_root, row))
+    # Exact layout: <step_root>/staging_rows/<mode>/seed_<n>/<window_name>.json
+    assert (
+        path.relative_to(step_root) == Path(gen.OVERFIT100_STAGING_DIR) / "correct" / "seed_0" / "ep100_v0_s00000.json"
+    )
+    payload = json.loads(path.read_text())
+    assert payload["schema"] == gen.OVERFIT100_STAGED_ROW_SCHEMA
+    for key, value in _BINDING.items():
+        assert payload[key] == value
+    assert payload["row"] == row
+
+    admitted = gen.read_staged_rows(
+        str(step_root), windows=[{"name": row["name"]}], seeds=[0], modes=["correct"], **_BINDING
+    )
+    assert admitted == {("ep100_v0_s00000", "correct", 0): row}
+
+
+def test_read_staged_rows_is_empty_when_nothing_is_staged(tmp_path):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    assert gen.read_staged_rows(str(step_root), windows=[], seeds=[0], modes=["correct"], **_BINDING) == {}
+
+
+@pytest.mark.parametrize(
+    "field,bad",
+    [
+        ("checkpoint_step", 1000),
+        ("pass_role", "s3_intermediate"),
+        ("manifest_sha256", "b" * 64),
+        ("code_commit", "d" * 40),
+    ],
+)
+def test_envelope_mismatch_hard_fails_the_pass(tmp_path, field, bad):
+    # Fail-closed on EVERY binding field: a staged row from another checkpoint, role, manifest or
+    # code commit is not evidence for this run, and silently recomputing it would hide the problem.
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    _stage(step_root, _sample_row(), **{field: bad})
+    with pytest.raises(ValueError) as ei:
+        gen.read_staged_rows(
+            str(step_root), windows=[{"name": "ep100_v0_s00000"}], seeds=[0], modes=["correct"], **_BINDING
+        )
+    message = str(ei.value)
+    assert field in message and "staging" in message.lower()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["{ not json", "[]", '"a string"', json.dumps({"schema": "wrong_tag", "row": {}}), json.dumps({"row": {}})],
+    ids=["corrupt", "list", "string", "wrong_schema", "no_envelope"],
+)
+def test_corrupt_or_foreign_staged_file_hard_fails(tmp_path, content):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    path = step_root / gen.OVERFIT100_STAGING_DIR / "correct" / "seed_0" / "ep100_v0_s00000.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(content)
+    with pytest.raises(ValueError):
+        gen.read_staged_rows(
+            str(step_root), windows=[{"name": "ep100_v0_s00000"}], seeds=[0], modes=["correct"], **_BINDING
+        )
+
+
+def test_a_foreign_schema_tag_hard_fails_even_when_everything_else_is_valid(tmp_path):
+    # The tag is the file-format contract: without this case a dropped tag check would still be
+    # masked by the envelope-field checks, so the tag would be unprotected.
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    payload = gen.staged_row_envelope(_sample_row(), **_BINDING)
+    payload["schema"] = "some_other_writer_v9"
+    path = step_root / gen.OVERFIT100_STAGING_DIR / "correct" / "seed_0" / "ep100_v0_s00000.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload, indent=2))
+    with pytest.raises(ValueError) as ei:
+        gen.read_staged_rows(
+            str(step_root), windows=[{"name": "ep100_v0_s00000"}], seeds=[0], modes=["correct"], **_BINDING
+        )
+    message = str(ei.value)
+    assert "some_other_writer_v9" in message and gen.OVERFIT100_STAGED_ROW_SCHEMA in message
+
+
+@pytest.mark.parametrize("field,bad", [("name", "ep999_v0_s00000"), ("context_mode", "null"), ("seed", 2)])
+def test_staged_row_identity_must_match_its_path(tmp_path, field, bad):
+    # The path key IS the claim; a row whose fields disagree with it would be admitted for the
+    # wrong (window, mode, seed) tuple.
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    row = _sample_row()
+    path = step_root / gen.OVERFIT100_STAGING_DIR / "correct" / "seed_0" / "ep100_v0_s00000.json"
+    path.parent.mkdir(parents=True)
+    payload = gen.staged_row_envelope({**row, field: bad}, **_BINDING)
+    path.write_text(json.dumps(payload, indent=2))
+    with pytest.raises(ValueError) as ei:
+        gen.read_staged_rows(
+            str(step_root), windows=[{"name": "ep100_v0_s00000"}], seeds=[0, 2], modes=["correct", "null"], **_BINDING
+        )
+    assert "ep100_v0_s00000" in str(ei.value)
+
+
+def test_staged_row_with_wrong_columns_hard_fails(tmp_path):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    short = _sample_row()
+    del short["ssim"]
+    path = step_root / gen.OVERFIT100_STAGING_DIR / "correct" / "seed_0" / "ep100_v0_s00000.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(gen.staged_row_envelope(short, **_BINDING)))
+    with pytest.raises(ValueError) as ei:
+        gen.read_staged_rows(
+            str(step_root), windows=[{"name": "ep100_v0_s00000"}], seeds=[0], modes=["correct"], **_BINDING
+        )
+    assert "ssim" in str(ei.value)
+
+
+def test_staged_row_for_an_unselected_window_hard_fails(tmp_path):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    _stage(step_root, _sample_row())
+    with pytest.raises(ValueError) as ei:
+        gen.read_staged_rows(
+            str(step_root), windows=[{"name": "ep200_v0_s00000"}], seeds=[0], modes=["correct"], **_BINDING
+        )
+    assert "ep100_v0_s00000" in str(ei.value)
+
+
+def test_driver_stages_every_row_as_it_completes(tmp_path, monkeypatch):
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    assert _staging_files(step_root) == [
+        "correct/seed_0/ep100_v0_s00000.json",
+        "correct/seed_0/ep101_v0_s00000.json",
+    ]
+    staged = json.loads((step_root / gen.OVERFIT100_STAGING_DIR / "correct/seed_0/ep100_v0_s00000.json").read_text())
+    artifact = json.loads((step_root / "aggregation.json").read_text())
+    assert staged["row"] in artifact["rows"]
+    assert staged["code_commit"] == artifact["commit"]  # one provenance source, not two
+    assert staged["manifest_sha256"] == artifact["manifest_sha256"]
+
+
+def test_resume_recomputes_only_the_missing_tuples(tmp_path, monkeypatch):
+    # Straight-through into "a", then a fresh output root "b" pre-seeded with PART of a's staging:
+    # only the missing tuples may be rolled out, and the result must still be complete.
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    first = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct", out="a")
+    gen.run_overfit100(first)
+    root_a = tmp_path / "a" / "validation" / "step_002500_s3_intermediate" / gen.OVERFIT100_STAGING_DIR
+
+    second = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct", out="b")
+    root_b = tmp_path / "b" / "validation" / "step_002500_s3_intermediate" / gen.OVERFIT100_STAGING_DIR
+    (root_b / "correct" / "seed_0").mkdir(parents=True)
+    shutil.copy(root_a / "correct/seed_0/ep100_v0_s00000.json", root_b / "correct/seed_0/ep100_v0_s00000.json")
+
+    _CALLS.clear()
+    gen.run_overfit100(second)
+    # One rollout only: the staged window was skipped (the stub records one call per rollout).
+    assert len(_CALLS) == 1
+    artifact = json.loads(
+        (tmp_path / "b" / "validation" / "step_002500_s3_intermediate" / "aggregation.json").read_text()
+    )
+    assert [row["name"] for row in artifact["rows"]] == ["ep100_v0_s00000", "ep101_v0_s00000"]
+
+
+def test_resumed_aggregation_is_byte_identical_to_straight_through(tmp_path, monkeypatch):
+    # THE parity contract: visit order cannot change a number, because every rollout's rng is keyed
+    # on the window identity rather than on its position in the loop.
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    first = _resume_env(tmp_path, monkeypatch, episodes, out="a")
+    gen.run_overfit100(first)
+    step_a = tmp_path / "a" / "validation" / "step_002500_s3_segment_final"
+    straight_through = (step_a / "aggregation.json").read_bytes()
+
+    second = _resume_env(tmp_path, monkeypatch, episodes, out="b")
+    step_b = tmp_path / "b" / "validation" / "step_002500_s3_segment_final"
+    # Seed b's staging with a preemption-shaped subset that exercises BOTH resume paths: every
+    # tuple of ep100 (the whole-window short-circuit, which also skips its VAE decode) plus three
+    # scattered tuples of ep101 (the per-tuple skip inside the loop).
+    relatives = [
+        f"{mode}/seed_{seed}/ep100_v0_s00000.json" for mode in ("correct", "null", "shuffled") for seed in (0, 1, 2)
+    ]
+    relatives += [
+        "null/seed_2/ep101_v0_s00000.json",
+        "shuffled/seed_1/ep101_v0_s00000.json",
+        "correct/seed_0/ep101_v0_s00000.json",
+    ]
+    for relative in relatives:
+        target = step_b / gen.OVERFIT100_STAGING_DIR / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(step_a / gen.OVERFIT100_STAGING_DIR / relative, target)
+    _CALLS.clear()
+    gen.run_overfit100(second)
+    # 18 tuples total, 12 staged -> exactly 6 rollouts recomputed...
+    assert len(_CALLS) == 6
+    # ...and ep100, whose every tuple was staged, is never decoded: the whole-window short-circuit
+    # skips its GROUND-TRUTH decode too (1 gt decode for ep101 + 6 prediction decodes).
+    assert _DRIVER_PIPELINE["pipeline"].decode_calls == 7
+    assert (step_b / "aggregation.json").read_bytes() == straight_through
+    assert (step_b / "summary.csv").read_bytes() == (step_a / "summary.csv").read_bytes()
+
+
+def test_resume_logs_one_line_with_the_split(tmp_path, monkeypatch):
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    first = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct", out="a")
+    gen.run_overfit100(first)
+    root_a = tmp_path / "a" / "validation" / "step_002500_s3_intermediate" / gen.OVERFIT100_STAGING_DIR
+    second = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct", out="b")
+    root_b = tmp_path / "b" / "validation" / "step_002500_s3_intermediate" / gen.OVERFIT100_STAGING_DIR
+    (root_b / "correct" / "seed_0").mkdir(parents=True)
+    shutil.copy(root_a / "correct/seed_0/ep100_v0_s00000.json", root_b / "correct/seed_0/ep100_v0_s00000.json")
+
+    logged: list[str] = []
+    monkeypatch.setattr(gen.max_logging, "log", lambda message: logged.append(str(message)))
+    gen.run_overfit100(second)
+    lines = [line for line in logged if "resumed n_rows=" in line]
+    assert len(lines) == 1
+    assert "resumed n_rows=1" in lines[0] and "recomputed=1" in lines[0]
+
+
+@pytest.mark.parametrize("disable", ["env", "config"], ids=["env OVERFIT100_EVAL_RESUME=0", "config flag False"])
+def test_resume_can_be_switched_off(tmp_path, monkeypatch, disable):
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    if disable == "env":
+        monkeypatch.setenv("OVERFIT100_EVAL_RESUME", "0")
+    else:
+        config.overfit100_eval_resume = False
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    assert _staging_files(step_root) == []  # nothing staged when disabled
+    assert (step_root / "aggregation.json").exists()  # ...and the pass still completes
+
+
+def test_resume_env_switch_rejects_a_junk_value(tmp_path, monkeypatch):
+    monkeypatch.setenv("OVERFIT100_EVAL_RESUME", "yes")
+    with pytest.raises(ValueError) as ei:
+        gen.resume_state(SimpleNamespace(overfit100_eval_resume=True))
+    assert "OVERFIT100_EVAL_RESUME" in str(ei.value)
+
+
+def test_resume_is_disabled_and_explained_under_multi_host(tmp_path, monkeypatch):
+    # A skip decision that differs between hosts would desynchronize the collectives inside the
+    # VAE decode, so multi-host jobs run straight through with staging OFF entirely.
+    monkeypatch.setattr(gen.jax, "process_count", lambda: 2)
+    enabled, reason = gen.resume_state(SimpleNamespace(overfit100_eval_resume=True))
+    assert enabled is False
+    assert "process_count=2" in reason and "host" in reason.lower()
+
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    logged: list[str] = []
+    monkeypatch.setattr(gen.max_logging, "log", lambda message: logged.append(str(message)))
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    assert _staging_files(step_root) == []
+    assert any("process_count=2" in line for line in logged)
+
+
+def test_resume_state_is_enabled_by_default_single_host():
+    enabled, reason = gen.resume_state(SimpleNamespace())
+    assert enabled is True and "enabled" in reason
+
+
+def test_a_completed_pass_reruns_idempotently_through_staging(tmp_path, monkeypatch):
+    # With staging present the rerun recomputes nothing and reproduces byte-identical artifacts, so
+    # the immutability guard sees identical bytes and tolerates the rewrite...
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    before = (step_root / "aggregation.json").read_bytes()
+    _CALLS.clear()
+    gen.run_overfit100(config)
+    assert _CALLS == []  # every row resumed; no rollout re-run
+    assert (step_root / "aggregation.json").read_bytes() == before
+
+
+def test_the_immutability_guard_still_blocks_a_changed_rerun(tmp_path, monkeypatch):
+    # ...while a rerun that would produce DIFFERENT bytes is still refused. Staging does not
+    # weaken the D4 guard: here the staged rows are discarded by an envelope change (new commit),
+    # the rollouts are recomputed against a different state, and the write is refused.
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    before = (step_root / "aggregation.json").read_bytes()
+
+    shutil.rmtree(step_root / gen.OVERFIT100_STAGING_DIR)  # a clean staging dir, as an operator would leave
+    table = jnp.stack([jnp.full((2, 8), 9.0, dtype=jnp.float32) for _ in episodes])
+    changed = _overfit100_state(_ContextSensitiveStub(0.9), table)
+    trainer = SimpleNamespace(_create_scheduler=lambda: (_scheduler(), None))
+    pipeline = _DecodingPipeline(_cpu_mesh())
+    monkeypatch.setattr(
+        gen,
+        "_restore_overfit100_validation_state",
+        lambda cfg: (trainer, pipeline, pipeline.mesh, changed, "SH", jnp.zeros((1, 2, 8)), 2500),
+    )
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    assert "aggregation.json" in str(ei.value)
+    assert (step_root / "aggregation.json").read_bytes() == before
+
+
+def test_config_carries_the_resume_switch():
+    import yaml
+
+    cfg = yaml.safe_load(_CONFIG_YML.read_text())
+    assert cfg["overfit100_eval_resume"] is True
+    assert "OVERFIT100_EVAL_RESUME" in _CONFIG_YML.read_text()
