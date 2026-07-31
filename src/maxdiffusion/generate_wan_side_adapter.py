@@ -1328,7 +1328,7 @@ def _restore_overfit100_validation_state(config):
     Returns ``(trainer, pipeline, mesh, state, state_shardings, null_context, restored_step)``.
     """
     trainer, pipeline, mesh, state, state_shardings, null_context = _build_overfit100_validation_state(config)
-    ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, config.run_name, "checkpoints")
+    ckpt_dir = _resolved_checkpoint_dir(config)
     state, restored_step = _restore_checkpoint_state(config, state, ckpt_dir, cohort_mode=True)
     return trainer, pipeline, mesh, state, state_shardings, null_context, restored_step
 
@@ -1536,9 +1536,32 @@ OVERFIT100_STAGED_ROW_SCHEMA = "overfit100_eval_staged_row_v1"
 OVERFIT100_RUN_SIGNATURE_SCHEMA = "overfit100_eval_run_signature_v1"
 OVERFIT100_STAGING_DIR = "staging_rows"
 OVERFIT100_RESUME_ENV = "OVERFIT100_EVAL_RESUME"
-# The artifacts whose presence means this role directory is COMPLETE. Their existence disables
-# staging entirely so a finished pass is never partially mutated (review finding 3).
-OVERFIT100_COMPLETED_ARTIFACTS = ("aggregation.json", "summary.json", "summary.csv")
+# The final artifacts a published pass writes, and the commit marker written LAST.
+#
+# MARKER-LAST TRANSACTIONAL PUBLICATION (pass-2 review finding 3). Completion is the MARKER, not
+# "any one artifact": treating a lone aggregation.json as completion meant a preemption between it
+# and the summaries left a role directory that could never be repaired (staging was disabled, and a
+# nondeterministic aux block could then fail the immutable comparison). The three artifacts are
+# written first, the marker last, so:
+#
+#   * marker present                      -> PUBLISHED: recompute in memory, write NOTHING, let the
+#                                            immutable writers compare;
+#   * marker absent, some artifacts       -> PARTIAL PUBLICATION: rebuild the rows from staging
+#                                            (publication only begins once the grid is complete, so
+#                                            they are all there), let the immutable writers verify
+#                                            the artifacts that exist, write the missing ones, then
+#                                            the marker;
+#   * marker absent, no artifacts         -> a normal (possibly staging-resumed) pass.
+#
+# SINGLE WRITER is enforced OPERATIONALLY, not by the filesystem: ``tf.io.gfile`` has no
+# generation-precondition write, so two concurrent evaluators writing one role directory cannot be
+# excluded here. The launch procedure is therefore to cancel the previous jobs and CONFIRM their
+# termination before relaunching (the reviewer endorses this). Marker-last plus completion-by-marker
+# keeps the race window small, and any artifact that appears mid-run with DIFFERENT bytes is refused
+# by the immutable writers rather than silently overwritten -- which is the detectable case.
+OVERFIT100_FINAL_ARTIFACTS = ("aggregation.json", "summary.csv", "summary.json")
+OVERFIT100_PUBLISHED_MARKER = "_PUBLISHED"
+OVERFIT100_PUBLISHED_MARKER_SCHEMA = "overfit100_eval_published_v1"
 
 # The run signature: every input that can change a row's numbers or its meaning. A staged row is
 # admitted only when ALL of these match the current run exactly -- binding step/role/manifest/commit
@@ -1570,6 +1593,21 @@ OVERFIT100_RUN_SIGNATURE_TYPES: tuple[tuple[str, type], ...] = (
     ("activations_dtype", str),
     ("eval_aux_rgb", bool),
     ("write_videos", bool),
+    # pass-2 review: the remaining inputs that reach a rollout's numbers or its saved artifacts.
+    ("resolved_checkpoint_dir", str),  # what the restore actually reads, post-resolution
+    ("scheduler_sigma_min", float),  # both enter build_rollout_sigmas directly
+    ("scheduler_sigma_max", float),
+    ("latent_channels", int),  # the latent geometry the reader and the sampler assume
+    ("latent_frames", int),
+    ("latent_height", int),
+    ("latent_width", int),
+    ("wan_max_sequence_length", int),  # context length -> the transformer's text conditioning
+    ("attention", str),  # transformer numerics
+    ("precision", str),
+    ("flash_min_seq_length", int),
+    ("flash_block_sizes", str),
+    ("split_head_dim", bool),
+    ("fps", int),  # enters the saved videos
 )
 
 # Per-row JSON types. ``bool`` is checked with ``type(x) is`` so it never satisfies ``int``.
@@ -1667,10 +1705,46 @@ def resume_state(config) -> tuple[bool, str]:
     return True, f"row staging enabled by {source} (single-process job)"
 
 
-def overfit100_completed_artifacts(step_root: str) -> list[str]:
-    """Which completed artifacts already exist in this role directory (D4-first, finding 3)."""
+def overfit100_publication_state(step_root: str) -> dict:
+    """Where this role directory stands: ``fresh`` / ``partial_publication`` / ``published``.
+
+    Probed ONCE at entry, before any staging interaction, so the pass knows whether it may write at
+    all (see the marker-last note above).
+    """
     root = str(step_root).rstrip("/")
-    return [name for name in OVERFIT100_COMPLETED_ARTIFACTS if tf.io.gfile.exists(f"{root}/{name}")]
+    present = [name for name in OVERFIT100_FINAL_ARTIFACTS if tf.io.gfile.exists(f"{root}/{name}")]
+    published = tf.io.gfile.exists(f"{root}/{OVERFIT100_PUBLISHED_MARKER}")
+    if published:
+        state = "published"
+    elif present:
+        state = "partial_publication"
+    else:
+        state = "fresh"
+    return {"state": state, "published": published, "artifacts_present": present}
+
+
+def overfit100_published_marker(*, pass_role: str, checkpoint_step: int, n_rows: int, run_signature) -> dict:
+    """The commit marker: what was published, and the signature of the run that published it."""
+    return {
+        "schema": OVERFIT100_PUBLISHED_MARKER_SCHEMA,
+        "eval_pass_role": str(pass_role),
+        "checkpoint_step": int(checkpoint_step),
+        "n_rows": int(n_rows),
+        "artifacts": list(OVERFIT100_FINAL_ARTIFACTS),
+        "run_signature_sha256": (run_signature_sha256(run_signature) if run_signature is not None else None),
+    }
+
+
+def _resolved_checkpoint_dir(config) -> str:
+    """The checkpoint directory the restore ACTUALLY reads (post-resolution).
+
+    ``config.checkpoint_dir`` may be empty, in which case the restore falls back to
+    ``<output_dir>/<run_name>/checkpoints``. The signature binds this resolved value, so two runs
+    that differ only in how they spelled the same directory still agree -- and two that resolve
+    differently never share staged rows. Shared with
+    :func:`_restore_overfit100_validation_state` so the two cannot drift.
+    """
+    return str(config.checkpoint_dir or os.path.join(config.output_dir, config.run_name, "checkpoints"))
 
 
 def run_signature_sha256(run_signature: dict) -> str:
@@ -1691,6 +1765,9 @@ def overfit100_run_signature(
     modes,
     train_summary_sha256: str,
     eval_summary_sha256: str,
+    resolved_checkpoint_dir: str,
+    scheduler_sigma_min: float,
+    scheduler_sigma_max: float,
 ) -> dict:
     """The canonical, strictly typed signature of THIS run (review finding 1).
 
@@ -1734,6 +1811,24 @@ def overfit100_run_signature(
         "activations_dtype": str(getattr(config, "activations_dtype", "")),
         "eval_aux_rgb": bool(getattr(config, "eval_aux_rgb", True)),
         "write_videos": bool(getattr(config, "write_videos", False)),
+        # Derived from the RESOLVED runtime objects where they exist: the sigmas come from the
+        # scheduler the rollout actually uses, the checkpoint dir from the same resolution the
+        # restore performs.
+        "resolved_checkpoint_dir": str(resolved_checkpoint_dir),
+        "scheduler_sigma_min": float(scheduler_sigma_min),
+        "scheduler_sigma_max": float(scheduler_sigma_max),
+        "latent_channels": int(getattr(config, "latent_channels", 0)),
+        "latent_frames": int(getattr(config, "latent_frames", 0)),
+        "latent_height": int(getattr(config, "latent_height", 0)),
+        "latent_width": int(getattr(config, "latent_width", 0)),
+        "wan_max_sequence_length": int(getattr(config, "wan_max_sequence_length", 0)),
+        "attention": str(getattr(config, "attention", "")),
+        "precision": str(getattr(config, "precision", "")),
+        "flash_min_seq_length": int(getattr(config, "flash_min_seq_length", 0)),
+        # A dict is not a stable JSON scalar to compare; its canonical text is.
+        "flash_block_sizes": json.dumps(getattr(config, "flash_block_sizes", {}) or {}, sort_keys=True),
+        "split_head_dim": bool(getattr(config, "split_head_dim", False)),
+        "fps": int(getattr(config, "fps", 16)),
     }
     return signature
 
@@ -1769,7 +1864,8 @@ def _staging_error(root: str, detail: str) -> ValueError:
     return ValueError(
         f"overfit100 eval staging: {detail}. Staged rows are admitted only when their run signature matches this "
         f"run EXACTLY; a mismatch means this directory holds another run's evidence. Clear the staging root "
-        f"deliberately -- {root} -- or set {OVERFIT100_RESUME_ENV}=0 to run without resume."
+        f"deliberately -- {root} -- or set {OVERFIT100_RESUME_ENV}=0 to run without resume (that recomputes the "
+        f"rollouts; it does not alter any already-published artifact)."
     )
 
 
@@ -1791,6 +1887,10 @@ def _finite(value: float, path: str, root: str, what: str) -> float:
     return value
 
 
+class _StagingRootAbsent(Exception):
+    """The staging root does not exist yet -- a fresh pass, not an error."""
+
+
 def _enumerate_staging_files(root: str) -> list[str]:
     """Every object under the staging root, recursively; ANY nonconforming one is fatal (finding 5).
 
@@ -1799,17 +1899,38 @@ def _enumerate_staging_files(root: str) -> list[str]:
     and unreadable placements are collected and reported TOGETHER, because after a code upgrade
     every staged row is foreign and naming only the first is useless.
     """
-    if not tf.io.gfile.exists(root):
-        return []
+
+    # No prefix-``exists`` probe: on Cloud Storage a "directory" is a name prefix, not an object, so
+    # its absence is normal. The walk itself reports absence as no entries, while any REAL listing
+    # error is rethrown -- tf.io.gfile.walk ignores listing errors unless ``onerror`` is supplied,
+    # which would have made a permission or transport failure look like "nothing staged" (finding 4).
+    def _rethrow(error):
+        # An ABSENT root is the normal "nothing staged yet" case (and on GCS the prefix is not an
+        # object at all). Anything else -- a permission failure, a transport error, or a subdirectory
+        # that vanished mid-walk -- is fatal: failing open here would silently restart from zero and
+        # re-run hours of rollouts. The absent case raises a private sentinel rather than returning,
+        # because tf.io.gfile.walk cannot continue after a swallowed listing error.
+        message = str(error)
+        if isinstance(error, tf.errors.NotFoundError) and message.rstrip("/").endswith(root.rstrip("/")):
+            raise _StagingRootAbsent(root)
+        raise _staging_error(root, f"could not list the staging root ({type(error).__name__}: {message})")
+
     conforming: list[str] = []
     offenders: list[str] = []
-    for dirpath, _dirnames, filenames in tf.io.gfile.walk(root):
+    try:
+        walked = list(tf.io.gfile.walk(root, onerror=_rethrow))
+    except _StagingRootAbsent:
+        return []
+    for dirpath, _dirnames, filenames in walked:
         for filename in filenames:
+            # TOLERATED DIRECTORY MARKERS: an empty name, or a zero-byte object whose name ends in
+            # "/" -- the two forms a GCS "folder" takes. Anything else zero-byte (a leftover temp
+            # object, a truncated row) is an offender, not a marker.
+            if not filename or filename.endswith("/"):
+                continue
             full = f"{dirpath.rstrip('/')}/{filename}"
             relative = full[len(root) + 1 :] if full.startswith(root + "/") else full
             parts = relative.split("/")
-            if not filename:  # directory markers surface as empty names on some filesystems
-                continue
             conforms = (
                 len(parts) == 3
                 and filename.endswith(".json")
@@ -1874,6 +1995,15 @@ def read_staged_rows(step_root: str, *, run_signature: dict, windows, seeds, mod
                 f"run signature schema {staged_signature.get('schema')!r} is not "
                 f"{OVERFIT100_RUN_SIGNATURE_SCHEMA!r}",
             )
+        expected_keys = {"schema"} | {name for name, _ in OVERFIT100_RUN_SIGNATURE_TYPES}
+        staged_keys = set(staged_signature)
+        if staged_keys != expected_keys:
+            raise _staged_row_error(
+                path,
+                root,
+                f"run signature key set differs from this run's: unexpected {sorted(staged_keys - expected_keys)}, "
+                f"missing {sorted(expected_keys - staged_keys)}",
+            )
         for field, kind in OVERFIT100_RUN_SIGNATURE_TYPES:
             if field not in staged_signature:
                 raise _staged_row_error(path, root, f"run signature field {field} is missing")
@@ -1903,6 +2033,13 @@ def read_staged_rows(step_root: str, *, run_signature: dict, windows, seeds, mod
         if recorded_hash != run_signature_sha256(staged_signature):
             raise _staged_row_error(
                 path, root, f"run_signature_sha256={recorded_hash!r} does not hash its own run_signature"
+            )
+        expected_hash = run_signature_sha256(expected_signature)
+        if recorded_hash != expected_hash:
+            # Belt and braces beside the field-by-field comparison above: one value that must equal
+            # the independently recomputed signature of THIS run.
+            raise _staged_row_error(
+                path, root, f"run_signature_sha256={recorded_hash!r} is not this run's {expected_hash!r}"
             )
 
         row = payload.get("row")
@@ -2293,12 +2430,27 @@ def run_overfit100(config) -> None:
     # pass takes the original recompute-in-memory path with staging fully disabled -- neither read
     # nor written -- so the immutable writers decide, and a finished directory is never partially
     # mutated by a rerun.
-    completed = overfit100_completed_artifacts(step_root)
-    if completed and resume_on:
+    publication = overfit100_publication_state(step_root)
+    # PUBLISHED (marker present): recompute in memory and write NOTHING -- not a staged row, not a
+    # video, not a per-window metrics.json (``_save_video`` overwrites, which is how a completed
+    # video-enabled directory used to stay mutable) -- until the immutable writers compare.
+    writes_suppressed = publication["state"] == "published"
+    if writes_suppressed and resume_on:
         resume_on = False
         resume_reason = (
-            f"row staging disabled: this role directory is already complete ({', '.join(completed)}). The pass "
-            f"recomputes in memory so the immutable writers can compare, leaving the finished evidence untouched."
+            f"row staging disabled: this role directory is already PUBLISHED ({OVERFIT100_PUBLISHED_MARKER} "
+            f"present). The pass recomputes in memory and writes nothing, so the immutable writers can compare "
+            f"and the finished evidence stays untouched."
+        )
+    elif publication["state"] == "partial_publication":
+        # A preemption between the first artifact and the marker. Publication only starts once the
+        # grid is complete, so the staged rows ARE the rows that produced the partial publication:
+        # they are authoritative here, and rebuilding from them is what makes the repair
+        # byte-consistent (the immutable writers verify that against whatever already exists).
+        resume_reason = (
+            f"partial publication detected ({', '.join(publication['artifacts_present'])} present, no "
+            f"{OVERFIT100_PUBLISHED_MARKER}): rebuilding the rows from staging and republishing the missing "
+            f"artifacts. {resume_reason}"
         )
     fps = int(getattr(config, "fps", 16))
     if jax.process_index() == 0:
@@ -2324,29 +2476,33 @@ def run_overfit100(config) -> None:
     # covered by that claim: it depends on gsutil, ffmpeg and the network, so two attempts can
     # legitimately differ. Admission is by TUPLE IDENTITY, not content, so a row staged while the
     # auxiliary path was failing keeps its recorded failure on resume rather than being recomputed.
-    # That is deliberate and safe: aux never feeds the success statistic, the per-row aux_status
-    # plus the run-level aux_coverage make the gap explicit, and the VAE ceiling is recoverable
-    # independently (the S2-ceiling-backfill path). An operator who wants the ceiling for those
-    # rows clears the staging root and re-runs, or backfills the ceiling separately.
+    # That is deliberate and safe: aux never feeds the success statistic, and the per-row aux_status
+    # plus the run-level aux_coverage make the gap explicit. RECOVERY (pass-2 review finding 5):
+    # once a pass is published its aggregation.json is immutable and completed-mode ignores staging,
+    # so clearing the staging root does NOT recover a ceiling. The VAE ceiling is checkpoint- and
+    # rollout-independent, so it is recovered by the separate backfill artifact -- decode the stored
+    # z_video and score it against the source frames into its OWN output -- never by mutating a
+    # published role directory.
     staged_rows: dict[tuple, dict] = {}
-    run_signature = None
+    # Always computed: the marker records it even for a published-mode rerun, so the artifact set is
+    # attributable to a run signature regardless of whether staging was in play.
+    run_signature = overfit100_run_signature(
+        config,
+        checkpoint_step=checkpoint_step,
+        pass_role=pass_role,
+        manifest_sha256=manifest_sha256,
+        code_commit=code_commit,
+        derangement=derangement,
+        windows=windows,
+        seeds=seeds,
+        modes=modes,
+        train_summary_sha256=str(read_success_marker(config.train_data_dir)["summary_sha256"]),
+        eval_summary_sha256=str(read_success_marker(config.eval_data_dir)["summary_sha256"]),
+        resolved_checkpoint_dir=_resolved_checkpoint_dir(config),
+        scheduler_sigma_min=float(scheduler.config.sigma_min),
+        scheduler_sigma_max=float(scheduler.config.sigma_max),
+    )
     if resume_on:
-        # The signature binds every input that can change a row: checkpoint identity, dataset
-        # identity (dirs + the summary_sha256 the cycle-C preflight verifies), model provenance,
-        # sampler/guidance, the derangement's identity, the coverage spec and the aux/video flags.
-        run_signature = overfit100_run_signature(
-            config,
-            checkpoint_step=checkpoint_step,
-            pass_role=pass_role,
-            manifest_sha256=manifest_sha256,
-            code_commit=code_commit,
-            derangement=derangement,
-            windows=windows,
-            seeds=seeds,
-            modes=modes,
-            train_summary_sha256=str(read_success_marker(config.train_data_dir)["summary_sha256"]),
-            eval_summary_sha256=str(read_success_marker(config.eval_data_dir)["summary_sha256"]),
-        )
         staged_rows = read_staged_rows(
             step_root,
             run_signature=run_signature,
@@ -2355,6 +2511,24 @@ def run_overfit100(config) -> None:
             modes=modes,
             derangement=derangement,
         )
+    if publication["state"] == "partial_publication":
+        # Fail closed: without every staged row this pass would recompute some tuples, and with aux
+        # enabled the rebuilt artifact could legitimately differ from the half-published one --
+        # silently replacing published evidence. Refuse and tell the operator exactly what to do.
+        expected_tuples = [
+            (str(window["name"]), mode, int(seed)) for window in windows for mode in modes for seed in seeds
+        ]
+        missing_tuples = [key for key in expected_tuples if key not in staged_rows]
+        if missing_tuples:
+            raise ValueError(
+                f"overfit100 eval: cannot complete the interrupted publication of {step_root}: "
+                f"{', '.join(publication['artifacts_present'])} exist without {OVERFIT100_PUBLISHED_MARKER}, but "
+                f"staging can only rebuild {len(staged_rows)} of {len(expected_tuples)} rows (missing e.g. "
+                f"{missing_tuples[:3]}). Publication only begins once the grid is complete, so the staged rows are "
+                f"the authoritative source for the repair; recomputing them could publish a different auxiliary "
+                f"block over evidence that is already partly published. Move or delete {step_root} deliberately "
+                f"(keeping a copy of the partial artifacts) and re-run the pass into a clean role directory."
+            )
 
     rows: list[dict] = []
     aux_cache: dict = {}
@@ -2415,7 +2589,7 @@ def run_overfit100(config) -> None:
                 )
                 rows.append(row)
                 recomputed_count += 1
-                if write_videos:
+                if write_videos and not writes_suppressed:
                     window_dir = f"{step_root}/mode_{mode}/seed_{seed}/{sample.name}"
                     _save_video(gt0, f"{window_dir}/ground_truth.mp4", fps=fps)
                     _save_video(pred0, f"{window_dir}/sample.mp4", fps=fps)
@@ -2425,7 +2599,7 @@ def run_overfit100(config) -> None:
                         fps=fps,
                     )
                     _write_json(f"{window_dir}/metrics.json", row)
-                if resume_on:
+                if resume_on and not writes_suppressed:
                     # AFTER the videos: an admitted row implies its artifacts are already on disk.
                     write_staged_row(step_root, row, run_signature=run_signature)
                 max_logging.log(
@@ -2465,6 +2639,15 @@ def run_overfit100(config) -> None:
             "per_mode": summary,
             "aggregation_json": f"{step_root}/aggregation.json",
         },
+    )
+    _write_json_immutable(
+        f"{step_root}/{OVERFIT100_PUBLISHED_MARKER}",
+        overfit100_published_marker(
+            pass_role=pass_role,
+            checkpoint_step=checkpoint_step,
+            n_rows=len(rows),
+            run_signature=run_signature,
+        ),
     )
     max_logging.log(f"[wan_overfit100_val] resumed n_rows={resumed_count} recomputed={recomputed_count}")
     for line in aux_coverage_log_lines(summary["aux_coverage"]):  # D5: loud, not silent

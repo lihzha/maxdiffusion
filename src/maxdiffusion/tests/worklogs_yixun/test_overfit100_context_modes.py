@@ -644,6 +644,7 @@ def test_run_overfit100_writes_the_aggregation_artifact_for_every_window_mode_se
         + "\n"
     )
     channels, frames, height, width = 2, 3, 4, 4
+    _write_success_marker(data_dir)
     records = _driver_records(episodes, channels=channels, frames=frames, height=height, width=width)
     monkeypatch.setattr(gen, "_iter_overfit100_records", lambda config: iter(records))
     monkeypatch.setattr(gen, "assert_ssim_available", lambda: None)  # no scikit-image needed on CPU
@@ -777,6 +778,7 @@ def test_run_overfit100_writes_videos_only_when_asked(tmp_path, monkeypatch):
             }
         )
     )
+    _write_success_marker(data_dir)
     records = _driver_records(episodes, channels=2, frames=3, height=4, width=4)
     monkeypatch.setattr(gen, "_iter_overfit100_records", lambda config: iter(records))
     monkeypatch.setattr(gen, "assert_ssim_available", lambda: None)  # no scikit-image needed on CPU
@@ -1265,35 +1267,8 @@ def _sample_row(name="ep100_v0_s00000", mode="correct", seed=0, **overrides):
 
 
 def _signature(**overrides) -> dict:
-    """A canonical run signature, as ``overfit100_run_signature`` builds one."""
-    signature = {
-        "schema": gen.OVERFIT100_RUN_SIGNATURE_SCHEMA,
-        "checkpoint_step": 2500,
-        "checkpoint_dir": "gs://bucket/run/checkpoints",
-        "pass_role": "s3_segment_final",
-        "manifest_sha256": "a" * 64,
-        "code_commit": "c" * 40,
-        "model_snapshot": "/cache/snapshots/" + "b" * 40,
-        "model_revision": "b" * 40,
-        "train_data_dir": "gs://bucket/train100",
-        "eval_data_dir": "gs://bucket/train100",
-        "train_summary_sha256": "1" * 64,
-        "eval_summary_sha256": "1" * 64,
-        "eval_windows_spec": "canonical",
-        "num_windows": 1,
-        "rollout_seeds": [0],
-        "context_modes": ["correct"],
-        "context_shuffle_seed": 0,
-        "context_derangement_sha256": "none",
-        "num_text_slots": 2,
-        "sampling_steps": 25,
-        "guide_scale": 1.0,
-        "flow_shift": 5.0,
-        "weights_dtype": "float32",
-        "activations_dtype": "float32",
-        "eval_aux_rgb": False,
-        "write_videos": False,
-    }
+    """A canonical run signature, built by the REAL builder so its key set is always exact."""
+    signature = _build_signature()
     signature.update(overrides)
     return signature
 
@@ -1355,17 +1330,11 @@ def test_run_signature_is_built_from_the_run_and_strictly_typed():
         pretrained_model_name_or_path="/cache/snapshots/" + "b" * 40,
         expected_model_revision="b" * 40,
     )
-    signature = gen.overfit100_run_signature(
+    signature = _build_signature(
         config,
-        checkpoint_step=2500,
-        pass_role="s3_segment_final",
-        manifest_sha256="a" * 64,
-        code_commit="c" * 40,
         derangement=(1, 0),
-        windows=[_WINDOW],
         seeds=(0, 1, 2),
         modes=("correct", "null", "shuffled"),
-        train_summary_sha256="1" * 64,
         eval_summary_sha256="2" * 64,
     )
     # Every field the review named is bound...
@@ -1404,17 +1373,11 @@ def test_run_signature_is_built_from_the_run_and_strictly_typed():
     assert signature["rollout_seeds"] == [0, 1, 2] and all(type(s) is int for s in signature["rollout_seeds"])
     # The derangement is bound by identity, not by presence.
     assert signature["context_derangement_sha256"] != "none"
-    other = gen.overfit100_run_signature(
+    other = _build_signature(
         config,
-        checkpoint_step=2500,
-        pass_role="s3_segment_final",
-        manifest_sha256="a" * 64,
-        code_commit="c" * 40,
         derangement=(0, 1),
-        windows=[_WINDOW],
         seeds=(0, 1, 2),
         modes=("correct", "null", "shuffled"),
-        train_summary_sha256="1" * 64,
         eval_summary_sha256="2" * 64,
     )
     assert other["context_derangement_sha256"] != signature["context_derangement_sha256"]
@@ -1963,7 +1926,7 @@ def test_a_completed_pass_reruns_idempotently_through_staging(tmp_path, monkeypa
     gen.run_overfit100(config)
     assert len(_CALLS) == 1  # recomputed in memory, NOT resumed
     assert _dir_snapshot(step_root) == before  # nothing in the role dir changed, staging included
-    assert any("already complete" in line for line in logged)
+    assert any("PUBLISHED" in line for line in logged)
 
 
 def test_the_immutability_guard_still_blocks_a_changed_rerun_without_touching_the_role_dir(tmp_path, monkeypatch):
@@ -2016,3 +1979,456 @@ def test_config_carries_the_resume_switch():
     cfg = yaml.safe_load(_CONFIG_YML.read_text())
     assert cfg["overfit100_eval_resume"] is True
     assert "OVERFIT100_EVAL_RESUME" in _CONFIG_YML.read_text()
+
+
+# ======================================================================================
+# (eval-resume pass 2) Complete run signature, write-suppressed completed dirs, and
+# MARKER-LAST transactional publication.
+# ======================================================================================
+
+
+def _published(step_root: Path) -> bool:
+    return (step_root / gen.OVERFIT100_PUBLISHED_MARKER).exists()
+
+
+# --------------------------------------------------------------------------------------
+# Finding 1: the signature binds the rest of the rollout-affecting inputs.
+# --------------------------------------------------------------------------------------
+
+
+def _full_signature_config(**overrides):
+    base = {
+        "checkpoint_dir": "gs://b/ck",
+        "output_dir": "gs://b",
+        "run_name": "r",
+        "train_data_dir": "gs://b/train100",
+        "eval_data_dir": "gs://b/train100",
+        "eval_windows": "canonical",
+        "context_shuffle_seed": 0,
+        "num_text_slots": 2,
+        "side_adapter_sampling_steps": 25,
+        "side_adapter_guide_scale": 1.0,
+        "flow_shift": 5.0,
+        "flow_sigma_min": 0.0,
+        "flow_sigma_max": 1.0,
+        "weights_dtype": "float32",
+        "activations_dtype": "float32",
+        "eval_aux_rgb": False,
+        "write_videos": False,
+        "pretrained_model_name_or_path": "/cache/snapshots/" + "b" * 40,
+        "expected_model_revision": "b" * 40,
+        "latent_channels": 48,
+        "latent_frames": 9,
+        "latent_height": 12,
+        "latent_width": 20,
+        "wan_max_sequence_length": 512,
+        "attention": "flash",
+        "precision": "DEFAULT",
+        "flash_min_seq_length": 4096,
+        "flash_block_sizes": {},
+        "split_head_dim": True,
+        "fps": 16,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _build_signature(config=None, **overrides):
+    kwargs = {
+        "checkpoint_step": 2500,
+        "pass_role": "s3_segment_final",
+        "manifest_sha256": "a" * 64,
+        "code_commit": "c" * 40,
+        "derangement": None,
+        "windows": [_WINDOW],
+        "seeds": (0,),
+        "modes": ("correct",),
+        "train_summary_sha256": "1" * 64,
+        "eval_summary_sha256": "1" * 64,
+        "resolved_checkpoint_dir": "gs://b/ck",
+        "scheduler_sigma_min": 0.0,
+        "scheduler_sigma_max": 1.0,
+    }
+    kwargs.update(overrides)
+    return gen.overfit100_run_signature(config or _full_signature_config(), **kwargs)
+
+
+def test_signature_binds_every_rollout_affecting_input():
+    signature = _build_signature()
+    for field in (
+        "scheduler_sigma_min",
+        "scheduler_sigma_max",
+        "latent_channels",
+        "latent_frames",
+        "latent_height",
+        "latent_width",
+        "wan_max_sequence_length",
+        "attention",
+        "precision",
+        "flash_min_seq_length",
+        "flash_block_sizes",
+        "split_head_dim",
+        "fps",
+        "resolved_checkpoint_dir",
+    ):
+        assert field in signature, field
+    assert set(signature) == {"schema"} | {name for name, _ in gen.OVERFIT100_RUN_SIGNATURE_TYPES}
+    assert type(signature["scheduler_sigma_min"]) is float
+    assert type(signature["split_head_dim"]) is bool
+    assert type(signature["fps"]) is int
+
+
+def test_signature_uses_the_resolved_checkpoint_dir_not_the_config_string():
+    # An empty checkpoint_dir resolves to <output_dir>/<run_name>/checkpoints -- the directory the
+    # restore actually reads, which is what must be bound.
+    config = _full_signature_config(checkpoint_dir="")
+    resolved = gen._resolved_checkpoint_dir(config)
+    assert resolved == "gs://b/r/checkpoints"
+    signature = _build_signature(config, resolved_checkpoint_dir=resolved)
+    assert signature["resolved_checkpoint_dir"] == resolved
+    assert signature["checkpoint_dir"] == ""  # the raw config value is recorded separately
+
+
+@pytest.mark.parametrize(
+    "field,bad",
+    [
+        ("scheduler_sigma_min", 0.1),
+        ("scheduler_sigma_max", 0.9),
+        ("latent_channels", 16),
+        ("latent_frames", 5),
+        ("latent_height", 24),
+        ("latent_width", 40),
+        ("wan_max_sequence_length", 256),
+        ("attention", "dot_product"),
+        ("precision", "HIGHEST"),
+        ("flash_min_seq_length", 2048),
+        ("flash_block_sizes", '{"block_q": 128}'),
+        ("split_head_dim", False),
+        ("fps", 8),
+        ("resolved_checkpoint_dir", "gs://b/OTHER/checkpoints"),
+    ],
+)
+def test_every_new_signature_field_is_enforced(tmp_path, field, bad):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    expected = _build_signature()
+    _stage(step_root, _sample_row(), signature={**expected, field: bad})
+    with pytest.raises(ValueError) as ei:
+        _read(step_root, signature=expected)
+    assert field in str(ei.value)
+
+
+def test_an_extra_signature_key_is_refused(tmp_path):
+    # Exact key set: a staged signature carrying a field this run does not know cannot be compared.
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    expected = _build_signature()
+    _stage(step_root, _sample_row(), signature={**expected, "future_knob": 1})
+    with pytest.raises(ValueError) as ei:
+        _read(step_root, signature=expected)
+    message = str(ei.value)
+    assert "future_knob" in message and "key set" in message.lower()
+
+
+def test_signature_hash_equality_is_required_against_the_expected_signature(tmp_path):
+    # Review-required belt and braces beside the field-by-field comparison: the staged signature
+    # must hash to the SAME value as this run's independently computed one.
+    #
+    # Honest note: with the exact key set enforced and every typed field compared by value, this
+    # check is currently UNREACHABLE as the sole failure -- no input can pass those and still hash
+    # differently. It is kept because the review required it and because it keeps the guarantee
+    # whole-object rather than field-enumerated (a future field added to the builder but forgotten
+    # in the type table would be caught by the key-set check today, and by this one regardless).
+    # Its presence is therefore asserted against the source as well as exercised behaviourally.
+    import inspect
+
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    expected = _build_signature()
+    assert gen.run_signature_sha256(expected) == gen.run_signature_sha256(dict(expected))
+    _stage(step_root, _sample_row(), signature=expected)
+    assert _read(step_root, signature=expected)
+    src = inspect.getsource(gen.read_staged_rows)
+    assert "expected_hash = run_signature_sha256(expected_signature)" in src
+    assert "if recorded_hash != expected_hash:" in src
+
+
+# --------------------------------------------------------------------------------------
+# Finding 2: a completed role directory takes NO filesystem writes.
+# --------------------------------------------------------------------------------------
+
+
+def test_a_completed_dir_writes_nothing_even_with_videos_enabled(tmp_path, monkeypatch):
+    # The hole the previous snapshot tests missed: they ran write_videos=False, so the loop's
+    # _save_video / metrics.json overwrites (save_video uses overwrite=True) went unchecked.
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    config.write_videos = True
+    saved: list[str] = []
+    monkeypatch.setattr(
+        gen,
+        "_save_video",
+        lambda frames, path, fps: (
+            saved.append(path),
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(b"v"),
+        )[0],
+    )
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    assert saved and _published(step_root)
+    before = _dir_snapshot(step_root)
+
+    saved.clear()
+    monkeypatch.setattr(
+        gen,
+        "_save_video",
+        lambda frames, path, fps: pytest.fail("a completed role directory must not write videos"),
+    )
+    monkeypatch.setattr(
+        gen,
+        "_write_json",
+        lambda path, value: pytest.fail(f"a completed role directory must not write {path}"),
+    )
+    gen.run_overfit100(config)
+    assert _dir_snapshot(step_root) == before
+
+
+def test_a_completed_dir_suppresses_staging_writes_too(tmp_path, monkeypatch):
+    # Today this is doubly guaranteed: a published directory turns resume OFF (so the staging write
+    # is unreachable) AND the write itself is gated on the suppression flag. The behavioural half is
+    # asserted here; the belt-and-braces half is asserted against the source, because no test can
+    # reach it while resume_on is already False -- and it is what keeps the guarantee if a future
+    # change ever re-enables resume in published mode.
+    import inspect
+
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    before = _dir_snapshot(step_root)
+    monkeypatch.setattr(gen, "write_staged_row", lambda *a, **kw: pytest.fail("completed dirs must not stage rows"))
+    gen.run_overfit100(config)
+    assert _dir_snapshot(step_root) == before
+    src = inspect.getsource(gen.run_overfit100)
+    assert "if resume_on and not writes_suppressed:" in src
+
+
+# --------------------------------------------------------------------------------------
+# Finding 3: marker-last transactional publication.
+# --------------------------------------------------------------------------------------
+
+
+def test_the_published_marker_is_written_last_and_defines_completion(tmp_path, monkeypatch):
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    order: list[str] = []
+    real_json, real_text = gen._write_json_immutable, gen._write_text_immutable
+    monkeypatch.setattr(
+        gen,
+        "_write_json_immutable",
+        lambda path, value: (order.append(path.rsplit("/", 1)[-1]), real_json(path, value))[1],
+    )
+    monkeypatch.setattr(
+        gen,
+        "_write_text_immutable",
+        lambda path, text: (order.append(path.rsplit("/", 1)[-1]), real_text(path, text))[1],
+    )
+    gen.run_overfit100(config)
+    assert order[-1] == gen.OVERFIT100_PUBLISHED_MARKER, order
+    assert set(order[:-1]) == {"aggregation.json", "summary.csv", "summary.json"}
+
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    state = gen.overfit100_publication_state(str(step_root))
+    assert state["published"] is True and state["state"] == "published"
+    marker = json.loads((step_root / gen.OVERFIT100_PUBLISHED_MARKER).read_text())
+    assert marker["eval_pass_role"] == "s3_intermediate"
+    assert marker["n_rows"] == 1
+    assert marker["run_signature_sha256"] == gen.run_signature_sha256(
+        json.loads((step_root / gen.OVERFIT100_STAGING_DIR / "correct/seed_0/ep100_v0_s00000.json").read_text())[
+            "run_signature"
+        ]
+    )
+
+
+def test_an_artifact_without_the_marker_is_not_completion(tmp_path):
+    step_root = tmp_path / "step_002500_s3_intermediate"
+    step_root.mkdir(parents=True)
+    (step_root / "aggregation.json").write_text("{}")
+    state = gen.overfit100_publication_state(str(step_root))
+    assert state["published"] is False
+    assert state["state"] == "partial_publication"
+    assert state["artifacts_present"] == ["aggregation.json"]
+    assert gen.overfit100_publication_state(str(tmp_path / "nothing_here"))["state"] == "fresh"
+
+
+def test_a_mid_publication_preemption_is_repaired_from_staging(tmp_path, monkeypatch):
+    # Publication only starts once the grid is complete, so staging holds every row. A crash after
+    # aggregation.json (the exact case that used to brick a role dir) must republish the missing
+    # artifacts from those same staged rows and then place the marker.
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+
+    boom = RuntimeError("preempted mid-publication")
+    real_text = gen._write_text_immutable
+
+    def _die_on_csv(path, text):
+        if path.endswith("summary.csv"):
+            raise boom
+        return real_text(path, text)
+
+    monkeypatch.setattr(gen, "_write_text_immutable", _die_on_csv)
+    with pytest.raises(RuntimeError):
+        gen.run_overfit100(config)
+    assert (step_root / "aggregation.json").exists()
+    assert not (step_root / "summary.csv").exists()
+    assert not _published(step_root)
+    aggregation_before = (step_root / "aggregation.json").read_bytes()
+
+    monkeypatch.setattr(gen, "_write_text_immutable", real_text)
+    _CALLS.clear()
+    logged: list[str] = []
+    monkeypatch.setattr(gen.max_logging, "log", lambda message: logged.append(str(message)))
+    gen.run_overfit100(config)
+    assert _CALLS == []  # rebuilt from staging; no rollout re-run
+    assert (step_root / "aggregation.json").read_bytes() == aggregation_before  # unchanged
+    assert (step_root / "summary.csv").exists() and (step_root / "summary.json").exists()
+    assert _published(step_root)
+    assert any("publication" in line.lower() for line in logged)
+
+
+def test_publication_resume_refuses_when_staging_cannot_rebuild_the_grid(tmp_path, monkeypatch):
+    # Fail-closed: a half-published directory whose staging was cleared cannot be repaired, and
+    # recomputing would risk a different aux block silently replacing published evidence.
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    real_text = gen._write_text_immutable
+    monkeypatch.setattr(
+        gen,
+        "_write_text_immutable",
+        lambda path, text: (
+            (_ for _ in ()).throw(RuntimeError("boom")) if path.endswith("summary.csv") else real_text(path, text)
+        ),
+    )
+    with pytest.raises(RuntimeError):
+        gen.run_overfit100(config)
+    monkeypatch.setattr(gen, "_write_text_immutable", real_text)
+    shutil.rmtree(step_root / gen.OVERFIT100_STAGING_DIR)  # staging cleared by an operator
+
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    message = str(ei.value)
+    assert "publication" in message.lower()
+    assert str(step_root) in message  # names exactly what to deal with
+    assert not _published(step_root)
+
+
+def test_a_foreign_writer_publishing_different_bytes_is_refused(tmp_path, monkeypatch):
+    # Single-writer is enforced operationally (old jobs cancelled and confirmed dead before a
+    # relaunch), but a marker that appears mid-run with DIFFERENT content is still refused by the
+    # immutable writer rather than silently overwritten.
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    real_json = gen._write_json_immutable
+
+    def _foreign_marker_appears(path, value):
+        if path.endswith("aggregation.json"):
+            marker = Path(step_root) / gen.OVERFIT100_PUBLISHED_MARKER
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps({"eval_pass_role": "s3_intermediate", "n_rows": 999}) + "\n")
+        return real_json(path, value)
+
+    monkeypatch.setattr(gen, "_write_json_immutable", _foreign_marker_appears)
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    assert gen.OVERFIT100_PUBLISHED_MARKER in str(ei.value)
+
+
+def test_publication_state_is_probed_before_any_staging_interaction():
+    import inspect
+
+    src = inspect.getsource(gen.run_overfit100)
+    assert src.index("overfit100_publication_state") < src.index("read_staged_rows")
+    assert src.index("overfit100_publication_state") < src.index("write_staged_row")
+
+
+# --------------------------------------------------------------------------------------
+# Finding 4: enumeration must fail closed on listing errors; GCS marker semantics.
+# --------------------------------------------------------------------------------------
+
+
+def test_a_listing_error_during_enumeration_is_fatal(tmp_path, monkeypatch):
+    root = tmp_path / "step_002500_s3_segment_final"
+    _stage(root, _sample_row())
+
+    def _walk_with_error(top, onerror=None, **kwargs):
+        if onerror is not None:
+            onerror(OSError("permission denied listing gs://bucket/staging_rows/correct"))
+        return iter(())
+
+    monkeypatch.setattr(gen.tf.io.gfile, "walk", _walk_with_error)
+    with pytest.raises(ValueError) as ei:
+        _read(root)
+    assert "permission denied" in str(ei.value)
+
+
+def test_gcs_zero_byte_directory_markers_are_tolerated_but_other_zero_byte_objects_are_not(tmp_path, monkeypatch):
+    root = tmp_path / "step_002500_s3_segment_final"
+    staging = str(root / gen.OVERFIT100_STAGING_DIR)
+    real_path = _stage(root, _sample_row())
+
+    def _walk_with_marker(top, onerror=None, **kwargs):
+        # GCS represents some folders as zero-byte objects whose name ends with "/".
+        yield (staging, ["correct"], ["marker/"])
+        yield (f"{staging}/correct", ["seed_0"], [""])
+        yield (f"{staging}/correct/seed_0", [], ["ep100_v0_s00000.json"])
+
+    monkeypatch.setattr(gen.tf.io.gfile, "walk", _walk_with_marker)
+    assert _read(root)  # markers skipped, the real row admitted
+    assert Path(real_path).exists()
+
+    def _walk_with_stray_zero_byte(top, onerror=None, **kwargs):
+        yield (staging, ["correct"], ["_leftover"])
+        yield (f"{staging}/correct/seed_0", [], ["ep100_v0_s00000.json"])
+
+    monkeypatch.setattr(gen.tf.io.gfile, "walk", _walk_with_stray_zero_byte)
+    with pytest.raises(ValueError) as ei:
+        _read(root)
+    assert "_leftover" in str(ei.value)
+
+
+def test_enumeration_does_not_require_the_prefix_to_exist(tmp_path):
+    # On GCS a prefix is not an object: an absent staging root must read as "nothing staged"
+    # (the walk's NotFound on the root is tolerated), never as an error and never via an
+    # exists() probe on a prefix.
+    import inspect
+
+    assert _read(tmp_path / "step_002500_s3_segment_final", windows=[]) == {}
+    src = inspect.getsource(gen._enumerate_staging_files)
+    assert "onerror=_rethrow" in src
+    assert "tf.io.gfile.exists(root)" not in src
+
+
+# --------------------------------------------------------------------------------------
+# Finding 5: the aux-recovery guidance must describe the real procedure.
+# --------------------------------------------------------------------------------------
+
+
+def test_staging_error_text_does_not_promise_ceiling_recovery_by_clearing_staging(tmp_path):
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    _stage(step_root, _sample_row(), signature=_build_signature(checkpoint_step=1000))
+    with pytest.raises(ValueError) as ei:
+        _read(step_root, signature=_build_signature())
+    message = str(ei.value)
+    assert str(step_root / gen.OVERFIT100_STAGING_DIR) in message
+    assert "ceiling" not in message.lower()  # no false recovery promise in the staging error
+
+
+def test_the_aux_recovery_note_points_at_the_backfill_not_at_staging():
+    import inspect
+
+    src = inspect.getsource(gen.run_overfit100)
+    note = src[src.index("SCOPE OF THE PARITY CLAIM") : src.index("staged_rows: dict")]
+    assert "backfill" in note
+    # It must NOT tell the operator that clearing staging recovers a published row's ceiling.
+    assert "clears the staging root and re-runs" not in note
