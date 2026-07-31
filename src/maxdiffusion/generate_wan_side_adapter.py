@@ -105,6 +105,7 @@ from maxdiffusion.trainers.wan_ti2v_overfit100_trainer import (
     read_episode_mapping,
     read_episode_texts,
     read_manifest_episodes,
+    read_success_marker,
 )
 from maxdiffusion.trainers.wan_ti2v_side_adapter_trainer import (
     TrainState,
@@ -1532,12 +1533,82 @@ def assert_flagged_windows_in_cohort(flagged_windows, cohort) -> None:
 # --------------------------------------------------------------------------------------
 
 OVERFIT100_STAGED_ROW_SCHEMA = "overfit100_eval_staged_row_v1"
+OVERFIT100_RUN_SIGNATURE_SCHEMA = "overfit100_eval_run_signature_v1"
 OVERFIT100_STAGING_DIR = "staging_rows"
 OVERFIT100_RESUME_ENV = "OVERFIT100_EVAL_RESUME"
-# The envelope fields that BIND a staged row to one specific run. All four must match exactly or
-# the pass fails closed -- a foreign staging directory is an operator problem, not something to
-# silently recompute around.
-OVERFIT100_STAGING_BINDING = ("checkpoint_step", "pass_role", "manifest_sha256", "code_commit")
+# The artifacts whose presence means this role directory is COMPLETE. Their existence disables
+# staging entirely so a finished pass is never partially mutated (review finding 3).
+OVERFIT100_COMPLETED_ARTIFACTS = ("aggregation.json", "summary.json", "summary.csv")
+
+# The run signature: every input that can change a row's numbers or its meaning. A staged row is
+# admitted only when ALL of these match the current run exactly -- binding step/role/manifest/commit
+# alone let a retry admit rows produced against a different checkpoint directory, dataset, sampler
+# setting, derangement or aux/video mode (review finding 1). Strictly typed, in this exact order.
+OVERFIT100_RUN_SIGNATURE_TYPES: tuple[tuple[str, type], ...] = (
+    ("checkpoint_step", int),
+    ("checkpoint_dir", str),
+    ("pass_role", str),
+    ("manifest_sha256", str),
+    ("code_commit", str),
+    ("model_snapshot", str),
+    ("model_revision", str),
+    ("train_data_dir", str),
+    ("eval_data_dir", str),
+    ("train_summary_sha256", str),
+    ("eval_summary_sha256", str),
+    ("eval_windows_spec", str),
+    ("num_windows", int),
+    ("rollout_seeds", list),
+    ("context_modes", list),
+    ("context_shuffle_seed", int),
+    ("context_derangement_sha256", str),
+    ("num_text_slots", int),
+    ("sampling_steps", int),
+    ("guide_scale", float),
+    ("flow_shift", float),
+    ("weights_dtype", str),
+    ("activations_dtype", str),
+    ("eval_aux_rgb", bool),
+    ("write_videos", bool),
+)
+
+# Per-row JSON types. ``bool`` is checked with ``type(x) is`` so it never satisfies ``int``.
+_STAGED_ROW_TYPES: dict[str, tuple] = {
+    "name": (str,),
+    "episode_id": (int,),
+    "episode_index": (int,),
+    "window_start": (int,),
+    "canonical": (bool,),
+    "checkpoint_step": (int,),
+    "seed": (int,),
+    "context_mode": (str,),
+    "context_source_episode_index": (int, type(None)),
+    "ssim": (float,),
+    "latent_mse": (float,),
+    "latent_mae": (float,),
+    "pixel_mse": (float,),
+    "pixel_mae": (float,),
+    "z_pred_std": (float,),
+    "z_target_std": (float,),
+    "z_init_anchor_mse": (float,),
+    "ssim_vs_rgb": (float, type(None)),
+    "pixel_mse_vs_rgb": (float, type(None)),
+    "vae_ceiling_ssim": (float, type(None)),
+    "aux_status": (str,),
+}
+# Value domains checked before admission: an SSIM outside [-1, 1] or a negative squared error is
+# not a measurement this pipeline can produce, so it must not reach the verdict artifact.
+_STAGED_SSIM_FIELDS = ("ssim", "ssim_vs_rgb", "vae_ceiling_ssim")
+_STAGED_NONNEGATIVE_FIELDS = (
+    "latent_mse",
+    "latent_mae",
+    "pixel_mse",
+    "pixel_mae",
+    "z_pred_std",
+    "z_target_std",
+    "z_init_anchor_mse",
+    "pixel_mse_vs_rgb",
+)
 
 
 def _eval_code_commit() -> str:
@@ -1555,6 +1626,11 @@ def resume_state(config) -> tuple[bool, str]:
     Precedence: the ``OVERFIT100_EVAL_RESUME`` env var (``1``/``0``) overrides the
     ``overfit100_eval_resume`` config key, mirroring how the loss evaluator takes ``SMOKE_LIMIT``
     and ``TRAIN_COMMIT`` from the environment. Default ON.
+
+    **A valid 40-hex COMMIT is mandatory** (review finding 1): the signature binds a staged row to
+    the code that produced it, and the ``"unknown"`` fallback cannot distinguish two code states, so
+    an unrelayed commit hard-disables staging -- both reads AND writes -- rather than admitting
+    under it.
 
     **Single-process only, deliberately.** Every host must execute the SAME rollout set: the decode
     inside the loop runs a ``process_allgather``, so if one host skipped a rollout another host
@@ -1574,6 +1650,13 @@ def resume_state(config) -> tuple[bool, str]:
         want, source = bool(getattr(config, "overfit100_eval_resume", True)), "config overfit100_eval_resume"
     if not want:
         return False, f"row staging disabled by {source}"
+    commit = _eval_code_commit()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return False, (
+            f"row staging disabled: COMMIT={commit!r} is not a 40-hex sha. A staged row is bound to the code that "
+            f"produced it, and 'unknown' cannot distinguish two code states -- relay the launch commit "
+            f"(tpu create --env COMMIT=$(git rev-parse HEAD)) to enable resume."
+        )
     processes = int(jax.process_count())
     if processes != 1:
         return False, (
@@ -1584,26 +1667,93 @@ def resume_state(config) -> tuple[bool, str]:
     return True, f"row staging enabled by {source} (single-process job)"
 
 
+def overfit100_completed_artifacts(step_root: str) -> list[str]:
+    """Which completed artifacts already exist in this role directory (D4-first, finding 3)."""
+    root = str(step_root).rstrip("/")
+    return [name for name in OVERFIT100_COMPLETED_ARTIFACTS if tf.io.gfile.exists(f"{root}/{name}")]
+
+
+def run_signature_sha256(run_signature: dict) -> str:
+    """sha256 of the signature's canonical JSON -- one value to log and compare."""
+    return hashlib.sha256(json.dumps(run_signature, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def overfit100_run_signature(
+    config,
+    *,
+    checkpoint_step: int,
+    pass_role: str,
+    manifest_sha256: str,
+    code_commit: str,
+    derangement,
+    windows,
+    seeds,
+    modes,
+    train_summary_sha256: str,
+    eval_summary_sha256: str,
+) -> dict:
+    """The canonical, strictly typed signature of THIS run (review finding 1).
+
+    Covers checkpoint identity, dataset identity (the directories plus the ``summary_sha256`` the
+    cycle-C preflight already binds), model provenance, the sampler/guidance settings that shape a
+    rollout, the context derangement's identity, the coverage spec, and the ``eval_aux_rgb`` /
+    ``write_videos`` behaviour flags -- because switching ``write_videos`` on would otherwise leave
+    resumed rows without their videos.
+    """
+    derangement_id = (
+        "none"
+        if derangement is None
+        else hashlib.sha256(
+            json.dumps([int(v) for v in derangement], separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    )
+    signature = {
+        "schema": OVERFIT100_RUN_SIGNATURE_SCHEMA,
+        "checkpoint_step": int(checkpoint_step),
+        "checkpoint_dir": str(getattr(config, "checkpoint_dir", "")),
+        "pass_role": str(pass_role),
+        "manifest_sha256": str(manifest_sha256),
+        "code_commit": str(code_commit),
+        "model_snapshot": str(getattr(config, "pretrained_model_name_or_path", "")),
+        "model_revision": str(getattr(config, "expected_model_revision", "")),
+        "train_data_dir": str(getattr(config, "train_data_dir", "")),
+        "eval_data_dir": str(getattr(config, "eval_data_dir", "")),
+        "train_summary_sha256": str(train_summary_sha256),
+        "eval_summary_sha256": str(eval_summary_sha256),
+        "eval_windows_spec": str(getattr(config, "eval_windows", "")),
+        "num_windows": len(list(windows)),
+        "rollout_seeds": [int(seed) for seed in seeds],
+        "context_modes": [str(mode) for mode in modes],
+        "context_shuffle_seed": int(getattr(config, "context_shuffle_seed", 0)),
+        "context_derangement_sha256": derangement_id,
+        "num_text_slots": int(getattr(config, "num_text_slots", 0) or 0),
+        "sampling_steps": int(getattr(config, "side_adapter_sampling_steps", 0)),
+        "guide_scale": float(getattr(config, "side_adapter_guide_scale", 1.0)),
+        "flow_shift": float(getattr(config, "flow_shift", 0.0)),
+        "weights_dtype": str(getattr(config, "weights_dtype", "")),
+        "activations_dtype": str(getattr(config, "activations_dtype", "")),
+        "eval_aux_rgb": bool(getattr(config, "eval_aux_rgb", True)),
+        "write_videos": bool(getattr(config, "write_videos", False)),
+    }
+    return signature
+
+
 def staged_row_path(step_root: str, context_mode: str, seed: int, name: str) -> str:
     """``<step_root>/staging_rows/<context_mode>/seed_<seed>/<window_name>.json``."""
     return f"{str(step_root).rstrip('/')}/{OVERFIT100_STAGING_DIR}/{context_mode}/seed_{int(seed)}/{name}.json"
 
 
-def staged_row_envelope(
-    row: dict, *, checkpoint_step: int, pass_role: str, manifest_sha256: str, code_commit: str
-) -> dict:
-    """One staged row plus the envelope binding it to this run (schema tag + the 4 binding fields)."""
+def staged_row_envelope(row: dict, *, run_signature: dict) -> dict:
+    """One staged row plus the RUN SIGNATURE that binds it (schema tag + signature + its hash)."""
     return {
         "schema": OVERFIT100_STAGED_ROW_SCHEMA,
-        "checkpoint_step": int(checkpoint_step),
-        "pass_role": str(pass_role),
-        "manifest_sha256": str(manifest_sha256),
-        "code_commit": str(code_commit),
+        "run_signature": dict(run_signature),
+        "run_signature_sha256": run_signature_sha256(run_signature),
         "row": dict(row),
     }
 
 
-def write_staged_row(step_root: str, row: dict, *, checkpoint_step, pass_role, manifest_sha256, code_commit) -> str:
+def write_staged_row(step_root: str, row: dict, *, run_signature: dict) -> str:
     """Persist one completed rollout row.
 
     Written by process 0 AFTER that row's videos, so an admitted row implies its artifacts are
@@ -1611,107 +1761,214 @@ def write_staged_row(step_root: str, row: dict, *, checkpoint_step, pass_role, m
     and a crash mid-write is caught by the strict reader on the next start.
     """
     path = staged_row_path(step_root, str(row["context_mode"]), int(row["seed"]), str(row["name"]))
-    _write_json(
-        path,
-        staged_row_envelope(
-            row,
-            checkpoint_step=checkpoint_step,
-            pass_role=pass_role,
-            manifest_sha256=manifest_sha256,
-            code_commit=code_commit,
-        ),
-    )
+    _write_json(path, staged_row_envelope(row, run_signature=run_signature))
     return path
 
 
-def _staged_row_error(path: str, detail: str) -> ValueError:
+def _staging_error(root: str, detail: str) -> ValueError:
     return ValueError(
-        f"overfit100 eval staging: refusing to resume from {path}: {detail}. Staged rows are admitted only when "
-        f"their envelope matches this run EXACTLY; a mismatch means the directory holds another run's evidence, so "
-        f"clear it deliberately (or set {OVERFIT100_RESUME_ENV}=0) rather than silently recomputing around it."
+        f"overfit100 eval staging: {detail}. Staged rows are admitted only when their run signature matches this "
+        f"run EXACTLY; a mismatch means this directory holds another run's evidence. Clear the staging root "
+        f"deliberately -- {root} -- or set {OVERFIT100_RESUME_ENV}=0 to run without resume."
     )
 
 
-def read_staged_rows(
-    step_root: str, *, checkpoint_step, pass_role, manifest_sha256, code_commit, windows, seeds, modes
-) -> dict:
+def _staged_row_error(path: str, root: str, detail: str) -> ValueError:
+    return _staging_error(root, f"refusing to resume from {path}: {detail}")
+
+
+def _typed(value, expected: tuple, path: str, root: str, what: str):
+    """Exact JSON typing: ``type(x) is T``, so a bool never passes as an int (finding 2)."""
+    if type(value) not in expected:
+        names = "/".join(t.__name__ for t in expected)
+        raise _staged_row_error(path, root, f"{what}={value!r} is {type(value).__name__}, expected exactly {names}")
+    return value
+
+
+def _finite(value: float, path: str, root: str, what: str) -> float:
+    if not math.isfinite(value):
+        raise _staged_row_error(path, root, f"{what}={value!r} is not finite")
+    return value
+
+
+def _enumerate_staging_files(root: str) -> list[str]:
+    """Every object under the staging root, recursively; ANY nonconforming one is fatal (finding 5).
+
+    Directories (including empty ones and GCS directory markers) are tolerated; a file is
+    conforming only at ``<mode>/seed_<n>/<name>.json``. Stray extensions, temp files, wrong depths
+    and unreadable placements are collected and reported TOGETHER, because after a code upgrade
+    every staged row is foreign and naming only the first is useless.
+    """
+    if not tf.io.gfile.exists(root):
+        return []
+    conforming: list[str] = []
+    offenders: list[str] = []
+    for dirpath, _dirnames, filenames in tf.io.gfile.walk(root):
+        for filename in filenames:
+            full = f"{dirpath.rstrip('/')}/{filename}"
+            relative = full[len(root) + 1 :] if full.startswith(root + "/") else full
+            parts = relative.split("/")
+            if not filename:  # directory markers surface as empty names on some filesystems
+                continue
+            conforms = (
+                len(parts) == 3
+                and filename.endswith(".json")
+                and parts[1].startswith("seed_")
+                and parts[1][len("seed_") :].isdigit()
+                and len(filename) > len(".json")
+            )
+            (conforming if conforms else offenders).append(full)
+    if offenders:
+        shown = sorted(offenders)[:5]
+        raise _staging_error(
+            root,
+            f"{len(offenders)} object(s) under the staging root do not conform to "
+            f"<context_mode>/seed_<n>/<window_name>.json: {shown}"
+            + (f" (+{len(offenders) - 5} more)" if len(offenders) > 5 else ""),
+        )
+    return sorted(conforming)
+
+
+def read_staged_rows(step_root: str, *, run_signature: dict, windows, seeds, modes, derangement=None) -> dict:
     """Admit staged rows for this run -> ``{(name, mode, seed): row}``; ANY anomaly hard-fails.
 
-    Every file under the staging root is validated: the schema tag, all four binding fields, the
-    exact ``OVERFIT100_ROW_FIELDS`` column set, and agreement between the row's identity
-    (``name`` / ``context_mode`` / ``seed``, plus the ``episode_id`` / ``window_start`` implied by
-    the window name) and the path it was found at. A row outside this pass's coverage is refused
-    too: it could not be reconciled with the artifact this pass will write.
+    Validated per file: the schema tag, the RUN SIGNATURE field-by-field (exact types AND exact
+    values -- ``"2500"`` is not ``2500``) plus its recorded hash, the exact ``OVERFIT100_ROW_FIELDS``
+    column set with exact per-field JSON types, every metric's domain (finite; SSIM within
+    ``[-1, 1]``; squared errors and standard deviations non-negative), and the row's full identity
+    against the SELECTED window descriptor -- ``episode_id`` / ``episode_index`` / ``window_start`` /
+    ``canonical`` -- plus the ``context_source_episode_index`` this ``(mode, derangement)`` implies.
     """
     root = f"{str(step_root).rstrip('/')}/{OVERFIT100_STAGING_DIR}"
-    files = sorted(tf.io.gfile.glob(f"{root}/*/*/*.json"))
+    files = _enumerate_staging_files(root)
     if not files:
         return {}
-    wanted_names = {str(window["name"]) for window in windows}
+    by_name = {str(window["name"]): window for window in windows}
     wanted_seeds = {int(seed) for seed in seeds}
     wanted_modes = {str(mode) for mode in modes}
-    expected = {
-        "checkpoint_step": int(checkpoint_step),
-        "pass_role": str(pass_role),
-        "manifest_sha256": str(manifest_sha256),
-        "code_commit": str(code_commit),
-    }
+    expected_signature = dict(run_signature)
 
     admitted: dict[tuple, dict] = {}
     for path in files:
         _, mode_dir, seed_dir, filename = path.rsplit("/", 3)
         name_from_path = filename[: -len(".json")]
-        if not seed_dir.startswith("seed_") or not seed_dir[len("seed_") :].isdigit():
-            raise _staged_row_error(path, f"path segment {seed_dir!r} is not seed_<n>")
         seed_from_path = int(seed_dir[len("seed_") :])
         try:
             with tf.io.gfile.GFile(path, "r") as handle:
                 payload = json.load(handle)
         except Exception as exc:  # noqa: BLE001 -- unreadable/corrupt staging must fail loudly
-            raise _staged_row_error(path, f"unreadable or corrupt JSON ({type(exc).__name__}: {exc})") from exc
+            raise _staged_row_error(path, root, f"unreadable or corrupt JSON ({type(exc).__name__}: {exc})") from exc
         if not isinstance(payload, dict):
-            raise _staged_row_error(path, "the staged file is not a JSON object")
+            raise _staged_row_error(path, root, "the staged file is not a JSON object")
         if payload.get("schema") != OVERFIT100_STAGED_ROW_SCHEMA:
-            raise _staged_row_error(path, f"schema {payload.get('schema')!r} is not {OVERFIT100_STAGED_ROW_SCHEMA!r}")
-        for field, value in expected.items():
-            if field not in payload:
-                raise _staged_row_error(path, f"envelope field {field} is missing")
-            staged = int(payload[field]) if field == "checkpoint_step" else str(payload[field])
-            if staged != value:
-                raise _staged_row_error(path, f"envelope field {field}={staged!r} does not match this run's {value!r}")
+            raise _staged_row_error(
+                path, root, f"schema {payload.get('schema')!r} is not {OVERFIT100_STAGED_ROW_SCHEMA!r}"
+            )
+        staged_signature = payload.get("run_signature")
+        if not isinstance(staged_signature, dict):
+            raise _staged_row_error(path, root, "the envelope carries no 'run_signature' object")
+        if staged_signature.get("schema") != OVERFIT100_RUN_SIGNATURE_SCHEMA:
+            raise _staged_row_error(
+                path,
+                root,
+                f"run signature schema {staged_signature.get('schema')!r} is not "
+                f"{OVERFIT100_RUN_SIGNATURE_SCHEMA!r}",
+            )
+        for field, kind in OVERFIT100_RUN_SIGNATURE_TYPES:
+            if field not in staged_signature:
+                raise _staged_row_error(path, root, f"run signature field {field} is missing")
+            value = staged_signature[field]
+            if type(value) is not kind:
+                raise _staged_row_error(
+                    path,
+                    root,
+                    f"run signature field {field}={value!r} is {type(value).__name__}, expected exactly "
+                    f"{kind.__name__} (values are compared by type AND value, never coerced)",
+                )
+            if kind is list:
+                inner = int if field == "rollout_seeds" else str
+                for item in value:
+                    if type(item) is not inner:
+                        raise _staged_row_error(
+                            path, root, f"run signature field {field} contains {item!r}, expected {inner.__name__}"
+                        )
+            if value != expected_signature.get(field):
+                raise _staged_row_error(
+                    path,
+                    root,
+                    f"run signature field {field}={value!r} does not match this run's "
+                    f"{expected_signature.get(field)!r}",
+                )
+        recorded_hash = payload.get("run_signature_sha256")
+        if recorded_hash != run_signature_sha256(staged_signature):
+            raise _staged_row_error(
+                path, root, f"run_signature_sha256={recorded_hash!r} does not hash its own run_signature"
+            )
+
         row = payload.get("row")
         if not isinstance(row, dict):
-            raise _staged_row_error(path, "the envelope carries no 'row' object")
+            raise _staged_row_error(path, root, "the envelope carries no 'row' object")
         missing = [field for field in OVERFIT100_ROW_FIELDS if field not in row]
         extra = [field for field in row if field not in OVERFIT100_ROW_FIELDS]
         if missing or extra:
             raise _staged_row_error(
-                path, f"row columns do not match OVERFIT100_ROW_FIELDS (missing {missing}, extra {extra})"
+                path, root, f"row columns do not match OVERFIT100_ROW_FIELDS (missing {missing}, extra {extra})"
             )
-        if (
-            str(row["name"]) != name_from_path
-            or str(row["context_mode"]) != mode_dir
-            or int(row["seed"]) != seed_from_path
-        ):
+        for field, kinds in _STAGED_ROW_TYPES.items():
+            _typed(row[field], kinds, path, root, f"row field {field}")
+        for field in _STAGED_SSIM_FIELDS:
+            value = row[field]
+            if value is not None:
+                _finite(value, path, root, f"row field {field}")
+                if not -1.0 <= value <= 1.0:
+                    raise _staged_row_error(path, root, f"row field {field}={value!r} is outside SSIM's [-1, 1]")
+        for field in _STAGED_NONNEGATIVE_FIELDS:
+            value = row[field]
+            if value is not None:
+                _finite(value, path, root, f"row field {field}")
+                if value < 0.0:
+                    raise _staged_row_error(path, root, f"row field {field}={value!r} is negative")
+
+        if row["name"] != name_from_path or row["context_mode"] != mode_dir or row["seed"] != seed_from_path:
             raise _staged_row_error(
                 path,
+                root,
                 f"row identity (name={row['name']!r}, mode={row['context_mode']!r}, seed={row['seed']}) disagrees "
                 f"with its path (name={name_from_path!r}, mode={mode_dir!r}, seed={seed_from_path})",
             )
-        episode_id, _, window_start = parse_overfit100_window_name(name_from_path)
-        if int(row["episode_id"]) != episode_id or int(row["window_start"]) != window_start:
-            raise _staged_row_error(path, "row episode_id / window_start disagree with its window name")
-        if int(row["checkpoint_step"]) != int(checkpoint_step):
+        if name_from_path not in by_name or mode_dir not in wanted_modes or seed_from_path not in wanted_seeds:
             raise _staged_row_error(
-                path, f"row checkpoint_step={row['checkpoint_step']} is not this run's {int(checkpoint_step)}"
+                path,
+                root,
+                f"({name_from_path}, {mode_dir}, seed {seed_from_path}) is not part of this pass's coverage",
             )
-        if name_from_path not in wanted_names or mode_dir not in wanted_modes or seed_from_path not in wanted_seeds:
+        window = by_name[name_from_path]
+        for field in ("episode_id", "episode_index", "window_start", "canonical"):
+            if row[field] != window[field]:
+                raise _staged_row_error(
+                    path,
+                    root,
+                    f"row field {field}={row[field]!r} does not match the selected window descriptor's "
+                    f"{window[field]!r}",
+                )
+        if row["checkpoint_step"] != expected_signature["checkpoint_step"]:
             raise _staged_row_error(
-                path, f"({name_from_path}, {mode_dir}, seed {seed_from_path}) is not part of this pass's coverage"
+                path,
+                root,
+                f"row field checkpoint_step={row['checkpoint_step']!r} is not this run's "
+                f"{expected_signature['checkpoint_step']!r}",
+            )
+        expected_source = context_source_index(mode_dir, int(window["episode_index"]), derangement)
+        if row["context_source_episode_index"] != expected_source:
+            raise _staged_row_error(
+                path,
+                root,
+                f"row field context_source_episode_index={row['context_source_episode_index']!r} is not the source "
+                f"index mode {mode_dir!r} implies for episode_index {window['episode_index']} ({expected_source!r})",
             )
         key = (name_from_path, mode_dir, seed_from_path)
         if key in admitted:
-            raise _staged_row_error(path, f"duplicate staged row for {key}")
+            raise _staged_row_error(path, root, f"duplicate staged row for {key}")
         admitted[key] = row
     return admitted
 
@@ -2032,6 +2289,17 @@ def run_overfit100(config) -> None:
     # D4: the ROLE is part of the path, so the canonical and full-set passes at one checkpoint are
     # separate immutable artifacts instead of overwriting each other.
     step_root = overfit100_step_root(output_root, checkpoint_step, pass_role)
+    # D4 FIRST (review finding 3): if this role directory already holds a completed artifact, the
+    # pass takes the original recompute-in-memory path with staging fully disabled -- neither read
+    # nor written -- so the immutable writers decide, and a finished directory is never partially
+    # mutated by a rerun.
+    completed = overfit100_completed_artifacts(step_root)
+    if completed and resume_on:
+        resume_on = False
+        resume_reason = (
+            f"row staging disabled: this role directory is already complete ({', '.join(completed)}). The pass "
+            f"recomputes in memory so the immutable writers can compare, leaving the finished evidence untouched."
+        )
     fps = int(getattr(config, "fps", 16))
     if jax.process_index() == 0:
         tf.io.gfile.makedirs(step_root)
@@ -2045,22 +2313,47 @@ def run_overfit100(config) -> None:
         )
         max_logging.log(f"[wan_overfit100_val] {resume_reason}")
 
-    # RESUME (preemption tolerance). The staged rows admitted here are byte-for-byte what an
-    # uninterrupted pass would have produced for those tuples: every rollout's rng is
+    # RESUME (preemption tolerance). SCOPE OF THE PARITY CLAIM (review finding 4): for the
+    # DETERMINISTIC primary/statistic fields the admitted rows are byte-for-byte what an
+    # uninterrupted pass would have produced -- every rollout's rng is
     # window_fold_key(seed, episode_id, window_start), which does not depend on visit order, so
-    # skipping a tuple cannot change any OTHER tuple's numbers. Rows are appended in the same
-    # loop order whether they were resumed or recomputed, so the artifact is identical too.
+    # skipping a tuple cannot change any OTHER tuple's numbers, and rows are appended in the same
+    # windows->modes->seeds order whether resumed or recomputed.
+    #
+    # The AUXILIARY block (ssim_vs_rgb / pixel_mse_vs_rgb / vae_ceiling_ssim / aux_status) is NOT
+    # covered by that claim: it depends on gsutil, ffmpeg and the network, so two attempts can
+    # legitimately differ. Admission is by TUPLE IDENTITY, not content, so a row staged while the
+    # auxiliary path was failing keeps its recorded failure on resume rather than being recomputed.
+    # That is deliberate and safe: aux never feeds the success statistic, the per-row aux_status
+    # plus the run-level aux_coverage make the gap explicit, and the VAE ceiling is recoverable
+    # independently (the S2-ceiling-backfill path). An operator who wants the ceiling for those
+    # rows clears the staging root and re-runs, or backfills the ceiling separately.
     staged_rows: dict[tuple, dict] = {}
+    run_signature = None
     if resume_on:
-        staged_rows = read_staged_rows(
-            step_root,
+        # The signature binds every input that can change a row: checkpoint identity, dataset
+        # identity (dirs + the summary_sha256 the cycle-C preflight verifies), model provenance,
+        # sampler/guidance, the derangement's identity, the coverage spec and the aux/video flags.
+        run_signature = overfit100_run_signature(
+            config,
             checkpoint_step=checkpoint_step,
             pass_role=pass_role,
             manifest_sha256=manifest_sha256,
             code_commit=code_commit,
+            derangement=derangement,
             windows=windows,
             seeds=seeds,
             modes=modes,
+            train_summary_sha256=str(read_success_marker(config.train_data_dir)["summary_sha256"]),
+            eval_summary_sha256=str(read_success_marker(config.eval_data_dir)["summary_sha256"]),
+        )
+        staged_rows = read_staged_rows(
+            step_root,
+            run_signature=run_signature,
+            windows=windows,
+            seeds=seeds,
+            modes=modes,
+            derangement=derangement,
         )
 
     rows: list[dict] = []
@@ -2134,14 +2427,7 @@ def run_overfit100(config) -> None:
                     _write_json(f"{window_dir}/metrics.json", row)
                 if resume_on:
                     # AFTER the videos: an admitted row implies its artifacts are already on disk.
-                    write_staged_row(
-                        step_root,
-                        row,
-                        checkpoint_step=checkpoint_step,
-                        pass_role=pass_role,
-                        manifest_sha256=manifest_sha256,
-                        code_commit=code_commit,
-                    )
+                    write_staged_row(step_root, row, run_signature=run_signature)
                 max_logging.log(
                     f"[wan_overfit100_val] step={checkpoint_step} {sample.name} mode={mode} seed={seed} "
                     f"ssim={row['ssim']:.4f} latent_mse={row['latent_mse']:.6f} pixel_mse={row['pixel_mse']:.6f}"
