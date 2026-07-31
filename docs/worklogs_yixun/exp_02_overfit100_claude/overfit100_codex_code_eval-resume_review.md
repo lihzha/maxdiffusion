@@ -195,4 +195,3 @@ reason.
   was added (`True == 1`, the only case where exact typing is load-bearing) before this record.
 * **Static:** black (`--line-length 119 --target-version py312`), ruff, `py_compile`,
   `git diff --check` clean. `overfit100_success_statistic.py` untouched; no aggregation-schema change.
-
