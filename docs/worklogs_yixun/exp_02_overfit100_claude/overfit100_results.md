@@ -20,3 +20,22 @@ Every window improved monotonically across all four checkpoints (10/10).
 **Text-ablation at 2500** (mean SSIM over 10 windows × 3 seeds): correct **0.8895** / null 0.8398 / shuffled 0.8342. The correct-text advantage is +0.050 vs null and +0.055 vs shuffled, and wrong text is *worse than no text* — the model genuinely uses language, with a modest effect size consistent with the duplicate-audit finding (58/100 taxonomy-label instructions) and first-frame fingerprints carrying much of the identification.
 
 **Known defect found by the run:** the auxiliary RGB/VAE-ceiling path failed on all rows (`AttributeError: 'str' object has no attribute 'parent'` — a str-vs-Path bug in the aux fetch). The D5 machinery reported it exactly as designed (aux_status per row; run completed). Primary metrics unaffected. Fix queued before any S3 eval.
+
+## S3 step-2500 segment-final (s3_segment_final, 900 rollouts) — landed 2026-07-31T23:39Z
+
+Job `20260731-160907-6359b989-exp02-o100-s3ev-final2500-yixun`, SUCCEEDED on attempt 9 (8 preemption kills first). Artifact: `.../validation/step_002500_s3_segment_final/aggregation.json` (900 rows, role_validation.ok=true, manifest c02a67be…). Committed copy + formal verdict in `overfit100_s3_artifacts/`.
+
+**Formal verdict (verdict CLI, segment-final only — full-set tier not yet evaluable):**
+
+| Claim | Established | Detail |
+| --- | --- | --- |
+| Canonical-window memorization (≥90% of 100 at m_corr ≥ 0.95) | **NO** | fraction **0.0** (0/100); best window 0.9461; mean m_corr **0.8133**; fixed denominator 100, coverage complete |
+| Full-set memorization | not evaluable | awaiting s3_full_set pass |
+
+**m_corr distribution (median over seeds 0,1,2, correct mode):** mean 0.8133, median 0.8133, min 0.5870, max 0.9461; ≥0.90: 8/100; ≥0.85: 28/100; ≥0.80: 55/100.
+
+**Ablations (mean SSIM over 300 rows each):** correct **0.8133** > null 0.7992 (gap 0.0141) > shuffled 0.7824 (gap 0.0310) — ordering correct at 100-episode scale; text conditioning contributes, margin modest (consistent with S2's 0.8895/0.8398/0.8342 at 10-episode scale).
+
+**Checkpoint trajectory (canonical-100 mean, correct mode):** 0.7580 (250) → 0.7707 (500) → 0.7892 (1000) → 0.8020 (1750) → **0.8133 (2500)** — monotone, ~+0.011 per 750 steps at the tail, not saturated; train loss at 2500 was 0.145 and still falling. Read: memorization is progressing but far from the 0.95 bar at ~390 epochs — the D10 extension question (continue past 2,500 steps) is now the live decision.
+
+**Aux:** all 900 rows `FileNotFoundError: ffmpeg` (expected — pre-fix tarball, issue #8); VAE ceilings recoverable via the checkpoint-independent backfill; primary metrics unaffected.
