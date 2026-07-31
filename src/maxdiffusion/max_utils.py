@@ -328,6 +328,21 @@ def walk_and_upload_blobs(config, output_dir):
 # training path is unchanged — no extra ops, no extra outputs.
 
 
+def config_get(config, key: str, default):
+  """``getattr(config, key, default)`` that actually works on pyconfig.
+
+  ``HyperParameters.__getattr__`` raises ``ValueError`` for an unknown key, but
+  ``getattr``'s default only suppresses ``AttributeError`` — so the plain
+  three-arg form propagates instead of falling back. Any optional key read from
+  shared code (``create_optimizer`` runs for every trainer, most of whose configs
+  will not define it) has to go through this.
+  """
+  try:
+    return getattr(config, key)
+  except (AttributeError, ValueError, KeyError):
+    return default
+
+
 def probe_add(probe, name: str, x) -> None:
   """Record an intermediate for NaN localisation. No-op when probe is None."""
   if probe is not None and hasattr(x, "shape"):
@@ -741,7 +756,7 @@ def create_optimizer(config, learning_rate_scheduler):
   if config.opt_enable_grad_clipping:
     opt = optax.chain(optax.clip(config.max_grad_value), opt)
 
-  if getattr(config, "opt_skip_nonfinite_updates", False):
+  if config_get(config, "opt_skip_nonfinite_updates", False):
     # Wraps the whole chain, so apply_if_finite inspects the *raw* gradients and a
     # non-finite one skips the step before any clipping runs. That ordering is the
     # point: clip_by_global_norm turns a single inf into NaN across every
@@ -751,7 +766,7 @@ def create_optimizer(config, learning_rate_scheduler):
     # Note the escape hatch: once max_consecutive_errors consecutive steps are
     # non-finite, optax stops skipping and lets the bad update through, so a
     # genuinely broken run still fails loudly rather than silently spinning.
-    opt = optax.apply_if_finite(opt, int(getattr(config, "opt_max_consecutive_nonfinite", 100)))
+    opt = optax.apply_if_finite(opt, int(config_get(config, "opt_max_consecutive_nonfinite", 100)))
   return opt
 
 

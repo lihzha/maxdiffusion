@@ -565,7 +565,7 @@ class CtrlWorldTrainer:
         recent_grad: list[float] = []
         last_step_time = datetime.datetime.now()
 
-        probe_pending = bool(getattr(config, "debug_nan_probe", False))
+        probe_pending = bool(max_utils.config_get(config, "debug_nan_probe", False))
 
         for step in range(start_step, config.max_train_steps):
             batch = next(train_iter)

@@ -896,7 +896,7 @@ class WanCtrlWorldTrainer:
 
         example_batch = _next_batch(train_iter)
 
-        if getattr(config, "debug_nan_probe", False):
+        if max_utils.config_get(config, "debug_nan_probe", False):
             if grad_accum_steps != 1:
                 max_logging.log(
                     "[nan-probe] skipped: only implemented for grad_accum_steps=1 "

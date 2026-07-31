@@ -461,7 +461,7 @@ def run(argv: Sequence[str]) -> None:
     # episodes, since the median val episode is 18 latent frames. Padding keeps
     # the short ones and repeats their last action for the remainder of the
     # rollout; their GT track freezes at the last real frame.
-    pad_short = bool(getattr(config, "eval_pad_short_episodes", False))
+    pad_short = bool(max_utils.config_get(config, "eval_pad_short_episodes", False))
     dataset = WanCtrlWorldDroidDataset(
         data_dir=config.eval_data_dir,
         stats_path=config.action_stats_path,
@@ -475,7 +475,7 @@ def run(argv: Sequence[str]) -> None:
         shard_for_training=False,
         first_window_only=autoregressive,
         pad_short_episodes=pad_short and autoregressive,
-        min_latent_frames=int(getattr(config, "eval_min_latent_frames", 0)),
+        min_latent_frames=int(max_utils.config_get(config, "eval_min_latent_frames", 0)),
     )
     if pad_short and autoregressive:
         max_logging.log(
