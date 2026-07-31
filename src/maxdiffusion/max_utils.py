@@ -320,6 +320,106 @@ def walk_and_upload_blobs(config, output_dir):
       max_logging.log(f"File {file_to_upload} moved successfully!")
 
 
+# ── Forward-pass NaN localisation ────────────────────────────────────────────
+# A "probe" is a plain python list threaded into a loss function. During tracing
+# the loss appends (name, tensor) pairs to it; the caller stacks them into a
+# single array returned from the jitted function and reports the first stage that
+# went non-finite. Passing probe=None makes probe_add a no-op, so the real
+# training path is unchanged — no extra ops, no extra outputs.
+
+
+def probe_add(probe, name: str, x) -> None:
+  """Record an intermediate for NaN localisation. No-op when probe is None."""
+  if probe is not None and hasattr(x, "shape"):
+    probe.append((name, x))
+
+
+def probe_stack(probe):
+  """Stack a probe into a (n_stages, 2) array of [nonfinite_count, finite_absmax].
+
+  Safe inside jit: every entry is a traced scalar. absmax ignores non-finite
+  elements so a NaN somewhere does not hide the magnitude of the rest, which is
+  what tells you whether a stage was already blowing up before it overflowed.
+  """
+  rows = []
+  for _, x in probe:
+    v = x.astype(jnp.float32)
+    finite = jnp.isfinite(v)
+    rows.append(
+        jnp.stack([
+            jnp.sum(~finite).astype(jnp.float32),
+            jnp.max(jnp.where(finite, jnp.abs(v), 0.0)),
+        ])
+    )
+  return jnp.stack(rows) if rows else jnp.zeros((0, 2), jnp.float32)
+
+
+def log_probe_report(names, stats, label: str = "") -> str | None:
+  """Log one line per stage; return the name of the first non-finite stage."""
+  stats = np.asarray(stats)
+  first = None
+  max_logging.log(f"[nan-probe] {label} — forward stages in execution order:")
+  for name, (n_bad, absmax) in zip(names, stats):
+    marker = ""
+    if n_bad > 0 and first is None:
+      first = name
+      marker = "   <-- FIRST NON-FINITE"
+    max_logging.log(
+        f"[nan-probe]   {name:<30s} nonfinite={int(n_bad):>12d}  absmax={absmax:.6g}{marker}"
+    )
+  if first is None:
+    max_logging.log("[nan-probe] all forward stages finite")
+  else:
+    max_logging.log(f"[nan-probe] FIRST non-finite stage: {first}")
+  return first
+
+
+def grad_probe(grads):
+  """(names, stats) for every gradient leaf, summarised *inside* jit.
+
+  Call from within the jitted step and return only the resulting (n_leaves, 2)
+  array — never pull the gradients themselves to the host, which would be
+  gigabytes at these model sizes.
+  """
+  flat = jax.tree_util.tree_flatten_with_path(grads)[0]
+  names = [jax.tree_util.keystr(p) for p, _ in flat]
+  return names, probe_stack([(n, g) for n, (_, g) in zip(names, flat)])
+
+
+def log_probe_summary_table(names, stats, label: str = "", top_n: int = 25) -> None:
+  """Log the largest-magnitude entries of a probe, plus any non-finite ones.
+
+  Where the gradient explosion is concentrated is the diagnosis: if the biggest
+  entries cluster in one block type (attention, norms, the action encoder) the
+  cause is local to it; if the magnitudes are uniform across the model the cause
+  is a global scale factor.
+  """
+  stats = np.asarray(stats)
+  if stats.size == 0:
+    max_logging.log(f"[nan-probe] {label}: nothing recorded")
+    return
+  counts, absmax = stats[:, 0], stats[:, 1]
+  n_bad = int((counts > 0).sum())
+  finite_absmax = np.where(np.isfinite(absmax), absmax, 0.0)
+  max_logging.log(
+      f"[nan-probe] {label}: {len(names)} entries, {n_bad} containing non-finite values, "
+      f"absmax range [{finite_absmax.min():.6g}, {finite_absmax.max():.6g}]"
+  )
+  order = np.argsort(-finite_absmax)
+  if n_bad:
+    bad_idx = [i for i in range(len(names)) if counts[i] > 0]
+    max_logging.log(f"[nan-probe]   -- non-finite entries (first {min(top_n, n_bad)}) --")
+    for i in bad_idx[:top_n]:
+      max_logging.log(
+          f"[nan-probe]   nonfinite={int(counts[i]):>12d}  absmax={absmax[i]:.6g}  {names[i]}"
+      )
+  max_logging.log(f"[nan-probe]   -- largest absmax (top {min(top_n, len(names))}) --")
+  for i in order[:top_n]:
+    max_logging.log(
+        f"[nan-probe]   absmax={absmax[i]:<14.6g} nonfinite={int(counts[i]):>10d}  {names[i]}"
+    )
+
+
 def device_put_replicated(x, sharding):
   """
   Although the name indicates replication, this function can be used
@@ -640,6 +740,18 @@ def create_optimizer(config, learning_rate_scheduler):
 
   if config.opt_enable_grad_clipping:
     opt = optax.chain(optax.clip(config.max_grad_value), opt)
+
+  if getattr(config, "opt_skip_nonfinite_updates", False):
+    # Wraps the whole chain, so apply_if_finite inspects the *raw* gradients and a
+    # non-finite one skips the step before any clipping runs. That ordering is the
+    # point: clip_by_global_norm turns a single inf into NaN across every
+    # parameter (scale = max_norm/inf = 0, and 0 * inf = NaN), which poisons the
+    # Adam moments permanently — one bad batch kills the whole run. Skipping the
+    # update costs one batch instead.
+    # Note the escape hatch: once max_consecutive_errors consecutive steps are
+    # non-finite, optax stops skipping and lets the bad update through, so a
+    # genuinely broken run still fails loudly rather than silently spinning.
+    opt = optax.apply_if_finite(opt, int(getattr(config, "opt_max_consecutive_nonfinite", 100)))
   return opt
 
 

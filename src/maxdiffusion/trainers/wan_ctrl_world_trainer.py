@@ -294,9 +294,14 @@ def _attn_param_layer_stats(params) -> dict:
 
 # ── Training step ─────────────────────────────────────────────────────────────
 
+# Filled at jit trace time by _train_step(nan_probe=True); pairs with the
+# "probe/stages" and "probe/grads" arrays it returns, whose rows are
+# [nonfinite_count, finite_absmax].
+_PROBE_NAMES: dict[str, list[str]] = {"stages": [], "grads": []}
+
 
 def _train_step(state: TrainState, data: dict, rng: jax.Array,
-                scheduler_state, scheduler, config) -> tuple:
+                scheduler_state, scheduler, config, nan_probe: bool = False) -> tuple:
     """
     When grad_accum_steps == 1 (default): data leaves have shape [bsz, ...].
     When grad_accum_steps > 1: data leaves have shape [grad_accum_steps, bsz, ...];
@@ -309,18 +314,23 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
     n_hist = config.num_history_latent_frames
     grad_accum_steps = getattr(config, "grad_accum_steps", 1)
 
-    def compute_loss(params, micro_data, n_rng, t_rng, d_rng):
+    def compute_loss(params, micro_data, n_rng, t_rng, d_rng, probe=None):
         model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
+        _p = max_utils.probe_add
 
         latents = micro_data["latent"][:bsz].astype(weights_dtype)               # (B,C,F_lat,H,W)
         actions = micro_data["action"][:bsz].astype(weights_dtype)               # (B,4*F_lat,7)
         frame_positions = micro_data["frame_positions"][:bsz]                    # (B, W) int32
+        _p(probe, "00_input_latents", latents)
+        _p(probe, "01_input_actions", actions)
 
         b, _, F_lat, H_lat, W_lat = latents.shape
 
         actions_grouped = _group_actions(actions, F_lat)             # (B, F_lat, 4, 7)
+        _p(probe, "02_actions_grouped", actions_grouped)
 
         timesteps = scheduler.sample_timesteps(t_rng, b)
+        _p(probe, "03_timesteps", timesteps)
 
         future_latents = latents[:, :, n_hist:]
         n_rng, hist_rng = jax.random.split(n_rng)
@@ -341,16 +351,24 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             # where the true corruption level is unknown.
             if getattr(config, "history_noise_conditioned", False):
                 hist_timesteps = hist_t
+        _p(probe, "04_noisy_future", noisy_future)
+        _p(probe, "05_target_future", target_future)
+        _p(probe, "06_training_weight", training_weight)
+        _p(probe, "07_hist_latents_noised", hist_latents)
         noisy_latents = jnp.concatenate([hist_latents, noisy_future], axis=2)
+        _p(probe, "08_noisy_latents", noisy_latents)
 
         timestep_2d = _build_per_token_timestep(
             timesteps, F_lat, H_lat, W_lat, n_hist, hist_timesteps=hist_timesteps
         )
         timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
+        _p(probe, "09_timestep_2d", timestep_2d)
         action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat*K, 4096)
+        _p(probe, "10_action_tokens", action_tokens)
         cfg_rng, do_rng = jax.random.split(d_rng)
         action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
+        _p(probe, "11_action_tokens_cfg", action_tokens)
 
         action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
         cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
@@ -381,7 +399,12 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         # (no gradient path), so it does not affect the trained model.
         model_pred, attn_diags = transformer_out if want_attn_diag else (transformer_out, None)
 
+        _p(probe, "12_enc_tokens", enc_tokens)
+        if action_hidden_states is not None:
+            _p(probe, "13_action_hidden_states", action_hidden_states)
+        _p(probe, "14_model_pred", model_pred)
         diff = target_future - model_pred[:, :, n_hist:]
+        _p(probe, "15_diff", diff)
         sq = diff ** 2
         # d(loss)/d(pred) = -2*diff*weight; its per-sample L2 norm is the cheap
         # causal proxy for how much each episode drives the parameter gradient
@@ -395,14 +418,32 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         axes = tuple(range(1, sq.ndim))
         per_sample_loss = jnp.mean(sq, axis=axes)                       # (B,)
         per_sample_outgrad = jnp.sqrt(jnp.sum(outgrad ** 2, axis=axes)) # (B,)
-        return jnp.mean(per_sample_loss), (per_sample_loss, per_sample_outgrad, attn_diags)
+        # probe_stack must run here, inside the differentiated function: the
+        # recorded intermediates are tracers owned by this trace and using them
+        # after value_and_grad returns is a tracer leak. Names are plain strings,
+        # so stashing those globally is safe.
+        probe_stats = None
+        if probe is not None:
+            _PROBE_NAMES["stages"] = [n for n, _ in probe]
+            probe_stats = max_utils.probe_stack(probe)
+        return jnp.mean(per_sample_loss), (per_sample_loss, per_sample_outgrad,
+                                           attn_diags, probe_stats)
+
+    # One-shot NaN / gradient-explosion localisation. Reuses the real forward and
+    # the real gradients (no extra pass); summarised to two small arrays inside the
+    # jit so 5B parameters never ship to the host. When the loss is healthy but
+    # grad_norm is enormous, the forward stages all look fine and the answer is in
+    # the per-subtree gradient breakdown: explosion concentrated in the attention
+    # blocks points at the flash kernel's custom VJP, spread evenly points at
+    # something global.
+    probe: list | None = [] if nan_probe else None
 
     if grad_accum_steps == 1:
         def loss_fn(params):
-            return compute_loss(params, data, noise_rng, timestep_rng, drop_rng)
+            return compute_loss(params, data, noise_rng, timestep_rng, drop_rng, probe=probe)
 
         grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-        (loss, (per_sample_loss, per_sample_outgrad, attn_diags)), grads = grad_fn(state.params)
+        (loss, (per_sample_loss, per_sample_outgrad, attn_diags, probe_stats)), grads = grad_fn(state.params)
         total_loss = loss
     else:
         # data leaves: [grad_accum_steps, bsz, ...]
@@ -426,7 +467,8 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
                 return compute_loss(params, _d, _n, _t, _dr)
 
             grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-            (micro_loss, (micro_ps_loss, micro_ps_outgrad, micro_diag)), micro_grads = grad_fn(state.params)
+            (micro_loss, (micro_ps_loss, micro_ps_outgrad, micro_diag, _probe_unused)), micro_grads = grad_fn(state.params)
+            probe_stats = None   # probe is only supported with grad_accum_steps=1
             acc_grads = jax.tree_util.tree_map(
                 lambda a, g: a + g / grad_accum_steps, acc_grads, micro_grads
             )
@@ -514,6 +556,15 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             "learning/episode_ids": episode_ids,
         },
     }
+    if nan_probe and probe_stats is not None:
+        # probe_stats was built inside the differentiated function (see
+        # compute_loss). grads, by contrast, are real outputs of value_and_grad,
+        # so summarising them out here is safe — and the summary is what gets
+        # returned, never the ~5B-parameter tree itself.
+        grad_names, grad_stats = max_utils.grad_probe(grads)
+        _PROBE_NAMES["grads"] = grad_names
+        metrics["scalars"]["probe/stages"] = jax.lax.with_sharding_constraint(probe_stats, P())
+        metrics["scalars"]["probe/grads"] = jax.lax.with_sharding_constraint(grad_stats, P())
     return new_state, scheduler_state, metrics, new_rng
 
 
@@ -844,6 +895,39 @@ class WanCtrlWorldTrainer:
         )
 
         example_batch = _next_batch(train_iter)
+
+        if getattr(config, "debug_nan_probe", False):
+            if grad_accum_steps != 1:
+                max_logging.log(
+                    "[nan-probe] skipped: only implemented for grad_accum_steps=1 "
+                    f"(got {grad_accum_steps})"
+                )
+            else:
+                # Separate jit (nan_probe is static, and this returns two extra
+                # arrays), run once on the first batch. Not donating state, so the
+                # real training step below still gets an intact state to donate.
+                p_probe_step = jax.jit(
+                    functools.partial(_train_step, scheduler=scheduler, config=config,
+                                      nan_probe=True),
+                    in_shardings=(state_shardings, data_shardings, None, None),
+                    out_shardings=(state_shardings, None, None, None),
+                )
+                with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+                    _, _, probe_metrics, _ = p_probe_step(
+                        state, example_batch, rng, scheduler_state
+                    )
+                max_logging.log(
+                    f"[nan-probe] loss={float(probe_metrics['scalar']['learning/loss'])} "
+                    f"grad_norm={float(probe_metrics['scalar']['learning/grad_norm'])}"
+                )
+                max_utils.log_probe_report(
+                    _PROBE_NAMES["stages"], probe_metrics["scalars"]["probe/stages"],
+                    label="wan ctrl_world forward",
+                )
+                max_utils.log_probe_summary_table(
+                    _PROBE_NAMES["grads"], probe_metrics["scalars"]["probe/grads"],
+                    label="wan ctrl_world gradients by parameter", top_n=25,
+                )
 
         for step in range(start_step, config.max_train_steps):
             if max_utils.profiler_enabled(config) and step == first_profiling_step:

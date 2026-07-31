@@ -46,6 +46,16 @@ from ...models.embeddings_flax import svd_micro_cond_embed
 from .action_encoder_flax import FlaxActionEncoder
 
 
+def probe_add(probe, name: str, x) -> None:
+    """Record a forward intermediate for NaN localisation; no-op when probe is None.
+
+    Defined here rather than imported from max_utils: max_utils imports
+    models.attention_flax, so importing it from a models module risks a cycle.
+    """
+    if probe is not None and hasattr(x, "shape"):
+        probe.append((name, x))
+
+
 @dataclass
 class CtrlWorldTrainConfig:
     """Knobs for the EDM training objective. Defaults match Ctrl-World."""
@@ -157,8 +167,14 @@ def action_world_train_step(
     cfg: CtrlWorldTrainConfig,
     vae_scaling_factor: float,
     train: bool = True,
+    probe: list | None = None,
 ):
     """Single training-step forward + loss for Ctrl-World (JAX).
+
+    ``probe``: optional list for NaN localisation. When supplied, each forward
+    stage appends ``(name, tensor)`` to it during tracing so the caller can
+    report the first stage that goes non-finite (see ``max_utils.probe_add``).
+    Leave it None — the default — and the computation is completely unchanged.
 
     ``batch`` layout mirrors the Ctrl-World torch dataset:
 
@@ -176,6 +192,11 @@ def action_world_train_step(
     latents = batch["latent"]
     actions = batch["action"]
     text_embeds = batch.get("text_embeds", None)
+    _p = probe_add
+    _p(probe, "00_input_latents", latents)
+    _p(probe, "01_input_actions", actions)
+    if text_embeds is not None:
+        _p(probe, "02_input_text_embeds", text_embeds)
 
     b, t_total = latents.shape[:2]
     t_future = cfg.num_frames
@@ -197,7 +218,9 @@ def action_world_train_step(
         cond_aug_max=cfg.cond_aug_max,
         his_cond_zero=cfg.his_cond_zero,
     )
+    _p(probe, "03_concat_stream", condition_latent)
     condition_latent = condition_latent / vae_scaling_factor
+    _p(probe, "04_concat_stream_scaled", condition_latent)
 
     # 2. Per-frame action embedding (+ text), with CFG dropout.
     action_hidden = apply_fns["action_encoder"](
@@ -206,7 +229,9 @@ def action_world_train_step(
         text_embeds,
         True,  # frame_level_cond
     )  # (B, T, hidden_size)
+    _p(probe, "05_action_hidden", action_hidden)
     action_hidden = _apply_cfg_dropout(rng_action_drop, action_hidden, cfg.cfg_drop_prob)
+    _p(probe, "06_action_hidden_cfg", action_hidden)
 
     # 3. EDM sigma per sample for the future slots.
     log_sigma = cfg.p_mean + cfg.p_std * jax.random.normal(rng_sigma, (b, 1, 1, 1, 1))
@@ -214,6 +239,12 @@ def action_world_train_step(
     c_skip, c_out, c_in, c_noise, loss_weight = _edm_preconditioning(sigma)
     # c_noise is (B,1,1,1,1); UNet wants one scalar per sample in the flat batch.
     c_noise_btile = jnp.broadcast_to(c_noise.reshape(b, 1), (b, t_total)).reshape(-1)
+    _p(probe, "07_sigma", sigma)
+    _p(probe, "08_c_skip", c_skip)
+    _p(probe, "09_c_out", c_out)
+    _p(probe, "10_c_in", c_in)
+    _p(probe, "11_c_noise", c_noise_btile)
+    _p(probe, "12_loss_weight", loss_weight)
 
     # 4. Noise the latents (future: EDM; history: independent weak sigma).
     noise = jax.random.normal(rng_noise, latents.shape)
@@ -224,10 +255,15 @@ def action_world_train_step(
     hist_scale = 1.0 / jnp.sqrt(sigma_h ** 2 + 1.0)
     noisy_history = hist_scale * (latents[:, :t_history] + sigma_h * hist_noise)
 
+    _p(probe, "13_noisy_latents", noisy_latents)
+    _p(probe, "14_hist_scale", hist_scale)
+    _p(probe, "15_noisy_history", noisy_history)
     noisy_future = c_in * noisy_latents[:, t_history:]
+    _p(probe, "16_noisy_future", noisy_future)
     input_latents = jnp.concatenate([noisy_history, noisy_future], axis=1)
     # Channel-concat conditioning stream.
     input_latents = jnp.concatenate([input_latents, condition_latent], axis=2)
+    _p(probe, "17_unet_input", input_latents)
 
     # Flatten batch+frame for the UNet.
     # (B, F, 8, H, W) -> (B*F, 8, H, W)
@@ -248,13 +284,18 @@ def action_world_train_step(
         num_frames=t_total,
         frame_level_cond=True,
     ).sample  # (B*F, 4, H, W)
+    _p(probe, "18_adm_vector", adm_vec)
+    _p(probe, "19_unet_v_pred", v_pred)
     v_pred = v_pred.reshape((b, t_total) + v_pred.shape[1:])
 
     predict_x0 = c_out * v_pred + c_skip * noisy_latents
+    _p(probe, "20_predict_x0", predict_x0)
 
     # Loss on future slots only. `loss_weight` is (B,1,1,1,1) so broadcast.
     diff = predict_x0[:, t_history:] - latents[:, t_history:]
+    _p(probe, "21_diff", diff)
     loss = jnp.mean((diff ** 2) * loss_weight)
+    _p(probe, "22_loss", loss)
     return loss
 
 

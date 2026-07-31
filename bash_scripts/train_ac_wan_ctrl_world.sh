@@ -148,6 +148,7 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     log_attn_param_stats=False \
     log_attn_activation_stats=False \
+    debug_nan_probe=True \
     wandb_project='wan-ac-history-low-res-ctrl-world' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \

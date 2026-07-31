@@ -354,6 +354,70 @@ class CtrlWorldTrainer:
         state = jax.tree_util.tree_map(_place_on_sharding, state, state_shardings)
         return state, state_shardings
 
+    # ── NaN localisation ───────────────────────────────────────────────────────
+
+    def _run_nan_probe(self, state, batch, rng, apply_fns, mesh, state_shardings,
+                       data_shardings):
+        """Run one forward+backward with per-stage finiteness checks and log where
+        the first non-finite value appears.
+
+        The periodic training log only says *that* loss went non-finite; this says
+        *which stage*, which is the difference between a data/conditioning problem
+        (an early stage), an overflow inside the UNet (19_unet_v_pred), and a
+        preconditioning problem (07_sigma..12_loss_weight). Runs once, on the first
+        batch, under the same mesh/shardings/dtypes as the real step so the numbers
+        are the ones training actually sees.
+        """
+        cfg = self.train_cfg
+        vae_scaling_factor = float(self.config.vae_scaling_factor)
+        weights_dtype = self.weights_dtype
+        names: dict[str, list[str]] = {"stages": [], "grads": []}
+
+        def probe_step(params, batch, rng):
+            batch = jax.tree_util.tree_map(
+                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, batch
+            )
+            def loss_fn(p):
+                # probe_stack must run *inside* the differentiated function: the
+                # recorded intermediates are tracers owned by this trace, and
+                # touching them after value_and_grad returns is a tracer leak.
+                probe: list = []
+                loss = action_world_train_step(
+                    rng=rng, params=p, apply_fns=apply_fns, batch=batch,
+                    cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=True,
+                    probe=probe,
+                )
+                # Names are static python strings captured during tracing, so they
+                # cannot be jit outputs — close over the dict instead.
+                names["stages"] = [n for n, _ in probe]
+                return loss, max_utils.probe_stack(probe)
+
+            (loss, stats), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+            # Gradients are summarised here, inside the jit; the full tree is ~1.5B
+            # params and must never be pulled to the host.
+            grad_names, grad_stats = max_utils.grad_probe(grads)
+            names["grads"] = grad_names
+            return loss, stats, grad_stats
+
+        with mesh, nn_partitioning.axis_rules(self.config.logical_axis_rules):
+            loss, stats, grad_stats = jax.jit(
+                probe_step, in_shardings=(state_shardings.params, data_shardings, None),
+                out_shardings=(None, None, None),
+            )(state.params, batch, rng)
+
+        max_logging.log(f"[nan-probe] loss={float(loss)}")
+        first = max_utils.log_probe_report(names["stages"], stats, label="svd ctrl_world forward")
+        if first is None:
+            max_logging.log(
+                "[nan-probe] forward is finite — the non-finite value is created in "
+                "the backward pass; see the gradient breakdown below"
+            )
+        max_utils.log_probe_summary_table(
+            names["grads"], grad_stats,
+            label="svd ctrl_world gradients by parameter", top_n=25,
+        )
+        return first
+
     # ── Steps ──────────────────────────────────────────────────────────────────
 
     def _build_train_step(self, apply_fns, state_shardings, data_shardings):
@@ -501,9 +565,18 @@ class CtrlWorldTrainer:
         recent_grad: list[float] = []
         last_step_time = datetime.datetime.now()
 
+        probe_pending = bool(getattr(config, "debug_nan_probe", False))
+
         for step in range(start_step, config.max_train_steps):
             batch = next(train_iter)
             rng, step_rng = jax.random.split(rng)
+
+            if probe_pending:
+                probe_pending = False
+                self._run_nan_probe(
+                    state, batch, step_rng, apply_fns, mesh,
+                    state_shardings, data_shardings,
+                )
 
             with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
                 state, metrics = train_step_fn(state, batch, step_rng)

@@ -190,8 +190,24 @@ opt_enable_grad_clipping: False
 max_grad_value: 1.0
 opt_enable_grad_global_norm_clipping: True
 max_grad_norm: 1.0
+# Skip the optimizer update entirely on a non-finite gradient, instead of letting
+# it reach the clip and the Adam moments. Neither clip helps here: clip() maps
+# inf -> max_grad_value but passes NaN through, and clip_by_global_norm() turns a
+# single inf into NaN across *every* parameter (scale = max_grad_norm/inf = 0, and
+# 0 * inf = NaN), so one bad batch permanently poisons the moments and every later
+# step reports loss=nan. Skipping costs one batch. After
+# opt_max_consecutive_nonfinite consecutive bad steps optax stops skipping and
+# lets the update through, so a genuinely broken run still fails loudly.
+opt_skip_nonfinite_updates: True
+opt_max_consecutive_nonfinite: 100
 
 enable_profiler: False
+# One-shot forward/backward NaN + gradient-explosion localisation. On the first
+# batch, logs per-stage [nonfinite_count, absmax] through the whole forward and
+# then the same per gradient leaf, so a bad step says *which* stage rather than
+# just "loss=nan". Costs one extra step; leave off for real runs.
+debug_nan_probe: False
+
 skip_first_n_steps_for_profiler: 5
 profiler_steps: 10
 enable_jax_named_scopes: False
