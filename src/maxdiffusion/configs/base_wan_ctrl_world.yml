@@ -313,6 +313,13 @@ log_attn_activation_stats: False
 # Whether to apply flow-matching per-sample loss weighting.
 disable_training_weights: False
 
+# Keep FULL. HIDDEN_STATE_WITH_OFFLOAD produced gradients that did not match
+# the forward at the low-res sequence length (2160 tokens at 192x320, vs 23400
+# at 480x832): loss stayed a healthy ~0.35 while grad_norm reached 1.1e8 and
+# climbed. What proved it was the backward and not the model/data: turning on
+# the attention diagnostics — mathematically gradient-free, they only add an
+# aux output — moved grad_norm to 9.69 on the same data. FULL fixes it at
+# acceptable overhead. tokamax_flash is not at fault.
 remat_policy: "FULL"
 names_which_can_be_saved: []
 names_which_can_be_offloaded: []

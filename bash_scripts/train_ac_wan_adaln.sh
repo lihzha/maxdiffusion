@@ -92,7 +92,7 @@ python src/maxdiffusion/train_wan.py \
     attention=tokamax_flash \
     weights_dtype=float32 \
     activations_dtype=bfloat16 \
-    remat_policy=HIDDEN_STATE_WITH_OFFLOAD \
+    remat_policy=FULL \
     ici_data_parallelism=1 \
     ici_fsdp_parallelism=-1 \
     ici_tensor_parallelism=1 \
