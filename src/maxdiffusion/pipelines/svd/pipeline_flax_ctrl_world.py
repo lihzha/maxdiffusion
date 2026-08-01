@@ -43,6 +43,8 @@ import numpy as np
 from flax.core.frozen_dict import FrozenDict
 from PIL import Image
 
+from maxdiffusion.models.svd.action_encoder_flax import tile_text_to_hidden
+
 from ...models.embeddings_flax import svd_micro_cond_embed
 from ...schedulers.scheduling_edm_euler_flax import (
     FlaxEDMEulerScheduler,
@@ -69,6 +71,7 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         unet: Any,
         action_encoder: Any,
         scheduler: FlaxEDMEulerScheduler,
+        action_adaln_proj: Any = None,
         image_encoder: Any = None,
         feature_extractor: Any = None,
         dtype: jnp.dtype = jnp.float32,
@@ -88,6 +91,9 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         # register_modules on the parent only knows about the SVD set; stash
         # the action encoder directly.
         self.action_encoder = action_encoder
+        # Non-None only for action_cond_mode='adaln' checkpoints, which carry an
+        # extra "action_adaln_proj" params subtree.
+        self.action_adaln_proj = action_adaln_proj
 
     # ------------------------------------------------------------------
     # Helpers
@@ -170,6 +176,7 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         cond_aug: float = 0.02,
         frame_level_cond: bool = True,
         his_cond_zero: bool = False,
+        action_cond_mode: str = "cross_attn",
         output_type: str = "latent",
         decode_chunk_size: Optional[int] = None,
     ):
@@ -198,19 +205,67 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         t_history = num_history if history is not None else 0
         t_total = t_future + t_history
 
-        # 1. Action-derived cross-attn context (+ optional text).
-        action_hidden = self.action_encoder.apply(
-            {"params": params["action_encoder"]},
-            action,
-            text_embeds,
-            frame_level_cond,
-        )  # (B, T, 1024) where T = num_history + num_frames
-        b = action_hidden.shape[0]
-        if do_cfg:
-            uncond_hidden = jnp.zeros_like(action_hidden)
-            action_hidden_all = jnp.concatenate([uncond_hidden, action_hidden], axis=0)
+        adaln = action_cond_mode == "adaln"
+        if adaln and self.action_adaln_proj is None:
+            raise ValueError(
+                "action_cond_mode='adaln' needs the pipeline to be constructed with "
+                "action_adaln_proj=<FlaxActionAdaLNProjector>."
+            )
+        # 1. Action conditioning. Mirrors action_world_train_step exactly — any
+        #    divergence here silently degrades generation rather than erroring.
+        if adaln:
+            # Action route carries no text (text goes to cross-attention below),
+            # matching training.
+            action_hidden = self.action_encoder.apply(
+                {"params": params["action_encoder"]},
+                action,
+                None,
+                True,   # frame_level_cond: one action token per frame
+            )  # (B, T, 1024)
+            b = action_hidden.shape[0]
+            if do_cfg:
+                # Uncond = zero action tokens, projected — i.e. proj(0) = bias,
+                # NOT a zero contribution. Training drops the tokens before the
+                # projection, so the uncond branch must be built the same way.
+                action_hidden = jnp.concatenate(
+                    [jnp.zeros_like(action_hidden), action_hidden], axis=0
+                )
+            action_temb = self.action_adaln_proj.apply(
+                {"params": params["action_adaln_proj"]}, action_hidden
+            )  # (b_all, T, time_embed_dim)
+            action_hidden_states_all = action_temb.reshape(
+                action_temb.shape[0] * t_total, -1
+            )
+            # Cross-attention carries the per-sample text embedding, identical on
+            # both CFG branches, pre-flattened to (b_all*T, 1, C) because the UNet
+            # is called with frame_level_cond=False.
+            if text_embeds is not None:
+                text_ctx = tile_text_to_hidden(
+                    text_embeds, self.action_encoder.hidden_size,
+                    self.action_encoder.text_embed_dim,
+                )  # (B, 1, 1024)
+            else:
+                text_ctx = jnp.zeros((b, 1, self.action_encoder.hidden_size),
+                                     dtype=action_temb.dtype)
+            if do_cfg:
+                text_ctx = jnp.concatenate([text_ctx, text_ctx], axis=0)
+            action_hidden_all = jnp.repeat(
+                text_ctx.astype(action_temb.dtype), t_total, axis=0
+            )
         else:
-            action_hidden_all = action_hidden
+            action_hidden = self.action_encoder.apply(
+                {"params": params["action_encoder"]},
+                action,
+                text_embeds,
+                frame_level_cond,
+            )  # (B, T, 1024) where T = num_history + num_frames
+            b = action_hidden.shape[0]
+            if do_cfg:
+                uncond_hidden = jnp.zeros_like(action_hidden)
+                action_hidden_all = jnp.concatenate([uncond_hidden, action_hidden], axis=0)
+            else:
+                action_hidden_all = action_hidden
+            action_hidden_states_all = None
 
         # 2. Channel-concat conditioning stream.
         rng_cond, rng_noise = jax.random.split(prng_seed)
@@ -334,7 +389,8 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
                 added_cond_kwargs={"adm_vector": adm_vec_all},
                 image_only_indicator=image_only_indicator,
                 num_frames=t_total,
-                frame_level_cond=frame_level_cond,
+                frame_level_cond=(False if adaln else frame_level_cond),
+                action_hidden_states=action_hidden_states_all,
             ).sample  # (b_all*T, 4, H, W)
             v_pred = v_pred.reshape((b_all, t_total) + v_pred.shape[1:])
 

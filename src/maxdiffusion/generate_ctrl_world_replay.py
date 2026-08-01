@@ -54,7 +54,12 @@ from safetensors.torch import load_file as load_torch_safetensors
 from maxdiffusion import max_logging
 from maxdiffusion.models.svd.video_unet_flax import FlaxVideoUNet
 from maxdiffusion.models.svd.video_autoencoder_flax import FlaxSVDAutoencoderKL
-from maxdiffusion.models.svd.action_encoder_flax import FlaxActionEncoder
+import orbax.checkpoint as ocp
+from flax.serialization import from_bytes
+from maxdiffusion.models.svd.action_encoder_flax import (
+    FlaxActionAdaLNProjector,
+    FlaxActionEncoder,
+)
 from maxdiffusion.schedulers.scheduling_edm_euler_flax import FlaxEDMEulerScheduler
 from maxdiffusion.pipelines.svd.pipeline_flax_ctrl_world import FlaxCtrlWorldPipeline
 
@@ -141,6 +146,36 @@ class _TorchCLIPTextShim:
             )
             out = self.model(**{k: v for k, v in inputs.items()})
         return jnp.asarray(out.text_embeds.numpy())
+
+
+def _restore_params_from_orbax(ckpt_dir: str, step, template: dict):
+    """Restore a trained ``params`` tree written by CtrlWorldTrainer.
+
+    The trainer writes orbax (params + step JSON, plus opt_state when
+    save_optimizer is on), while --ctrl_world_dir holds the *converted from
+    torch* upstream layout. They are different formats, so a run trained here
+    could not be replayed at all until this path existed. ``template`` supplies
+    the tree structure, dtypes and shardings to restore into, so the UNet must
+    be constructed from the same unet/config.json the run trained with.
+    """
+    mgr = ocp.CheckpointManager(
+        ckpt_dir,
+        item_names=("params", "step", "opt_state"),
+        item_handlers={
+            "params": ocp.StandardCheckpointHandler(),
+            "step": ocp.JsonCheckpointHandler(),
+            "opt_state": ocp.StandardCheckpointHandler(),
+        },
+    )
+    target = step if step is not None else mgr.latest_step()
+    if target is None:
+        raise FileNotFoundError(f"no checkpoint found under {ckpt_dir}")
+    # Only params are requested; opt_state is declared so a checkpoint that has
+    # it still opens, but it is never read.
+    restored = mgr.restore(
+        target, args=ocp.args.Composite(params=ocp.args.StandardRestore(template))
+    )
+    return restored["params"], target
 
 
 def _load_action_encoder_params(path: str, dtype: jnp.dtype):
@@ -363,10 +398,72 @@ def run_replay(args) -> None:
         dtype=weights_dtype,
     )
 
+    adaln = args.action_cond_mode == "adaln"
+    adaln_proj, adaln_params = None, None
+    if adaln:
+        adaln_proj = FlaxActionAdaLNProjector(
+            time_embed_dim=unet.block_out_channels[0] * 4,
+            dtype=dtype,
+            weights_dtype=weights_dtype,
+        )
+        # Init only as a restore template / structure; real weights come from one
+        # of the two branches below.
+        adaln_params = adaln_proj.init_weights(
+            jax.random.PRNGKey(0), batch=1, num_frames=1,
+            hidden_size=action_encoder.hidden_size,
+        )
+
+    if args.orbax_checkpoint_dir:
+        # Trained here: take every trained tensor from the orbax tree. The VAE is
+        # never trained, so it keeps coming from --ctrl_world_dir, as do the
+        # architecture configs used to build the modules above.
+        template = {"unet": unet_params, "action_encoder": action_encoder_params}
+        if adaln:
+            template["action_adaln_proj"] = adaln_params
+        restored, restored_step = _restore_params_from_orbax(
+            args.orbax_checkpoint_dir, args.checkpoint_step, template
+        )
+        unet_params = restored["unet"]
+        action_encoder_params = restored["action_encoder"]
+        if adaln:
+            if "action_adaln_proj" not in restored:
+                raise KeyError(
+                    "--action_cond_mode=adaln but the checkpoint at "
+                    f"{args.orbax_checkpoint_dir} has no action_adaln_proj subtree; "
+                    "it was trained with action_cond_mode=cross_attn."
+                )
+            adaln_params = restored["action_adaln_proj"]
+        elif "action_adaln_proj" in restored:
+            raise KeyError(
+                f"the checkpoint at {args.orbax_checkpoint_dir} carries an "
+                "action_adaln_proj subtree, so it was trained with "
+                "action_cond_mode=adaln; pass --action_cond_mode=adaln or the "
+                "action signal would be silently dropped."
+            )
+        max_logging.log(
+            f"[mcw] restored trained params from {args.orbax_checkpoint_dir} "
+            f"(step {restored_step}), mode={args.action_cond_mode}"
+        )
+    elif adaln:
+        # Not a run trained here: fall back to a standalone projector dump beside
+        # the converted upstream weights.
+        adaln_path = os.path.join(args.ctrl_world_dir, "action_adaln_proj.msgpack")
+        if not os.path.exists(adaln_path):
+            raise FileNotFoundError(
+                f"--action_cond_mode=adaln needs either --orbax_checkpoint_dir "
+                f"(a run trained by CtrlWorldTrainer) or {adaln_path}. Without the "
+                "projector the action signal would be dropped silently and the "
+                "rollout would be unconditioned."
+            )
+        with open(adaln_path, "rb") as fh:
+            adaln_params = from_bytes(adaln_params, fh.read())
+        max_logging.log(f"[mcw] action_cond_mode=adaln: loaded {adaln_path}")
+
     pipeline = FlaxCtrlWorldPipeline(
         vae=vae,
         unet=unet,
         action_encoder=action_encoder,
+        action_adaln_proj=adaln_proj,
         scheduler=scheduler,
         image_encoder=None,
         feature_extractor=None,
@@ -382,7 +479,12 @@ def run_replay(args) -> None:
 
     params = jax.tree_util.tree_map(
         _to_accel,
-        {"unet": unet_params, "vae": vae_params, "action_encoder": action_encoder_params},
+        {
+            "unet": unet_params,
+            "vae": vae_params,
+            "action_encoder": action_encoder_params,
+            **({"action_adaln_proj": adaln_params} if adaln_params is not None else {}),
+        },
     )
     max_logging.log(f"[mcw] all weights on device in {time.perf_counter() - t_load:.1f}s")
 
@@ -510,6 +612,7 @@ def run_replay(args) -> None:
                     cond_aug=args.cond_aug,
                     frame_level_cond=True,
                     his_cond_zero=False,
+                    action_cond_mode=args.action_cond_mode,
                     output_type="latent",
                 )
             pred_latents.block_until_ready()  # force execution so the timing below is real
@@ -606,6 +709,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     ap.add_argument("--width", type=int, default=320)
     ap.add_argument("--num_inference_steps", type=int, default=50)
     ap.add_argument("--guidance_scale", type=float, default=1.0)
+    ap.add_argument(
+        "--orbax_checkpoint_dir", default=None,
+        help="Checkpoint dir written by CtrlWorldTrainer. When set, the trained "
+             "UNet / action encoder / adaln projector are restored from it and "
+             "--ctrl_world_dir supplies only the architecture configs and the VAE.",
+    )
+    ap.add_argument(
+        "--checkpoint_step", type=int, default=None,
+        help="Step to restore from --orbax_checkpoint_dir (default: latest).",
+    )
+    ap.add_argument(
+        "--action_cond_mode", choices=("cross_attn", "adaln"), default="cross_attn",
+        help="Must match how the checkpoint was trained. 'adaln' additionally "
+             "requires action_adaln_proj.msgpack in --ctrl_world_dir.",
+    )
     ap.add_argument("--motion_bucket_id", type=int, default=127)
     ap.add_argument("--cond_aug", type=float, default=0.02)
     ap.add_argument("--fps", type=int, default=7)

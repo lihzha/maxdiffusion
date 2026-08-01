@@ -40,6 +40,67 @@ def _kaiming_normal_relu_fan_in():
     return nn.initializers.he_normal(in_axis=-2, out_axis=-1, dtype=jnp.float32)
 
 
+def tile_text_to_hidden(text_embeds: jnp.ndarray, hidden_size: int, text_embed_dim: int) -> jnp.ndarray:
+    """``(B, text_embed_dim)`` → ``(B, 1, hidden_size)`` by repeating the feature axis.
+
+    sgm's trick of concatenating the 512-dim CLIP text projection with itself to
+    reach the 1024-dim cross-attention width. Shared by the encoder's additive
+    text conditioning and by the adaln path, which routes text to
+    cross-attention on its own rather than folding it into the action tokens —
+    both must tile identically or the two modes see different text.
+    """
+    if hidden_size % text_embed_dim != 0:
+        raise ValueError(
+            f"hidden_size ({hidden_size}) must be a multiple of text_embed_dim "
+            f"({text_embed_dim}) for the tile-to-hidden-size trick."
+        )
+    reps = hidden_size // text_embed_dim
+    return jnp.tile(text_embeds[:, None, :], (1, 1, reps))
+
+
+class FlaxActionAdaLNProjector(nn.Module):
+    """Projects per-frame action hidden states into the UNet's timestep-embedding
+    space, as an alternative to feeding them through cross-attention.
+
+    ``(B, T, hidden_size)`` → ``(B, T, time_embed_dim)``. The caller flattens to
+    ``(B*T, time_embed_dim)`` and adds it to the UNet's ``t_emb``, which is
+    already per-(sample, frame) and drives every spatial and temporal resnet
+    through their ``time_emb_proj``. Simpler than the WAN equivalent
+    (``NNXWanActionAdaLNProjector``), which first concatenates K tokens per
+    frame; this encoder emits exactly one token per frame.
+
+    The init no-op — a fresh model behaving identically to the no-action
+    baseline — comes from ``FlaxActionEncoder.linear_3`` being zero-init, so the
+    action hidden states are exactly 0 at step 0 and this projection outputs its
+    bias (also zero). This kernel is therefore NORMAL-initialised, NOT zero.
+    Zero-init here as well would deadlock: in adaln mode ``encoder →
+    adaln_proj`` is the only action route, so a zero kernel here means
+    ``linear_3`` receives no gradient, and zero input upstream means this kernel
+    receives none either — the action pathway would stay dead forever.
+    """
+
+    time_embed_dim: int
+    dtype: jnp.dtype = jnp.float32
+    weights_dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, action_hidden: jnp.ndarray) -> jnp.ndarray:
+        return nn.Dense(
+            self.time_embed_dim,
+            # Normal, not zero — see the class docstring. Bias defaults to zeros,
+            # which is what keeps step 0 a no-op given linear_3=0 upstream.
+            kernel_init=_kaiming_normal_relu_fan_in(),
+            dtype=self.dtype,
+            param_dtype=self.weights_dtype,
+            name="proj",
+        )(action_hidden)
+
+    def init_weights(self, rng: jax.Array, batch: int = 1, num_frames: int = 1,
+                     hidden_size: int = 1024):
+        x = jnp.zeros((batch, num_frames, hidden_size), dtype=self.dtype)
+        return self.init({"params": rng}, x)["params"]
+
+
 class FlaxActionEncoder(nn.Module):
     """MLP that lifts a per-frame action sequence to the cross-attn dim.
 
@@ -150,10 +211,9 @@ class FlaxActionEncoder(nn.Module):
         x = self.linear_3(x)
 
         if text_embeds is not None and self.text_embed_dim is not None:
-            # Tile the (B, C_text) projection to (B, 1, hidden_size) by
-            # repeating along the feature axis; broadcast-add across T.
-            reps = self.hidden_size // self.text_embed_dim
-            tiled = jnp.tile(text_embeds[:, None, :], (1, 1, reps))
+            # Tile the (B, C_text) projection to (B, 1, hidden_size) and
+            # broadcast-add across T.
+            tiled = tile_text_to_hidden(text_embeds, self.hidden_size, self.text_embed_dim)
             x = x + tiled.astype(x.dtype)
         return x
 

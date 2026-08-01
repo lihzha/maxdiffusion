@@ -45,7 +45,10 @@ from safetensors.torch import load_file as load_torch_safetensors
 
 from maxdiffusion import max_logging, max_utils
 from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
-from maxdiffusion.models.svd.action_encoder_flax import FlaxActionEncoder
+from maxdiffusion.models.svd.action_encoder_flax import (
+    FlaxActionAdaLNProjector,
+    FlaxActionEncoder,
+)
 from maxdiffusion.models.svd.ctrl_world_flax import (
     CtrlWorldTrainConfig,
     action_world_train_step,
@@ -72,7 +75,19 @@ def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
         motion_bucket_id=config.ctrl_motion_bucket_id,
         noise_aug_strength=config.ctrl_noise_aug_strength,
         his_cond_zero=config.ctrl_his_cond_zero,
+        action_cond_mode=max_utils.config_get(config, "action_cond_mode", "cross_attn"),
+        time_embed_dim=_unet_time_embed_dim(config),
     )
+
+
+def _unet_time_embed_dim(config) -> int:
+    """SVD's timestep-embedding width: block_out_channels[0] * 4 (1280 for base SVD).
+
+    Only used by the adaln action route, which must project into exactly this
+    width to be summable with the UNet's t_emb.
+    """
+    boc = max_utils.config_get(config, "block_out_channels", None)
+    return (boc[0] if boc else 320) * 4
 
 
 def _load_action_encoder_params(path: str, dtype) -> Dict[str, Any]:
@@ -295,7 +310,35 @@ class CtrlWorldTrainer:
                 jax.random.PRNGKey(self.config.seed), batch=1, num_frames=1
             )
 
-        return unet, unet_params, action_encoder, ae_params
+        adaln = self.train_cfg.action_cond_mode == "adaln"
+        adaln_proj, adaln_params = None, None
+        if adaln:
+            if self.config.action_encoder_init_path:
+                # The converted Ctrl-World encoder was trained to drive
+                # cross-attention, and its linear_3 is non-zero, so adaln would
+                # start far off the pretrained operating point instead of at it.
+                raise ValueError(
+                    "action_cond_mode='adaln' cannot be combined with "
+                    "action_encoder_init_path: the upstream weights were trained "
+                    "for the cross-attention route. Train adaln from scratch, or "
+                    "switch to action_cond_mode='cross_attn'."
+                )
+            adaln_proj = FlaxActionAdaLNProjector(
+                time_embed_dim=self.train_cfg.time_embed_dim,
+                dtype=self.dtype,
+                weights_dtype=self.weights_dtype,
+            )
+            adaln_params = adaln_proj.init_weights(
+                jax.random.PRNGKey(self.config.seed + 1), batch=1, num_frames=1,
+                hidden_size=self.config.hidden_size,
+            )
+            max_logging.log(
+                "[ctrl_world] action_cond_mode=adaln: action tokens are summed into "
+                f"t_emb (width {self.train_cfg.time_embed_dim}); cross-attention "
+                "carries the text embedding only and per-frame cross-attn is off"
+            )
+
+        return unet, unet_params, action_encoder, ae_params, adaln_proj, adaln_params
 
     def _build_optimizer(self, num_steps: int):
         schedule_steps = (
@@ -314,7 +357,8 @@ class CtrlWorldTrainer:
 
     # ── Sharding-aware state construction ──────────────────────────────────────
 
-    def _build_sharded_state(self, mesh, unet, unet_params, action_encoder, ae_params, tx):
+    def _build_sharded_state(self, mesh, unet, unet_params, action_encoder, ae_params, tx,
+                             adaln_params=None):
         """Build a TrainState whose leaves are FSDP-sharded across the mesh.
 
         Path:
@@ -334,6 +378,8 @@ class CtrlWorldTrainer:
         # Step 1 — boxed state. Note that we feed unet_params unmodified;
         # tx.init's tree_map preserves the LogicallyPartitioned wrappers.
         params = {"unet": unet_params, "action_encoder": ae_params}
+        if adaln_params is not None:
+            params["action_adaln_proj"] = adaln_params
         with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
             state = train_state.TrainState.create(
                 apply_fn=lambda *a, **k: None, params=params, tx=tx
@@ -417,15 +463,20 @@ class CtrlWorldTrainer:
     def start_training(self):
         config = self.config
         mesh = self._build_mesh()
-        unet, unet_params, action_encoder, ae_params = self._load_modules(mesh)
+        unet, unet_params, action_encoder, ae_params, adaln_proj, adaln_params = (
+            self._load_modules(mesh)
+        )
 
         apply_fns = {"unet": unet.apply, "action_encoder": action_encoder.apply}
+        if adaln_proj is not None:
+            apply_fns["action_adaln_proj"] = adaln_proj.apply
         tx, lr_schedule = self._build_optimizer(config.max_train_steps)
 
         state, state_shardings = self._build_sharded_state(
-            mesh, unet, unet_params, action_encoder, ae_params, tx
+            mesh, unet, unet_params, action_encoder, ae_params, tx,
+            adaln_params=adaln_params,
         )
-        del unet_params, ae_params  # freed inside state
+        del unet_params, ae_params, adaln_params  # freed inside state
 
         if jax.process_index() == 0:
             num_params = sum(int(np.prod(p.shape)) for p in jax.tree_util.tree_leaves(state.params))

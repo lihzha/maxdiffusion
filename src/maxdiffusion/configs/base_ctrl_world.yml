@@ -226,6 +226,32 @@ ctrl_fps_id: 7.0
 ctrl_motion_bucket_id: 127.0
 ctrl_noise_aug_strength: 0.0
 ctrl_his_cond_zero: False
+
+# How the action signal reaches the UNet.
+#   'cross_attn' — one action token per frame is the UNet's cross-attention
+#                  context (Ctrl-World's original frame-locked conditioning).
+#                  The CLIP text embedding is added into those same tokens.
+#   'adaln'      — action tokens are projected per frame and summed into the
+#                  timestep embedding (t_emb), which every spatial and temporal
+#                  resnet already consumes via time_emb_proj. The per-frame
+#                  cross-attention route is dropped; cross-attention instead
+#                  carries the per-sample text embedding on its own, so text
+#                  conditioning keeps using the path SVD pretrained it on.
+#                  NAME: kept for parity with the WAN trainer's action_cond_mode.
+#                  WAN really does have AdaLN (a scale/shift/gate table driven by
+#                  temb); SVD does not — its t_emb drives FiLM-style *additive*
+#                  conditioning in each resnet. So this is "inject the action into
+#                  the timestep conditioning", not scale/shift/gate modulation.
+#                  It is also NOT DiT's AdaLN-Zero: that zero-inits each block's
+#                  modulation output so the residual gate starts at 0 and every
+#                  block is identity, which is a from-scratch-stability trick.
+#                  Here the pretrained SVD blocks stay exactly as they are; the
+#                  only thing zeroed is the new action signal (via the encoder's
+#                  zero-init linear_3), so step 0 reproduces the pretrained model.
+# Adds an action_adaln_proj parameter subtree, so checkpoints are NOT compatible
+# across modes. Rejected together with action_encoder_init_path: those upstream
+# weights were trained for the cross-attention route.
+action_cond_mode: 'cross_attn'
 # Each cam latent is 24 rows tall; 3 cams stacked = 72.
 latent_height_per_cam: 24
 num_views: 3

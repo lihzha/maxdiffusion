@@ -383,6 +383,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
       train: bool = False,
       cross_attention_kwargs: Optional[Union[Dict, FrozenDict]] = None,
       frame_level_cond: bool = False,
+      action_hidden_states: Optional[jnp.ndarray] = None,
   ) -> Union[FlaxVideoUNetOutput, Tuple]:
     # 1. time
     if not isinstance(timesteps, jnp.ndarray):
@@ -406,6 +407,20 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
       add_emb = jnp.repeat(add_emb, num_frames, axis=0)
       # t_emb may be (1, time_embed_dim) (scalar timesteps); broadcast.
       t_emb = t_emb + add_emb
+
+    # 2c. AdaLN action conditioning (action_cond_mode='adaln'). t_emb is already
+    # per-(sample, frame) at (B*T, time_embed_dim) and is what every spatial and
+    # temporal resnet consumes via its time_emb_proj, so summing here routes the
+    # action signal through the same modulation path the timestep uses — the
+    # SVD analogue of WAN's per-token temb injection. In this mode the caller
+    # sends no per-frame action tokens to cross-attention.
+    if action_hidden_states is not None:
+      if action_hidden_states.shape != t_emb.shape:
+        raise ValueError(
+            "FlaxVideoUNet: action_hidden_states must match t_emb's shape "
+            f"{t_emb.shape} (B*T, time_embed_dim), got {action_hidden_states.shape}"
+        )
+      t_emb = t_emb + action_hidden_states.astype(t_emb.dtype)
 
     # 2b. frame-level cross-attn context (Ctrl-World / action-conditioned SVD).
     # Base SVD passes encoder_hidden_states pre-tiled to (B*T, 1, C). Ctrl-World

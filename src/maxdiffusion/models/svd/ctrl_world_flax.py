@@ -43,7 +43,7 @@ import jax
 import jax.numpy as jnp
 
 from ...models.embeddings_flax import svd_micro_cond_embed
-from .action_encoder_flax import FlaxActionEncoder
+from .action_encoder_flax import FlaxActionEncoder, tile_text_to_hidden
 
 
 @dataclass
@@ -77,6 +77,20 @@ class CtrlWorldTrainConfig:
     # Zero out the history slots of the channel-concat stream (Ctrl-World
     # ``his_cond_zero``). Default False matches the released training config.
     his_cond_zero: bool = False
+
+    # How the action signal reaches the UNet:
+    #   'cross_attn' (default) — one action token per frame is the UNet's
+    #                            cross-attention context (frame_level_cond).
+    #   'adaln'                — action tokens are projected per frame and summed
+    #                            into the timestep embedding instead; the
+    #                            per-frame cross-attention path is dropped and
+    #                            cross-attention carries the (per-sample) text
+    #                            embedding on its own.
+    # Not checkpoint-compatible across modes: 'adaln' adds an action_adaln_proj
+    # parameter subtree and changes what cross-attention receives.
+    action_cond_mode: str = "cross_attn"
+    # UNet timestep-embedding width; only read in 'adaln' mode (block_out_channels[0]*4).
+    time_embed_dim: int = 1280
 
 
 def _build_concat_stream(
@@ -198,14 +212,52 @@ def action_world_train_step(
     )
     condition_latent = condition_latent / vae_scaling_factor
 
-    # 2. Per-frame action embedding (+ text), with CFG dropout.
-    action_hidden = apply_fns["action_encoder"](
-        {"params": params["action_encoder"]},
-        actions,
-        text_embeds,
-        True,  # frame_level_cond
-    )  # (B, T, hidden_size)
-    action_hidden = _apply_cfg_dropout(rng_action_drop, action_hidden, cfg.cfg_drop_prob)
+    # 2. Per-frame action embedding, routed by action_cond_mode.
+    adaln = cfg.action_cond_mode == "adaln"
+    if adaln:
+        # Action-only encoder output: text is NOT folded in here, it goes to
+        # cross-attention on its own below. Feeding text into both routes would
+        # double-count it.
+        action_hidden = apply_fns["action_encoder"](
+            {"params": params["action_encoder"]},
+            actions,
+            None,   # no text on the action route
+            True,   # frame_level_cond
+        )  # (B, T, hidden_size)
+        # Drop BEFORE the projection, matching the WAN trainer. The dropped
+        # sample's contribution is then proj(0) = the projector bias, not zero —
+        # which is the point: at inference the uncond branch is built the same
+        # way, so the bias appears in both cond and uncond and cancels out of the
+        # CFG delta (cond - uncond = W·a). Dropping after the projection would
+        # leave the bias in the delta, so raising guidance_scale would amplify a
+        # learned constant that carries no action information.
+        action_hidden = _apply_cfg_dropout(rng_action_drop, action_hidden, cfg.cfg_drop_prob)
+        action_temb = apply_fns["action_adaln_proj"](
+            {"params": params["action_adaln_proj"]}, action_hidden
+        )  # (B, T, time_embed_dim)
+        action_hidden_states = action_temb.reshape(b * t_total, -1)
+        # Cross-attention carries the per-sample text embedding, tiled to the
+        # cross-attn width and repeated over frames. The UNet is called with
+        # frame_level_cond=False, so it expects (B*T, S, C) already flattened.
+        if text_embeds is not None and cfg.text_embed_dim is not None:
+            text_ctx = tile_text_to_hidden(
+                text_embeds, cfg.hidden_size, cfg.text_embed_dim
+            )  # (B, 1, hidden_size)
+        else:
+            text_ctx = jnp.zeros((b, 1, cfg.hidden_size), dtype=action_hidden.dtype)
+        encoder_hidden_states = jnp.repeat(
+            text_ctx.astype(action_hidden.dtype), t_total, axis=0
+        )  # (B*T, 1, hidden_size)
+    else:
+        action_hidden = apply_fns["action_encoder"](
+            {"params": params["action_encoder"]},
+            actions,
+            text_embeds,
+            True,  # frame_level_cond
+        )  # (B, T, hidden_size)
+        action_hidden = _apply_cfg_dropout(rng_action_drop, action_hidden, cfg.cfg_drop_prob)
+        encoder_hidden_states = action_hidden
+        action_hidden_states = None
 
     # 3. EDM sigma per sample for the future slots.
     log_sigma = cfg.p_mean + cfg.p_std * jax.random.normal(rng_sigma, (b, 1, 1, 1, 1))
@@ -241,11 +293,14 @@ def action_world_train_step(
         {"params": params["unet"]},
         input_flat,
         c_noise_btile,
-        encoder_hidden_states=action_hidden,
+        encoder_hidden_states=encoder_hidden_states,
         added_cond_kwargs={"adm_vector": adm_vec},
         image_only_indicator=image_only_indicator,
         num_frames=t_total,
-        frame_level_cond=True,
+        # adaln already flattened its (per-sample text) context to (B*T, S, C),
+        # so the per-frame reshape must be off; cross_attn mode still needs it.
+        frame_level_cond=not adaln,
+        action_hidden_states=action_hidden_states,
     ).sample  # (B*F, 4, H, W)
     v_pred = v_pred.reshape((b, t_total) + v_pred.shape[1:])
 
