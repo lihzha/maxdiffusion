@@ -319,3 +319,37 @@ Common: `RUN_NAME=wan-overfit100-s3-20260730`, COMMIT=<tip at submission, record
 - **Acceptance:** role_validation ok per pass; immutable role-keyed artifacts (`step_005000_s3_intermediate/` etc.); aux_coverage 1.0 this time (ffmpeg fixed); verdict CLI then re-computes the two-tier claim over ALL admitted artifacts (c* by fraction tie-break between 2500 and 10000).
 - **Launch note:** first submission attempt 2026-08-01T08:20Z failed on gcloud reauth (issue #6, 5th recurrence) creating NO jobs; relaunched cleanly after Yixun re-authed. `COMMIT=46e5f41…` — actual: `46c5f411738d4cfdcf7c3a16245b191c80d02e89` (tip at submission; eval code = APPROVED fc9ac52 lineage + probe round, docs commits above).
 - **Job ids (submitted 2026-08-01T14:28–14:29Z):** `20260801-142820-66e1b5ce-…-i5000`, `20260801-142847-33331211-…-i7500`, `20260801-142914-9d6458a0-…-final10k`, `20260801-142941-95e2e0a1-…-fullset10k`
+
+## Jobs 29–30 — v6e-8 VIDEO PASSES (write_videos=True) @ ckpt 2500 + 10000 — launched 2026-08-01
+
+**Approved by Yixun** ("Please give me 5 ground truth vs. pred videos" + AskUserQuestion: representative
+spread, both checkpoints). Commit `04223639032bdc4ee4236c65ccfdb6f3c7f2a725` (eval code = APPROVED fc9ac52 lineage; docs commits above).
+
+Purpose: results visualization. No verdict impact — these write to **fresh** `step_00XXXX_s3_intermediate/`
+role dirs (neither checkpoint had an s3_intermediate pass; no collision with any verdict artifact). The run
+signature binds `write_videos`, so these are distinct runs and cannot admit prior passes' staged rows.
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+for STEP in 2500 10000; do
+  tpu create v6 -n 8 --worker0-only --name exp02-o100-vid-${STEP}-yixun \
+    --code-dir . \
+    --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+    --env RUN_NAME="wan-overfit100-s3-20260730" \
+    --env CHECKPOINT_STEP="$STEP" --env EVAL_PASS_ROLE=s3_intermediate \
+    --env EVAL_WINDOWS=canonical --env ROLLOUT_SEEDS=0 --env CONTEXT_MODES=correct \
+    --env WRITE_VIDEOS=True \
+    --env COMMIT="04223639032bdc4ee4236c65ccfdb6f3c7f2a725" \
+    --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+    -- bash bash_scripts/validate_wan_overfit100.sh
+done
+```
+
+- **Cost:** ~40–50 min each on v6e-8 (rollouts + 300 mp4 encodes per pass); resume staging protects both.
+- **Acceptance:** role_validation ok; 100 windows; `comparison_gt_top_pred_bottom.mp4` present per window;
+  the seed-0 SSIM column must reproduce the already-landed values for these checkpoints (0.8139 @ 2500,
+  0.8416 @ 10000) — a mismatch would invalidate the video pass, not the verdict.
+- **The 5 windows to deliver** (representative spread by 10k m_corr, same windows at both checkpoints):
+  worst `ep30738_v0_s00132` (0.6756) · 25th `ep4358_v0_s00040` (0.8068) · median `ep4015_v0_s00000`
+  (0.8446) · 75th `ep50125_v0_s00028` (0.8805) · best `ep36295_v0_s00020` (0.9484).
+- **Job ids:** (appended at submission)
