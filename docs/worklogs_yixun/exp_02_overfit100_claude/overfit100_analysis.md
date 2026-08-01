@@ -67,3 +67,11 @@ If neither discriminator moves the ceiling materially, the honest conclusion of 
 - Both D11 artifacts + complete verdict committed under `overfit100_s3_artifacts/`; checkpoints {250,500,1000,1750,2500} retained on GCS.
 - Open cheap follow-ups: aux/ceiling backfill job (checkpoint-independent); S2 ceiling backfill; both optional for the record, not for the verdict.
 - Open decisions (Yixun): sampling probe approval; S3 extension approval (D10); merge decision (SOP: only on confirmed success — as of step 2,500 the formal answer is "not established").
+
+## 8. Post-verdict updates (2026-08-01)
+
+**Sampling probe (Yixun-approved) — sampling-side H2 EXCLUDED.** 30 canonical windows at ckpt 2500, arms {25, 50, 100} rollout steps: validity bitwise-perfect (25-arm reproduces the landed rows exactly), and more steps are strictly WORSE — 50: −0.0074 mean, 0/30 windows improved; 100: −0.0121, 0/30. Velocity-field error compounding dominates discretization error at 25 steps already. Corollary: the CFG arm was void by discovery — the OVERFIT100 rollout has no guidance branch and training used none, so no train/eval CFG mismatch exists. §5-H2's sampling-side component is closed; what remains of H2 is the one-step training objective itself.
+
+**S3 extension to 10k (Yixun: "extend to 10k") — training PASSED, loss flattening hard.** Resume verified (step 2501 = 0.139, continuous with 0.145); loss 0.145 (2500) → 0.1318 (5000) → 0.1270 (7500) → ≈0.12 (10000, noisy 0.111–0.137). Tripling the compute bought ~0.025 of loss. Read together with the probe: if the 5000→7500→10000 SSIM trajectory flattens correspondingly below the bar, the conclusion sharpens to "the one-step-denoising objective is the ceiling under this recipe" — H1's remaining room is small.
+
+**Revised expectation for the 10k verdict:** loss-to-SSIM has been roughly linear-ish across runs; a ~0.145→0.12 loss move projects only a modest SSIM gain (order +0.01–0.03 on the canonical mean, i.e. ≈0.82–0.84 at 10k). The 0.95 bar would remain far out of reach unless the mapping breaks upward. Awaiting the four extension evals for the formal answer.
