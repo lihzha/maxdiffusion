@@ -256,3 +256,10 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Result (science)** — S3 step-2500 segment-final landed pre-resume (attempt 9): canonical tier **NOT established** (0/100 at m_corr ≥ 0.95; mean 0.8133; ablations correct > null > shuffled). Formal verdict + artifacts committed (`a2ce261`). Full-set tier not yet evaluable.
 - **In flight** — full-set attempt 9 (same calm window that landed segment-final): if it lands, no relaunch is needed anywhere and the resume series stands as insurance + merge value; if it dies, the relaunch package (fc9ac52 + checklist) goes to Yixun.
 - **Next** — full-set resolution → complete two-tier verdict → `_analysis.md` + analysis review + HTML reports → Yixun: extension decision (D10) + merge decision.
+
+## 2026-08-01T03:25:00Z — Full-set landed (both tiers NOT established at 2500); Yixun approved "extend to 10k"; Job 23 launched
+
+- **Result** — Full-set pass SUCCEEDED attempt 9: 105/1,629 at ≥0.90 (6.4%; needs 90%); complete two-tier verdict committed (`9d339dc`). Analysis v1 written (`overfit100_analysis.md`): H1 (undertrained) vs H2 (one-step-denoising→25-step-rollout ceiling) undiscriminated; S2's 0.890 at loss 0.061 is the key H2 evidence. Sampling-recipe probe recommended but NOT approved/launched.
+- **Decision (Yixun, verbatim): "extend to 10k"** — D10 extension approved in response to the delivered verdict.
+- **Launch** — Job 23 `20260801-032202-ee7d478b-exp02-overfit100-s3ext10k-yixun` (v6e-64): resume wan-overfit100-s3-20260730 from step 2500 → 10,000 steps, checkpoints {5000,7500,10000}, COMMIT=81ae571 (code == fc9ac52). Acceptance in `_command.md` Job 23. Follow-on evals at fc9ac52-lineage code (resume staging ON, ffmpeg fix live): intermediates at 5000/7500, segment-final+full-set at 10000.
+- **Next** — Monitor training (~2 h compute); analysis review deferred until the 10k results finalize the analysis.
