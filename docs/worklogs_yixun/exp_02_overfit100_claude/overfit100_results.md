@@ -84,3 +84,27 @@ Jobs 25/26, both SUCCEEDED attempt 1, role ok, **aux 100/100 populated for the f
 | 7500 | 0.8377 | 0.8372 | 0.9475 | 0/100 | 17 | 43 | 0.0006 |
 
 **Read: saturation ≈0.84.** Per-250-step gain fell 0.0038 → 0.0019 → 0.0006 (6× decay over 5k steps); the best window is frozen at ~0.947; no window has crossed 0.95 at any checkpoint. Tracks the loss flattening (0.145→0.132→0.127) and the §8 projection (0.82–0.84 at 10k). Combined with the probe (sampling axis closed), the picture entering the 10k verdict: **the one-step-denoising→25-step-rollout recipe saturates near mean 0.84 / max ~0.95 on this cohort — the D11 bar is not reachable by more training at this rate.**
+
+## S3 step-10000 segment-final (s3_segment_final, 900 rollouts) — landed 2026-08-01T~16:25Z
+
+Job 27 `20260801-142914-9d6458a0-…-final10k`, SUCCEEDED. **Resume staging proved out**: the pass survived an infra kill mid-run and finished from staged rows instead of restarting (657/900 banked at the time of the last check). Role ok, 900 rows, aux **900/900 populated**.
+
+**Canonical tier at 10,000 steps: still NOT established.**
+
+| statistic | step 2500 | step 10000 |
+| --- | --- | --- |
+| m_corr mean | 0.8133 | **0.8414** |
+| m_corr median | 0.8133 | 0.8430 |
+| best window | 0.9461 | 0.9484 |
+| ≥0.95 | 0/100 | **0/100** |
+| ≥0.90 | 8 | 17 |
+| ≥0.85 | 28 | 46 |
+| ≥0.80 | 55 | 78 |
+
+Verdict CLI (10k generation, c*=10000, denominator 100, coverage complete): headline fraction **0.0**, established **False**.
+
+**Full trajectory + saturation:** 0.7580 (250) → 0.7707 → 0.7892 → 0.8020 → 0.8133 (2500) → 0.8320 (5000) → 0.8377 (7500) → **0.8414 (10000)**. Gains per 2,500 steps after 2500: +0.0187, +0.0057, +0.0037 — a 5× decay, asymptote clearly below 0.90 and nowhere near 0.95.
+
+**New finding — the text signal STRENGTHENS with training.** Ablation gaps vs correct: at 2500, null −0.0141 / shuffled −0.0310; at 10000, null **−0.0393** / shuffled **−0.0530**. The model leans on the instruction *more* as it memorizes more (~3× wider gap), which is the cleanest evidence yet that the conditioning path is genuinely used and not a nuisance variable.
+
+**Process note (fail-closed guard fired correctly):** the verdict CLI **refused** to build one verdict from the 2500 artifacts (eval commit `e27fdc3`) mixed with the 10k artifacts (`46c5f41`) — "one verdict must be built from one run's passes". Correct and intended: exp_02 therefore reports **two internally-consistent verdicts**, one per eval-code generation, rather than one silently-mixed claim. The 2500 verdict (both tiers) stands as committed; the 10k verdict comprises segment-final@10000 + full-set@10000 (pending).
