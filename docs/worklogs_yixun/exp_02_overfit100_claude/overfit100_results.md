@@ -134,3 +134,34 @@ to measured cohorts (review item 7) is what made the correction visible rather t
 
 **Progress across the extension (full-set tier):** ≥0.90 rose 105 → 229 windows (6.4% → 14.1%) and the mean
 0.7984 → 0.8322 between steps 2,500 and 10,000 — real movement, ~6× short of the bar.
+
+## Video passes (Jobs 29–30) — 600 comparison videos at ckpts 2500 + 10000 — landed 2026-08-01T~19:20Z
+
+Both SUCCEEDED (10k needed attempt 1 after a setup-phase preemption). Fresh `s3_intermediate` role dirs at
+each checkpoint; 100 windows × 3 videos = 300 mp4 each.
+
+**Acceptance PASSED, exactly:** both passes reproduced their landed seed-0 SSIM **per window, bitwise**
+(max |Δssim| = 0.00e+00, n=100 each; means 0.8139 @2500 and 0.8416 @10000 matching the verdict passes). The
+rollouts are deterministic across independent jobs, code generations and machines — the strongest end-to-end
+reproducibility evidence in the experiment.
+
+**The 5 delivered windows** (representative spread by 10k m_corr; same windows at both checkpoints):
+
+| role | window | ssim @2500 | ssim @10000 | Δ |
+| --- | --- | --- | --- | --- |
+| worst | `ep30738_v0_s00132` | 0.6020 | 0.6903 | **+0.0883** |
+| 25th | `ep4358_v0_s00040` | 0.7585 | 0.8068 | +0.0483 |
+| median | `ep4015_v0_s00000` | 0.8190 | 0.8398 | +0.0208 |
+| 75th | `ep50125_v0_s00028` | 0.8508 | 0.8805 | +0.0297 |
+| best | `ep36295_v0_s00020` | 0.9440 | 0.9483 | **+0.0043** |
+
+**Finding — the extension helped the *worst* windows most, and the best hardly at all.** The gain is
+monotonically ordered against starting quality: +0.088 at the bottom vs +0.004 at the top (a 20× spread). The
+cohort mean's modest +0.028 is therefore a blend of real recovery in the tail and a genuinely saturated head.
+This sharpens §4/§5 of the analysis: whatever caps the good windows near ~0.95 is *not* relieved by training,
+while the poor windows were partly a dose problem. Consistent with the ceiling being a property of the
+recipe rather than of optimization, and it also means "mean SSIM" understates how differently the cohort
+behaves at its two ends.
+
+All 600 videos remain on GCS at
+`…/validation/step_{002500,010000}_s3_intermediate/mode_correct/seed_0/<window>/`.
