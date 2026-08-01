@@ -135,3 +135,43 @@ the join key and the per-arm metric are both there. No new fields were needed.
   clean.
 
 No push, no launch.
+
+## Re-review (pass 2) — APPROVE
+
+- **Date:** 2026-08-01 | **Commit:** `a921917` | Codex `gpt-5.6-sol` xhigh
+- All four findings VERIFIED fixed; declared deviation (two module-fact tests kept) ACCEPTED; reviewer independently reproduced the 30-window anchor (mean 0.8100125855 / median 0.8059329625) and digest. FIT TO LAUNCH (1 × v6e-8, ~55 min, no resume; PROBE_NUM_WINDOWS=15 only as predeclared fallback; single writer; 25-arm mismatch invalidates the probe, not the checkpoint).
+
+```
+APPROVE
+
+1. VERIFIED — Output override is removed from module, launcher, and YAML; canonical path enforcement rejects all five hostile `step_` cases and requires the file directly under `validation_probe_sampling/`.
+2. VERIFIED — Arms are set-canonicalized to `{25,50,100}`; checkpoint 2500 is checked before model load and against Orbax’s restored step; baseline is fixed at 25; 15 windows remains valid.
+3. VERIFIED — `validate_wan_overfit100.sh` is byte-identical to `fc9ac52`. **Declared deviation ACCEPTED:** the two retained tests assert relevant production invariants and do not preserve the reverted knobs. Minor record correction: the new regression test checks token absence, not whole-file byte identity.
+4. VERIFIED — H1/H2 terminology and acceptance criteria are correct. Independent offline recomputation reproduced mean `0.8100125855`, median `0.8059329625`, and the exact 30-window digest; JSON contains every required join field.
+5. VERIFIED — Mutation failure counts correspond to the relevant regression tests. Focused re-run: **21 passed**; syntax, `bash -n`, and `git diff --check` passed. The reported full **1236 passed / 2 skipped** remains Coder-run evidence because this read-only sandbox cannot provide pytest temporary storage.
+
+Launch fitness — **FIT TO LAUNCH** as 1 × v6e-8 at `a921917` once pushed, approximately 55 minutes, with no resume. `PROBE_NUM_WINDOWS=15` is acceptable only as the predeclared fallback. Obtain explicit launch approval, record the exact command and acceptance criteria at launch, confirm any prior attempt is terminated and the immutable output path is unoccupied, and allow only one writer. A mismatching 25-step control invalidates the probe—not the checkpoint.
+
+Status
+
+- Review: complete.
+- Job 23: last recorded as launched; live state was not queried or changed.
+- Earliest steer: now.
+tokens used
+179,728
+APPROVE
+
+1. VERIFIED — Output override is removed from module, launcher, and YAML; canonical path enforcement rejects all five hostile `step_` cases and requires the file directly under `validation_probe_sampling/`.
+2. VERIFIED — Arms are set-canonicalized to `{25,50,100}`; checkpoint 2500 is checked before model load and against Orbax’s restored step; baseline is fixed at 25; 15 windows remains valid.
+3. VERIFIED — `validate_wan_overfit100.sh` is byte-identical to `fc9ac52`. **Declared deviation ACCEPTED:** the two retained tests assert relevant production invariants and do not preserve the reverted knobs. Minor record correction: the new regression test checks token absence, not whole-file byte identity.
+4. VERIFIED — H1/H2 terminology and acceptance criteria are correct. Independent offline recomputation reproduced mean `0.8100125855`, median `0.8059329625`, and the exact 30-window digest; JSON contains every required join field.
+5. VERIFIED — Mutation failure counts correspond to the relevant regression tests. Focused re-run: **21 passed**; syntax, `bash -n`, and `git diff --check` passed. The reported full **1236 passed / 2 skipped** remains Coder-run evidence because this read-only sandbox cannot provide pytest temporary storage.
+
+Launch fitness — **FIT TO LAUNCH** as 1 × v6e-8 at `a921917` once pushed, approximately 55 minutes, with no resume. `PROBE_NUM_WINDOWS=15` is acceptable only as the predeclared fallback. Obtain explicit launch approval, record the exact command and acceptance criteria at launch, confirm any prior attempt is terminated and the immutable output path is unoccupied, and allow only one writer. A mismatching 25-step control invalidates the probe—not the checkpoint.
+
+Status
+
+- Review: complete.
+- Job 23: last recorded as launched; live state was not queried or changed.
+- Earliest steer: now.
+```
