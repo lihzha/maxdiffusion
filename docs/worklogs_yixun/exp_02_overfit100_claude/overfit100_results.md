@@ -218,3 +218,47 @@ window barely decays at all.
 memorization is largely *there*; it is being spent on trajectory divergence. This is the most direct evidence
 yet for H2b (objective/rollout mismatch) — previously supported only indirectly by the sampling probe — and
 it converts "the recipe is the leading explanation" into a mechanism visible frame by frame.
+
+### D2 — fixed-RNG one-step loss instrument (H5): **the optimization has NOT saturated; the transfer is linear**
+
+Job 31 `20260801-192833-0cfabb6d`, SUCCEEDED attempt 0. All 8 checkpoints × all 1,629 windows at a
+deterministic (t, ε) keyed by (episode_id, window_start) — the instrument the plan called for and that had
+never been run. This closes the instrument gap flagged in `_analysis.md` §3. Artifact committed at
+`diagnostics/d2_val_loss_by_checkpoint.json`.
+
+| step | one-step loss | rollout SSIM | paired Δloss vs prev | significance |
+| --- | --- | --- | --- | --- |
+| 250 | 0.19191 | 0.7580 | — | — |
+| 500 | 0.18084 | 0.7707 | +0.01108 | 42.7σ (1609/1629 improved) |
+| 1000 | 0.16853 | 0.7892 | +0.01231 | 44.0σ (1616/1629) |
+| 1750 | 0.15566 | 0.8020 | +0.01287 | 38.4σ (1613/1629) |
+| 2500 | 0.14598 | 0.8139 | +0.00968 | 37.5σ (1620/1629) |
+| 5000 | 0.13111 | 0.8320 | +0.01487 | 43.8σ (1624/1629) |
+| 7500 | 0.12575 | 0.8377 | +0.00537 | 43.3σ (1618/1629) |
+| **10000** | **0.12227** | **0.8416** | **+0.00348** | **42.0σ (1609/1629)** |
+
+**Finding 1 — training has not saturated.** Even the final leg (7,500→10,000) reduces the one-step loss at
+**42σ** on the paired test, with 1,609 of 1,629 windows improving; 2500→10000 is 48.6σ with 1,627/1,629
+improving. The model is still getting measurably better at the objective it is trained on. So neither "the
+objective saturated" nor "this optimization run saturated" is true — **H5 is resolved, and the answer is that
+the optimization is still descending, just slowly (0.0035 per 2,500 steps and decelerating).**
+
+**Finding 2 — the loss→SSIM mapping is linear, tight, and stable** (this was NOT known before):
+regression over all 8 checkpoints gives **SSIM ≈ 0.9885 − 1.201 × loss, r = −0.9994**. Per-leg ratios
+ΔSSIM/Δloss run 0.99–1.50 (mean 1.18, sd 0.16) with no trend. The rollout metric keeps responding to the
+training objective exactly as it always did — the SSIM plateau is a *direct consequence of the loss plateau*,
+not a breakdown of transfer.
+
+**Finding 3 — what the bar would actually cost.** Extrapolating that line, SSIM 0.95 corresponds to one-step
+loss ≈ **0.032** — a further **74% reduction** from 0.1223, against a current rate of 0.0035 per 2,500 steps
+that is still decelerating. Unreachable on this optimization path. *(Caveat: a local linear fit over the
+measured range 0.19–0.12; it need not hold down at 0.03.)*
+
+**How D1 and D2 fit together.** The line's intercept says a *perfect* one-step denoiser would score ≈0.989 —
+above the bar. Its slope of 1.2 is the price of the rollout: each unit of one-step error is amplified ~1.2×
+into rollout SSIM, which is exactly the compounding D1 shows frame by frame. That gives two distinct levers,
+and names them precisely:
+
+- **lower the loss floor** (optimization/capacity/LR) — measured as decelerating and 74% short; poor odds;
+- **lower the slope** (train on the trajectory the eval runs, so one-step error stops compounding) — this is
+  the objective change, and D1 shows the headroom is real: every window's frame 0 already clears the bar.

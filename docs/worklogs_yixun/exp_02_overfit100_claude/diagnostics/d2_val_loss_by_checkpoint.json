@@ -1,0 +1,90 @@
+[
+  {
+    "checkpoint_step": 250,
+    "mean_loss": 0.19191296058812707,
+    "stderr": 0.002272216544479292,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  },
+  {
+    "checkpoint_step": 500,
+    "mean_loss": 0.1808367537447761,
+    "stderr": 0.002186182318970926,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  },
+  {
+    "checkpoint_step": 1000,
+    "mean_loss": 0.1685259684215959,
+    "stderr": 0.0021117268500304774,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  },
+  {
+    "checkpoint_step": 1750,
+    "mean_loss": 0.15566055813748242,
+    "stderr": 0.002037825116523009,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  },
+  {
+    "checkpoint_step": 2500,
+    "mean_loss": 0.14598195374634018,
+    "stderr": 0.00201166329782161,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  },
+  {
+    "checkpoint_step": 5000,
+    "mean_loss": 0.13111324743021843,
+    "stderr": 0.002023469750667842,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  },
+  {
+    "checkpoint_step": 7500,
+    "mean_loss": 0.12574632745064643,
+    "stderr": 0.002034226457566272,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  },
+  {
+    "checkpoint_step": 10000,
+    "mean_loss": 0.1222671805872388,
+    "stderr": 0.002044776009064129,
+    "n": 1629,
+    "validation_seed": 0,
+    "dataset_path": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+    "checkpoint_path": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+    "train_commit": "81ae5717cf631e654c6f2af918360a6e98787c3c",
+    "eval_commit": "577692255194dc9ec791d4003b2544b3581d06cd"
+  }
+]
