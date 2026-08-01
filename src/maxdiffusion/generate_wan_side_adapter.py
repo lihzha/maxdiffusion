@@ -1569,7 +1569,6 @@ OVERFIT100_PUBLISHED_MARKER_SCHEMA = "overfit100_eval_published_v1"
 # setting, derangement or aux/video mode (review finding 1). Strictly typed, in this exact order.
 OVERFIT100_RUN_SIGNATURE_TYPES: tuple[tuple[str, type], ...] = (
     ("checkpoint_step", int),
-    ("checkpoint_dir", str),
     ("pass_role", str),
     ("manifest_sha256", str),
     ("code_commit", str),
@@ -1751,7 +1750,10 @@ def overfit100_publication_state(step_root: str, *, expected=None) -> dict:
     means the directory belongs to something else, which an operator must resolve.
 
     ``expected`` (optional) is ``{"eval_pass_role", "checkpoint_step", "manifest_sha256", "n_rows"}``
-    for the binding check; without it only the structural checks run.
+    for the binding check; without it only the structural checks run. Entry authentication
+    deliberately does NOT compare the run-signature hash -- the later compare-only artifact
+    comparison is what enforces same-signature/same-commit re-verification, and it does so with a
+    better error (it names the artifact that differs).
     """
     root = str(step_root).rstrip("/")
     present = [name for name in OVERFIT100_FINAL_ARTIFACTS if tf.io.gfile.exists(f"{root}/{name}")]
@@ -1809,9 +1811,15 @@ def overfit100_published_marker(
 
     ``aggregation_sha256`` is what makes the marker AUTHENTICATE rather than merely announce: a
     marker copied from another directory cannot match the aggregation that sits beside it.
-    ``run_signature_sha256`` rides along for provenance but is deliberately NOT required to match on
-    a later re-verification -- a newer commit must still be able to verify a published directory by
-    recomputation, which is exactly what compare-only published mode does.
+
+    RE-VERIFICATION CONTRACT (pass-4 review finding 2 -- this corrects an earlier, false claim that
+    the recorded ``run_signature_sha256`` was non-binding): published re-verification is
+    **same-signature and same-commit only**. Compare-only mode regenerates every artifact and
+    byte-compares it, so the regenerated marker rebinds this hash, and ``aggregation.json`` embeds
+    ``COMMIT`` and therefore fails the comparison first. A newer commit re-verifying a published
+    directory is EXPECTED TO REFUSE, and that refusal is the fail-closed intent: published evidence
+    belongs to the run and the code that produced it, so a different build must publish into a clean
+    role directory rather than re-attest someone else's artifacts.
     """
     return {
         "schema": OVERFIT100_PUBLISHED_MARKER_SCHEMA,
@@ -1882,7 +1890,6 @@ def overfit100_run_signature(
     signature = {
         "schema": OVERFIT100_RUN_SIGNATURE_SCHEMA,
         "checkpoint_step": int(checkpoint_step),
-        "checkpoint_dir": str(getattr(config, "checkpoint_dir", "")),
         "pass_role": str(pass_role),
         "manifest_sha256": str(manifest_sha256),
         "code_commit": str(code_commit),
@@ -1909,6 +1916,10 @@ def overfit100_run_signature(
         # Derived from the RESOLVED runtime objects where they exist: the sigmas come from the
         # scheduler the rollout actually uses, the checkpoint dir from the same resolution the
         # restore performs.
+        # The checkpoint identity is carried by the RESOLVED value alone. The raw config string used
+        # to ride along as its own field, which defeated the normalization: exact admission then
+        # rejected a retry that merely spelled the same directory with a trailing slash. One fact,
+        # one canonical representation (pass-4 review finding 1).
         "resolved_checkpoint_dir": str(resolved_checkpoint_dir),
         "scheduler_sigma_min": float(scheduler_sigma_min),
         "scheduler_sigma_max": float(scheduler_sigma_max),

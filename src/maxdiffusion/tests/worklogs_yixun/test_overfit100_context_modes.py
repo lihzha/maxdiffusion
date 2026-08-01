@@ -1340,7 +1340,7 @@ def test_run_signature_is_built_from_the_run_and_strictly_typed():
     # Every field the review named is bound...
     for field in (
         "checkpoint_step",
-        "checkpoint_dir",
+        "resolved_checkpoint_dir",
         "pass_role",
         "manifest_sha256",
         "code_commit",
@@ -1388,7 +1388,6 @@ def test_run_signature_is_built_from_the_run_and_strictly_typed():
     "field,bad",
     [
         ("checkpoint_step", 1000),
-        ("checkpoint_dir", "gs://bucket/OTHER/checkpoints"),
         ("pass_role", "s3_intermediate"),
         ("manifest_sha256", "b" * 64),
         ("code_commit", "d" * 40),
@@ -1718,7 +1717,7 @@ def test_driver_stages_every_row_as_it_completes(tmp_path, monkeypatch):
     assert signature["code_commit"] == artifact["commit"]  # one provenance source, not two
     assert signature["manifest_sha256"] == artifact["manifest_sha256"]
     assert signature["pass_role"] == artifact["eval_pass_role"]
-    assert signature["checkpoint_dir"] == artifact["checkpoint_dir"]
+    assert signature["resolved_checkpoint_dir"] == artifact["checkpoint_dir"].rstrip("/")
 
 
 def test_resume_recomputes_only_the_missing_tuples(tmp_path, monkeypatch):
@@ -2095,7 +2094,9 @@ def test_signature_uses_the_resolved_checkpoint_dir_not_the_config_string():
     assert resolved == "gs://b/r/checkpoints"
     signature = _build_signature(config, resolved_checkpoint_dir=resolved)
     assert signature["resolved_checkpoint_dir"] == resolved
-    assert signature["checkpoint_dir"] == ""  # the raw config value is recorded separately
+    # The RAW config string is deliberately not a signature field: it is a spelling of the resolved
+    # value, and carrying both is what let a trailing slash reject otherwise-identical rows.
+    assert "checkpoint_dir" not in signature
 
 
 @pytest.mark.parametrize(
@@ -2622,13 +2623,21 @@ def test_published_mode_is_compare_only_and_never_creates(tmp_path, monkeypatch)
     config, step_root = _publish_then(tmp_path, monkeypatch)
     before = _dir_snapshot(step_root)
     created: list[str] = []
-    real_write_json = gen._write_json
-
     monkeypatch.setattr(gen, "_write_json", lambda path, value: created.append(path))
     gen.run_overfit100(config)
     assert created == []  # nothing written at all
     assert _dir_snapshot(step_root) == before
-    del real_write_json
+
+    # The compare_only WIRING is asserted against the source: with entry authentication now
+    # rejecting a marker beside a missing artifact (pass-3 finding 2a), the driver can no longer
+    # reach publication with anything absent, so no behavioural test can distinguish
+    # compare_only=True from False there. It stays as defence in depth -- if entry validation ever
+    # missed a state, compare-only is what still refuses to CREATE published evidence.
+    import inspect
+
+    src = inspect.getsource(gen.run_overfit100)
+    assert "compare_only = writes_suppressed" in src
+    assert "compare_only=compare_only" in src
 
 
 def test_compare_only_writers_refuse_a_missing_artifact(tmp_path):
@@ -2740,3 +2749,80 @@ def test_a_stat_failure_on_a_candidate_marker_fails_closed(tmp_path, monkeypatch
     with pytest.raises(ValueError) as ei:
         _read(root)
     assert "transient stat failure" in str(ei.value)
+
+
+# ======================================================================================
+# (eval-resume pass 4) The two residuals: a canonical checkpoint identity in the FULL
+# signature, and the true same-commit re-verification contract.
+# ======================================================================================
+
+
+def test_checkpoint_dir_slash_variants_produce_identical_signatures_end_to_end(tmp_path):
+    # The BLOCKER, end to end: normalizing only `_resolved_checkpoint_dir` was not enough while the
+    # raw string rode along as its own field -- exact admission then rejected a trailing-slash
+    # retry. Whole signatures (and their hashes) must be equal, and each variant must admit the
+    # other's staged rows.
+    plain = _full_signature_config(checkpoint_dir="gs://b/ck")
+    slashed = _full_signature_config(checkpoint_dir="gs://b/ck/")
+    a = _build_signature(plain, resolved_checkpoint_dir=gen._resolved_checkpoint_dir(plain))
+    b = _build_signature(slashed, resolved_checkpoint_dir=gen._resolved_checkpoint_dir(slashed))
+    assert a == b
+    assert gen.run_signature_sha256(a) == gen.run_signature_sha256(b)
+
+    step_root = tmp_path / "step_002500_s3_segment_final"
+    _stage(step_root, _sample_row(), signature=a)
+    assert _read(step_root, signature=b) == {("ep100_v0_s00000", "correct", 0): _sample_row()}
+    # ...and the reverse direction too.
+    other_root = tmp_path / "other" / "step_002500_s3_segment_final"
+    _stage(other_root, _sample_row(), signature=b)
+    assert _read(other_root, signature=a)
+
+
+def test_the_driver_admits_a_slash_variant_retrys_staged_rows(tmp_path, monkeypatch):
+    # The same property through the real driver: a retry whose checkpoint_dir gained a trailing
+    # slash must RESUME, not recompute.
+    episodes = [("fold cloth", 1), ("press button", 1)]
+    first = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    first.checkpoint_dir = str(tmp_path / "ck")
+    gen.run_overfit100(first)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    shutil.rmtree(step_root / "aggregation.json", ignore_errors=True)
+    for name in gen.OVERFIT100_FINAL_ARTIFACTS + (gen.OVERFIT100_PUBLISHED_MARKER,):
+        (step_root / name).unlink()  # keep only staging: the preempted-retry shape
+
+    second = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    second.checkpoint_dir = str(tmp_path / "ck") + "/"  # the only difference
+    _CALLS.clear()
+    gen.run_overfit100(second)
+    assert _CALLS == []  # every row resumed despite the slash
+
+
+def test_published_re_verification_is_same_commit_only(tmp_path, monkeypatch):
+    # The MINOR, pinned as the REAL contract (not the false "cross-commit works" claim): published
+    # mode regenerates aggregation.json, which embeds COMMIT, and byte-compares it -- so a newer
+    # commit re-verifying a published directory REFUSES, and that refusal is the fail-closed intent.
+    episodes = [("fold cloth", 1)]
+    config = _resume_env(tmp_path, monkeypatch, episodes, role="s3_intermediate", seeds="0", modes="correct")
+    gen.run_overfit100(config)
+    step_root = tmp_path / "out" / "validation" / "step_002500_s3_intermediate"
+    before = _dir_snapshot(step_root)
+
+    monkeypatch.setenv("COMMIT", "d" * 40)  # a newer build re-verifying the same directory
+    with pytest.raises(ValueError) as ei:
+        gen.run_overfit100(config)
+    assert "aggregation.json" in str(ei.value)
+    assert _dir_snapshot(step_root) == before  # refused before mutating anything
+
+    monkeypatch.setenv("COMMIT", "c" * 40)  # the SAME commit re-verifies cleanly
+    gen.run_overfit100(config)
+    assert _dir_snapshot(step_root) == before
+
+
+def test_the_contract_text_states_same_commit_re_verification():
+    import inspect
+
+    marker_doc = inspect.getdoc(gen.overfit100_published_marker) or ""
+    assert "same-signature" in marker_doc or "same commit" in marker_doc or "same-commit" in marker_doc
+    # The retracted claim must be gone.
+    assert "must still be able to verify" not in marker_doc
+    assert "newer commit" in marker_doc  # it says plainly what a newer commit does: refuse
