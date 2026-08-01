@@ -372,7 +372,6 @@ overfit100_eval_resume: True
 # never globally.
 probe_sampling_steps_list: [25, 50, 100]
 probe_num_windows: 30
-validation_probe_output_dir: ''
 eval_windows: 'canonical'
 rollout_seeds: '0,1,2'
 context_modes: 'correct'

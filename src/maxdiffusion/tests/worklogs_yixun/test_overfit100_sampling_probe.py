@@ -159,14 +159,79 @@ def test_probe_summary_refuses_an_incomplete_pairing():
     assert "ep101_v0_s00000" in str(ei.value)
 
 
-def test_probe_output_path_is_never_inside_a_verdict_role_directory():
-    config = SimpleNamespace(output_dir="gs://bucket/out", run_name="ovf-s3", validation_output_dir="")
+def test_probe_output_path_is_canonical_and_has_no_override():
+    import inspect
+
+    config = SimpleNamespace(output_dir="gs://bucket/out", run_name="ovf-s3")
     path = probe.probe_output_path(config, 2500)
     assert path == "gs://bucket/out/ovf-s3/validation_probe_sampling/probe_steps_ckpt2500.json"
-    assert probe.PROBE_OUTPUT_DIR in path
-    # A verdict role dir is step_XXXXXX_<role>; the probe can never write into one.
-    assert "step_002500_" not in path
     assert not any(part.startswith("step_") for part in path.split("/"))
+    # There is NO output-root override: an unrestricted one could drop a diagnostic inside a
+    # verdict role directory, which no amount of testing downstream can undo.
+    source = inspect.getsource(probe)
+    assert "validation_probe_output_dir" not in source
+
+
+@pytest.mark.parametrize(
+    "run_name",
+    [
+        "step_002500_s3_segment_final",
+        "x/step_002500_s3_full_set",
+        "../step_002500_s3_segment_final",
+        "ok/../step_002500_s3_intermediate",
+    ],
+)
+def test_a_hostile_run_name_cannot_steer_the_probe_into_a_verdict_directory(run_name):
+    config = SimpleNamespace(output_dir="gs://bucket/out", run_name=run_name)
+    with pytest.raises(ValueError) as ei:
+        probe.probe_output_path(config, 2500)
+    message = str(ei.value)
+    assert "step_" in message and "verdict" in message.lower()
+
+
+def test_a_hostile_output_dir_cannot_steer_the_probe_either():
+    config = SimpleNamespace(output_dir="gs://bucket/out/step_002500_s3_full_set", run_name="ovf")
+    with pytest.raises(ValueError):
+        probe.probe_output_path(config, 2500)
+
+
+# --------------------------------------------------------------------------------------
+# The approved experiment is pinned: any deviation is a startup failure.
+# --------------------------------------------------------------------------------------
+
+
+def test_the_approved_design_is_pinned():
+    assert probe.APPROVED_SAMPLING_ARMS == (25, 50, 100)
+    assert probe.APPROVED_CHECKPOINT_STEP == 2500
+    assert probe.BASELINE_SAMPLING_STEPS == 25
+    probe.assert_approved_design(steps=(25, 50, 100), checkpoint_step=2500)
+    probe.assert_approved_design(steps=(100, 25, 50), checkpoint_step=2500)  # order-canonicalized
+
+
+@pytest.mark.parametrize(
+    "steps,step,needle",
+    [
+        ((25, 50), 2500, "arms"),
+        ((25, 50, 100, 200), 2500, "arms"),
+        ((10, 20, 30), 2500, "arms"),
+        ((25, 50, 100), 1000, "checkpoint"),
+        ((25, 50, 100), 5000, "checkpoint"),
+    ],
+)
+def test_a_deviation_from_the_approved_design_is_refused(steps, step, needle):
+    with pytest.raises(ValueError) as ei:
+        probe.assert_approved_design(steps=steps, checkpoint_step=step)
+    message = str(ei.value)
+    assert needle in message.lower()
+    assert "approv" in message.lower()  # says WHY it is pinned
+
+
+def test_the_baseline_is_fixed_not_derived_from_the_arms():
+    import inspect
+
+    source = inspect.getsource(probe)
+    assert "baseline=BASELINE_SAMPLING_STEPS" in source
+    assert "baseline=min(" not in source
 
 
 def test_probe_artifact_is_written_immutably(tmp_path):
@@ -182,12 +247,12 @@ def test_probe_artifact_is_written_immutably(tmp_path):
         ),
         checkpoint_step=2500,
         cohort=[{"name": "ep100_v0_s00000", "episode_id": 100, "episode_index": 0, "window_start": 0}],
-        steps=(25, 50),
-        rows=_rows(steps=(25, 50), n=1),
+        steps=(25, 50, 100),
+        rows=_rows(steps=(25, 50, 100), n=1),
     )
     assert payload["schema"] == probe.PROBE_SCHEMA
     assert payload["checkpoint_step"] == 2500
-    assert payload["sampling_steps_arms"] == [25, 50]
+    assert payload["sampling_steps_arms"] == [25, 50, 100]
     assert payload["cohort"] == ["ep100_v0_s00000"]
     assert "summary" in payload and "rows" in payload
     # Verdict fields must NOT be present: this is not an admissible artifact.
@@ -261,6 +326,15 @@ def test_the_probe_launcher_forwards_its_knobs():
     assert 'PROBE_NUM_WINDOWS="${PROBE_NUM_WINDOWS:-30}"' in text
     # Manifest-pinned model, like every other arm.
     assert "MANIFEST_PATH" in text and "export COMMIT" in text and "local_files_only=True" in text
+
+
+def test_neither_the_launcher_nor_the_config_still_offers_an_output_override():
+    # The override is gone at every layer -- an env knob or a live YAML key would be a way back in.
+    text = _LAUNCHER.read_text()
+    for token in ("PROBE_OUTPUT_DIR", "validation_probe_output_dir"):
+        assert token not in text, token
+    config_text = (Path(probe.__file__).parent / "configs" / "base_wan_5b_overfit100.yml").read_text()
+    assert "validation_probe_output_dir" not in config_text
 
 
 def test_the_probe_launcher_documents_why_it_needs_no_ffmpeg():
@@ -398,8 +472,8 @@ def _probe_stub_stack(monkeypatch, tmp_path, *, episodes=2):
         model_type="OVERFIT100_TI2V",
         run_name="probe",
         output_dir=str(tmp_path / "out"),
-        validation_probe_output_dir="",
         seed=0,
+        checkpoint_step=2500,
         probe_sampling_steps_list=[25, 50, 100],
         probe_num_windows=episodes,
         model_manifest_path=str(_MANIFEST),
@@ -449,3 +523,39 @@ def test_the_driver_writes_only_to_the_probe_directory(tmp_path, monkeypatch):
     written = [str(p.relative_to(tmp_path)) for p in (tmp_path).rglob("*.json")]
     assert written == ["out/probe/validation_probe_sampling/probe_steps_ckpt2500.json"], written
     assert not any("step_" in path for path in written)
+
+
+def test_the_docstring_records_the_acceptance_rule_and_the_landed_reference():
+    # The scientific anchor the reviewer supplied: the same 30 windows' landed 25-step numbers, so
+    # the in-probe control arm can be checked against them offline.
+    doc = probe.__doc__ or ""
+    assert "0.8100125855" in doc and "0.8059329625" in doc
+    assert "acceptance" in doc.lower()
+
+
+def test_the_artifact_carries_everything_the_offline_validity_check_needs():
+    payload = probe.probe_artifact(
+        SimpleNamespace(
+            output_dir="/tmp/x",
+            run_name="r",
+            seed=0,
+            model_manifest_path=str(_MANIFEST),
+            eval_data_dir="gs://x/train100",
+            checkpoint_dir="gs://x/ck",
+        ),
+        checkpoint_step=2500,
+        cohort=[{"name": "ep100_v0_s00000", "episode_id": 100, "episode_index": 0, "window_start": 0}],
+        steps=(25, 50, 100),
+        rows=_rows(steps=(25, 50, 100), n=1),
+    )
+    # Row-level identity + per-arm ssim is what an offline join against the segment-final rows needs.
+    for row in payload["rows"]:
+        for field in ("name", "episode_id", "window_start", "sampling_steps", "ssim"):
+            assert field in row, field
+    assert payload["rollout_seed"] == 0 and payload["context_mode"] == "correct"
+
+
+def test_the_module_and_launcher_call_it_a_discriminator_not_just_a_diagnostic():
+    doc = probe.__doc__ or ""
+    assert "H1/H2" in doc or "discriminator" in doc
+    assert "discriminator" in _LAUNCHER.read_text()

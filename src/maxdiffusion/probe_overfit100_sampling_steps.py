@@ -1,4 +1,4 @@
-"""exp_02 overfit100 — standalone SAMPLING-STEPS diagnostic (H1), deliberately verdict-isolated.
+"""exp_02 overfit100 — standalone SAMPLING-STEPS H1/H2 DISCRIMINATOR, deliberately verdict-isolated.
 
 One question: at checkpoint 2500, does a longer sampler close the gap? The segment-final pass ran
 the plan's 25-step sampler and reported ``mean m_corr = 0.8133`` with 0/100 windows at 0.95, so
@@ -28,6 +28,26 @@ function can silently reuse another arm's step count.
 Why no ffmpeg: the probe scores against the VAE decode of the stored ``z_video`` only (latent MSE,
 pixel MSE, SSIM). It never pulls or decodes a source MP4, so — like the one-step loss arm — its
 launcher deliberately carries no ffmpeg-ensure block.
+
+**What it discriminates.** H1 (the sampler is the limiter) predicts the longer arms lift SSIM
+materially; H2 (the weights are the limiter) predicts they do not. The paired per-window deltas are
+the read-out, because the arms share a cohort, a context and a per-window rng.
+
+**Acceptance criteria, fixed in advance.**
+
+* *Validity control.* The 25-step arm must reproduce the landed segment-final rows for these same
+  30 windows, whose reference is **mean SSIM 0.8100125855, median 0.8059329625**. That row-level
+  join is done OFFLINE against the published aggregation -- this module never reads a verdict
+  artifact, which is what keeps it isolated -- so every row here carries its window identity and its
+  per-arm SSIM. A 25-step arm that does not match those numbers invalidates the probe, not the
+  checkpoint.
+* *Read-out.* ``paired_deltas`` for ``50-25`` and ``100-25``. Deltas that leave the cohort far below
+  the 0.95 canonical bar mean the sampler is not the limiter and the segment-final reading stands.
+
+**The design is approval-pinned** (:func:`assert_approved_design`): checkpoint 2500, arms exactly
+{25, 50, 100}, baseline 25. Only ``probe_num_windows`` is flexible -- 15 is the pre-declared
+fallback for bad spot weather. Anything else is a startup failure, because the approved experiment
+is what was approved.
 """
 
 from __future__ import annotations
@@ -50,6 +70,13 @@ PROBE_SCHEMA = "overfit100_sampling_steps_probe_v1"
 PROBE_OUTPUT_DIR = "validation_probe_sampling"
 PROBE_CONTEXT_MODE = "correct"
 PROBE_SEED = 0  # the segment-final pass's seed 0, so an arm's 25-step row is comparable to it
+
+# The APPROVED experiment. Pinned rather than parameterised: what was approved is a specific
+# comparison at a specific checkpoint, and a probe that quietly ran something else would answer a
+# question nobody sanctioned.
+APPROVED_SAMPLING_ARMS = (25, 50, 100)
+APPROVED_CHECKPOINT_STEP = 2500
+BASELINE_SAMPLING_STEPS = 25
 
 
 class _ArmConfig:
@@ -129,16 +156,44 @@ def probe_cohort(manifest_path: str, *, seed: int, num_windows: int) -> list[dic
 
 
 def probe_output_path(config, checkpoint_step: int) -> str:
-    """``<output root>/validation_probe_sampling/probe_steps_ckpt<step>.json``.
+    """``<output_dir>/<run_name>/validation_probe_sampling/probe_steps_ckpt<step>.json``.
 
-    Deliberately NOT under a ``step_<n>_<role>`` directory: a diagnostic must be impossible to
-    confuse with the evidence a verdict reads.
+    CANONICAL ONLY -- there is deliberately no output-root override. An unrestricted one could drop
+    a diagnostic inside a ``step_<n>_<role>`` verdict directory, where nothing downstream could undo
+    the confusion, and the launcher never needed it. The operator-controlled components that remain
+    (``output_dir``, ``run_name``) are still checked: any path component that looks like a role
+    directory is refused, so neither a typo nor a hostile value can steer the probe into the
+    evidence tree.
     """
-    root = (
-        str(getattr(config, "validation_probe_output_dir", "") or "").strip()
-        or f"{str(config.output_dir).rstrip('/')}/{config.run_name}/{PROBE_OUTPUT_DIR}"
-    )
-    return f"{root.rstrip('/')}/probe_steps_ckpt{int(checkpoint_step)}.json"
+    root = f"{str(config.output_dir).rstrip('/')}/{config.run_name}/{PROBE_OUTPUT_DIR}"
+    path = f"{root.rstrip('/')}/probe_steps_ckpt{int(checkpoint_step)}.json"
+    offenders = [part for part in path.split("/") if part.startswith("step_")]
+    if offenders:
+        raise ValueError(
+            f"refusing the probe output path {path!r}: component(s) {offenders} name a verdict role directory. A "
+            f"diagnostic must never be written where the verdict's evidence lives -- fix output_dir/run_name."
+        )
+    parts = path.split("/")
+    if len(parts) < 2 or parts[-2] != PROBE_OUTPUT_DIR:
+        raise ValueError(f"refusing the probe output path {path!r}: it is not directly under {PROBE_OUTPUT_DIR}/")
+    return path
+
+
+def assert_approved_design(*, steps, checkpoint_step: int) -> None:
+    """Refuse anything but the approved experiment (arms {25, 50, 100} at checkpoint 2500)."""
+    arms = tuple(sorted({int(step) for step in steps}))
+    if arms != tuple(sorted(APPROVED_SAMPLING_ARMS)):
+        raise ValueError(
+            f"the sampling probe is approval-pinned: arms must be exactly {list(APPROVED_SAMPLING_ARMS)}, got "
+            f"{list(arms)}. Running a different comparison would answer a question that was not approved -- get the "
+            f"new design approved and change APPROVED_SAMPLING_ARMS deliberately."
+        )
+    if int(checkpoint_step) != APPROVED_CHECKPOINT_STEP:
+        raise ValueError(
+            f"the sampling probe is approval-pinned to checkpoint {APPROVED_CHECKPOINT_STEP}, but got "
+            f"{int(checkpoint_step)}. The landed segment-final reference this probe is validated against belongs to "
+            f"that checkpoint; probing another one needs its own approval and its own reference."
+        )
 
 
 def probe_summary(rows: Sequence[dict], *, baseline: int) -> dict:
@@ -207,7 +262,7 @@ def probe_artifact(config, *, checkpoint_step: int, cohort, steps, rows) -> dict
         "cohort_seed": int(getattr(config, "seed", 0)),
         "sampling_steps_arms": [int(step) for step in steps],
         "cohort": [str(window["name"]) for window in cohort],
-        "summary": probe_summary(rows, baseline=min(int(step) for step in steps)),
+        "summary": probe_summary(rows, baseline=BASELINE_SAMPLING_STEPS),
         "rows": list(rows),
     }
 
@@ -239,6 +294,8 @@ def run_probe(config) -> dict:
     cohort = probe_cohort(
         manifest_path, seed=int(getattr(config, "seed", 0)), num_windows=int(config.probe_num_windows)
     )
+    # Cheap refusal first: the arms and the REQUESTED step, before the ~5B load.
+    assert_approved_design(steps=steps, checkpoint_step=int(getattr(config, "checkpoint_step", -1)))
 
     (
         trainer,
@@ -249,6 +306,9 @@ def run_probe(config) -> dict:
         null_context,
         checkpoint_step,
     ) = gen._restore_overfit100_validation_state(config)
+    # Re-checked against the RESTORED checkpoint: the requested step is not proof of what Orbax
+    # handed back.
+    assert_approved_design(steps=steps, checkpoint_step=checkpoint_step)
     scheduler, _ = trainer._create_scheduler()
     replicated = NamedSharding(mesh, P())
     data_shardings = {"z_i0": replicated, "z_video": replicated, "context": replicated}

@@ -95,13 +95,6 @@ EVAL_AUX_RGB="${EVAL_AUX_RGB:-True}"
 FLAGGED_WINDOWS="${FLAGGED_WINDOWS:-}"
 VALIDATION_OUTPUT_DIR="${VALIDATION_OUTPUT_DIR:-${OUTPUT_DIR%/}/${RUN_NAME}/validation}"
 PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-1.0}"
-# Pipeline sampling knobs, defaulted to the yml values so an env-less launch behaves exactly as
-# before. NOTE, so these are not mistaken for the rollout's sampler: the OVERFIT100_TI2V rollout
-# reads side_adapter_sampling_steps for its step count and has NO classifier-free-guidance term at
-# all, so num_inference_steps / guidance_scale do NOT change an overfit100 rollout. They are plumbed
-# for reachability and for the shared pipeline paths that do read them.
-NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-25}"
-GUIDANCE_SCALE="${GUIDANCE_SCALE:-5.0}"
 SKIP_HF_PREFETCH="${SKIP_HF_PREFETCH:-0}"
 
 # The model repo + revision come from the MANIFEST (C1), never from this launcher.
@@ -137,8 +130,6 @@ echo "EVAL_AUX_RGB=${EVAL_AUX_RGB}"
 echo "FLAGGED_WINDOWS=${FLAGGED_WINDOWS:-<none>}"
 echo "VALIDATION_OUTPUT_DIR=${VALIDATION_OUTPUT_DIR}"
 echo "PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE}"
-echo "NUM_INFERENCE_STEPS=${NUM_INFERENCE_STEPS}"
-echo "GUIDANCE_SCALE=${GUIDANCE_SCALE}"
 echo "SKIP_HF_PREFETCH=${SKIP_HF_PREFETCH}"
 echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
 
@@ -249,6 +240,4 @@ python src/maxdiffusion/generate_wan_side_adapter.py \
   flagged_windows="${FLAGGED_WINDOWS}" \
   validation_output_dir="${VALIDATION_OUTPUT_DIR}" \
   per_device_batch_size="${PER_DEVICE_BATCH_SIZE}" \
-  num_inference_steps="${NUM_INFERENCE_STEPS}" \
-  guidance_scale="${GUIDANCE_SCALE}" \
   hardware=tpu

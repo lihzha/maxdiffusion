@@ -55,8 +55,8 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_enable_async_collective_f
 --xla_tpu_relayout_group_size_threshold_for_reduce_scatter=1 \
 --xla_tpu_assign_all_reduce_scatter_layout=true}"
 
-# --- exp_02 overfit100 SAMPLING-STEPS probe (H1 diagnostic) ---
-# Asks ONE question at checkpoint 2500: does a longer sampler close the gap? The segment-final pass
+# --- exp_02 overfit100 SAMPLING-STEPS probe (H1/H2 discriminator) ---
+# Discriminates H1 (the sampler limits SSIM) from H2 (the weights do) at checkpoint 2500. The segment-final pass
 # ran the plan's 25-step sampler and reported mean m_corr = 0.8133 with 0/100 windows at 0.95, so
 # before drawing conclusions about the weights we measure the sampler's contribution.
 #
@@ -88,7 +88,6 @@ CHECKPOINT_DIR="${CHECKPOINT_DIR:-${OUTPUT_DIR%/}/${RUN_NAME}/checkpoints}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-2500}"
 PROBE_STEPS="${PROBE_STEPS:-[25,50,100]}"
 PROBE_NUM_WINDOWS="${PROBE_NUM_WINDOWS:-30}"
-PROBE_OUTPUT_DIR="${PROBE_OUTPUT_DIR:-}"
 PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-1.0}"
 SKIP_HF_PREFETCH="${SKIP_HF_PREFETCH:-0}"
 
@@ -118,7 +117,6 @@ echo "PROBE_STEPS=${PROBE_STEPS}"
 echo "PROBE_NUM_WINDOWS=${PROBE_NUM_WINDOWS}"
 echo "PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE}"
 echo "SKIP_HF_PREFETCH=${SKIP_HF_PREFETCH}"
-echo "PROBE_OUTPUT_DIR=${PROBE_OUTPUT_DIR:-config_default}"
 
 # The queue deploys an uploaded TARBALL with no .git, so COMMIT must be relayed from the launch
 # env (`tpu create --env COMMIT=$(git rev-parse HEAD)`) and EXPORTED -- the aggregation artifact
@@ -176,6 +174,5 @@ python src/maxdiffusion/probe_overfit100_sampling_steps.py \
   checkpoint_step="${CHECKPOINT_STEP}" \
   probe_sampling_steps_list="${PROBE_STEPS}" \
   probe_num_windows="${PROBE_NUM_WINDOWS}" \
-  validation_probe_output_dir="${PROBE_OUTPUT_DIR}" \
   per_device_batch_size="${PER_DEVICE_BATCH_SIZE}" \
   hardware=tpu
