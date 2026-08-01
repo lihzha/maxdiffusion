@@ -352,4 +352,4 @@ done
 - **The 5 windows to deliver** (representative spread by 10k m_corr, same windows at both checkpoints):
   worst `ep30738_v0_s00132` (0.6756) · 25th `ep4358_v0_s00040` (0.8068) · median `ep4015_v0_s00000`
   (0.8446) · 75th `ep50125_v0_s00028` (0.8805) · best `ep36295_v0_s00020` (0.9484).
-- **Job ids:** (appended at submission)
+- **Job ids (submitted 2026-08-01T18:14Z):** ckpt 2500 → `20260801-181353-3e7419e4-exp02-o100-vid-2500-yixun`; ckpt 10000 → `20260801-181420-9e61cb62-exp02-o100-vid-10000-yixun`.
