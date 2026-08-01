@@ -56,3 +56,19 @@ Job `20260731-160912-184642ed-exp02-o100-s3ev-fullset-yixun`, SUCCEEDED attempt 
 **Bottom line at 2,500 steps (~390 epochs):** memorization is real, text-conditioned, monotonically improving, and uniformly incomplete — no window in either cohort reaches 0.95. Train loss 0.145 still falling. The D10 extension question (continue S3 beyond 2,500 steps) is the live decision; the alternative reading (rollout-error / objective-mismatch ceiling) is examined in `_analysis.md`.
 
 **Aux:** all rows ffmpeg-missing as in segment-final (issue #8; pre-fix tarball); primary metrics unaffected; ceilings recoverable via the checkpoint-independent backfill.
+
+## Sampling-steps probe (H1/H2 discriminator) @ ckpt 2500 — landed 2026-08-01T05:15Z-ish
+
+Job 24 `20260801-042558-e41be63a-exp02-o100-probe-steps-yixun`, attempt 1. 30 seeded canonical windows × arms {25, 50, 100}, seed 0, correct context. Artifact committed: `overfit100_s3_artifacts/probe_steps_ckpt2500.json`.
+
+**Validity: PASSED perfectly** — 25-arm reproduces the landed segment-final rows bitwise (max |Δssim| = 0.0; mean exactly 0.8100125855 = the reviewer's independently-computed anchor).
+
+| arm | mean | median | min | max |
+| --- | --- | --- | --- | --- |
+| 25 | 0.8100 | 0.8059 | 0.6956 | 0.9440 |
+| 50 | 0.8026 | 0.7977 | 0.6899 | 0.9385 |
+| 100 | 0.7979 | 0.7937 | 0.6854 | 0.9359 |
+
+Paired deltas: 50−25 mean **−0.0074** (0/30 improved); 100−25 mean **−0.0121** (0/30 improved).
+
+**Read:** sampling-side H2 EXCLUDED. More integration steps strictly degrade reconstruction — velocity-field error compounding dominates discretization error already at 25 steps. No sampling knob recovers the gap to 0.95; the remaining hypotheses are H1 (more training — being tested by the 10k extension) and the one-step-objective ceiling (recipe change territory). Open question noted for the record: the monotone degradation suggests FEWER steps might do marginally better; untested (arms approval-pinned), not decision-relevant now.

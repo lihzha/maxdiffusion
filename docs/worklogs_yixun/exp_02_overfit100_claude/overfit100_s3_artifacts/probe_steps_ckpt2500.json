@@ -1,0 +1,993 @@
+{
+  "checkpoint_dir": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+  "checkpoint_step": 2500,
+  "cohort": [
+    "ep45109_v0_s00068",
+    "ep61233_v0_s00080",
+    "ep35500_v0_s00004",
+    "ep34499_v0_s00080",
+    "ep61291_v0_s00032",
+    "ep19306_v0_s00196",
+    "ep37834_v0_s00036",
+    "ep22488_v0_s00012",
+    "ep11071_v0_s00052",
+    "ep35494_v0_s00036",
+    "ep19658_v0_s00000",
+    "ep19339_v0_s00024",
+    "ep53617_v0_s00036",
+    "ep54416_v0_s00004",
+    "ep39091_v0_s00028",
+    "ep24960_v0_s00052",
+    "ep2521_v0_s00028",
+    "ep57681_v0_s00016",
+    "ep36295_v0_s00020",
+    "ep50125_v0_s00028",
+    "ep53656_v0_s00020",
+    "ep11022_v0_s00004",
+    "ep8896_v0_s00028",
+    "ep39393_v0_s00016",
+    "ep40738_v0_s00092",
+    "ep67045_v0_s00008",
+    "ep69447_v0_s00008",
+    "ep49658_v0_s00004",
+    "ep65802_v0_s00016",
+    "ep69642_v0_s00028"
+  ],
+  "cohort_seed": 0,
+  "commit": "c92245340a57f44da410a9e4bb77f319f660711f",
+  "context_mode": "correct",
+  "eval_data_dir": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+  "kind": "diagnostic",
+  "model_manifest_path": "docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json",
+  "note": "Sampling-steps diagnostic. NOT an evaluation artifact: no role, no cohort denominator, no aggregation schema. It cannot enter the success statistic.",
+  "rollout_seed": 0,
+  "rows": [
+    {
+      "episode_id": 45109,
+      "episode_index": 5,
+      "latent_mse": 0.17139405012130737,
+      "name": "ep45109_v0_s00068",
+      "pixel_mse": 0.01505906879901886,
+      "sampling_steps": 25,
+      "ssim": 0.7505067984263102,
+      "window_start": 68
+    },
+    {
+      "episode_id": 45109,
+      "episode_index": 5,
+      "latent_mse": 0.17986926436424255,
+      "name": "ep45109_v0_s00068",
+      "pixel_mse": 0.01561617013067007,
+      "sampling_steps": 50,
+      "ssim": 0.7406697797052788,
+      "window_start": 68
+    },
+    {
+      "episode_id": 45109,
+      "episode_index": 5,
+      "latent_mse": 0.18435470759868622,
+      "name": "ep45109_v0_s00068",
+      "pixel_mse": 0.015757862478494644,
+      "sampling_steps": 100,
+      "ssim": 0.734894663998575,
+      "window_start": 68
+    },
+    {
+      "episode_id": 61233,
+      "episode_index": 12,
+      "latent_mse": 0.17138469219207764,
+      "name": "ep61233_v0_s00080",
+      "pixel_mse": 0.009013993665575981,
+      "sampling_steps": 25,
+      "ssim": 0.8267984570878925,
+      "window_start": 80
+    },
+    {
+      "episode_id": 61233,
+      "episode_index": 12,
+      "latent_mse": 0.17774975299835205,
+      "name": "ep61233_v0_s00080",
+      "pixel_mse": 0.009206768125295639,
+      "sampling_steps": 50,
+      "ssim": 0.8235589916055853,
+      "window_start": 80
+    },
+    {
+      "episode_id": 61233,
+      "episode_index": 12,
+      "latent_mse": 0.1823122501373291,
+      "name": "ep61233_v0_s00080",
+      "pixel_mse": 0.009210699237883091,
+      "sampling_steps": 100,
+      "ssim": 0.8222190593228196,
+      "window_start": 80
+    },
+    {
+      "episode_id": 35500,
+      "episode_index": 20,
+      "latent_mse": 0.18910914659500122,
+      "name": "ep35500_v0_s00004",
+      "pixel_mse": 0.012033935636281967,
+      "sampling_steps": 25,
+      "ssim": 0.7952369144468596,
+      "window_start": 4
+    },
+    {
+      "episode_id": 35500,
+      "episode_index": 20,
+      "latent_mse": 0.19637566804885864,
+      "name": "ep35500_v0_s00004",
+      "pixel_mse": 0.01223767176270485,
+      "sampling_steps": 50,
+      "ssim": 0.7896949432112954,
+      "window_start": 4
+    },
+    {
+      "episode_id": 35500,
+      "episode_index": 20,
+      "latent_mse": 0.2032776027917862,
+      "name": "ep35500_v0_s00004",
+      "pixel_mse": 0.012684708461165428,
+      "sampling_steps": 100,
+      "ssim": 0.7843169389349042,
+      "window_start": 4
+    },
+    {
+      "episode_id": 34499,
+      "episode_index": 23,
+      "latent_mse": 0.31432032585144043,
+      "name": "ep34499_v0_s00080",
+      "pixel_mse": 0.018879758194088936,
+      "sampling_steps": 25,
+      "ssim": 0.6956477797392643,
+      "window_start": 80
+    },
+    {
+      "episode_id": 34499,
+      "episode_index": 23,
+      "latent_mse": 0.3238486051559448,
+      "name": "ep34499_v0_s00080",
+      "pixel_mse": 0.0191325806081295,
+      "sampling_steps": 50,
+      "ssim": 0.6899489597840742,
+      "window_start": 80
+    },
+    {
+      "episode_id": 34499,
+      "episode_index": 23,
+      "latent_mse": 0.3327368497848511,
+      "name": "ep34499_v0_s00080",
+      "pixel_mse": 0.01933603547513485,
+      "sampling_steps": 100,
+      "ssim": 0.6853742509177236,
+      "window_start": 80
+    },
+    {
+      "episode_id": 61291,
+      "episode_index": 25,
+      "latent_mse": 0.16975155472755432,
+      "name": "ep61291_v0_s00032",
+      "pixel_mse": 0.012317068874835968,
+      "sampling_steps": 25,
+      "ssim": 0.7960472016623525,
+      "window_start": 32
+    },
+    {
+      "episode_id": 61291,
+      "episode_index": 25,
+      "latent_mse": 0.18011295795440674,
+      "name": "ep61291_v0_s00032",
+      "pixel_mse": 0.012674140743911266,
+      "sampling_steps": 50,
+      "ssim": 0.7887964411215349,
+      "window_start": 32
+    },
+    {
+      "episode_id": 61291,
+      "episode_index": 25,
+      "latent_mse": 0.18413396179676056,
+      "name": "ep61291_v0_s00032",
+      "pixel_mse": 0.013081388548016548,
+      "sampling_steps": 100,
+      "ssim": 0.7848455996224375,
+      "window_start": 32
+    },
+    {
+      "episode_id": 19306,
+      "episode_index": 30,
+      "latent_mse": 0.16404010355472565,
+      "name": "ep19306_v0_s00196",
+      "pixel_mse": 0.013567069545388222,
+      "sampling_steps": 25,
+      "ssim": 0.7440585241173253,
+      "window_start": 196
+    },
+    {
+      "episode_id": 19306,
+      "episode_index": 30,
+      "latent_mse": 0.17114447057247162,
+      "name": "ep19306_v0_s00196",
+      "pixel_mse": 0.013834564946591854,
+      "sampling_steps": 50,
+      "ssim": 0.7362202405929565,
+      "window_start": 196
+    },
+    {
+      "episode_id": 19306,
+      "episode_index": 30,
+      "latent_mse": 0.17728029191493988,
+      "name": "ep19306_v0_s00196",
+      "pixel_mse": 0.014175089076161385,
+      "sampling_steps": 100,
+      "ssim": 0.7302988261887522,
+      "window_start": 196
+    },
+    {
+      "episode_id": 37834,
+      "episode_index": 32,
+      "latent_mse": 0.17680704593658447,
+      "name": "ep37834_v0_s00036",
+      "pixel_mse": 0.013854112476110458,
+      "sampling_steps": 25,
+      "ssim": 0.7755861679712931,
+      "window_start": 36
+    },
+    {
+      "episode_id": 37834,
+      "episode_index": 32,
+      "latent_mse": 0.18783442676067352,
+      "name": "ep37834_v0_s00036",
+      "pixel_mse": 0.015056023374199867,
+      "sampling_steps": 50,
+      "ssim": 0.7662864670608983,
+      "window_start": 36
+    },
+    {
+      "episode_id": 37834,
+      "episode_index": 32,
+      "latent_mse": 0.19539454579353333,
+      "name": "ep37834_v0_s00036",
+      "pixel_mse": 0.015578228048980236,
+      "sampling_steps": 100,
+      "ssim": 0.7589544220404192,
+      "window_start": 36
+    },
+    {
+      "episode_id": 22488,
+      "episode_index": 34,
+      "latent_mse": 0.132747083902359,
+      "name": "ep22488_v0_s00012",
+      "pixel_mse": 0.010939132422208786,
+      "sampling_steps": 25,
+      "ssim": 0.8085965026508678,
+      "window_start": 12
+    },
+    {
+      "episode_id": 22488,
+      "episode_index": 34,
+      "latent_mse": 0.13924534618854523,
+      "name": "ep22488_v0_s00012",
+      "pixel_mse": 0.011217324063181877,
+      "sampling_steps": 50,
+      "ssim": 0.8005794828588312,
+      "window_start": 12
+    },
+    {
+      "episode_id": 22488,
+      "episode_index": 34,
+      "latent_mse": 0.14236363768577576,
+      "name": "ep22488_v0_s00012",
+      "pixel_mse": 0.011352762579917908,
+      "sampling_steps": 100,
+      "ssim": 0.7955878720139012,
+      "window_start": 12
+    },
+    {
+      "episode_id": 11071,
+      "episode_index": 39,
+      "latent_mse": 0.09468408674001694,
+      "name": "ep11071_v0_s00052",
+      "pixel_mse": 0.0029664100147783756,
+      "sampling_steps": 25,
+      "ssim": 0.8963061571121216,
+      "window_start": 52
+    },
+    {
+      "episode_id": 11071,
+      "episode_index": 39,
+      "latent_mse": 0.10047076642513275,
+      "name": "ep11071_v0_s00052",
+      "pixel_mse": 0.0031518074683845043,
+      "sampling_steps": 50,
+      "ssim": 0.8893039660020308,
+      "window_start": 52
+    },
+    {
+      "episode_id": 11071,
+      "episode_index": 39,
+      "latent_mse": 0.10290408879518509,
+      "name": "ep11071_v0_s00052",
+      "pixel_mse": 0.00326884095557034,
+      "sampling_steps": 100,
+      "ssim": 0.8843527237574259,
+      "window_start": 52
+    },
+    {
+      "episode_id": 35494,
+      "episode_index": 45,
+      "latent_mse": 0.18362875282764435,
+      "name": "ep35494_v0_s00036",
+      "pixel_mse": 0.014731870032846928,
+      "sampling_steps": 25,
+      "ssim": 0.762704282095938,
+      "window_start": 36
+    },
+    {
+      "episode_id": 35494,
+      "episode_index": 45,
+      "latent_mse": 0.19452568888664246,
+      "name": "ep35494_v0_s00036",
+      "pixel_mse": 0.015273484401404858,
+      "sampling_steps": 50,
+      "ssim": 0.7553509744730863,
+      "window_start": 36
+    },
+    {
+      "episode_id": 35494,
+      "episode_index": 45,
+      "latent_mse": 0.19925549626350403,
+      "name": "ep35494_v0_s00036",
+      "pixel_mse": 0.015605130232870579,
+      "sampling_steps": 100,
+      "ssim": 0.7528428995248043,
+      "window_start": 36
+    },
+    {
+      "episode_id": 19658,
+      "episode_index": 49,
+      "latent_mse": 0.14179600775241852,
+      "name": "ep19658_v0_s00000",
+      "pixel_mse": 0.012124243192374706,
+      "sampling_steps": 25,
+      "ssim": 0.9032721465284174,
+      "window_start": 0
+    },
+    {
+      "episode_id": 19658,
+      "episode_index": 49,
+      "latent_mse": 0.14973576366901398,
+      "name": "ep19658_v0_s00000",
+      "pixel_mse": 0.012521686032414436,
+      "sampling_steps": 50,
+      "ssim": 0.898028187679522,
+      "window_start": 0
+    },
+    {
+      "episode_id": 19658,
+      "episode_index": 49,
+      "latent_mse": 0.15495145320892334,
+      "name": "ep19658_v0_s00000",
+      "pixel_mse": 0.012866971082985401,
+      "sampling_steps": 100,
+      "ssim": 0.894568018841021,
+      "window_start": 0
+    },
+    {
+      "episode_id": 19339,
+      "episode_index": 50,
+      "latent_mse": 0.16822713613510132,
+      "name": "ep19339_v0_s00024",
+      "pixel_mse": 0.009880601428449154,
+      "sampling_steps": 25,
+      "ssim": 0.8275605367891716,
+      "window_start": 24
+    },
+    {
+      "episode_id": 19339,
+      "episode_index": 50,
+      "latent_mse": 0.17765074968338013,
+      "name": "ep19339_v0_s00024",
+      "pixel_mse": 0.01030686218291521,
+      "sampling_steps": 50,
+      "ssim": 0.8217201865080631,
+      "window_start": 24
+    },
+    {
+      "episode_id": 19339,
+      "episode_index": 50,
+      "latent_mse": 0.18041938543319702,
+      "name": "ep19339_v0_s00024",
+      "pixel_mse": 0.010249708779156208,
+      "sampling_steps": 100,
+      "ssim": 0.8210589813463616,
+      "window_start": 24
+    },
+    {
+      "episode_id": 53617,
+      "episode_index": 52,
+      "latent_mse": 0.18734987080097198,
+      "name": "ep53617_v0_s00036",
+      "pixel_mse": 0.014462065882980824,
+      "sampling_steps": 25,
+      "ssim": 0.7648338982553193,
+      "window_start": 36
+    },
+    {
+      "episode_id": 53617,
+      "episode_index": 52,
+      "latent_mse": 0.19754396378993988,
+      "name": "ep53617_v0_s00036",
+      "pixel_mse": 0.015050281770527363,
+      "sampling_steps": 50,
+      "ssim": 0.7536617914835612,
+      "window_start": 36
+    },
+    {
+      "episode_id": 53617,
+      "episode_index": 52,
+      "latent_mse": 0.205698162317276,
+      "name": "ep53617_v0_s00036",
+      "pixel_mse": 0.01564788818359375,
+      "sampling_steps": 100,
+      "ssim": 0.7459102525855555,
+      "window_start": 36
+    },
+    {
+      "episode_id": 54416,
+      "episode_index": 56,
+      "latent_mse": 0.10439945012331009,
+      "name": "ep54416_v0_s00004",
+      "pixel_mse": 0.003923973999917507,
+      "sampling_steps": 25,
+      "ssim": 0.8959105159297134,
+      "window_start": 4
+    },
+    {
+      "episode_id": 54416,
+      "episode_index": 56,
+      "latent_mse": 0.11082632094621658,
+      "name": "ep54416_v0_s00004",
+      "pixel_mse": 0.0040274811908602715,
+      "sampling_steps": 50,
+      "ssim": 0.8901530757094874,
+      "window_start": 4
+    },
+    {
+      "episode_id": 54416,
+      "episode_index": 56,
+      "latent_mse": 0.11473911255598068,
+      "name": "ep54416_v0_s00004",
+      "pixel_mse": 0.004129772074520588,
+      "sampling_steps": 100,
+      "ssim": 0.8862537163676638,
+      "window_start": 4
+    },
+    {
+      "episode_id": 39091,
+      "episode_index": 57,
+      "latent_mse": 0.2142062932252884,
+      "name": "ep39091_v0_s00028",
+      "pixel_mse": 0.01552142295986414,
+      "sampling_steps": 25,
+      "ssim": 0.7526240710056189,
+      "window_start": 28
+    },
+    {
+      "episode_id": 39091,
+      "episode_index": 57,
+      "latent_mse": 0.2247941493988037,
+      "name": "ep39091_v0_s00028",
+      "pixel_mse": 0.016016356647014618,
+      "sampling_steps": 50,
+      "ssim": 0.7447089625127388,
+      "window_start": 28
+    },
+    {
+      "episode_id": 39091,
+      "episode_index": 57,
+      "latent_mse": 0.23249776661396027,
+      "name": "ep39091_v0_s00028",
+      "pixel_mse": 0.01637185737490654,
+      "sampling_steps": 100,
+      "ssim": 0.7384596087715842,
+      "window_start": 28
+    },
+    {
+      "episode_id": 24960,
+      "episode_index": 62,
+      "latent_mse": 0.17690572142601013,
+      "name": "ep24960_v0_s00052",
+      "pixel_mse": 0.015218880958855152,
+      "sampling_steps": 25,
+      "ssim": 0.7194367556860952,
+      "window_start": 52
+    },
+    {
+      "episode_id": 24960,
+      "episode_index": 62,
+      "latent_mse": 0.18327148258686066,
+      "name": "ep24960_v0_s00052",
+      "pixel_mse": 0.01556811947375536,
+      "sampling_steps": 50,
+      "ssim": 0.7084785970774564,
+      "window_start": 52
+    },
+    {
+      "episode_id": 24960,
+      "episode_index": 62,
+      "latent_mse": 0.18890540301799774,
+      "name": "ep24960_v0_s00052",
+      "pixel_mse": 0.0159097071737051,
+      "sampling_steps": 100,
+      "ssim": 0.7003269972223224,
+      "window_start": 52
+    },
+    {
+      "episode_id": 2521,
+      "episode_index": 70,
+      "latent_mse": 0.17191532254219055,
+      "name": "ep2521_v0_s00028",
+      "pixel_mse": 0.022477606311440468,
+      "sampling_steps": 25,
+      "ssim": 0.7417994448632905,
+      "window_start": 28
+    },
+    {
+      "episode_id": 2521,
+      "episode_index": 70,
+      "latent_mse": 0.18093541264533997,
+      "name": "ep2521_v0_s00028",
+      "pixel_mse": 0.02296402119100094,
+      "sampling_steps": 50,
+      "ssim": 0.7329700354373816,
+      "window_start": 28
+    },
+    {
+      "episode_id": 2521,
+      "episode_index": 70,
+      "latent_mse": 0.1881735771894455,
+      "name": "ep2521_v0_s00028",
+      "pixel_mse": 0.023574011400341988,
+      "sampling_steps": 100,
+      "ssim": 0.726230906717705,
+      "window_start": 28
+    },
+    {
+      "episode_id": 57681,
+      "episode_index": 74,
+      "latent_mse": 0.2075643539428711,
+      "name": "ep57681_v0_s00016",
+      "pixel_mse": 0.011078626848757267,
+      "sampling_steps": 25,
+      "ssim": 0.7143216187303717,
+      "window_start": 16
+    },
+    {
+      "episode_id": 57681,
+      "episode_index": 74,
+      "latent_mse": 0.21657182276248932,
+      "name": "ep57681_v0_s00016",
+      "pixel_mse": 0.011380762793123722,
+      "sampling_steps": 50,
+      "ssim": 0.7052246205734484,
+      "window_start": 16
+    },
+    {
+      "episode_id": 57681,
+      "episode_index": 74,
+      "latent_mse": 0.2249126136302948,
+      "name": "ep57681_v0_s00016",
+      "pixel_mse": 0.011732945218682289,
+      "sampling_steps": 100,
+      "ssim": 0.698471107266166,
+      "window_start": 16
+    },
+    {
+      "episode_id": 36295,
+      "episode_index": 76,
+      "latent_mse": 0.06586365401744843,
+      "name": "ep36295_v0_s00020",
+      "pixel_mse": 0.0009394816006533802,
+      "sampling_steps": 25,
+      "ssim": 0.9439744967402834,
+      "window_start": 20
+    },
+    {
+      "episode_id": 36295,
+      "episode_index": 76,
+      "latent_mse": 0.07171256840229034,
+      "name": "ep36295_v0_s00020",
+      "pixel_mse": 0.001023614313453436,
+      "sampling_steps": 50,
+      "ssim": 0.9385040474660469,
+      "window_start": 20
+    },
+    {
+      "episode_id": 36295,
+      "episode_index": 76,
+      "latent_mse": 0.07268757373094559,
+      "name": "ep36295_v0_s00020",
+      "pixel_mse": 0.0010391358518972993,
+      "sampling_steps": 100,
+      "ssim": 0.9359232927813674,
+      "window_start": 20
+    },
+    {
+      "episode_id": 50125,
+      "episode_index": 80,
+      "latent_mse": 0.09983769804239273,
+      "name": "ep50125_v0_s00028",
+      "pixel_mse": 0.007332356180995703,
+      "sampling_steps": 25,
+      "ssim": 0.85077386191397,
+      "window_start": 28
+    },
+    {
+      "episode_id": 50125,
+      "episode_index": 80,
+      "latent_mse": 0.10514960438013077,
+      "name": "ep50125_v0_s00028",
+      "pixel_mse": 0.0075077093206346035,
+      "sampling_steps": 50,
+      "ssim": 0.8444084452860283,
+      "window_start": 28
+    },
+    {
+      "episode_id": 50125,
+      "episode_index": 80,
+      "latent_mse": 0.10901600867509842,
+      "name": "ep50125_v0_s00028",
+      "pixel_mse": 0.007582295686006546,
+      "sampling_steps": 100,
+      "ssim": 0.8404182249849493,
+      "window_start": 28
+    },
+    {
+      "episode_id": 53656,
+      "episode_index": 81,
+      "latent_mse": 0.2020183652639389,
+      "name": "ep53656_v0_s00020",
+      "pixel_mse": 0.012619974091649055,
+      "sampling_steps": 25,
+      "ssim": 0.7808320973858689,
+      "window_start": 20
+    },
+    {
+      "episode_id": 53656,
+      "episode_index": 81,
+      "latent_mse": 0.21206896007061005,
+      "name": "ep53656_v0_s00020",
+      "pixel_mse": 0.01284092478454113,
+      "sampling_steps": 50,
+      "ssim": 0.77578794594967,
+      "window_start": 20
+    },
+    {
+      "episode_id": 53656,
+      "episode_index": 81,
+      "latent_mse": 0.2197633981704712,
+      "name": "ep53656_v0_s00020",
+      "pixel_mse": 0.013096009381115437,
+      "sampling_steps": 100,
+      "ssim": 0.7715851158806772,
+      "window_start": 20
+    },
+    {
+      "episode_id": 11022,
+      "episode_index": 82,
+      "latent_mse": 0.07833927124738693,
+      "name": "ep11022_v0_s00004",
+      "pixel_mse": 0.0025217547081410885,
+      "sampling_steps": 25,
+      "ssim": 0.91504136540673,
+      "window_start": 4
+    },
+    {
+      "episode_id": 11022,
+      "episode_index": 82,
+      "latent_mse": 0.08371146023273468,
+      "name": "ep11022_v0_s00004",
+      "pixel_mse": 0.0026448084972798824,
+      "sampling_steps": 50,
+      "ssim": 0.9098347533832897,
+      "window_start": 4
+    },
+    {
+      "episode_id": 11022,
+      "episode_index": 82,
+      "latent_mse": 0.08595895767211914,
+      "name": "ep11022_v0_s00004",
+      "pixel_mse": 0.0027103431057184935,
+      "sampling_steps": 100,
+      "ssim": 0.906697974060521,
+      "window_start": 4
+    },
+    {
+      "episode_id": 8896,
+      "episode_index": 84,
+      "latent_mse": 0.1613968014717102,
+      "name": "ep8896_v0_s00028",
+      "pixel_mse": 0.008655242621898651,
+      "sampling_steps": 25,
+      "ssim": 0.8079305706602155,
+      "window_start": 28
+    },
+    {
+      "episode_id": 8896,
+      "episode_index": 84,
+      "latent_mse": 0.16900627315044403,
+      "name": "ep8896_v0_s00028",
+      "pixel_mse": 0.008774175308644772,
+      "sampling_steps": 50,
+      "ssim": 0.7985970775286356,
+      "window_start": 28
+    },
+    {
+      "episode_id": 8896,
+      "episode_index": 84,
+      "latent_mse": 0.17562077939510345,
+      "name": "ep8896_v0_s00028",
+      "pixel_mse": 0.009412460960447788,
+      "sampling_steps": 100,
+      "ssim": 0.7936915068915396,
+      "window_start": 28
+    },
+    {
+      "episode_id": 39393,
+      "episode_index": 86,
+      "latent_mse": 0.12540878355503082,
+      "name": "ep39393_v0_s00016",
+      "pixel_mse": 0.016086963936686516,
+      "sampling_steps": 25,
+      "ssim": 0.8420908414956295,
+      "window_start": 16
+    },
+    {
+      "episode_id": 39393,
+      "episode_index": 86,
+      "latent_mse": 0.13221637904644012,
+      "name": "ep39393_v0_s00016",
+      "pixel_mse": 0.016456976532936096,
+      "sampling_steps": 50,
+      "ssim": 0.8345866672920458,
+      "window_start": 16
+    },
+    {
+      "episode_id": 39393,
+      "episode_index": 86,
+      "latent_mse": 0.13608694076538086,
+      "name": "ep39393_v0_s00016",
+      "pixel_mse": 0.016859639436006546,
+      "sampling_steps": 100,
+      "ssim": 0.8299409440069487,
+      "window_start": 16
+    },
+    {
+      "episode_id": 40738,
+      "episode_index": 87,
+      "latent_mse": 0.13462430238723755,
+      "name": "ep40738_v0_s00092",
+      "pixel_mse": 0.009802966378629208,
+      "sampling_steps": 25,
+      "ssim": 0.8413271181511156,
+      "window_start": 92
+    },
+    {
+      "episode_id": 40738,
+      "episode_index": 87,
+      "latent_mse": 0.14221137762069702,
+      "name": "ep40738_v0_s00092",
+      "pixel_mse": 0.010272569954395294,
+      "sampling_steps": 50,
+      "ssim": 0.8309103611743811,
+      "window_start": 92
+    },
+    {
+      "episode_id": 40738,
+      "episode_index": 87,
+      "latent_mse": 0.14633649587631226,
+      "name": "ep40738_v0_s00092",
+      "pixel_mse": 0.010526473633944988,
+      "sampling_steps": 100,
+      "ssim": 0.8263402075478525,
+      "window_start": 92
+    },
+    {
+      "episode_id": 67045,
+      "episode_index": 89,
+      "latent_mse": 0.07778892666101456,
+      "name": "ep67045_v0_s00008",
+      "pixel_mse": 0.002935655415058136,
+      "sampling_steps": 25,
+      "ssim": 0.8768380970665903,
+      "window_start": 8
+    },
+    {
+      "episode_id": 67045,
+      "episode_index": 89,
+      "latent_mse": 0.08285023272037506,
+      "name": "ep67045_v0_s00008",
+      "pixel_mse": 0.003092789789661765,
+      "sampling_steps": 50,
+      "ssim": 0.8691036683140378,
+      "window_start": 8
+    },
+    {
+      "episode_id": 67045,
+      "episode_index": 89,
+      "latent_mse": 0.08513365685939789,
+      "name": "ep67045_v0_s00008",
+      "pixel_mse": 0.0031916017178446054,
+      "sampling_steps": 100,
+      "ssim": 0.8644742152907632,
+      "window_start": 8
+    },
+    {
+      "episode_id": 69447,
+      "episode_index": 90,
+      "latent_mse": 0.2437535524368286,
+      "name": "ep69447_v0_s00008",
+      "pixel_mse": 0.017139531672000885,
+      "sampling_steps": 25,
+      "ssim": 0.7238701311024752,
+      "window_start": 8
+    },
+    {
+      "episode_id": 69447,
+      "episode_index": 90,
+      "latent_mse": 0.25405022501945496,
+      "name": "ep69447_v0_s00008",
+      "pixel_mse": 0.017550256103277206,
+      "sampling_steps": 50,
+      "ssim": 0.7166681578665068,
+      "window_start": 8
+    },
+    {
+      "episode_id": 69447,
+      "episode_index": 90,
+      "latent_mse": 0.26125434041023254,
+      "name": "ep69447_v0_s00008",
+      "pixel_mse": 0.018137270584702492,
+      "sampling_steps": 100,
+      "ssim": 0.7102648850643274,
+      "window_start": 8
+    },
+    {
+      "episode_id": 49658,
+      "episode_index": 92,
+      "latent_mse": 0.11588762700557709,
+      "name": "ep49658_v0_s00004",
+      "pixel_mse": 0.010762824676930904,
+      "sampling_steps": 25,
+      "ssim": 0.8450871778256965,
+      "window_start": 4
+    },
+    {
+      "episode_id": 49658,
+      "episode_index": 92,
+      "latent_mse": 0.12230290472507477,
+      "name": "ep49658_v0_s00004",
+      "pixel_mse": 0.01121365837752819,
+      "sampling_steps": 50,
+      "ssim": 0.8377631902694702,
+      "window_start": 4
+    },
+    {
+      "episode_id": 49658,
+      "episode_index": 92,
+      "latent_mse": 0.1265624314546585,
+      "name": "ep49658_v0_s00004",
+      "pixel_mse": 0.011305398307740688,
+      "sampling_steps": 100,
+      "ssim": 0.8327575000849637,
+      "window_start": 4
+    },
+    {
+      "episode_id": 65802,
+      "episode_index": 96,
+      "latent_mse": 0.17074145376682281,
+      "name": "ep65802_v0_s00016",
+      "pixel_mse": 0.0169510655105114,
+      "sampling_steps": 25,
+      "ssim": 0.8039353544061835,
+      "window_start": 16
+    },
+    {
+      "episode_id": 65802,
+      "episode_index": 96,
+      "latent_mse": 0.18053960800170898,
+      "name": "ep65802_v0_s00016",
+      "pixel_mse": 0.017641859129071236,
+      "sampling_steps": 50,
+      "ssim": 0.7967889760479783,
+      "window_start": 16
+    },
+    {
+      "episode_id": 65802,
+      "episode_index": 96,
+      "latent_mse": 0.18350625038146973,
+      "name": "ep65802_v0_s00016",
+      "pixel_mse": 0.017749259248375893,
+      "sampling_steps": 100,
+      "ssim": 0.7936790495207815,
+      "window_start": 16
+    },
+    {
+      "episode_id": 69642,
+      "episode_index": 98,
+      "latent_mse": 0.08932042121887207,
+      "name": "ep69642_v0_s00028",
+      "pixel_mse": 0.004112727474421263,
+      "sampling_steps": 25,
+      "ssim": 0.897428678743767,
+      "window_start": 28
+    },
+    {
+      "episode_id": 69642,
+      "episode_index": 98,
+      "latent_mse": 0.09619854390621185,
+      "name": "ep69642_v0_s00028",
+      "pixel_mse": 0.004390690475702286,
+      "sampling_steps": 50,
+      "ssim": 0.8911323872479525,
+      "window_start": 28
+    },
+    {
+      "episode_id": 69642,
+      "episode_index": 98,
+      "latent_mse": 0.09940407425165176,
+      "name": "ep69642_v0_s00028",
+      "pixel_mse": 0.0044409362599253654,
+      "sampling_steps": 100,
+      "ssim": 0.887443609309919,
+      "window_start": 28
+    }
+  ],
+  "run_name": "wan-overfit100-s3-20260730",
+  "sampling_steps_arms": [
+    25,
+    50,
+    100
+  ],
+  "schema": "overfit100_sampling_steps_probe_v1",
+  "summary": {
+    "baseline_sampling_steps": 25,
+    "paired_deltas": {
+      "100-25": {
+        "mean_delta_ssim": -0.012073139771066518,
+        "median_delta_ssim": -0.012051665421688229,
+        "n": 30,
+        "n_improved": 0
+      },
+      "50-25": {
+        "mean_delta_ssim": -0.007364539425782486,
+        "median_delta_ssim": -0.007287374048521977,
+        "n": 30,
+        "n_improved": 0
+      }
+    },
+    "per_arm": {
+      "100": {
+        "mean_latent_mse": 0.1698547271390756,
+        "mean_pixel_mse": 0.011886147685193768,
+        "mean_ssim": 0.7979394456954918,
+        "median_ssim": 0.7936852782061605,
+        "n": 30
+      },
+      "25": {
+        "mean_latent_mse": 0.15684039518237114,
+        "mean_pixel_mse": 0.011263679517044996,
+        "mean_ssim": 0.8100125854665582,
+        "median_ssim": 0.8059329625331995,
+        "n": 30
+      },
+      "50": {
+        "mean_latent_mse": 0.16481749167044957,
+        "mean_pixel_mse": 0.011621537983107071,
+        "mean_ssim": 0.8026480460407758,
+        "median_ssim": 0.7976930267883069,
+        "n": 30
+      }
+    }
+  }
+}
