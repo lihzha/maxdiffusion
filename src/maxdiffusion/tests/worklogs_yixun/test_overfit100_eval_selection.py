@@ -887,3 +887,67 @@ def test_loss_eval_module_cannot_reach_a_video_decoder():
         assert forbidden not in source, f"{forbidden} appeared in the loss evaluator; it now needs ffmpeg"
     # And it frees the VAE, so it cannot decode latents to frames either.
     assert '"vae", "vae_cache"' in source
+
+
+# ======================================================================================
+# (sampling-probe) The eval launcher plumbs the pipeline's sampling knobs.
+#
+# CAVEAT PINNED BELOW: these two keys do NOT drive the OVERFIT100 rollout. That path reads
+# side_adapter_sampling_steps and has no CFG term at all, so the passthroughs exist for
+# reachability/compat only. The tests assert both the plumbing AND that caveat, so nobody
+# mistakes them for the knobs that change a rollout.
+# ======================================================================================
+
+
+def test_validate_arm_plumbs_the_sampling_overrides():
+    text = _VALIDATE.read_text()
+    for env in ("NUM_INFERENCE_STEPS", "GUIDANCE_SCALE"):
+        assert f'{env}="${{{env}:-' in text, env  # env-driven with a default, the file's pattern
+        assert f'echo "{env}=${{{env}}}"' in text, env
+    for override in ('num_inference_steps="${NUM_INFERENCE_STEPS}"', 'guidance_scale="${GUIDANCE_SCALE}"'):
+        assert override in text, override
+    # Placement: inside the python invocation, before the trailing hardware=tpu.
+    invocation = text[text.index("python src/maxdiffusion/generate_wan_side_adapter.py") :]
+    assert invocation.index('num_inference_steps="${NUM_INFERENCE_STEPS}"') < invocation.index("hardware=tpu")
+    assert invocation.index('guidance_scale="${GUIDANCE_SCALE}"') < invocation.index("hardware=tpu")
+
+
+def test_the_sampling_override_defaults_match_the_yaml():
+    # An env-less launch must behave exactly as before this change.
+    import yaml
+
+    cfg = yaml.safe_load(_CONFIG.read_text())
+    text = _VALIDATE.read_text()
+    assert f'NUM_INFERENCE_STEPS="${{NUM_INFERENCE_STEPS:-{cfg["num_inference_steps"]}}}"' in text
+    assert f'GUIDANCE_SCALE="${{GUIDANCE_SCALE:-{cfg["guidance_scale"]}}}"' in text
+
+
+def test_the_launcher_records_that_these_knobs_do_not_drive_the_overfit100_rollout():
+    # The rollout reads side_adapter_sampling_steps and has no CFG term; binding these two keys to
+    # a "sampling probe" without saying so would be a footgun.
+    text = _VALIDATE.read_text()
+    assert "side_adapter_sampling_steps" in text
+    assert "do NOT" in text or "does NOT" in text
+
+
+def test_the_overfit100_rollout_ignores_the_pipeline_sampling_knobs():
+    # The claim behind the caveat, asserted against the module rather than a comment.
+    source = Path(gen.__file__).read_text()
+    assert "num_inference_steps" not in source
+    assert "guidance_scale" not in source
+    rollout = source[
+        source.index("def _rollout_overfit100_sample") : source.index("def _build_overfit100_validation_state")
+    ]
+    assert "side_adapter_sampling_steps" in rollout
+    for cfg_term in ("guide_scale", "uncond"):
+        assert cfg_term not in rollout  # no CFG branch exists in this path
+
+
+def test_the_signature_binds_the_knobs_that_actually_drive_the_rollout():
+    # The interaction check: two variants that really differ in sampler or guidance can never admit
+    # each other's staged rows, because BOTH bound fields come from the keys the rollout reads.
+    bound = dict(gen.OVERFIT100_RUN_SIGNATURE_TYPES)
+    assert bound["sampling_steps"] is int and bound["guide_scale"] is float
+    builder = inspect.getsource(gen.overfit100_run_signature)
+    assert '"sampling_steps": int(getattr(config, "side_adapter_sampling_steps"' in builder
+    assert '"guide_scale": float(getattr(config, "side_adapter_guide_scale"' in builder
