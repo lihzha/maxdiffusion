@@ -317,4 +317,5 @@ Common: `RUN_NAME=wan-overfit100-s3-20260730`, COMMIT=<tip at submission, record
 | 28 fullset10000 | 10000 | s3_full_set | all | 0 | correct |
 
 - **Acceptance:** role_validation ok per pass; immutable role-keyed artifacts (`step_005000_s3_intermediate/` etc.); aux_coverage 1.0 this time (ffmpeg fixed); verdict CLI then re-computes the two-tier claim over ALL admitted artifacts (c* by fraction tie-break between 2500 and 10000).
-- **Job ids:** (appended at submission)
+- **Launch note:** first submission attempt 2026-08-01T08:20Z failed on gcloud reauth (issue #6, 5th recurrence) creating NO jobs; relaunched cleanly after Yixun re-authed. `COMMIT=46e5f41…` — actual: `46c5f411738d4cfdcf7c3a16245b191c80d02e89` (tip at submission; eval code = APPROVED fc9ac52 lineage + probe round, docs commits above).
+- **Job ids (submitted 2026-08-01T14:28–14:29Z):** `20260801-142820-66e1b5ce-…-i5000`, `20260801-142847-33331211-…-i7500`, `20260801-142914-9d6458a0-…-final10k`, `20260801-142941-95e2e0a1-…-fullset10k`
