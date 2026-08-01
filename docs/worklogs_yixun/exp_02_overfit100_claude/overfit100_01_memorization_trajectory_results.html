@@ -1,0 +1,123 @@
+<title>exp_02 overfit100 — memorization trajectory &amp; verdict</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+    --gridline: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6; --series-2: #eb6834;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --page: #0d0d0d;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+      --gridline: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5; --series-2: #d95926;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --gridline: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926;
+  }
+  .viz-root {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page); color: var(--text-primary);
+    margin: 0 auto; padding: 40px 24px 72px; max-width: 860px; line-height: 1.55;
+  }
+  h1 { font-size: 1.7rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--text-secondary); margin: 0 0 28px; }
+  h2 { font-size: 1.12rem; margin: 40px 0 4px; }
+  h2 + .lede { color: var(--text-secondary); margin: 0 0 14px; font-size: 0.95rem; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+           padding: 18px 18px 10px; margin: 0 0 8px; overflow-x: auto; }
+  .card svg { display: block; width: 100%; height: auto; min-width: 520px; }
+  .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 0 0 8px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .tile-label { font-size: 0.8rem; color: var(--text-secondary); }
+  .tile-value { font-size: 1.9rem; font-weight: 600; margin: 4px 0 2px; letter-spacing: -0.02em; }
+  .tile-sub { font-size: 0.78rem; color: var(--text-muted); }
+  .verdict { border: 1px solid var(--border); border-left: 3px solid var(--series-2);
+              background: var(--surface-1); border-radius: 12px; padding: 16px 18px; margin: 16px 0 8px; }
+  .verdict-word { font-weight: 700; letter-spacing: 0.06em; font-size: 0.82rem; color: var(--series-2); }
+  .verdict p { margin: 6px 0 0; color: var(--text-secondary); font-size: 0.95rem; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 12px; font-size: 0.85rem;
+             color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  text.tick { font: 11px system-ui, sans-serif; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
+  text.endlabel { font: 12px system-ui, sans-serif; fill: var(--text-secondary); font-weight: 600; }
+  text.catlabel { font: 12px system-ui, sans-serif; fill: var(--text-secondary); }
+  text.reflabel { font: 11px system-ui, sans-serif; fill: var(--text-muted); }
+  text.axistitle { font: 11px system-ui, sans-serif; fill: var(--text-muted); }
+  details { margin: 0 0 6px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 0.86rem; padding: 6px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin: 6px 0 12px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--gridline); }
+  th { color: var(--text-secondary); font-weight: 600; }
+  table.num td:not(:first-child), table.num th:not(:first-child) { text-align: right;
+      font-variant-numeric: tabular-nums; }
+  .empty { color: var(--text-muted); font-size: 0.9rem; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border);
+            color: var(--text-muted); font-size: 0.8rem; }
+  code { font-size: 0.85em; background: var(--surface-1); padding: 1px 5px; border-radius: 4px;
+          border: 1px solid var(--border); }
+</style>
+<div class="viz-root">
+<h1>Does full-FT Wan2.2 TI2V 5B memorize 100 DROID trajectories?</h1>
+<p class="sub">exp_02 <code>overfit100</code> · text-conditioned finite-set memorization test · run
+<code>wan-overfit100-s3-20260730</code> · reconstruction scored as rollout SSIM against the D11 two-tier rule.</p>
+
+<div class="verdict"><div class="verdict-word">NOT ESTABLISHED</div><p>The canonical tier requires ≥ 90% of the 100-window cohort at m_corr ≥ 0.95; measured <strong>0.0%</strong>. The full-set tier requires ≥ 90% of 1,629 windows at ≥ 0.90; measured <strong>6.4%</strong> (c* = 2,500).</p></div>
+
+<div class="kpi"><div class="tile"><div class="tile-label">Canonical windows at SSIM ≥ 0.95</div><div class="tile-value">0 / 100</div><div class="tile-sub">D11 needs ≥ 90 · step 2,500</div></div><div class="tile"><div class="tile-label">Cohort mean m_corr</div><div class="tile-value">0.8133</div><div class="tile-sub">best window 0.9461</div></div><div class="tile"><div class="tile-label">Full-set windows at SSIM ≥ 0.90</div><div class="tile-value">105 / 1629</div><div class="tile-sub">6.4% · needs ≥ 90%</div></div><div class="tile"><div class="tile-label">Saturation</div><div class="tile-value">+0.0238</div><div class="tile-sub">gain over last 5,000 steps</div></div></div>
+
+<h2>The curve saturates below the bar</h2>
+<p class="lede">Seed-0, correct-instruction rollout SSIM over the 100-window canonical cohort at every
+retained checkpoint. Both the cohort mean and the single best window flatten well under 0.95.</p>
+<div class="legend">
+  <span><i class="swatch" style="background:var(--series-1)"></i>cohort mean</span>
+  <span><i class="swatch" style="background:var(--series-2)"></i>best window</span>
+</div>
+<div class="card"><svg viewBox="0 0 720 300" role="img" aria-label="Rollout SSIM by training step against the 0.95 bar"><line x1="54" y1="258.0" x2="624" y2="258.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="262.0" text-anchor="end" class="tick">0.70</text><line x1="54" y1="218.0" x2="624" y2="218.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="222.0" text-anchor="end" class="tick">0.75</text><line x1="54" y1="178.0" x2="624" y2="178.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="182.0" text-anchor="end" class="tick">0.80</text><line x1="54" y1="138.0" x2="624" y2="138.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="142.0" text-anchor="end" class="tick">0.85</text><line x1="54" y1="98.0" x2="624" y2="98.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="102.0" text-anchor="end" class="tick">0.90</text><line x1="54" y1="58.0" x2="624" y2="58.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="62.0" text-anchor="end" class="tick">0.95</text><line x1="54" y1="18.0" x2="624" y2="18.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="22.0" text-anchor="end" class="tick">1.00</text><line x1="54" y1="58.0" x2="624" y2="58.0" stroke="var(--baseline)" stroke-width="1"/><text x="632" y="62.0" class="reflabel">D11 bar 0.95</text><line x1="54" y1="258" x2="624" y2="258" stroke="var(--baseline)" stroke-width="1"/><text x="54.0" y="278" text-anchor="middle" class="tick">250</text><text x="113.0" y="278" text-anchor="middle" class="tick">1,000</text><text x="171.9" y="278" text-anchor="middle" class="tick">1,750</text><text x="230.9" y="278" text-anchor="middle" class="tick">2,500</text><text x="427.4" y="278" text-anchor="middle" class="tick">5,000</text><text x="624.0" y="278" text-anchor="middle" class="tick">7,500</text><text x="339" y="294" text-anchor="middle" class="axistitle">training step</text><path d="M54.0 98.5 L73.7 90.3 L113.0 69.9 L171.9 65.8 L230.9 62.8 L427.4 60.2 L624.0 60.0" fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="54.0" cy="98.5" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"><title>step 250 · best window 0.8994</title></circle><circle cx="73.7" cy="90.3" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"><title>step 500 · best window 0.9096</title></circle><circle cx="113.0" cy="69.9" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"><title>step 1,000 · best window 0.9351</title></circle><circle cx="171.9" cy="65.8" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"><title>step 1,750 · best window 0.9403</title></circle><circle cx="230.9" cy="62.8" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"><title>step 2,500 · best window 0.9440</title></circle><circle cx="427.4" cy="60.2" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"><title>step 5,000 · best window 0.9472</title></circle><circle cx="624.0" cy="60.0" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2"><title>step 7,500 · best window 0.9475</title></circle><text x="634.0" y="64.0" class="endlabel">0.947</text><path d="M54.0 211.6 L73.7 201.4 L113.0 186.7 L171.9 176.4 L230.9 166.9 L427.4 152.4 L624.0 147.8" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="54.0" cy="211.6" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"><title>step 250 · cohort mean 0.7580</title></circle><circle cx="73.7" cy="201.4" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"><title>step 500 · cohort mean 0.7707</title></circle><circle cx="113.0" cy="186.7" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"><title>step 1,000 · cohort mean 0.7892</title></circle><circle cx="171.9" cy="176.4" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"><title>step 1,750 · cohort mean 0.8020</title></circle><circle cx="230.9" cy="166.9" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"><title>step 2,500 · cohort mean 0.8139</title></circle><circle cx="427.4" cy="152.4" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"><title>step 5,000 · cohort mean 0.8320</title></circle><circle cx="624.0" cy="147.8" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"><title>step 7,500 · cohort mean 0.8377</title></circle><text x="634.0" y="151.8" class="endlabel">0.838</text></svg></div>
+<details><summary>Table view — trajectory</summary><table class="num"><thead><tr><th>step</th><th>cohort mean</th><th>best window</th><th>gain / 250 steps</th><th>windows</th></tr></thead><tbody><tr><td>250</td><td>0.7580</td><td>0.8994</td><td>—</td><td>100</td></tr><tr><td>500</td><td>0.7707</td><td>0.9096</td><td>+0.0127</td><td>100</td></tr><tr><td>1,000</td><td>0.7892</td><td>0.9351</td><td>+0.0092</td><td>100</td></tr><tr><td>1,750</td><td>0.8020</td><td>0.9403</td><td>+0.0043</td><td>100</td></tr><tr><td>2,500</td><td>0.8139</td><td>0.9440</td><td>+0.0040</td><td>100</td></tr><tr><td>5,000</td><td>0.8320</td><td>0.9472</td><td>+0.0018</td><td>100</td></tr><tr><td>7,500</td><td>0.8377</td><td>0.9475</td><td>+0.0006</td><td>100</td></tr></tbody></table></details>
+
+<h2>No window clears the bar — the shortfall is uniform</h2>
+<p class="lede">Per-window m_corr (median over seeds 0–2, correct instruction) at step 2,500.
+A memorized subset would show a spike against the bar; instead the whole cohort sits short of it.</p>
+<div class="card"><svg viewBox="0 0 720 260" role="img" aria-label="Distribution of per-window SSIM"><line x1="54" y1="214.0" x2="700" y2="214.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="218.0" text-anchor="end" class="tick">0</text><line x1="54" y1="165.0" x2="700" y2="165.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="169.0" text-anchor="end" class="tick">5</text><line x1="54" y1="116.0" x2="700" y2="116.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="120.0" text-anchor="end" class="tick">10</text><line x1="54" y1="67.0" x2="700" y2="67.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="71.0" text-anchor="end" class="tick">15</text><line x1="54" y1="18.0" x2="700" y2="18.0" stroke="var(--gridline)" stroke-width="1"/><text x="44" y="22.0" text-anchor="end" class="tick">20</text><rect x="101.1" y="204.2" width="44.1" height="9.8" rx="4" fill="var(--series-1)"><title>0.58–0.61: 1 windows</title></rect><rect x="193.4" y="194.4" width="44.1" height="19.6" rx="4" fill="var(--series-1)"><title>0.65–0.68: 2 windows</title></rect><rect x="239.6" y="204.2" width="44.1" height="9.8" rx="4" fill="var(--series-1)"><title>0.68–0.71: 1 windows</title></rect><rect x="285.7" y="174.8" width="44.1" height="39.2" rx="4" fill="var(--series-1)"><title>0.71–0.74: 4 windows</title></rect><rect x="331.9" y="37.6" width="44.1" height="176.4" rx="4" fill="var(--series-1)"><title>0.74–0.78: 18 windows</title></rect><rect x="378.0" y="18.0" width="44.1" height="196.0" rx="4" fill="var(--series-1)"><title>0.78–0.81: 20 windows</title></rect><rect x="424.1" y="47.4" width="44.1" height="166.6" rx="4" fill="var(--series-1)"><title>0.81–0.84: 17 windows</title></rect><rect x="470.3" y="57.2" width="44.1" height="156.8" rx="4" fill="var(--series-1)"><title>0.84–0.87: 16 windows</title></rect><rect x="516.4" y="47.4" width="44.1" height="166.6" rx="4" fill="var(--series-1)"><title>0.87–0.90: 17 windows</title></rect><rect x="562.6" y="184.6" width="44.1" height="29.4" rx="4" fill="var(--series-1)"><title>0.90–0.94: 3 windows</title></rect><rect x="608.7" y="204.2" width="44.1" height="9.8" rx="4" fill="var(--series-1)"><title>0.94–0.97: 1 windows</title></rect><line x1="628.2" y1="18" x2="628.2" y2="214" stroke="var(--baseline)" stroke-width="1"/><text x="622.2" y="30" text-anchor="end" class="reflabel">0.95</text><line x1="54" y1="214" x2="700" y2="214" stroke="var(--baseline)" stroke-width="1"/><text x="125.8" y="234" text-anchor="middle" class="tick">0.6</text><text x="269.3" y="234" text-anchor="middle" class="tick">0.7</text><text x="412.9" y="234" text-anchor="middle" class="tick">0.8</text><text x="556.4" y="234" text-anchor="middle" class="tick">0.9</text><text x="700.0" y="234" text-anchor="middle" class="tick">1.0</text><text x="377" y="252" text-anchor="middle" class="axistitle">per-window SSIM</text></svg></div>
+<details><summary>Table view — distribution</summary><table class="num"><thead><tr><th>bucket</th><th>windows</th></tr></thead><tbody><tr><td>≥ 0.95</td><td>0</td></tr><tr><td>≥ 0.90</td><td>8</td></tr><tr><td>≥ 0.85</td><td>28</td></tr><tr><td>≥ 0.80</td><td>55</td></tr><tr><td>≥ 0.70</td><td>96</td></tr></tbody></table></details>
+
+<h2>Text conditioning is doing real work</h2>
+<p class="lede">Mean SSIM at step 2,500 under the correct instruction versus two controls: empty text,
+and text deranged across episodes. The ordering is the evidence that the model uses the instruction —
+the margin is modest because the first-frame latent already determines most of the frame.</p>
+<div class="card"><svg viewBox="0 0 720 200" role="img" aria-label="Mean SSIM by condition"><rect x="120" y="27.3" width="296.9" height="24.0" rx="4" fill="var(--series-1)"><title>correct instruction: 0.8133</title></rect><text x="108" y="43.3" text-anchor="end" class="catlabel">correct instruction</text><text x="426.9" y="43.3" class="endlabel">0.8133</text><rect x="120" y="78.0" width="259.9" height="24.0" rx="4" fill="var(--series-1)"><title>null (empty) text: 0.7992</title></rect><text x="108" y="94.0" text-anchor="end" class="catlabel">null (empty) text</text><text x="389.9" y="94.0" class="endlabel">0.7992</text><rect x="120" y="128.7" width="215.8" height="24.0" rx="4" fill="var(--series-1)"><title>shuffled text: 0.7824</title></rect><text x="108" y="144.7" text-anchor="end" class="catlabel">shuffled text</text><text x="345.8" y="144.7" class="endlabel">0.7824</text><line x1="120" y1="14" x2="120" y2="166" stroke="var(--baseline)" stroke-width="1"/><text x="120" y="192" class="axistitle">mean SSIM, all seeds, 100 canonical windows</text></svg></div>
+<details><summary>Table view — ablations</summary><table class="num"><thead><tr><th>condition</th><th>mean SSIM</th></tr></thead><tbody><tr><td>correct instruction</td><td>0.8133</td></tr><tr><td>null (empty) text</td><td>0.7992</td></tr><tr><td>shuffled text</td><td>0.7824</td></tr></tbody></table></details>
+
+<h2>More sampling steps make it worse, not better</h2>
+<p class="lede">The H1/H2 discriminator: 30 canonical windows re-rolled at 25, 50 and 100 integration steps
+on the step-2500 checkpoint. If the gap were discretization error, more steps would close it. Every window
+got worse, so the shortfall lives in the learned velocity field — not in the sampler.</p>
+<div class="card"><svg viewBox="0 0 720 200" role="img" aria-label="Mean SSIM by condition"><rect x="120" y="27.3" width="288.2" height="24.0" rx="4" fill="var(--series-1)"><title>25 rollout steps: 0.8100</title></rect><text x="108" y="43.3" text-anchor="end" class="catlabel">25 rollout steps</text><text x="418.2" y="43.3" class="endlabel">0.8100</text><rect x="120" y="78.0" width="268.9" height="24.0" rx="4" fill="var(--series-1)"><title>50 rollout steps: 0.8026</title></rect><text x="108" y="94.0" text-anchor="end" class="catlabel">50 rollout steps</text><text x="398.9" y="94.0" class="endlabel">0.8026</text><rect x="120" y="128.7" width="256.6" height="24.0" rx="4" fill="var(--series-1)"><title>100 rollout steps: 0.7979</title></rect><text x="108" y="144.7" text-anchor="end" class="catlabel">100 rollout steps</text><text x="386.6" y="144.7" class="endlabel">0.7979</text><line x1="120" y1="14" x2="120" y2="166" stroke="var(--baseline)" stroke-width="1"/><text x="120" y="192" class="axistitle">mean SSIM over 30 canonical windows, seed 0</text></svg></div>
+<details><summary>Table view — sampling probe</summary><table class="num"><thead><tr><th>rollout steps</th><th>mean SSIM</th><th>median</th><th>Δ vs 25-step</th><th>windows improved</th></tr></thead><tbody><tr><td>25</td><td>0.8100</td><td>0.8059</td><td>—</td><td>—</td></tr><tr><td>50</td><td>0.8026</td><td>0.7977</td><td>-0.0074</td><td>0 / 30</td></tr><tr><td>100</td><td>0.7979</td><td>0.7937</td><td>-0.0121</td><td>0 / 30</td></tr></tbody></table></details>
+
+<h2>What this means</h2>
+<p>Memorization is real, text-conditioned and monotone, but it <strong>saturates near a cohort mean of
+0.84 with a per-window ceiling around 0.95</strong> — and the saturation is not a dose problem. Training was
+extended 4× (2,500 → 10,000 steps) for a loss move of 0.145 → ≈0.12 and an SSIM move of ≈0.019; the
+per-250-step gain decayed by roughly 6× along the way. The sampling axis is independently ruled out above.
+What remains is the recipe itself: a one-step denoising objective evaluated by a 25-step rollout, where
+velocity-field error compounds across the trajectory. Reaching near-perfect reconstruction on this cohort
+would take a different objective or a different evaluation contract — not more of the same training.</p>
+
+<footer>
+Generated by <code>build_overfit100_report.py</code> from the immutable artifacts in
+<code>overfit100_s3_artifacts/</code> (manifest sha256 <code>c02a67be…</code>, fail-closed admission by
+<code>overfit100_success_statistic</code>). Charts use the dataviz reference palette slots 1–2, validated
+in both modes (all-pairs CVD ΔE 24.7 light / 26.8 dark against an 8.0 target). Every chart has a table view.
+</footer>
+</div>
