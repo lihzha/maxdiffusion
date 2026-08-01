@@ -198,6 +198,13 @@ frames, lifting the reported mean by only **+0.0060**. The reported ~0.84 is gen
 **The real finding — SSIM decays monotonically along the rollout:** frame 0 (pinned) 0.9721 → frame 1 0.9142
 → … → frame 32 0.7106. A **−0.204 slide** from the first predicted frame to the last.
 
+> **Sample caveat (stated plainly).** This aggregate curve is over **n = 14** windows which, because of how
+> the download enumerated them, are all from the *low* end of the ranking — their mean SSIM is 0.7792 against
+> the cohort's 0.8416. The **absolute level of the curve is therefore biased low**; what is robust is the
+> *shape* (monotone decay from a near-uniform frame-0), and that is independently confirmed on the 5-window
+> spread below, which spans the full range 0.690–0.948. Re-running `diagnostics/d1_per_frame_ssim.py` over
+> all 100 windows would tighten the absolute numbers; it would not change the finding.
+
 **Every window starts in the same place and fans out.** Across the 5 spread windows at step 10000:
 
 | window | reported | frame 0 | frame 1 | last | decay (1→last) |

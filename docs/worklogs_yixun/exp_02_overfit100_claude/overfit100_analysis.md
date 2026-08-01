@@ -162,7 +162,9 @@ qualitative story with a quantitative one.
 **D1 — per-frame SSIM (H7): the free frame is negligible; compounding is visible directly.** The pinned frame
 0 scores 0.9721 but is 1 of 33 frames, lifting the reported mean by only **+0.0060** — so the ~0.84 is genuine
 prediction, and H7's inflation concern is answered in the negative. The real finding is the shape: SSIM decays
-monotonically from 0.9142 (frame 1) to 0.7106 (frame 32), **−0.204 across the rollout**. Critically, *every*
+monotonically from 0.9142 (frame 1) to 0.7106 (frame 32), **−0.204 across the rollout** *(aggregate over
+n=14 windows skewed to the low end — mean 0.779 vs the cohort's 0.842 — so the level is biased low; the shape
+is what matters and is confirmed across the full 0.690–0.948 range below)*. Critically, *every*
 window starts in the same place — frame-0 fidelity is 0.966–0.983 regardless of final score — and they fan out
 along the trajectory (decay −0.041 for the best window, −0.299 for the worst). **If the rollout preserved
 frame-0 fidelity, most windows would clear the 0.95 bar.** Method self-validates: mp4-decoded mean-over-frames
