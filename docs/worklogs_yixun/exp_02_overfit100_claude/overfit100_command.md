@@ -302,3 +302,19 @@ tpu create v6 -n 8 --worker0-only --name exp02-o100-probe-steps-yixun \
 - **Cost:** ~55 min on v6e-8 (37 min rollouts + decodes + setup); no resume — a preemption restarts it (single writer confirmed: no prior attempt exists). Predeclared fallback if weather turns: resubmit with PROBE_NUM_WINDOWS=15.
 - **Acceptance:** (i) validity — probe 25-arm agrees row-level with the landed segment-final seed-0 correct rows for the same 30 windows (reference mean 0.8100125855 / median 0.8059329625; mismatch invalidates the PROBE, not the checkpoint); (ii) read-out — paired per-window deltas 50−25 and 100−25: material lift ⇒ H2 discretization component real; flat ⇒ sampling-side H2 excluded, residual gap is the training objective (H1 + objective mismatch).
 - **Job id:** `20260801-042558-e41be63a-exp02-o100-probe-steps-yixun` (submitted 2026-08-01T04:26Z; COMMIT=c9224534 = tip at submission, probe code = APPROVED a921917).
+
+## Jobs 25–28 — v6e-8 EXTENSION EVALS (i5000, i7500, segment-final@10000, full-set@10000) — launched 2026-08-01
+
+Under the "extend to 10k" approval umbrella (Yixun 2026-08-01; D11 eval structure per Query 7 precedent). Training Job 23 SUCCEEDED attempt 1: resume verified (step 2501 loss 0.139), loss 0.145→0.132 (5000)→0.127 (7500)→≈0.12 (10000, noisy 0.111–0.137) — strong flattening; grad_norm healthy; 1.9 steps/s; checkpoints {5000,7500,10000} verified on GCS. Eval code = tip (eval-resume series APPROVED at fc9ac52 + probe round; staging/resume ON, ffmpeg-ensure live → ceilings populate; preemptions now cost only the incomplete tail).
+
+Common: `RUN_NAME=wan-overfit100-s3-20260730`, COMMIT=<tip at submission, recorded below>, launcher `bash_scripts/validate_wan_overfit100.sh`, v6e-8.
+
+| Job | CHECKPOINT_STEP | EVAL_PASS_ROLE | EVAL_WINDOWS | ROLLOUT_SEEDS | CONTEXT_MODES |
+| --- | --- | --- | --- | --- | --- |
+| 25 i5000 | 5000 | s3_intermediate | canonical | 0 | correct |
+| 26 i7500 | 7500 | s3_intermediate | canonical | 0 | correct |
+| 27 final10000 | 10000 | s3_segment_final | canonical | 0,1,2 | correct,null,shuffled |
+| 28 fullset10000 | 10000 | s3_full_set | all | 0 | correct |
+
+- **Acceptance:** role_validation ok per pass; immutable role-keyed artifacts (`step_005000_s3_intermediate/` etc.); aux_coverage 1.0 this time (ffmpeg fixed); verdict CLI then re-computes the two-tier claim over ALL admitted artifacts (c* by fraction tie-break between 2500 and 10000).
+- **Job ids:** (appended at submission)
