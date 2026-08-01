@@ -1,0 +1,26 @@
+{
+  "aggregation_json": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/validation/step_002500_s3_full_set/aggregation.json",
+  "checkpoint_step": 2500,
+  "cohort_size": 100,
+  "eval_pass_role": "s3_full_set",
+  "missing_canonical_windows": [],
+  "num_rows": 1629,
+  "num_windows": 1629,
+  "per_mode": {
+    "aux_coverage": {
+      "coverage_fraction": 0.0,
+      "failed": 1629,
+      "failure_reason_counts": {
+        "FileNotFoundError: [Errno 2] No such file or directory: 'ffmpeg'": 1629
+      },
+      "ok": 0,
+      "requested": 1629
+    },
+    "correct": {
+      "mean_latent_mse": 0.16525729461598793,
+      "mean_pixel_mse": 0.012183801584535189,
+      "mean_ssim": 0.7984375028528335,
+      "n_rows": 1629
+    }
+  }
+}
