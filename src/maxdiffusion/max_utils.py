@@ -320,14 +320,6 @@ def walk_and_upload_blobs(config, output_dir):
       max_logging.log(f"File {file_to_upload} moved successfully!")
 
 
-# ── Forward-pass NaN localisation ────────────────────────────────────────────
-# A "probe" is a plain python list threaded into a loss function. During tracing
-# the loss appends (name, tensor) pairs to it; the caller stacks them into a
-# single array returned from the jitted function and reports the first stage that
-# went non-finite. Passing probe=None makes probe_add a no-op, so the real
-# training path is unchanged — no extra ops, no extra outputs.
-
-
 def config_get(config, key: str, default):
   """``getattr(config, key, default)`` that actually works on pyconfig.
 
@@ -341,102 +333,6 @@ def config_get(config, key: str, default):
     return getattr(config, key)
   except (AttributeError, ValueError, KeyError):
     return default
-
-
-def probe_stat(x):
-  """Reduce one tensor to [nonfinite_count, finite_absmax] as f32 scalars.
-
-  Reduced at the call site rather than later, so the probe never extends a
-  tensor's live range: storing the tensor itself and reducing at the end kept all
-  ~33 stages resident at once (the UNet up-blocks alone are 500M+ elements) and
-  blew past HBM. Also avoids upcasting x to f32 first — that would materialise a
-  full-size temporary; the elementwise ops run in x's own dtype and only the two
-  resulting scalars are widened. absmax ignores non-finite entries so a NaN does
-  not hide how large the rest of the tensor already was.
-  """
-  finite = jnp.isfinite(x)
-  n_bad = jnp.sum(~finite).astype(jnp.float32)
-  amax = jnp.max(jnp.where(finite, jnp.abs(x), jnp.zeros((), x.dtype))).astype(jnp.float32)
-  return jnp.stack([n_bad, amax])
-
-
-def probe_add(probe, name: str, x) -> None:
-  """Record an intermediate for NaN localisation. No-op when probe is None."""
-  if probe is not None and hasattr(x, "shape"):
-    probe.append((name, probe_stat(x)))
-
-
-def probe_stack(probe):
-  """Stack an already-reduced probe into a (n_stages, 2) array."""
-  rows = [s for _, s in probe]
-  return jnp.stack(rows) if rows else jnp.zeros((0, 2), jnp.float32)
-
-
-def log_probe_report(names, stats, label: str = "") -> str | None:
-  """Log one line per stage; return the name of the first non-finite stage."""
-  stats = np.asarray(stats)
-  first = None
-  max_logging.log(f"[nan-probe] {label} — forward stages in execution order:")
-  for name, (n_bad, absmax) in zip(names, stats):
-    marker = ""
-    if n_bad > 0 and first is None:
-      first = name
-      marker = "   <-- FIRST NON-FINITE"
-    max_logging.log(
-        f"[nan-probe]   {name:<30s} nonfinite={int(n_bad):>12d}  absmax={absmax:.6g}{marker}"
-    )
-  if first is None:
-    max_logging.log("[nan-probe] all forward stages finite")
-  else:
-    max_logging.log(f"[nan-probe] FIRST non-finite stage: {first}")
-  return first
-
-
-def grad_probe(grads):
-  """(names, stats) for every gradient leaf, summarised *inside* jit.
-
-  Call from within the jitted step and return only the resulting (n_leaves, 2)
-  array — never pull the gradients themselves to the host, which would be
-  gigabytes at these model sizes.
-  """
-  flat = jax.tree_util.tree_flatten_with_path(grads)[0]
-  names = [jax.tree_util.keystr(p) for p, _ in flat]
-  rows = [probe_stat(g) for _, g in flat]
-  return names, (jnp.stack(rows) if rows else jnp.zeros((0, 2), jnp.float32))
-
-
-def log_probe_summary_table(names, stats, label: str = "", top_n: int = 25) -> None:
-  """Log the largest-magnitude entries of a probe, plus any non-finite ones.
-
-  Where the gradient explosion is concentrated is the diagnosis: if the biggest
-  entries cluster in one block type (attention, norms, the action encoder) the
-  cause is local to it; if the magnitudes are uniform across the model the cause
-  is a global scale factor.
-  """
-  stats = np.asarray(stats)
-  if stats.size == 0:
-    max_logging.log(f"[nan-probe] {label}: nothing recorded")
-    return
-  counts, absmax = stats[:, 0], stats[:, 1]
-  n_bad = int((counts > 0).sum())
-  finite_absmax = np.where(np.isfinite(absmax), absmax, 0.0)
-  max_logging.log(
-      f"[nan-probe] {label}: {len(names)} entries, {n_bad} containing non-finite values, "
-      f"absmax range [{finite_absmax.min():.6g}, {finite_absmax.max():.6g}]"
-  )
-  order = np.argsort(-finite_absmax)
-  if n_bad:
-    bad_idx = [i for i in range(len(names)) if counts[i] > 0]
-    max_logging.log(f"[nan-probe]   -- non-finite entries (first {min(top_n, n_bad)}) --")
-    for i in bad_idx[:top_n]:
-      max_logging.log(
-          f"[nan-probe]   nonfinite={int(counts[i]):>12d}  absmax={absmax[i]:.6g}  {names[i]}"
-      )
-  max_logging.log(f"[nan-probe]   -- largest absmax (top {min(top_n, len(names))}) --")
-  for i in order[:top_n]:
-    max_logging.log(
-        f"[nan-probe]   absmax={absmax[i]:<14.6g} nonfinite={int(counts[i]):>10d}  {names[i]}"
-    )
 
 
 def device_put_replicated(x, sharding):
