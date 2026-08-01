@@ -165,3 +165,56 @@ behaves at its two ends.
 
 All 600 videos remain on GCS at
 `…/validation/step_{002500,010000}_s3_intermediate/mode_correct/seed_0/<window>/`.
+
+## Diagnostics D1 + D3 (Yixun-approved) — 2026-08-01
+
+Both run **locally on existing artifacts, zero TPU**. Script committed at `diagnostics/d1_per_frame_ssim.py`.
+
+### D3 — episode weighting (H6): **REFUTED**
+
+Training weights each episode by its 1–99 overlapping windows; the canonical statistic weights each episode
+equally. If that mismatch under-trained sparse episodes, few-window episodes would score worse. They do not:
+
+| quartile by window count | windows/ep | mean episode SSIM |
+| --- | --- | --- |
+| Q1 fewest | 1–5 | 0.8319 |
+| Q2 | 5–12 | 0.8434 |
+| Q3 | 12–20 | 0.8367 |
+| Q4 most | 21–99 | 0.8364 |
+
+Pearson r(n_windows, mean episode SSIM) = **−0.092** — flat, and the sign is *opposite* to the hypothesis.
+H6 is eliminated.
+
+### D1 — per-frame SSIM (H7): **the free frame is negligible; the compounding is the whole story**
+
+Method: decode the rendered GT/pred mp4s and recompute SSIM per frame with an exact numpy replication of
+`skimage.structural_similarity(channel_axis=-1, data_range=1.0, win_size=7)`. **Self-validating** — the
+mean-over-frames must track the SSIM the eval recorded for the same window: measured **mean |diff| 0.0024,
+max 0.0083** (n=14), so codec noise is negligible and the frame-index trend is trustworthy.
+
+**Answer to H7 — the pinned frame is NOT inflating the score.** Frame 0 scores 0.9721, but it is 1 of 33
+frames, lifting the reported mean by only **+0.0060**. The reported ~0.84 is genuine prediction.
+
+**The real finding — SSIM decays monotonically along the rollout:** frame 0 (pinned) 0.9721 → frame 1 0.9142
+→ … → frame 32 0.7106. A **−0.204 slide** from the first predicted frame to the last.
+
+**Every window starts in the same place and fans out.** Across the 5 spread windows at step 10000:
+
+| window | reported | frame 0 | frame 1 | last | decay (1→last) |
+| --- | --- | --- | --- | --- | --- |
+| worst | 0.690 | 0.9659 | 0.8955 | 0.5962 | **−0.2993** |
+| 25th | 0.807 | 0.9733 | 0.8750 | 0.7632 | −0.1118 |
+| median | 0.840 | 0.9825 | 0.9784 | 0.7427 | −0.2356 |
+| 75th | 0.881 | 0.9778 | 0.9400 | 0.8430 | −0.0970 |
+| best | 0.948 | 0.9802 | 0.9774 | 0.9366 | **−0.0407** |
+
+Frame-0 fidelity is **uniformly 0.966–0.983 regardless of final score**; the difference between a 0.95 window
+and a 0.69 window is almost entirely *how fast it degrades along the trajectory*. Tercile analysis agrees:
+decay 1→last is −0.263 (bottom), −0.207 (middle), −0.161 (top) — worse windows decay faster, and the best
+window barely decays at all.
+
+**Why this matters for the verdict.** Every window's first predicted frame is already at or near the D11 bar.
+**If the rollout preserved frame-0 fidelity across the trajectory, most windows would clear 0.95.** The
+memorization is largely *there*; it is being spent on trajectory divergence. This is the most direct evidence
+yet for H2b (objective/rollout mismatch) — previously supported only indirectly by the sampling probe — and
+it converts "the recipe is the leading explanation" into a mechanism visible frame by frame.
