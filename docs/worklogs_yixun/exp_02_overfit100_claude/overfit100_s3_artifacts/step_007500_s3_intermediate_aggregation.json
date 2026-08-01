@@ -1,0 +1,4356 @@
+{
+  "all_windows_size": 1629,
+  "canonical_cohort": [
+    [
+      25189,
+      48
+    ],
+    [
+      67253,
+      28
+    ],
+    [
+      3905,
+      20
+    ],
+    [
+      40985,
+      8
+    ],
+    [
+      53956,
+      28
+    ],
+    [
+      45109,
+      68
+    ],
+    [
+      26802,
+      52
+    ],
+    [
+      48923,
+      28
+    ],
+    [
+      22546,
+      20
+    ],
+    [
+      31530,
+      4
+    ],
+    [
+      60367,
+      40
+    ],
+    [
+      52361,
+      68
+    ],
+    [
+      61233,
+      80
+    ],
+    [
+      49497,
+      40
+    ],
+    [
+      63560,
+      20
+    ],
+    [
+      15184,
+      28
+    ],
+    [
+      34212,
+      0
+    ],
+    [
+      30976,
+      4
+    ],
+    [
+      4099,
+      4
+    ],
+    [
+      991,
+      0
+    ],
+    [
+      35500,
+      4
+    ],
+    [
+      31999,
+      8
+    ],
+    [
+      10329,
+      12
+    ],
+    [
+      34499,
+      80
+    ],
+    [
+      37274,
+      12
+    ],
+    [
+      61291,
+      32
+    ],
+    [
+      6336,
+      0
+    ],
+    [
+      28709,
+      56
+    ],
+    [
+      21530,
+      8
+    ],
+    [
+      52341,
+      0
+    ],
+    [
+      19306,
+      196
+    ],
+    [
+      27573,
+      16
+    ],
+    [
+      37834,
+      36
+    ],
+    [
+      11518,
+      80
+    ],
+    [
+      22488,
+      12
+    ],
+    [
+      66118,
+      16
+    ],
+    [
+      47809,
+      12
+    ],
+    [
+      8877,
+      56
+    ],
+    [
+      15673,
+      20
+    ],
+    [
+      11071,
+      52
+    ],
+    [
+      44499,
+      20
+    ],
+    [
+      69308,
+      28
+    ],
+    [
+      67477,
+      12
+    ],
+    [
+      22800,
+      8
+    ],
+    [
+      61069,
+      92
+    ],
+    [
+      35494,
+      36
+    ],
+    [
+      49796,
+      8
+    ],
+    [
+      19099,
+      4
+    ],
+    [
+      69218,
+      4
+    ],
+    [
+      19658,
+      0
+    ],
+    [
+      19339,
+      24
+    ],
+    [
+      4358,
+      40
+    ],
+    [
+      53617,
+      36
+    ],
+    [
+      60900,
+      64
+    ],
+    [
+      24363,
+      120
+    ],
+    [
+      17669,
+      56
+    ],
+    [
+      54416,
+      4
+    ],
+    [
+      39091,
+      28
+    ],
+    [
+      51375,
+      0
+    ],
+    [
+      36671,
+      8
+    ],
+    [
+      26610,
+      4
+    ],
+    [
+      29037,
+      60
+    ],
+    [
+      24960,
+      52
+    ],
+    [
+      48582,
+      20
+    ],
+    [
+      44550,
+      12
+    ],
+    [
+      65562,
+      16
+    ],
+    [
+      52301,
+      4
+    ],
+    [
+      62102,
+      24
+    ],
+    [
+      30738,
+      132
+    ],
+    [
+      23688,
+      0
+    ],
+    [
+      2521,
+      28
+    ],
+    [
+      59043,
+      40
+    ],
+    [
+      46550,
+      8
+    ],
+    [
+      62064,
+      48
+    ],
+    [
+      57681,
+      16
+    ],
+    [
+      60453,
+      20
+    ],
+    [
+      36295,
+      20
+    ],
+    [
+      17148,
+      4
+    ],
+    [
+      5964,
+      32
+    ],
+    [
+      34148,
+      36
+    ],
+    [
+      50125,
+      28
+    ],
+    [
+      53656,
+      20
+    ],
+    [
+      11022,
+      4
+    ],
+    [
+      9029,
+      28
+    ],
+    [
+      8896,
+      28
+    ],
+    [
+      46170,
+      4
+    ],
+    [
+      39393,
+      16
+    ],
+    [
+      40738,
+      92
+    ],
+    [
+      16907,
+      4
+    ],
+    [
+      67045,
+      8
+    ],
+    [
+      69447,
+      8
+    ],
+    [
+      51382,
+      0
+    ],
+    [
+      49658,
+      4
+    ],
+    [
+      28817,
+      156
+    ],
+    [
+      62784,
+      4
+    ],
+    [
+      4015,
+      0
+    ],
+    [
+      65802,
+      16
+    ],
+    [
+      9732,
+      28
+    ],
+    [
+      69642,
+      28
+    ],
+    [
+      65294,
+      20
+    ]
+  ],
+  "checkpoint_dir": "gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints",
+  "checkpoint_step": 7500,
+  "cohort_size": 100,
+  "commit": "46c5f411738d4cfdcf7c3a16245b191c80d02e89",
+  "context_derangement": null,
+  "context_modes": [
+    "correct"
+  ],
+  "context_shuffle_seed": 0,
+  "covered_canonical_windows": [
+    [
+      25189,
+      48
+    ],
+    [
+      67253,
+      28
+    ],
+    [
+      3905,
+      20
+    ],
+    [
+      40985,
+      8
+    ],
+    [
+      53956,
+      28
+    ],
+    [
+      45109,
+      68
+    ],
+    [
+      26802,
+      52
+    ],
+    [
+      48923,
+      28
+    ],
+    [
+      22546,
+      20
+    ],
+    [
+      31530,
+      4
+    ],
+    [
+      60367,
+      40
+    ],
+    [
+      52361,
+      68
+    ],
+    [
+      61233,
+      80
+    ],
+    [
+      49497,
+      40
+    ],
+    [
+      63560,
+      20
+    ],
+    [
+      15184,
+      28
+    ],
+    [
+      34212,
+      0
+    ],
+    [
+      30976,
+      4
+    ],
+    [
+      4099,
+      4
+    ],
+    [
+      991,
+      0
+    ],
+    [
+      35500,
+      4
+    ],
+    [
+      31999,
+      8
+    ],
+    [
+      10329,
+      12
+    ],
+    [
+      34499,
+      80
+    ],
+    [
+      37274,
+      12
+    ],
+    [
+      61291,
+      32
+    ],
+    [
+      6336,
+      0
+    ],
+    [
+      28709,
+      56
+    ],
+    [
+      21530,
+      8
+    ],
+    [
+      52341,
+      0
+    ],
+    [
+      19306,
+      196
+    ],
+    [
+      27573,
+      16
+    ],
+    [
+      37834,
+      36
+    ],
+    [
+      11518,
+      80
+    ],
+    [
+      22488,
+      12
+    ],
+    [
+      66118,
+      16
+    ],
+    [
+      47809,
+      12
+    ],
+    [
+      8877,
+      56
+    ],
+    [
+      15673,
+      20
+    ],
+    [
+      11071,
+      52
+    ],
+    [
+      44499,
+      20
+    ],
+    [
+      69308,
+      28
+    ],
+    [
+      67477,
+      12
+    ],
+    [
+      22800,
+      8
+    ],
+    [
+      61069,
+      92
+    ],
+    [
+      35494,
+      36
+    ],
+    [
+      49796,
+      8
+    ],
+    [
+      19099,
+      4
+    ],
+    [
+      69218,
+      4
+    ],
+    [
+      19658,
+      0
+    ],
+    [
+      19339,
+      24
+    ],
+    [
+      4358,
+      40
+    ],
+    [
+      53617,
+      36
+    ],
+    [
+      60900,
+      64
+    ],
+    [
+      24363,
+      120
+    ],
+    [
+      17669,
+      56
+    ],
+    [
+      54416,
+      4
+    ],
+    [
+      39091,
+      28
+    ],
+    [
+      51375,
+      0
+    ],
+    [
+      36671,
+      8
+    ],
+    [
+      26610,
+      4
+    ],
+    [
+      29037,
+      60
+    ],
+    [
+      24960,
+      52
+    ],
+    [
+      48582,
+      20
+    ],
+    [
+      44550,
+      12
+    ],
+    [
+      65562,
+      16
+    ],
+    [
+      52301,
+      4
+    ],
+    [
+      62102,
+      24
+    ],
+    [
+      30738,
+      132
+    ],
+    [
+      23688,
+      0
+    ],
+    [
+      2521,
+      28
+    ],
+    [
+      59043,
+      40
+    ],
+    [
+      46550,
+      8
+    ],
+    [
+      62064,
+      48
+    ],
+    [
+      57681,
+      16
+    ],
+    [
+      60453,
+      20
+    ],
+    [
+      36295,
+      20
+    ],
+    [
+      17148,
+      4
+    ],
+    [
+      5964,
+      32
+    ],
+    [
+      34148,
+      36
+    ],
+    [
+      50125,
+      28
+    ],
+    [
+      53656,
+      20
+    ],
+    [
+      11022,
+      4
+    ],
+    [
+      9029,
+      28
+    ],
+    [
+      8896,
+      28
+    ],
+    [
+      46170,
+      4
+    ],
+    [
+      39393,
+      16
+    ],
+    [
+      40738,
+      92
+    ],
+    [
+      16907,
+      4
+    ],
+    [
+      67045,
+      8
+    ],
+    [
+      69447,
+      8
+    ],
+    [
+      51382,
+      0
+    ],
+    [
+      49658,
+      4
+    ],
+    [
+      28817,
+      156
+    ],
+    [
+      62784,
+      4
+    ],
+    [
+      4015,
+      0
+    ],
+    [
+      65802,
+      16
+    ],
+    [
+      9732,
+      28
+    ],
+    [
+      69642,
+      28
+    ],
+    [
+      65294,
+      20
+    ]
+  ],
+  "covered_windows": [
+    [
+      25189,
+      48
+    ],
+    [
+      67253,
+      28
+    ],
+    [
+      3905,
+      20
+    ],
+    [
+      40985,
+      8
+    ],
+    [
+      53956,
+      28
+    ],
+    [
+      45109,
+      68
+    ],
+    [
+      26802,
+      52
+    ],
+    [
+      48923,
+      28
+    ],
+    [
+      22546,
+      20
+    ],
+    [
+      31530,
+      4
+    ],
+    [
+      60367,
+      40
+    ],
+    [
+      52361,
+      68
+    ],
+    [
+      61233,
+      80
+    ],
+    [
+      49497,
+      40
+    ],
+    [
+      63560,
+      20
+    ],
+    [
+      15184,
+      28
+    ],
+    [
+      34212,
+      0
+    ],
+    [
+      30976,
+      4
+    ],
+    [
+      4099,
+      4
+    ],
+    [
+      991,
+      0
+    ],
+    [
+      35500,
+      4
+    ],
+    [
+      31999,
+      8
+    ],
+    [
+      10329,
+      12
+    ],
+    [
+      34499,
+      80
+    ],
+    [
+      37274,
+      12
+    ],
+    [
+      61291,
+      32
+    ],
+    [
+      6336,
+      0
+    ],
+    [
+      28709,
+      56
+    ],
+    [
+      21530,
+      8
+    ],
+    [
+      52341,
+      0
+    ],
+    [
+      19306,
+      196
+    ],
+    [
+      27573,
+      16
+    ],
+    [
+      37834,
+      36
+    ],
+    [
+      11518,
+      80
+    ],
+    [
+      22488,
+      12
+    ],
+    [
+      66118,
+      16
+    ],
+    [
+      47809,
+      12
+    ],
+    [
+      8877,
+      56
+    ],
+    [
+      15673,
+      20
+    ],
+    [
+      11071,
+      52
+    ],
+    [
+      44499,
+      20
+    ],
+    [
+      69308,
+      28
+    ],
+    [
+      67477,
+      12
+    ],
+    [
+      22800,
+      8
+    ],
+    [
+      61069,
+      92
+    ],
+    [
+      35494,
+      36
+    ],
+    [
+      49796,
+      8
+    ],
+    [
+      19099,
+      4
+    ],
+    [
+      69218,
+      4
+    ],
+    [
+      19658,
+      0
+    ],
+    [
+      19339,
+      24
+    ],
+    [
+      4358,
+      40
+    ],
+    [
+      53617,
+      36
+    ],
+    [
+      60900,
+      64
+    ],
+    [
+      24363,
+      120
+    ],
+    [
+      17669,
+      56
+    ],
+    [
+      54416,
+      4
+    ],
+    [
+      39091,
+      28
+    ],
+    [
+      51375,
+      0
+    ],
+    [
+      36671,
+      8
+    ],
+    [
+      26610,
+      4
+    ],
+    [
+      29037,
+      60
+    ],
+    [
+      24960,
+      52
+    ],
+    [
+      48582,
+      20
+    ],
+    [
+      44550,
+      12
+    ],
+    [
+      65562,
+      16
+    ],
+    [
+      52301,
+      4
+    ],
+    [
+      62102,
+      24
+    ],
+    [
+      30738,
+      132
+    ],
+    [
+      23688,
+      0
+    ],
+    [
+      2521,
+      28
+    ],
+    [
+      59043,
+      40
+    ],
+    [
+      46550,
+      8
+    ],
+    [
+      62064,
+      48
+    ],
+    [
+      57681,
+      16
+    ],
+    [
+      60453,
+      20
+    ],
+    [
+      36295,
+      20
+    ],
+    [
+      17148,
+      4
+    ],
+    [
+      5964,
+      32
+    ],
+    [
+      34148,
+      36
+    ],
+    [
+      50125,
+      28
+    ],
+    [
+      53656,
+      20
+    ],
+    [
+      11022,
+      4
+    ],
+    [
+      9029,
+      28
+    ],
+    [
+      8896,
+      28
+    ],
+    [
+      46170,
+      4
+    ],
+    [
+      39393,
+      16
+    ],
+    [
+      40738,
+      92
+    ],
+    [
+      16907,
+      4
+    ],
+    [
+      67045,
+      8
+    ],
+    [
+      69447,
+      8
+    ],
+    [
+      51382,
+      0
+    ],
+    [
+      49658,
+      4
+    ],
+    [
+      28817,
+      156
+    ],
+    [
+      62784,
+      4
+    ],
+    [
+      4015,
+      0
+    ],
+    [
+      65802,
+      16
+    ],
+    [
+      9732,
+      28
+    ],
+    [
+      69642,
+      28
+    ],
+    [
+      65294,
+      20
+    ]
+  ],
+  "eval_data_dir": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+  "eval_pass_role": "s3_intermediate",
+  "eval_windows_spec": "canonical",
+  "flagged_windows": [],
+  "guide_scale": 1.0,
+  "manifest_sha256": "c02a67beb10d3fe27a8a65baceed28cecc591bce9e7f717d92801b5fb2e495df",
+  "missing_canonical_windows": [],
+  "model_manifest_path": "docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json",
+  "model_type": "OVERFIT100_TI2V",
+  "num_text_slots": 100,
+  "num_windows": 100,
+  "role_validation": {
+    "all_windows_size": 1629,
+    "cohort_size": 100,
+    "covered": 100,
+    "covered_canonical": 100,
+    "modes": [
+      "correct"
+    ],
+    "ok": true,
+    "role": "s3_intermediate",
+    "sampling_steps": 25,
+    "scope": "canonical",
+    "seeds": [
+      0
+    ]
+  },
+  "rollout_seeds": [
+    0
+  ],
+  "rows": [
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 0,
+      "episode_id": 25189,
+      "episode_index": 0,
+      "latent_mae": 0.2018149048089981,
+      "latent_mse": 0.10669755935668945,
+      "name": "ep25189_v0_s00048",
+      "pixel_mae": 0.02952931448817253,
+      "pixel_mse": 0.005293254740536213,
+      "pixel_mse_vs_rgb": 0.005475357174873352,
+      "seed": 0,
+      "ssim": 0.8219081127282345,
+      "ssim_vs_rgb": 0.8104717135429382,
+      "vae_ceiling_ssim": 0.9621832677812288,
+      "window_start": 48,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7369276881217957,
+      "z_target_std": 0.7524863481521606
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 1,
+      "episode_id": 67253,
+      "episode_index": 1,
+      "latent_mae": 0.23179210722446442,
+      "latent_mse": 0.12560436129570007,
+      "name": "ep67253_v0_s00028",
+      "pixel_mae": 0.031464073807001114,
+      "pixel_mse": 0.005914352834224701,
+      "pixel_mse_vs_rgb": 0.006117852870374918,
+      "seed": 0,
+      "ssim": 0.8425535108103896,
+      "ssim_vs_rgb": 0.833130621548855,
+      "vae_ceiling_ssim": 0.9654517914309646,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7655203342437744,
+      "z_target_std": 0.7815654873847961
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 2,
+      "episode_id": 3905,
+      "episode_index": 2,
+      "latent_mae": 0.2593168318271637,
+      "latent_mse": 0.1623190939426422,
+      "name": "ep3905_v0_s00020",
+      "pixel_mae": 0.04248185455799103,
+      "pixel_mse": 0.010189390741288662,
+      "pixel_mse_vs_rgb": 0.010641705244779587,
+      "seed": 0,
+      "ssim": 0.8048041119719996,
+      "ssim_vs_rgb": 0.7860282677592654,
+      "vae_ceiling_ssim": 0.9407614595962294,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9428276419639587,
+      "z_target_std": 0.9571911096572876
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 3,
+      "episode_id": 40985,
+      "episode_index": 3,
+      "latent_mae": 0.21570590138435364,
+      "latent_mse": 0.12907034158706665,
+      "name": "ep40985_v0_s00008",
+      "pixel_mae": 0.0563712902367115,
+      "pixel_mse": 0.013220186345279217,
+      "pixel_mse_vs_rgb": 0.014188925735652447,
+      "seed": 0,
+      "ssim": 0.7715248772592256,
+      "ssim_vs_rgb": 0.749386337670413,
+      "vae_ceiling_ssim": 0.9245795950745092,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9643635153770447,
+      "z_target_std": 0.9771854877471924
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 4,
+      "episode_id": 53956,
+      "episode_index": 4,
+      "latent_mae": 0.20207548141479492,
+      "latent_mse": 0.09979059547185898,
+      "name": "ep53956_v0_s00028",
+      "pixel_mae": 0.03185151889920235,
+      "pixel_mse": 0.004554742947220802,
+      "pixel_mse_vs_rgb": 0.004985355772078037,
+      "seed": 0,
+      "ssim": 0.8718044486912814,
+      "ssim_vs_rgb": 0.8547582969521031,
+      "vae_ceiling_ssim": 0.9562302430470785,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8206555247306824,
+      "z_target_std": 0.8305273652076721
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 5,
+      "episode_id": 45109,
+      "episode_index": 5,
+      "latent_mae": 0.19575074315071106,
+      "latent_mse": 0.10350858420133591,
+      "name": "ep45109_v0_s00068",
+      "pixel_mae": 0.0418655127286911,
+      "pixel_mse": 0.009031495079398155,
+      "pixel_mse_vs_rgb": 0.009610950946807861,
+      "seed": 0,
+      "ssim": 0.7941514885786808,
+      "ssim_vs_rgb": 0.7739983074592821,
+      "vae_ceiling_ssim": 0.9358682072523868,
+      "window_start": 68,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.0296530723571777,
+      "z_target_std": 1.0358400344848633
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 6,
+      "episode_id": 26802,
+      "episode_index": 6,
+      "latent_mae": 0.18321539461612701,
+      "latent_mse": 0.09209514409303665,
+      "name": "ep26802_v0_s00052",
+      "pixel_mae": 0.03622071072459221,
+      "pixel_mse": 0.007129714824259281,
+      "pixel_mse_vs_rgb": 0.007790530100464821,
+      "seed": 0,
+      "ssim": 0.848374838178808,
+      "ssim_vs_rgb": 0.8313883886192784,
+      "vae_ceiling_ssim": 0.9544256329536438,
+      "window_start": 52,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9062392711639404,
+      "z_target_std": 0.9194961190223694
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 7,
+      "episode_id": 48923,
+      "episode_index": 7,
+      "latent_mae": 0.2115832418203354,
+      "latent_mse": 0.11952722072601318,
+      "name": "ep48923_v0_s00028",
+      "pixel_mae": 0.034912027418613434,
+      "pixel_mse": 0.006889871321618557,
+      "pixel_mse_vs_rgb": 0.007218359503895044,
+      "seed": 0,
+      "ssim": 0.8180516578934409,
+      "ssim_vs_rgb": 0.8014331622557207,
+      "vae_ceiling_ssim": 0.9529890273556565,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8588019013404846,
+      "z_target_std": 0.872394859790802
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 8,
+      "episode_id": 22546,
+      "episode_index": 8,
+      "latent_mae": 0.1799878478050232,
+      "latent_mse": 0.08099738508462906,
+      "name": "ep22546_v0_s00020",
+      "pixel_mae": 0.018718436360359192,
+      "pixel_mse": 0.0026790830306708813,
+      "pixel_mse_vs_rgb": 0.0028479851316660643,
+      "seed": 0,
+      "ssim": 0.9123934182253751,
+      "ssim_vs_rgb": 0.9029869563651808,
+      "vae_ceiling_ssim": 0.9761419043396459,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8353138566017151,
+      "z_target_std": 0.8390704393386841
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 9,
+      "episode_id": 31530,
+      "episode_index": 9,
+      "latent_mae": 0.20082782208919525,
+      "latent_mse": 0.11715611070394516,
+      "name": "ep31530_v0_s00004",
+      "pixel_mae": 0.05267753824591637,
+      "pixel_mse": 0.01170311402529478,
+      "pixel_mse_vs_rgb": 0.012453971430659294,
+      "seed": 0,
+      "ssim": 0.8177078528837725,
+      "ssim_vs_rgb": 0.7958036715334112,
+      "vae_ceiling_ssim": 0.9432714184125265,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9947108030319214,
+      "z_target_std": 1.0098668336868286
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 10,
+      "episode_id": 60367,
+      "episode_index": 10,
+      "latent_mae": 0.18674059212207794,
+      "latent_mse": 0.08832187205553055,
+      "name": "ep60367_v0_s00040",
+      "pixel_mae": 0.032881997525691986,
+      "pixel_mse": 0.006361023057252169,
+      "pixel_mse_vs_rgb": 0.006834663916379213,
+      "seed": 0,
+      "ssim": 0.8608208605737397,
+      "ssim_vs_rgb": 0.8450366114125107,
+      "vae_ceiling_ssim": 0.9578773505759962,
+      "window_start": 40,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8968358635902405,
+      "z_target_std": 0.9025155305862427
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 11,
+      "episode_id": 52361,
+      "episode_index": 11,
+      "latent_mae": 0.17685090005397797,
+      "latent_mse": 0.0758800208568573,
+      "name": "ep52361_v0_s00068",
+      "pixel_mae": 0.019556190818548203,
+      "pixel_mse": 0.0018041349248960614,
+      "pixel_mse_vs_rgb": 0.002128261374309659,
+      "seed": 0,
+      "ssim": 0.8843992027369413,
+      "ssim_vs_rgb": 0.8657047874999769,
+      "vae_ceiling_ssim": 0.9598789540204135,
+      "window_start": 68,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9028379321098328,
+      "z_target_std": 0.9111116528511047
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 12,
+      "episode_id": 61233,
+      "episode_index": 12,
+      "latent_mae": 0.2100541740655899,
+      "latent_mse": 0.10542162507772446,
+      "name": "ep61233_v0_s00080",
+      "pixel_mae": 0.028182199224829674,
+      "pixel_mse": 0.005866602528840303,
+      "pixel_mse_vs_rgb": 0.006027537863701582,
+      "seed": 0,
+      "ssim": 0.8652051235690261,
+      "ssim_vs_rgb": 0.8568277774435101,
+      "vae_ceiling_ssim": 0.9713174538178877,
+      "window_start": 80,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7328395247459412,
+      "z_target_std": 0.7539466619491577
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 13,
+      "episode_id": 49497,
+      "episode_index": 13,
+      "latent_mae": 0.17013923823833466,
+      "latent_mse": 0.08548703044652939,
+      "name": "ep49497_v0_s00040",
+      "pixel_mae": 0.022268639877438545,
+      "pixel_mse": 0.006127817090600729,
+      "pixel_mse_vs_rgb": 0.006379114463925362,
+      "seed": 0,
+      "ssim": 0.9146534836653507,
+      "ssim_vs_rgb": 0.9022265040513241,
+      "vae_ceiling_ssim": 0.96909499168396,
+      "window_start": 40,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.0106749534606934,
+      "z_target_std": 1.012906551361084
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 14,
+      "episode_id": 63560,
+      "episode_index": 14,
+      "latent_mae": 0.21613527834415436,
+      "latent_mse": 0.1053270772099495,
+      "name": "ep63560_v0_s00020",
+      "pixel_mae": 0.035979609936475754,
+      "pixel_mse": 0.008154505863785744,
+      "pixel_mse_vs_rgb": 0.008483476005494595,
+      "seed": 0,
+      "ssim": 0.8472095005439989,
+      "ssim_vs_rgb": 0.8326069947445032,
+      "vae_ceiling_ssim": 0.96019662510265,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9752860069274902,
+      "z_target_std": 0.9844670295715332
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 15,
+      "episode_id": 15184,
+      "episode_index": 15,
+      "latent_mae": 0.22647510468959808,
+      "latent_mse": 0.12344352155923843,
+      "name": "ep15184_v0_s00028",
+      "pixel_mae": 0.031294774264097214,
+      "pixel_mse": 0.004872750490903854,
+      "pixel_mse_vs_rgb": 0.0050948671996593475,
+      "seed": 0,
+      "ssim": 0.8287354509035746,
+      "ssim_vs_rgb": 0.8172233736876285,
+      "vae_ceiling_ssim": 0.9624214732285702,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8968026638031006,
+      "z_target_std": 0.921330451965332
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 16,
+      "episode_id": 34212,
+      "episode_index": 16,
+      "latent_mae": 0.22485560178756714,
+      "latent_mse": 0.12638145685195923,
+      "name": "ep34212_v0_s00000",
+      "pixel_mae": 0.056291285902261734,
+      "pixel_mse": 0.012508220039308071,
+      "pixel_mse_vs_rgb": 0.013425170443952084,
+      "seed": 0,
+      "ssim": 0.7776667800816622,
+      "ssim_vs_rgb": 0.7556939630797415,
+      "vae_ceiling_ssim": 0.9352375467618307,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.0001534223556519,
+      "z_target_std": 1.0190268754959106
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 17,
+      "episode_id": 30976,
+      "episode_index": 17,
+      "latent_mae": 0.2388930469751358,
+      "latent_mse": 0.15013481676578522,
+      "name": "ep30976_v0_s00004",
+      "pixel_mae": 0.04062115028500557,
+      "pixel_mse": 0.009258320555090904,
+      "pixel_mse_vs_rgb": 0.009633085690438747,
+      "seed": 0,
+      "ssim": 0.7878615205938165,
+      "ssim_vs_rgb": 0.7749788526332739,
+      "vae_ceiling_ssim": 0.9394462578224413,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8784345388412476,
+      "z_target_std": 0.8958285450935364
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 18,
+      "episode_id": 4099,
+      "episode_index": 18,
+      "latent_mae": 0.2999741733074188,
+      "latent_mse": 0.21184878051280975,
+      "name": "ep4099_v0_s00004",
+      "pixel_mae": 0.05874856933951378,
+      "pixel_mse": 0.014340145513415337,
+      "pixel_mse_vs_rgb": 0.014854829758405685,
+      "seed": 0,
+      "ssim": 0.7292166388396061,
+      "ssim_vs_rgb": 0.7148728551286639,
+      "vae_ceiling_ssim": 0.9355214075608687,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7873994708061218,
+      "z_target_std": 0.8249727487564087
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 19,
+      "episode_id": 991,
+      "episode_index": 19,
+      "latent_mae": 0.30276259779930115,
+      "latent_mse": 0.22252461314201355,
+      "name": "ep991_v0_s00000",
+      "pixel_mae": 0.055915363132953644,
+      "pixel_mse": 0.019885379821062088,
+      "pixel_mse_vs_rgb": 0.020088810473680496,
+      "seed": 0,
+      "ssim": 0.776175704869357,
+      "ssim_vs_rgb": 0.7563342144995024,
+      "vae_ceiling_ssim": 0.9424168720389857,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.1379942893981934,
+      "z_target_std": 1.1721577644348145
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 20,
+      "episode_id": 35500,
+      "episode_index": 20,
+      "latent_mae": 0.2411230504512787,
+      "latent_mse": 0.14671482145786285,
+      "name": "ep35500_v0_s00004",
+      "pixel_mae": 0.0347156785428524,
+      "pixel_mse": 0.009265842847526073,
+      "pixel_mse_vs_rgb": 0.009457041509449482,
+      "seed": 0,
+      "ssim": 0.8155179944905367,
+      "ssim_vs_rgb": 0.8014088869094849,
+      "vae_ceiling_ssim": 0.9533921678860983,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.092173457145691,
+      "z_target_std": 1.1054792404174805
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 21,
+      "episode_id": 31999,
+      "episode_index": 21,
+      "latent_mae": 0.2449919879436493,
+      "latent_mse": 0.1381138563156128,
+      "name": "ep31999_v0_s00008",
+      "pixel_mae": 0.03120630420744419,
+      "pixel_mse": 0.004131194669753313,
+      "pixel_mse_vs_rgb": 0.004523369483649731,
+      "seed": 0,
+      "ssim": 0.806665711330645,
+      "ssim_vs_rgb": 0.7824914997274225,
+      "vae_ceiling_ssim": 0.9230614864464962,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7651395797729492,
+      "z_target_std": 0.7939023375511169
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 22,
+      "episode_id": 10329,
+      "episode_index": 22,
+      "latent_mae": 0.2376745194196701,
+      "latent_mse": 0.1387491226196289,
+      "name": "ep10329_v0_s00012",
+      "pixel_mae": 0.04131537675857544,
+      "pixel_mse": 0.009535370394587517,
+      "pixel_mse_vs_rgb": 0.009822853840887547,
+      "seed": 0,
+      "ssim": 0.8008433851328763,
+      "ssim_vs_rgb": 0.7852150057301377,
+      "vae_ceiling_ssim": 0.9557002692511587,
+      "window_start": 12,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8237439393997192,
+      "z_target_std": 0.8450043201446533
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 23,
+      "episode_id": 34499,
+      "episode_index": 23,
+      "latent_mae": 0.2958638668060303,
+      "latent_mse": 0.2236865907907486,
+      "name": "ep34499_v0_s00080",
+      "pixel_mae": 0.05189308524131775,
+      "pixel_mse": 0.012475873343646526,
+      "pixel_mse_vs_rgb": 0.012827001512050629,
+      "seed": 0,
+      "ssim": 0.7371500766638553,
+      "ssim_vs_rgb": 0.7185165033195958,
+      "vae_ceiling_ssim": 0.9346551768707506,
+      "window_start": 80,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9042477607727051,
+      "z_target_std": 0.9304052591323853
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 24,
+      "episode_id": 37274,
+      "episode_index": 24,
+      "latent_mae": 0.2286018431186676,
+      "latent_mse": 0.12094664573669434,
+      "name": "ep37274_v0_s00012",
+      "pixel_mae": 0.02753971517086029,
+      "pixel_mse": 0.0053250230848789215,
+      "pixel_mse_vs_rgb": 0.005561140365898609,
+      "seed": 0,
+      "ssim": 0.8673027338403644,
+      "ssim_vs_rgb": 0.855961976629315,
+      "vae_ceiling_ssim": 0.9636074900627136,
+      "window_start": 12,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8080751299858093,
+      "z_target_std": 0.8291457295417786
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 25,
+      "episode_id": 61291,
+      "episode_index": 25,
+      "latent_mae": 0.20564216375350952,
+      "latent_mse": 0.1090233102440834,
+      "name": "ep61291_v0_s00032",
+      "pixel_mae": 0.03609194979071617,
+      "pixel_mse": 0.00785798393189907,
+      "pixel_mse_vs_rgb": 0.008394209668040276,
+      "seed": 0,
+      "ssim": 0.822452212824966,
+      "ssim_vs_rgb": 0.8064127636678291,
+      "vae_ceiling_ssim": 0.9518343824328799,
+      "window_start": 32,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9851796627044678,
+      "z_target_std": 0.9993883371353149
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 26,
+      "episode_id": 6336,
+      "episode_index": 26,
+      "latent_mae": 0.22869719564914703,
+      "latent_mse": 0.14609475433826447,
+      "name": "ep6336_v0_s00000",
+      "pixel_mae": 0.05035579204559326,
+      "pixel_mse": 0.010254191234707832,
+      "pixel_mse_vs_rgb": 0.010942785069346428,
+      "seed": 0,
+      "ssim": 0.7686029961614897,
+      "ssim_vs_rgb": 0.7457258719386477,
+      "vae_ceiling_ssim": 0.9298379854722456,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9423184394836426,
+      "z_target_std": 0.9641196727752686
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 27,
+      "episode_id": 28709,
+      "episode_index": 27,
+      "latent_mae": 0.17442861199378967,
+      "latent_mse": 0.08091407269239426,
+      "name": "ep28709_v0_s00056",
+      "pixel_mae": 0.039211422204971313,
+      "pixel_mse": 0.008282753638923168,
+      "pixel_mse_vs_rgb": 0.009216366335749626,
+      "seed": 0,
+      "ssim": 0.8639159094203602,
+      "ssim_vs_rgb": 0.8357735727772568,
+      "vae_ceiling_ssim": 0.9446510130708868,
+      "window_start": 56,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9841579794883728,
+      "z_target_std": 0.9870254397392273
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 28,
+      "episode_id": 21530,
+      "episode_index": 28,
+      "latent_mae": 0.252514123916626,
+      "latent_mse": 0.15321186184883118,
+      "name": "ep21530_v0_s00008",
+      "pixel_mae": 0.04499433562159538,
+      "pixel_mse": 0.009107655845582485,
+      "pixel_mse_vs_rgb": 0.00945200677961111,
+      "seed": 0,
+      "ssim": 0.8016547253637603,
+      "ssim_vs_rgb": 0.7889813726598566,
+      "vae_ceiling_ssim": 0.9540563279932196,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8218247890472412,
+      "z_target_std": 0.8402272462844849
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 29,
+      "episode_id": 52341,
+      "episode_index": 29,
+      "latent_mae": 0.19728568196296692,
+      "latent_mse": 0.10810200870037079,
+      "name": "ep52341_v0_s00000",
+      "pixel_mae": 0.05343947932124138,
+      "pixel_mse": 0.012411977164447308,
+      "pixel_mse_vs_rgb": 0.013244071044027805,
+      "seed": 0,
+      "ssim": 0.8186369953733502,
+      "ssim_vs_rgb": 0.7954754143050222,
+      "vae_ceiling_ssim": 0.939247008525964,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.026064157485962,
+      "z_target_std": 1.039431095123291
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 30,
+      "episode_id": 19306,
+      "episode_index": 30,
+      "latent_mae": 0.20842964947223663,
+      "latent_mse": 0.11464614421129227,
+      "name": "ep19306_v0_s00196",
+      "pixel_mae": 0.04510640352964401,
+      "pixel_mse": 0.010153748095035553,
+      "pixel_mse_vs_rgb": 0.01075872965157032,
+      "seed": 0,
+      "ssim": 0.7696212963624434,
+      "ssim_vs_rgb": 0.7441754666241732,
+      "vae_ceiling_ssim": 0.9194969841928193,
+      "window_start": 196,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9564418792724609,
+      "z_target_std": 0.9755055904388428
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 31,
+      "episode_id": 27573,
+      "episode_index": 31,
+      "latent_mae": 0.19752568006515503,
+      "latent_mse": 0.10175591707229614,
+      "name": "ep27573_v0_s00016",
+      "pixel_mae": 0.02853836677968502,
+      "pixel_mse": 0.007054199930280447,
+      "pixel_mse_vs_rgb": 0.007473495323210955,
+      "seed": 0,
+      "ssim": 0.9080686171849569,
+      "ssim_vs_rgb": 0.8952877720197042,
+      "vae_ceiling_ssim": 0.9655610250704216,
+      "window_start": 16,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8969217538833618,
+      "z_target_std": 0.9008061289787292
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 32,
+      "episode_id": 37834,
+      "episode_index": 32,
+      "latent_mae": 0.21910753846168518,
+      "latent_mse": 0.13180901110172272,
+      "name": "ep37834_v0_s00036",
+      "pixel_mae": 0.04048725962638855,
+      "pixel_mse": 0.009110803715884686,
+      "pixel_mse_vs_rgb": 0.009518496692180634,
+      "seed": 0,
+      "ssim": 0.7986163352475022,
+      "ssim_vs_rgb": 0.778854099186984,
+      "vae_ceiling_ssim": 0.9389527422009092,
+      "window_start": 36,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9417730569839478,
+      "z_target_std": 0.9590305685997009
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 33,
+      "episode_id": 11518,
+      "episode_index": 33,
+      "latent_mae": 0.1804068386554718,
+      "latent_mse": 0.10540169477462769,
+      "name": "ep11518_v0_s00080",
+      "pixel_mae": 0.029285263270139694,
+      "pixel_mse": 0.006842958740890026,
+      "pixel_mse_vs_rgb": 0.007074754219502211,
+      "seed": 0,
+      "ssim": 0.8647249088142858,
+      "ssim_vs_rgb": 0.8495160702503088,
+      "vae_ceiling_ssim": 0.9550896034096227,
+      "window_start": 80,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9345257878303528,
+      "z_target_std": 0.9458185434341431
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 34,
+      "episode_id": 22488,
+      "episode_index": 34,
+      "latent_mae": 0.1947149932384491,
+      "latent_mse": 0.09599151462316513,
+      "name": "ep22488_v0_s00012",
+      "pixel_mae": 0.03887416422367096,
+      "pixel_mse": 0.00876250583678484,
+      "pixel_mse_vs_rgb": 0.009862756356596947,
+      "seed": 0,
+      "ssim": 0.8225507989074244,
+      "ssim_vs_rgb": 0.7841952009634539,
+      "vae_ceiling_ssim": 0.9147013371640985,
+      "window_start": 12,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9514603614807129,
+      "z_target_std": 0.9570046067237854
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 35,
+      "episode_id": 66118,
+      "episode_index": 35,
+      "latent_mae": 0.21232418715953827,
+      "latent_mse": 0.11118806898593903,
+      "name": "ep66118_v0_s00016",
+      "pixel_mae": 0.03480483964085579,
+      "pixel_mse": 0.006745864637196064,
+      "pixel_mse_vs_rgb": 0.006988400127738714,
+      "seed": 0,
+      "ssim": 0.8285944750814727,
+      "ssim_vs_rgb": 0.8163959004662253,
+      "vae_ceiling_ssim": 0.9630305803183353,
+      "window_start": 16,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7987452149391174,
+      "z_target_std": 0.8157353401184082
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 36,
+      "episode_id": 47809,
+      "episode_index": 36,
+      "latent_mae": 0.1738673597574234,
+      "latent_mse": 0.08128409087657928,
+      "name": "ep47809_v0_s00012",
+      "pixel_mae": 0.029208311811089516,
+      "pixel_mse": 0.00668567419052124,
+      "pixel_mse_vs_rgb": 0.007023994345217943,
+      "seed": 0,
+      "ssim": 0.8494175365476897,
+      "ssim_vs_rgb": 0.8168008923530579,
+      "vae_ceiling_ssim": 0.921557341561173,
+      "window_start": 12,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9253058433532715,
+      "z_target_std": 0.9411345720291138
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 37,
+      "episode_id": 8877,
+      "episode_index": 37,
+      "latent_mae": 0.199717178940773,
+      "latent_mse": 0.10411122441291809,
+      "name": "ep8877_v0_s00056",
+      "pixel_mae": 0.028712738305330276,
+      "pixel_mse": 0.004169536288827658,
+      "pixel_mse_vs_rgb": 0.004558643791824579,
+      "seed": 0,
+      "ssim": 0.8190751491170941,
+      "ssim_vs_rgb": 0.7950008385109179,
+      "vae_ceiling_ssim": 0.9450587684457953,
+      "window_start": 56,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.0055192708969116,
+      "z_target_std": 1.0122060775756836
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 38,
+      "episode_id": 15673,
+      "episode_index": 38,
+      "latent_mae": 0.2393033355474472,
+      "latent_mse": 0.1461905539035797,
+      "name": "ep15673_v0_s00020",
+      "pixel_mae": 0.04293376952409744,
+      "pixel_mse": 0.00882705394178629,
+      "pixel_mse_vs_rgb": 0.009189244359731674,
+      "seed": 0,
+      "ssim": 0.7955459067315767,
+      "ssim_vs_rgb": 0.7754527655514803,
+      "vae_ceiling_ssim": 0.9405545032385624,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8513867855072021,
+      "z_target_std": 0.8760339021682739
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 39,
+      "episode_id": 11071,
+      "episode_index": 39,
+      "latent_mae": 0.15970410406589508,
+      "latent_mse": 0.06387194991111755,
+      "name": "ep11071_v0_s00052",
+      "pixel_mae": 0.022026142105460167,
+      "pixel_mse": 0.002148057334125042,
+      "pixel_mse_vs_rgb": 0.0025577854830771685,
+      "seed": 0,
+      "ssim": 0.9111020890149203,
+      "ssim_vs_rgb": 0.8901322628512527,
+      "vae_ceiling_ssim": 0.9563810446045615,
+      "window_start": 52,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8171529769897461,
+      "z_target_std": 0.8199911713600159
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 40,
+      "episode_id": 44499,
+      "episode_index": 40,
+      "latent_mae": 0.2247048169374466,
+      "latent_mse": 0.12943600118160248,
+      "name": "ep44499_v0_s00020",
+      "pixel_mae": 0.03961111232638359,
+      "pixel_mse": 0.00971387978643179,
+      "pixel_mse_vs_rgb": 0.009985542856156826,
+      "seed": 0,
+      "ssim": 0.8113994255210414,
+      "ssim_vs_rgb": 0.7988246047135555,
+      "vae_ceiling_ssim": 0.9567190643512842,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8644295930862427,
+      "z_target_std": 0.8760469555854797
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 41,
+      "episode_id": 69308,
+      "episode_index": 41,
+      "latent_mae": 0.1603313535451889,
+      "latent_mse": 0.06114921718835831,
+      "name": "ep69308_v0_s00028",
+      "pixel_mae": 0.03145625442266464,
+      "pixel_mse": 0.004126797895878553,
+      "pixel_mse_vs_rgb": 0.004667202476412058,
+      "seed": 0,
+      "ssim": 0.8665958317843351,
+      "ssim_vs_rgb": 0.8452323783527721,
+      "vae_ceiling_ssim": 0.9536109368006388,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9418840408325195,
+      "z_target_std": 0.9476875066757202
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 42,
+      "episode_id": 67477,
+      "episode_index": 42,
+      "latent_mae": 0.15048901736736298,
+      "latent_mse": 0.05549342930316925,
+      "name": "ep67477_v0_s00012",
+      "pixel_mae": 0.03148530051112175,
+      "pixel_mse": 0.005373954772949219,
+      "pixel_mse_vs_rgb": 0.006114830728620291,
+      "seed": 0,
+      "ssim": 0.8988503163511102,
+      "ssim_vs_rgb": 0.8785877408403339,
+      "vae_ceiling_ssim": 0.9566822792544509,
+      "window_start": 12,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9449655413627625,
+      "z_target_std": 0.949293851852417
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 43,
+      "episode_id": 22800,
+      "episode_index": 43,
+      "latent_mae": 0.14837704598903656,
+      "latent_mse": 0.051381077617406845,
+      "name": "ep22800_v0_s00008",
+      "pixel_mae": 0.021082449704408646,
+      "pixel_mse": 0.0016191364265978336,
+      "pixel_mse_vs_rgb": 0.0019299703417345881,
+      "seed": 0,
+      "ssim": 0.9073554494164207,
+      "ssim_vs_rgb": 0.8874829014142355,
+      "vae_ceiling_ssim": 0.9579741449067087,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8997515439987183,
+      "z_target_std": 0.9113765358924866
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 44,
+      "episode_id": 61069,
+      "episode_index": 44,
+      "latent_mae": 0.1903027445077896,
+      "latent_mse": 0.08927728235721588,
+      "name": "ep61069_v0_s00092",
+      "pixel_mae": 0.04660302400588989,
+      "pixel_mse": 0.011206699535250664,
+      "pixel_mse_vs_rgb": 0.01272414531558752,
+      "seed": 0,
+      "ssim": 0.8369299119169061,
+      "ssim_vs_rgb": 0.8005276322364807,
+      "vae_ceiling_ssim": 0.9175172321724169,
+      "window_start": 92,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.909320056438446,
+      "z_target_std": 0.9185433387756348
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 45,
+      "episode_id": 35494,
+      "episode_index": 45,
+      "latent_mae": 0.22224387526512146,
+      "latent_mse": 0.11608503013849258,
+      "name": "ep35494_v0_s00036",
+      "pixel_mae": 0.039895616471767426,
+      "pixel_mse": 0.009411186911165714,
+      "pixel_mse_vs_rgb": 0.009874654933810234,
+      "seed": 0,
+      "ssim": 0.8139924966927731,
+      "ssim_vs_rgb": 0.7989655335744222,
+      "vae_ceiling_ssim": 0.9511825225569985,
+      "window_start": 36,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8764666318893433,
+      "z_target_std": 0.8932585716247559
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 46,
+      "episode_id": 49796,
+      "episode_index": 46,
+      "latent_mae": 0.2282285839319229,
+      "latent_mse": 0.13334651291370392,
+      "name": "ep49796_v0_s00008",
+      "pixel_mae": 0.034826140850782394,
+      "pixel_mse": 0.007751744706183672,
+      "pixel_mse_vs_rgb": 0.007977548986673355,
+      "seed": 0,
+      "ssim": 0.8544371597694628,
+      "ssim_vs_rgb": 0.8419943614439531,
+      "vae_ceiling_ssim": 0.9573234518369039,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8287597298622131,
+      "z_target_std": 0.8572036623954773
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 47,
+      "episode_id": 19099,
+      "episode_index": 47,
+      "latent_mae": 0.2539692223072052,
+      "latent_mse": 0.17482653260231018,
+      "name": "ep19099_v0_s00004",
+      "pixel_mae": 0.054428111761808395,
+      "pixel_mse": 0.01486874744296074,
+      "pixel_mse_vs_rgb": 0.015490807592868805,
+      "seed": 0,
+      "ssim": 0.7712010650923757,
+      "ssim_vs_rgb": 0.7484299703077837,
+      "vae_ceiling_ssim": 0.9338806957909556,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.1112737655639648,
+      "z_target_std": 1.1256155967712402
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 48,
+      "episode_id": 69218,
+      "episode_index": 48,
+      "latent_mae": 0.2413128763437271,
+      "latent_mse": 0.15728752315044403,
+      "name": "ep69218_v0_s00004",
+      "pixel_mae": 0.045665763318538666,
+      "pixel_mse": 0.011730696074664593,
+      "pixel_mse_vs_rgb": 0.01206638291478157,
+      "seed": 0,
+      "ssim": 0.800142355037458,
+      "ssim_vs_rgb": 0.78760621583823,
+      "vae_ceiling_ssim": 0.9567259821024808,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9107356667518616,
+      "z_target_std": 0.9304190278053284
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 49,
+      "episode_id": 19658,
+      "episode_index": 49,
+      "latent_mae": 0.19204339385032654,
+      "latent_mse": 0.08980846405029297,
+      "name": "ep19658_v0_s00000",
+      "pixel_mae": 0.02411530911922455,
+      "pixel_mse": 0.005410852842032909,
+      "pixel_mse_vs_rgb": 0.005718683358281851,
+      "seed": 0,
+      "ssim": 0.9207817099311135,
+      "ssim_vs_rgb": 0.9110120065284498,
+      "vae_ceiling_ssim": 0.9742579116965785,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9120674133300781,
+      "z_target_std": 0.9326238036155701
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 50,
+      "episode_id": 19339,
+      "episode_index": 50,
+      "latent_mae": 0.2260521650314331,
+      "latent_mse": 0.12728050351142883,
+      "name": "ep19339_v0_s00024",
+      "pixel_mae": 0.03210018202662468,
+      "pixel_mse": 0.006840869784355164,
+      "pixel_mse_vs_rgb": 0.007263376843184233,
+      "seed": 0,
+      "ssim": 0.8528282913294706,
+      "ssim_vs_rgb": 0.8407230178515116,
+      "vae_ceiling_ssim": 0.9537176724636194,
+      "window_start": 24,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7501327991485596,
+      "z_target_std": 0.7717733979225159
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 51,
+      "episode_id": 4358,
+      "episode_index": 51,
+      "latent_mae": 0.23112379014492035,
+      "latent_mse": 0.12451929599046707,
+      "name": "ep4358_v0_s00040",
+      "pixel_mae": 0.038720715790987015,
+      "pixel_mse": 0.006910962518304586,
+      "pixel_mse_vs_rgb": 0.0072752018459141254,
+      "seed": 0,
+      "ssim": 0.7974318139480822,
+      "ssim_vs_rgb": 0.7820453318682584,
+      "vae_ceiling_ssim": 0.9474369612607089,
+      "window_start": 40,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7699224948883057,
+      "z_target_std": 0.7867994904518127
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 52,
+      "episode_id": 53617,
+      "episode_index": 52,
+      "latent_mae": 0.2378680557012558,
+      "latent_mse": 0.1443081796169281,
+      "name": "ep53617_v0_s00036",
+      "pixel_mae": 0.04860248044133186,
+      "pixel_mse": 0.010659459047019482,
+      "pixel_mse_vs_rgb": 0.011714046820998192,
+      "seed": 0,
+      "ssim": 0.7874911264939741,
+      "ssim_vs_rgb": 0.7575266469608654,
+      "vae_ceiling_ssim": 0.9276537714582501,
+      "window_start": 36,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9910843968391418,
+      "z_target_std": 1.0006468296051025
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 53,
+      "episode_id": 60900,
+      "episode_index": 53,
+      "latent_mae": 0.18334491550922394,
+      "latent_mse": 0.0915364921092987,
+      "name": "ep60900_v0_s00064",
+      "pixel_mae": 0.03137780725955963,
+      "pixel_mse": 0.0046422649174928665,
+      "pixel_mse_vs_rgb": 0.00529900286346674,
+      "seed": 0,
+      "ssim": 0.817546035304214,
+      "ssim_vs_rgb": 0.7750921791250055,
+      "vae_ceiling_ssim": 0.9089281631238533,
+      "window_start": 64,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9537158608436584,
+      "z_target_std": 0.9623755812644958
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 54,
+      "episode_id": 24363,
+      "episode_index": 54,
+      "latent_mae": 0.17091739177703857,
+      "latent_mse": 0.07215438038110733,
+      "name": "ep24363_v0_s00120",
+      "pixel_mae": 0.030895546078681946,
+      "pixel_mse": 0.005385806784033775,
+      "pixel_mse_vs_rgb": 0.006049457937479019,
+      "seed": 0,
+      "ssim": 0.8941572127920209,
+      "ssim_vs_rgb": 0.8712145072041135,
+      "vae_ceiling_ssim": 0.9536051352818807,
+      "window_start": 120,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9721202254295349,
+      "z_target_std": 0.9820548295974731
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 55,
+      "episode_id": 17669,
+      "episode_index": 55,
+      "latent_mae": 0.13378576934337616,
+      "latent_mse": 0.04452208802103996,
+      "name": "ep17669_v0_s00056",
+      "pixel_mae": 0.023950809612870216,
+      "pixel_mse": 0.003941426984965801,
+      "pixel_mse_vs_rgb": 0.004425765480846167,
+      "seed": 0,
+      "ssim": 0.9022937922766714,
+      "ssim_vs_rgb": 0.8824860923218004,
+      "vae_ceiling_ssim": 0.9605400417790269,
+      "window_start": 56,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.0215932130813599,
+      "z_target_std": 1.0260035991668701
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 56,
+      "episode_id": 54416,
+      "episode_index": 56,
+      "latent_mae": 0.18886080384254456,
+      "latent_mse": 0.09425842016935349,
+      "name": "ep54416_v0_s00004",
+      "pixel_mae": 0.023351212963461876,
+      "pixel_mse": 0.003374833147972822,
+      "pixel_mse_vs_rgb": 0.003533665556460619,
+      "seed": 0,
+      "ssim": 0.9034834919553815,
+      "ssim_vs_rgb": 0.8924377723173662,
+      "vae_ceiling_ssim": 0.9711992451638887,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9107601046562195,
+      "z_target_std": 0.932998538017273
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 57,
+      "episode_id": 39091,
+      "episode_index": 57,
+      "latent_mae": 0.249897763133049,
+      "latent_mse": 0.15127526223659515,
+      "name": "ep39091_v0_s00028",
+      "pixel_mae": 0.04619557783007622,
+      "pixel_mse": 0.011555599980056286,
+      "pixel_mse_vs_rgb": 0.012378590181469917,
+      "seed": 0,
+      "ssim": 0.7847851550940311,
+      "ssim_vs_rgb": 0.7664762663118767,
+      "vae_ceiling_ssim": 0.929327312744025,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9014036059379578,
+      "z_target_std": 0.929816722869873
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 58,
+      "episode_id": 51375,
+      "episode_index": 58,
+      "latent_mae": 0.25160297751426697,
+      "latent_mse": 0.1665814369916916,
+      "name": "ep51375_v0_s00000",
+      "pixel_mae": 0.044027410447597504,
+      "pixel_mse": 0.011234286241233349,
+      "pixel_mse_vs_rgb": 0.011525674723088741,
+      "seed": 0,
+      "ssim": 0.8023277268265233,
+      "ssim_vs_rgb": 0.7892180157430244,
+      "vae_ceiling_ssim": 0.9550087000384475,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8897648453712463,
+      "z_target_std": 0.9225661158561707
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 59,
+      "episode_id": 36671,
+      "episode_index": 59,
+      "latent_mae": 0.2052590698003769,
+      "latent_mse": 0.10522633045911789,
+      "name": "ep36671_v0_s00008",
+      "pixel_mae": 0.02408282272517681,
+      "pixel_mse": 0.0042741731740534306,
+      "pixel_mse_vs_rgb": 0.0043642702512443066,
+      "seed": 0,
+      "ssim": 0.9008742029016669,
+      "ssim_vs_rgb": 0.8934293461568428,
+      "vae_ceiling_ssim": 0.9731059435642126,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7940953373908997,
+      "z_target_std": 0.8120470643043518
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 60,
+      "episode_id": 26610,
+      "episode_index": 60,
+      "latent_mae": 0.18767866492271423,
+      "latent_mse": 0.08130999654531479,
+      "name": "ep26610_v0_s00004",
+      "pixel_mae": 0.037969380617141724,
+      "pixel_mse": 0.006863526534289122,
+      "pixel_mse_vs_rgb": 0.007739226799458265,
+      "seed": 0,
+      "ssim": 0.8872137322570338,
+      "ssim_vs_rgb": 0.8692815068996314,
+      "vae_ceiling_ssim": 0.9563311103618506,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9039074182510376,
+      "z_target_std": 0.9200796484947205
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 61,
+      "episode_id": 29037,
+      "episode_index": 61,
+      "latent_mae": 0.15695011615753174,
+      "latent_mse": 0.06595039367675781,
+      "name": "ep29037_v0_s00060",
+      "pixel_mae": 0.03573819622397423,
+      "pixel_mse": 0.006685206200927496,
+      "pixel_mse_vs_rgb": 0.007307032123208046,
+      "seed": 0,
+      "ssim": 0.8341508688348712,
+      "ssim_vs_rgb": 0.8091158758510243,
+      "vae_ceiling_ssim": 0.9405170281728109,
+      "window_start": 60,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9523078203201294,
+      "z_target_std": 0.9652212858200073
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 62,
+      "episode_id": 24960,
+      "episode_index": 62,
+      "latent_mae": 0.18069182336330414,
+      "latent_mse": 0.08164458721876144,
+      "name": "ep24960_v0_s00052",
+      "pixel_mae": 0.04560120031237602,
+      "pixel_mse": 0.008924467489123344,
+      "pixel_mse_vs_rgb": 0.01087605394423008,
+      "seed": 0,
+      "ssim": 0.7801154021060828,
+      "ssim_vs_rgb": 0.7222579591202013,
+      "vae_ceiling_ssim": 0.8811699459047029,
+      "window_start": 52,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9597518444061279,
+      "z_target_std": 0.9736322164535522
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 63,
+      "episode_id": 48582,
+      "episode_index": 63,
+      "latent_mae": 0.21614128351211548,
+      "latent_mse": 0.1188131794333458,
+      "name": "ep48582_v0_s00020",
+      "pixel_mae": 0.030454128980636597,
+      "pixel_mse": 0.006303072907030582,
+      "pixel_mse_vs_rgb": 0.006764770485460758,
+      "seed": 0,
+      "ssim": 0.8544936866471262,
+      "ssim_vs_rgb": 0.8357671734058496,
+      "vae_ceiling_ssim": 0.9412616509379763,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8105043768882751,
+      "z_target_std": 0.823225736618042
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 64,
+      "episode_id": 44550,
+      "episode_index": 64,
+      "latent_mae": 0.22528031468391418,
+      "latent_mse": 0.12508738040924072,
+      "name": "ep44550_v0_s00012",
+      "pixel_mae": 0.024080142378807068,
+      "pixel_mse": 0.004262246191501617,
+      "pixel_mse_vs_rgb": 0.004441647790372372,
+      "seed": 0,
+      "ssim": 0.8598943659753511,
+      "ssim_vs_rgb": 0.8482648188417609,
+      "vae_ceiling_ssim": 0.9593352494817792,
+      "window_start": 12,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9061262011528015,
+      "z_target_std": 0.9220197796821594
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 65,
+      "episode_id": 65562,
+      "episode_index": 65,
+      "latent_mae": 0.19853685796260834,
+      "latent_mse": 0.09278536587953568,
+      "name": "ep65562_v0_s00016",
+      "pixel_mae": 0.03895723074674606,
+      "pixel_mse": 0.008926769718527794,
+      "pixel_mse_vs_rgb": 0.009566931053996086,
+      "seed": 0,
+      "ssim": 0.8551898237430688,
+      "ssim_vs_rgb": 0.8393097068324233,
+      "vae_ceiling_ssim": 0.9611557920773824,
+      "window_start": 16,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.0203802585601807,
+      "z_target_std": 1.0328752994537354
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 66,
+      "episode_id": 52301,
+      "episode_index": 66,
+      "latent_mae": 0.18508999049663544,
+      "latent_mse": 0.0833049938082695,
+      "name": "ep52301_v0_s00004",
+      "pixel_mae": 0.030258944258093834,
+      "pixel_mse": 0.006721826735883951,
+      "pixel_mse_vs_rgb": 0.007135086227208376,
+      "seed": 0,
+      "ssim": 0.9074401277484316,
+      "ssim_vs_rgb": 0.8957918936556036,
+      "vae_ceiling_ssim": 0.9706477866028295,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9212583899497986,
+      "z_target_std": 0.9323009252548218
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 67,
+      "episode_id": 62102,
+      "episode_index": 67,
+      "latent_mae": 0.1580369621515274,
+      "latent_mse": 0.06419894844293594,
+      "name": "ep62102_v0_s00024",
+      "pixel_mae": 0.03551794961094856,
+      "pixel_mse": 0.006589755415916443,
+      "pixel_mse_vs_rgb": 0.007348475977778435,
+      "seed": 0,
+      "ssim": 0.8714169968258251,
+      "ssim_vs_rgb": 0.8473581039544308,
+      "vae_ceiling_ssim": 0.9513356143778021,
+      "window_start": 24,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9595972299575806,
+      "z_target_std": 0.9679218530654907
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 68,
+      "episode_id": 30738,
+      "episode_index": 68,
+      "latent_mae": 0.290063738822937,
+      "latent_mse": 0.20317025482654572,
+      "name": "ep30738_v0_s00132",
+      "pixel_mae": 0.06557229161262512,
+      "pixel_mse": 0.018903294578194618,
+      "pixel_mse_vs_rgb": 0.019424745813012123,
+      "seed": 0,
+      "ssim": 0.6757208054715936,
+      "ssim_vs_rgb": 0.6594691005620089,
+      "vae_ceiling_ssim": 0.9361026016148654,
+      "window_start": 132,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9310052990913391,
+      "z_target_std": 0.9592841267585754
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 69,
+      "episode_id": 23688,
+      "episode_index": 69,
+      "latent_mae": 0.24254435300827026,
+      "latent_mse": 0.15705344080924988,
+      "name": "ep23688_v0_s00000",
+      "pixel_mae": 0.04514453560113907,
+      "pixel_mse": 0.013723860494792461,
+      "pixel_mse_vs_rgb": 0.014070609584450722,
+      "seed": 0,
+      "ssim": 0.8144527475039164,
+      "ssim_vs_rgb": 0.7999779473651539,
+      "vae_ceiling_ssim": 0.9571952061219648,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.001711130142212,
+      "z_target_std": 1.0205663442611694
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 70,
+      "episode_id": 2521,
+      "episode_index": 70,
+      "latent_mae": 0.20895753800868988,
+      "latent_mse": 0.10550732910633087,
+      "name": "ep2521_v0_s00028",
+      "pixel_mae": 0.04835722967982292,
+      "pixel_mse": 0.013461270369589329,
+      "pixel_mse_vs_rgb": 0.014067555777728558,
+      "seed": 0,
+      "ssim": 0.7953833179040388,
+      "ssim_vs_rgb": 0.7757177804455613,
+      "vae_ceiling_ssim": 0.9513912670540087,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.020953893661499,
+      "z_target_std": 1.0332310199737549
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 71,
+      "episode_id": 59043,
+      "episode_index": 71,
+      "latent_mae": 0.19717741012573242,
+      "latent_mse": 0.09673293679952621,
+      "name": "ep59043_v0_s00040",
+      "pixel_mae": 0.037805989384651184,
+      "pixel_mse": 0.008179480209946632,
+      "pixel_mse_vs_rgb": 0.008989529684185982,
+      "seed": 0,
+      "ssim": 0.8492779515006326,
+      "ssim_vs_rgb": 0.8243554577682958,
+      "vae_ceiling_ssim": 0.9400349765112905,
+      "window_start": 40,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9132921695709229,
+      "z_target_std": 0.9210242629051208
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 72,
+      "episode_id": 46550,
+      "episode_index": 72,
+      "latent_mae": 0.25918829441070557,
+      "latent_mse": 0.16206671297550201,
+      "name": "ep46550_v0_s00008",
+      "pixel_mae": 0.05469542369246483,
+      "pixel_mse": 0.013110554777085781,
+      "pixel_mse_vs_rgb": 0.013905827887356281,
+      "seed": 0,
+      "ssim": 0.7805489482301654,
+      "ssim_vs_rgb": 0.7508733904722965,
+      "vae_ceiling_ssim": 0.9144730044133735,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8723589777946472,
+      "z_target_std": 0.8994011878967285
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 73,
+      "episode_id": 62064,
+      "episode_index": 73,
+      "latent_mae": 0.21826186776161194,
+      "latent_mse": 0.12028266489505768,
+      "name": "ep62064_v0_s00048",
+      "pixel_mae": 0.030196085572242737,
+      "pixel_mse": 0.007219851482659578,
+      "pixel_mse_vs_rgb": 0.007334770169109106,
+      "seed": 0,
+      "ssim": 0.8711456457773844,
+      "ssim_vs_rgb": 0.8633723764708547,
+      "vae_ceiling_ssim": 0.9718969410116022,
+      "window_start": 48,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.769338846206665,
+      "z_target_std": 0.7824975848197937
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 74,
+      "episode_id": 57681,
+      "episode_index": 74,
+      "latent_mae": 0.2496844381093979,
+      "latent_mse": 0.14316634833812714,
+      "name": "ep57681_v0_s00016",
+      "pixel_mae": 0.04386477917432785,
+      "pixel_mse": 0.007824472151696682,
+      "pixel_mse_vs_rgb": 0.00829356163740158,
+      "seed": 0,
+      "ssim": 0.7516617901397474,
+      "ssim_vs_rgb": 0.7307677160609852,
+      "vae_ceiling_ssim": 0.9267796603116122,
+      "window_start": 16,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8645814657211304,
+      "z_target_std": 0.8824149370193481
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 75,
+      "episode_id": 60453,
+      "episode_index": 75,
+      "latent_mae": 0.1830664426088333,
+      "latent_mse": 0.08903497457504272,
+      "name": "ep60453_v0_s00020",
+      "pixel_mae": 0.022345179691910744,
+      "pixel_mse": 0.00374150974676013,
+      "pixel_mse_vs_rgb": 0.0038576589431613684,
+      "seed": 0,
+      "ssim": 0.8712897391030283,
+      "ssim_vs_rgb": 0.8552534688602794,
+      "vae_ceiling_ssim": 0.957857856244752,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9377545714378357,
+      "z_target_std": 0.9490862488746643
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 76,
+      "episode_id": 36295,
+      "episode_index": 76,
+      "latent_mae": 0.1735362410545349,
+      "latent_mse": 0.061728429049253464,
+      "name": "ep36295_v0_s00020",
+      "pixel_mae": 0.01664181798696518,
+      "pixel_mse": 0.0008562832372263074,
+      "pixel_mse_vs_rgb": 0.0010535703040659428,
+      "seed": 0,
+      "ssim": 0.9474744507760713,
+      "ssim_vs_rgb": 0.9341357440659495,
+      "vae_ceiling_ssim": 0.9722674001346935,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.816254198551178,
+      "z_target_std": 0.8267771005630493
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 77,
+      "episode_id": 17148,
+      "episode_index": 77,
+      "latent_mae": 0.1977761685848236,
+      "latent_mse": 0.09739231318235397,
+      "name": "ep17148_v0_s00004",
+      "pixel_mae": 0.029817719012498856,
+      "pixel_mse": 0.007944452576339245,
+      "pixel_mse_vs_rgb": 0.008275995962321758,
+      "seed": 0,
+      "ssim": 0.9035878055023424,
+      "ssim_vs_rgb": 0.8933638713576577,
+      "vae_ceiling_ssim": 0.9722880684968197,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.931441068649292,
+      "z_target_std": 0.9485109448432922
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 78,
+      "episode_id": 5964,
+      "episode_index": 78,
+      "latent_mae": 0.3080434203147888,
+      "latent_mse": 0.22694921493530273,
+      "name": "ep5964_v0_s00032",
+      "pixel_mae": 0.04892956092953682,
+      "pixel_mse": 0.011184349656105042,
+      "pixel_mse_vs_rgb": 0.011479966342449188,
+      "seed": 0,
+      "ssim": 0.7370258714213516,
+      "ssim_vs_rgb": 0.724796611251253,
+      "vae_ceiling_ssim": 0.9460830869096698,
+      "window_start": 32,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9245232343673706,
+      "z_target_std": 0.9503637552261353
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 79,
+      "episode_id": 34148,
+      "episode_index": 79,
+      "latent_mae": 0.2351384460926056,
+      "latent_mse": 0.13312751054763794,
+      "name": "ep34148_v0_s00036",
+      "pixel_mae": 0.04348178580403328,
+      "pixel_mse": 0.008555126376450062,
+      "pixel_mse_vs_rgb": 0.009108676575124264,
+      "seed": 0,
+      "ssim": 0.8026473377690171,
+      "ssim_vs_rgb": 0.783034060940598,
+      "vae_ceiling_ssim": 0.9361921061169017,
+      "window_start": 36,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9258173704147339,
+      "z_target_std": 0.9409059286117554
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 80,
+      "episode_id": 50125,
+      "episode_index": 80,
+      "latent_mae": 0.1647931933403015,
+      "latent_mse": 0.06938062608242035,
+      "name": "ep50125_v0_s00028",
+      "pixel_mae": 0.02931905910372734,
+      "pixel_mse": 0.005139211658388376,
+      "pixel_mse_vs_rgb": 0.005375958979129791,
+      "seed": 0,
+      "ssim": 0.8779954386479927,
+      "ssim_vs_rgb": 0.8661864598592123,
+      "vae_ceiling_ssim": 0.9703403043024468,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9166488647460938,
+      "z_target_std": 0.9241719245910645
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 81,
+      "episode_id": 53656,
+      "episode_index": 81,
+      "latent_mae": 0.24939346313476562,
+      "latent_mse": 0.14363108575344086,
+      "name": "ep53656_v0_s00020",
+      "pixel_mae": 0.035748302936553955,
+      "pixel_mse": 0.008779156021773815,
+      "pixel_mse_vs_rgb": 0.00902511365711689,
+      "seed": 0,
+      "ssim": 0.8134009874228275,
+      "ssim_vs_rgb": 0.8010597084507798,
+      "vae_ceiling_ssim": 0.9520955374746611,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9327682852745056,
+      "z_target_std": 0.9485651254653931
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 82,
+      "episode_id": 11022,
+      "episode_index": 82,
+      "latent_mae": 0.1838957518339157,
+      "latent_mse": 0.0750119611620903,
+      "name": "ep11022_v0_s00004",
+      "pixel_mae": 0.02480427362024784,
+      "pixel_mse": 0.0023657064884901047,
+      "pixel_mse_vs_rgb": 0.0026766364462673664,
+      "seed": 0,
+      "ssim": 0.9170652664068973,
+      "ssim_vs_rgb": 0.9044798684842659,
+      "vae_ceiling_ssim": 0.9691566066308455,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.851611316204071,
+      "z_target_std": 0.8700910806655884
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 83,
+      "episode_id": 9029,
+      "episode_index": 83,
+      "latent_mae": 0.22456428408622742,
+      "latent_mse": 0.12862344086170197,
+      "name": "ep9029_v0_s00028",
+      "pixel_mae": 0.0417574979364872,
+      "pixel_mse": 0.00972364004701376,
+      "pixel_mse_vs_rgb": 0.010436290875077248,
+      "seed": 0,
+      "ssim": 0.8024528442007123,
+      "ssim_vs_rgb": 0.7768838261113022,
+      "vae_ceiling_ssim": 0.9264253106984225,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9631814360618591,
+      "z_target_std": 0.9732949733734131
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 84,
+      "episode_id": 8896,
+      "episode_index": 84,
+      "latent_mae": 0.21669000387191772,
+      "latent_mse": 0.1162755936384201,
+      "name": "ep8896_v0_s00028",
+      "pixel_mae": 0.03452406823635101,
+      "pixel_mse": 0.006462524179369211,
+      "pixel_mse_vs_rgb": 0.006930239964276552,
+      "seed": 0,
+      "ssim": 0.8322646419207255,
+      "ssim_vs_rgb": 0.8013111930904966,
+      "vae_ceiling_ssim": 0.9313971328012871,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9144372940063477,
+      "z_target_std": 0.9272635579109192
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 85,
+      "episode_id": 46170,
+      "episode_index": 85,
+      "latent_mae": 0.2241530567407608,
+      "latent_mse": 0.12610410153865814,
+      "name": "ep46170_v0_s00004",
+      "pixel_mae": 0.03258083015680313,
+      "pixel_mse": 0.008794929832220078,
+      "pixel_mse_vs_rgb": 0.009049864485859871,
+      "seed": 0,
+      "ssim": 0.8953239303646665,
+      "ssim_vs_rgb": 0.8859115080399946,
+      "vae_ceiling_ssim": 0.969566928617882,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9780575037002563,
+      "z_target_std": 0.9938717484474182
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 86,
+      "episode_id": 39393,
+      "episode_index": 86,
+      "latent_mae": 0.17247274518013,
+      "latent_mse": 0.08118035644292831,
+      "name": "ep39393_v0_s00016",
+      "pixel_mae": 0.034858837723731995,
+      "pixel_mse": 0.007684614975005388,
+      "pixel_mse_vs_rgb": 0.008206957951188087,
+      "seed": 0,
+      "ssim": 0.8613562945163611,
+      "ssim_vs_rgb": 0.8433318679982965,
+      "vae_ceiling_ssim": 0.9568567203752922,
+      "window_start": 16,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9444729089736938,
+      "z_target_std": 0.9579250812530518
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 87,
+      "episode_id": 40738,
+      "episode_index": 87,
+      "latent_mae": 0.21535997092723846,
+      "latent_mse": 0.11490873992443085,
+      "name": "ep40738_v0_s00092",
+      "pixel_mae": 0.03554277867078781,
+      "pixel_mse": 0.008089692331850529,
+      "pixel_mse_vs_rgb": 0.00904642790555954,
+      "seed": 0,
+      "ssim": 0.8571374452475345,
+      "ssim_vs_rgb": 0.828207664417498,
+      "vae_ceiling_ssim": 0.9436925559332876,
+      "window_start": 92,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.1165112257003784,
+      "z_target_std": 1.1283278465270996
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 88,
+      "episode_id": 16907,
+      "episode_index": 88,
+      "latent_mae": 0.18271319568157196,
+      "latent_mse": 0.08840420097112656,
+      "name": "ep16907_v0_s00004",
+      "pixel_mae": 0.04350150376558304,
+      "pixel_mse": 0.008447668515145779,
+      "pixel_mse_vs_rgb": 0.009149421937763691,
+      "seed": 0,
+      "ssim": 0.8409681627244661,
+      "ssim_vs_rgb": 0.8164871696269873,
+      "vae_ceiling_ssim": 0.9355908794836565,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.980814516544342,
+      "z_target_std": 0.9870777130126953
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 89,
+      "episode_id": 67045,
+      "episode_index": 89,
+      "latent_mae": 0.16192637383937836,
+      "latent_mse": 0.06538673490285873,
+      "name": "ep67045_v0_s00008",
+      "pixel_mae": 0.023865049704909325,
+      "pixel_mse": 0.002523540984839201,
+      "pixel_mse_vs_rgb": 0.0028104064986109734,
+      "seed": 0,
+      "ssim": 0.8827149362275095,
+      "ssim_vs_rgb": 0.8601930592999314,
+      "vae_ceiling_ssim": 0.9531870195359895,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8198711276054382,
+      "z_target_std": 0.8317821025848389
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 90,
+      "episode_id": 69447,
+      "episode_index": 90,
+      "latent_mae": 0.2576115131378174,
+      "latent_mse": 0.1716175228357315,
+      "name": "ep69447_v0_s00008",
+      "pixel_mae": 0.05089579522609711,
+      "pixel_mse": 0.01204680372029543,
+      "pixel_mse_vs_rgb": 0.012496967799961567,
+      "seed": 0,
+      "ssim": 0.7520221273104349,
+      "ssim_vs_rgb": 0.7347819606463114,
+      "vae_ceiling_ssim": 0.934744580225511,
+      "window_start": 8,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8649470210075378,
+      "z_target_std": 0.8843685388565063
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 91,
+      "episode_id": 51382,
+      "episode_index": 91,
+      "latent_mae": 0.1982496678829193,
+      "latent_mse": 0.10497885197401047,
+      "name": "ep51382_v0_s00000",
+      "pixel_mae": 0.022870777174830437,
+      "pixel_mse": 0.0044988286681473255,
+      "pixel_mse_vs_rgb": 0.004682411905378103,
+      "seed": 0,
+      "ssim": 0.8835589488347372,
+      "ssim_vs_rgb": 0.8713731910243179,
+      "vae_ceiling_ssim": 0.9662353793780009,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.892338216304779,
+      "z_target_std": 0.9144943952560425
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 92,
+      "episode_id": 49658,
+      "episode_index": 92,
+      "latent_mae": 0.19120736420154572,
+      "latent_mse": 0.0918571725487709,
+      "name": "ep49658_v0_s00004",
+      "pixel_mae": 0.034630075097084045,
+      "pixel_mse": 0.00825043860822916,
+      "pixel_mse_vs_rgb": 0.008709736168384552,
+      "seed": 0,
+      "ssim": 0.8532459988738551,
+      "ssim_vs_rgb": 0.8367913871100454,
+      "vae_ceiling_ssim": 0.9535459171641957,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9300178289413452,
+      "z_target_std": 0.9450326561927795
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 93,
+      "episode_id": 28817,
+      "episode_index": 93,
+      "latent_mae": 0.14409928023815155,
+      "latent_mse": 0.055762577801942825,
+      "name": "ep28817_v0_s00156",
+      "pixel_mae": 0.02520899660885334,
+      "pixel_mse": 0.0045167263597249985,
+      "pixel_mse_vs_rgb": 0.004866982344537973,
+      "seed": 0,
+      "ssim": 0.9008984023874457,
+      "ssim_vs_rgb": 0.8851380727507852,
+      "vae_ceiling_ssim": 0.966458513881221,
+      "window_start": 156,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8829370737075806,
+      "z_target_std": 0.8853690028190613
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 94,
+      "episode_id": 62784,
+      "episode_index": 94,
+      "latent_mae": 0.25454068183898926,
+      "latent_mse": 0.17888851463794708,
+      "name": "ep62784_v0_s00004",
+      "pixel_mae": 0.053860317915678024,
+      "pixel_mse": 0.01571369171142578,
+      "pixel_mse_vs_rgb": 0.01628236286342144,
+      "seed": 0,
+      "ssim": 0.7782828428528525,
+      "ssim_vs_rgb": 0.7556379527756663,
+      "vae_ceiling_ssim": 0.9341401999646967,
+      "window_start": 4,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 1.0967578887939453,
+      "z_target_std": 1.1193842887878418
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 95,
+      "episode_id": 4015,
+      "episode_index": 95,
+      "latent_mae": 0.25691118836402893,
+      "latent_mse": 0.15863153338432312,
+      "name": "ep4015_v0_s00000",
+      "pixel_mae": 0.03972528129816055,
+      "pixel_mse": 0.007842415012419224,
+      "pixel_mse_vs_rgb": 0.008214978501200676,
+      "seed": 0,
+      "ssim": 0.8374265504605842,
+      "ssim_vs_rgb": 0.8247180472720753,
+      "vae_ceiling_ssim": 0.953696319551179,
+      "window_start": 0,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8228024840354919,
+      "z_target_std": 0.8422228097915649
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 96,
+      "episode_id": 65802,
+      "episode_index": 96,
+      "latent_mae": 0.2191433161497116,
+      "latent_mse": 0.12380160391330719,
+      "name": "ep65802_v0_s00016",
+      "pixel_mae": 0.04336676374077797,
+      "pixel_mse": 0.012097223661839962,
+      "pixel_mse_vs_rgb": 0.0126331252977252,
+      "seed": 0,
+      "ssim": 0.8323664412353978,
+      "ssim_vs_rgb": 0.8162938031283292,
+      "vae_ceiling_ssim": 0.9489898537144517,
+      "window_start": 16,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.8634377121925354,
+      "z_target_std": 0.881712019443512
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 97,
+      "episode_id": 9732,
+      "episode_index": 97,
+      "latent_mae": 0.17086265981197357,
+      "latent_mse": 0.06407031416893005,
+      "name": "ep9732_v0_s00028",
+      "pixel_mae": 0.019519183784723282,
+      "pixel_mse": 0.0030714368913322687,
+      "pixel_mse_vs_rgb": 0.0034711845219135284,
+      "seed": 0,
+      "ssim": 0.9093213207793959,
+      "ssim_vs_rgb": 0.8981821428645741,
+      "vae_ceiling_ssim": 0.9700875535155787,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.7819911241531372,
+      "z_target_std": 0.7921232581138611
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 98,
+      "episode_id": 69642,
+      "episode_index": 98,
+      "latent_mae": 0.16133879125118256,
+      "latent_mse": 0.06173548102378845,
+      "name": "ep69642_v0_s00028",
+      "pixel_mae": 0.018479928374290466,
+      "pixel_mse": 0.0023592840880155563,
+      "pixel_mse_vs_rgb": 0.0025447881780564785,
+      "seed": 0,
+      "ssim": 0.9167294791250518,
+      "ssim_vs_rgb": 0.9036945754831488,
+      "vae_ceiling_ssim": 0.9700838562214014,
+      "window_start": 28,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9145708084106445,
+      "z_target_std": 0.92197585105896
+    },
+    {
+      "aux_status": "ok",
+      "canonical": true,
+      "checkpoint_step": 7500,
+      "context_mode": "correct",
+      "context_source_episode_index": 99,
+      "episode_id": 65294,
+      "episode_index": 99,
+      "latent_mae": 0.1969311237335205,
+      "latent_mse": 0.09793681651353836,
+      "name": "ep65294_v0_s00020",
+      "pixel_mae": 0.02803219109773636,
+      "pixel_mse": 0.007425613701343536,
+      "pixel_mse_vs_rgb": 0.007893024943768978,
+      "seed": 0,
+      "ssim": 0.9058282881072073,
+      "ssim_vs_rgb": 0.8928309227481033,
+      "vae_ceiling_ssim": 0.9691960034948407,
+      "window_start": 20,
+      "z_init_anchor_mse": 0.0,
+      "z_pred_std": 0.9166455864906311,
+      "z_target_std": 0.9349413514137268
+    }
+  ],
+  "run_name": "wan-overfit100-s3-20260730",
+  "sampling_steps": 25,
+  "schema": "overfit100_eval_aggregation_v2",
+  "train_data_dir": "gs://v6_east1d/datasets/exp02_overfit100/train100",
+  "windows": [
+    {
+      "canonical": true,
+      "episode_id": 25189,
+      "episode_index": 0,
+      "name": "ep25189_v0_s00048",
+      "used_text": "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)",
+      "window_start": 48
+    },
+    {
+      "canonical": true,
+      "episode_id": 67253,
+      "episode_index": 1,
+      "name": "ep67253_v0_s00028",
+      "used_text": "Fully open the slightly open drawer and put the black pen in the drawer",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 3905,
+      "episode_index": 2,
+      "name": "ep3905_v0_s00020",
+      "used_text": "Rotate the orange toy car 90 degrees counterclockwise",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 40985,
+      "episode_index": 3,
+      "name": "ep40985_v0_s00008",
+      "used_text": "Remove the black marker from the pot and put it on the table",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 53956,
+      "episode_index": 4,
+      "name": "ep53956_v0_s00028",
+      "used_text": "Move lid on or off of container (ex: pot, cup, pill bottle)",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 45109,
+      "episode_index": 5,
+      "name": "ep45109_v0_s00068",
+      "used_text": "Open the drawer and put the black blocks in the drawer on the desk",
+      "window_start": 68
+    },
+    {
+      "canonical": true,
+      "episode_id": 26802,
+      "episode_index": 6,
+      "name": "ep26802_v0_s00052",
+      "used_text": "Open or close curtain (ex: blanket on bed, shower curtain, shades)",
+      "window_start": 52
+    },
+    {
+      "canonical": true,
+      "episode_id": 48923,
+      "episode_index": 7,
+      "name": "ep48923_v0_s00028",
+      "used_text": "Move object into or out of container (ex: drawer, clothes hamper, plate, trashcan, washer)",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 22546,
+      "episode_index": 8,
+      "name": "ep22546_v0_s00020",
+      "used_text": "Remove the clean tag from the front of the dishwasher",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 31530,
+      "episode_index": 9,
+      "name": "ep31530_v0_s00004",
+      "used_text": "Move the green cloth to the left",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 60367,
+      "episode_index": 10,
+      "name": "ep60367_v0_s00040",
+      "used_text": "Use the spoon to stir the bowl",
+      "window_start": 40
+    },
+    {
+      "canonical": true,
+      "episode_id": 52361,
+      "episode_index": 11,
+      "name": "ep52361_v0_s00068",
+      "used_text": "Turn on the stove light",
+      "window_start": 68
+    },
+    {
+      "canonical": true,
+      "episode_id": 61233,
+      "episode_index": 12,
+      "name": "ep61233_v0_s00080",
+      "used_text": "Fold the towel in triangles",
+      "window_start": 80
+    },
+    {
+      "canonical": true,
+      "episode_id": 49497,
+      "episode_index": 13,
+      "name": "ep49497_v0_s00040",
+      "used_text": "Do any three tasks consecutively.\n\nSuggested tasks:\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Fold, spread out, or clump object (ex: cloth, charging cord, clothes)\n* Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "window_start": 40
+    },
+    {
+      "canonical": true,
+      "episode_id": 63560,
+      "episode_index": 14,
+      "name": "ep63560_v0_s00020",
+      "used_text": "Take the snack out of the sink",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 15184,
+      "episode_index": 15,
+      "name": "ep15184_v0_s00028",
+      "used_text": "Turn the overhead lights off",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 34212,
+      "episode_index": 16,
+      "name": "ep34212_v0_s00000",
+      "used_text": "Put the gold object in the blue cup",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 30976,
+      "episode_index": 17,
+      "name": "ep30976_v0_s00004",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 4099,
+      "episode_index": 18,
+      "name": "ep4099_v0_s00004",
+      "used_text": "Pick up the blue spoon and place it on the counter",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 991,
+      "episode_index": 19,
+      "name": "ep991_v0_s00000",
+      "used_text": "Place the cube in the bowl",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 35500,
+      "episode_index": 20,
+      "name": "ep35500_v0_s00004",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 31999,
+      "episode_index": 21,
+      "name": "ep31999_v0_s00008",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 10329,
+      "episode_index": 22,
+      "name": "ep10329_v0_s00012",
+      "used_text": "Lift the top of the coffee maker",
+      "window_start": 12
+    },
+    {
+      "canonical": true,
+      "episode_id": 34499,
+      "episode_index": 23,
+      "name": "ep34499_v0_s00080",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "window_start": 80
+    },
+    {
+      "canonical": true,
+      "episode_id": 37274,
+      "episode_index": 24,
+      "name": "ep37274_v0_s00012",
+      "used_text": "Close the drawer",
+      "window_start": 12
+    },
+    {
+      "canonical": true,
+      "episode_id": 61291,
+      "episode_index": 25,
+      "name": "ep61291_v0_s00032",
+      "used_text": "Do any task, and then reset the scene.\n\nSuggested task:\n* Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)",
+      "window_start": 32
+    },
+    {
+      "canonical": true,
+      "episode_id": 6336,
+      "episode_index": 26,
+      "name": "ep6336_v0_s00000",
+      "used_text": "Press on the mouse",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 28709,
+      "episode_index": 27,
+      "name": "ep28709_v0_s00056",
+      "used_text": "Move the white and black cube to the right then lift and drop the rubik's cube in the middle position",
+      "window_start": 56
+    },
+    {
+      "canonical": true,
+      "episode_id": 21530,
+      "episode_index": 28,
+      "name": "ep21530_v0_s00008",
+      "used_text": "Use cloth to clean something (ex: table, window, mirror, plate)",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 52341,
+      "episode_index": 29,
+      "name": "ep52341_v0_s00000",
+      "used_text": "Pick up the orange object and put it in the sink",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 19306,
+      "episode_index": 30,
+      "name": "ep19306_v0_s00196",
+      "used_text": "wrap pen in towel and pack in container",
+      "window_start": 196
+    },
+    {
+      "canonical": true,
+      "episode_id": 27573,
+      "episode_index": 31,
+      "name": "ep27573_v0_s00016",
+      "used_text": "Move the mug backwards",
+      "window_start": 16
+    },
+    {
+      "canonical": true,
+      "episode_id": 37834,
+      "episode_index": 32,
+      "name": "ep37834_v0_s00036",
+      "used_text": "Put the t-shirts on the brown box.",
+      "window_start": 36
+    },
+    {
+      "canonical": true,
+      "episode_id": 11518,
+      "episode_index": 33,
+      "name": "ep11518_v0_s00080",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "window_start": 80
+    },
+    {
+      "canonical": true,
+      "episode_id": 22488,
+      "episode_index": 34,
+      "name": "ep22488_v0_s00012",
+      "used_text": "Put the two blocks inside the bowl",
+      "window_start": 12
+    },
+    {
+      "canonical": true,
+      "episode_id": 66118,
+      "episode_index": 35,
+      "name": "ep66118_v0_s00016",
+      "used_text": "Pick the tube on the table and put it in the purse",
+      "window_start": 16
+    },
+    {
+      "canonical": true,
+      "episode_id": 47809,
+      "episode_index": 36,
+      "name": "ep47809_v0_s00012",
+      "used_text": "Put the pen in the bowl on the table",
+      "window_start": 12
+    },
+    {
+      "canonical": true,
+      "episode_id": 8877,
+      "episode_index": 37,
+      "name": "ep8877_v0_s00056",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "window_start": 56
+    },
+    {
+      "canonical": true,
+      "episode_id": 15673,
+      "episode_index": 38,
+      "name": "ep15673_v0_s00020",
+      "used_text": "Put the plush toy on the toy car",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 11071,
+      "episode_index": 39,
+      "name": "ep11071_v0_s00052",
+      "used_text": "Use cup to pour something granular (ex: nuts, rice, dried pasta, coffee beans)",
+      "window_start": 52
+    },
+    {
+      "canonical": true,
+      "episode_id": 44499,
+      "episode_index": 40,
+      "name": "ep44499_v0_s00020",
+      "used_text": "Stack up the cups",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 69308,
+      "episode_index": 41,
+      "name": "ep69308_v0_s00028",
+      "used_text": "Take the yellow object from the toolbox and put it on the table",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 67477,
+      "episode_index": 42,
+      "name": "ep67477_v0_s00012",
+      "used_text": "Put the white cloth on the rack.",
+      "window_start": 12
+    },
+    {
+      "canonical": true,
+      "episode_id": 22800,
+      "episode_index": 43,
+      "name": "ep22800_v0_s00008",
+      "used_text": "Put the left yellow block on the right yellow block",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 61069,
+      "episode_index": 44,
+      "name": "ep61069_v0_s00092",
+      "used_text": "Pick up the blue pair of shoes and move them to the left side of the rack",
+      "window_start": 92
+    },
+    {
+      "canonical": true,
+      "episode_id": 35494,
+      "episode_index": 45,
+      "name": "ep35494_v0_s00036",
+      "used_text": "Twist the knobs on both handles of the pot",
+      "window_start": 36
+    },
+    {
+      "canonical": true,
+      "episode_id": 49796,
+      "episode_index": 46,
+      "name": "ep49796_v0_s00008",
+      "used_text": "Put the bowl in the container",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 19099,
+      "episode_index": 47,
+      "name": "ep19099_v0_s00004",
+      "used_text": "Put the blue lego brick in the open drawer, then close the drawer",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 69218,
+      "episode_index": 48,
+      "name": "ep69218_v0_s00004",
+      "used_text": "Press button (ex: light switch, elevators, microwave button)",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 19658,
+      "episode_index": 49,
+      "name": "ep19658_v0_s00000",
+      "used_text": "Move the bottle forward",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 19339,
+      "episode_index": 50,
+      "name": "ep19339_v0_s00024",
+      "used_text": "Remove the box out of the sink",
+      "window_start": 24
+    },
+    {
+      "canonical": true,
+      "episode_id": 4358,
+      "episode_index": 51,
+      "name": "ep4358_v0_s00040",
+      "used_text": "Use the blue fabric to wipe the stove.",
+      "window_start": 40
+    },
+    {
+      "canonical": true,
+      "episode_id": 53617,
+      "episode_index": 52,
+      "name": "ep53617_v0_s00036",
+      "used_text": "Move the black bowl next to the napkin an remove the can from the bowl",
+      "window_start": 36
+    },
+    {
+      "canonical": true,
+      "episode_id": 60900,
+      "episode_index": 53,
+      "name": "ep60900_v0_s00064",
+      "used_text": "Put the white towel inside the black basket.",
+      "window_start": 64
+    },
+    {
+      "canonical": true,
+      "episode_id": 24363,
+      "episode_index": 54,
+      "name": "ep24363_v0_s00120",
+      "used_text": "Move the small pillows to the right armrest of the couch",
+      "window_start": 120
+    },
+    {
+      "canonical": true,
+      "episode_id": 17669,
+      "episode_index": 55,
+      "name": "ep17669_v0_s00056",
+      "used_text": "Do any two tasks consecutively.\n\nSuggested tasks:\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)\n* Move object to a new position and orientation (ex: grasping, relocating, flipping)",
+      "window_start": 56
+    },
+    {
+      "canonical": true,
+      "episode_id": 54416,
+      "episode_index": 56,
+      "name": "ep54416_v0_s00004",
+      "used_text": "Turn on the extension cable",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 39091,
+      "episode_index": 57,
+      "name": "ep39091_v0_s00028",
+      "used_text": "Put the marker in the cup",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 51375,
+      "episode_index": 58,
+      "name": "ep51375_v0_s00000",
+      "used_text": "Press button (ex: light switch, elevators, microwave button)",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 36671,
+      "episode_index": 59,
+      "name": "ep36671_v0_s00008",
+      "used_text": "Use cloth to clean something (ex: table, window, mirror, plate)",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 26610,
+      "episode_index": 60,
+      "name": "ep26610_v0_s00004",
+      "used_text": "Put the cloth on the table",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 29037,
+      "episode_index": 61,
+      "name": "ep29037_v0_s00060",
+      "used_text": "Stack the items on the plank",
+      "window_start": 60
+    },
+    {
+      "canonical": true,
+      "episode_id": 24960,
+      "episode_index": 62,
+      "name": "ep24960_v0_s00052",
+      "used_text": "Put the towel inside the black object",
+      "window_start": 52
+    },
+    {
+      "canonical": true,
+      "episode_id": 48582,
+      "episode_index": 63,
+      "name": "ep48582_v0_s00020",
+      "used_text": "Put the whisker on the table",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 44550,
+      "episode_index": 64,
+      "name": "ep44550_v0_s00012",
+      "used_text": "Pick up the cutter and put it on the table",
+      "window_start": 12
+    },
+    {
+      "canonical": true,
+      "episode_id": 65562,
+      "episode_index": 65,
+      "name": "ep65562_v0_s00016",
+      "used_text": "Slightly pull out the black bin under the black and white cabinet",
+      "window_start": 16
+    },
+    {
+      "canonical": true,
+      "episode_id": 52301,
+      "episode_index": 66,
+      "name": "ep52301_v0_s00004",
+      "used_text": "Pick up the pen from the cup and put it on the table",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 62102,
+      "episode_index": 67,
+      "name": "ep62102_v0_s00024",
+      "used_text": "Turn off the lamp",
+      "window_start": 24
+    },
+    {
+      "canonical": true,
+      "episode_id": 30738,
+      "episode_index": 68,
+      "name": "ep30738_v0_s00132",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "window_start": 132
+    },
+    {
+      "canonical": true,
+      "episode_id": 23688,
+      "episode_index": 69,
+      "name": "ep23688_v0_s00000",
+      "used_text": "Move the mug to the left",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 2521,
+      "episode_index": 70,
+      "name": "ep2521_v0_s00028",
+      "used_text": "Take the red marker out of the clear cup",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 59043,
+      "episode_index": 71,
+      "name": "ep59043_v0_s00040",
+      "used_text": "Put the fork and spoon on the cutlery tray.",
+      "window_start": 40
+    },
+    {
+      "canonical": true,
+      "episode_id": 46550,
+      "episode_index": 72,
+      "name": "ep46550_v0_s00008",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 62064,
+      "episode_index": 73,
+      "name": "ep62064_v0_s00048",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "window_start": 48
+    },
+    {
+      "canonical": true,
+      "episode_id": 57681,
+      "episode_index": 74,
+      "name": "ep57681_v0_s00016",
+      "used_text": "Open the left side of the cabinet",
+      "window_start": 16
+    },
+    {
+      "canonical": true,
+      "episode_id": 60453,
+      "episode_index": 75,
+      "name": "ep60453_v0_s00020",
+      "used_text": "Put the black marker inside the yellow mug",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 36295,
+      "episode_index": 76,
+      "name": "ep36295_v0_s00020",
+      "used_text": "Open the left cabinet door",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 17148,
+      "episode_index": 77,
+      "name": "ep17148_v0_s00004",
+      "used_text": "Put the bottle on top of the black box",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 5964,
+      "episode_index": 78,
+      "name": "ep5964_v0_s00032",
+      "used_text": "move rubber bands in/out of bag",
+      "window_start": 32
+    },
+    {
+      "canonical": true,
+      "episode_id": 34148,
+      "episode_index": 79,
+      "name": "ep34148_v0_s00036",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "window_start": 36
+    },
+    {
+      "canonical": true,
+      "episode_id": 50125,
+      "episode_index": 80,
+      "name": "ep50125_v0_s00028",
+      "used_text": "pnp-table-to-bowl-bars",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 53656,
+      "episode_index": 81,
+      "name": "ep53656_v0_s00020",
+      "used_text": "Move the towel to the left",
+      "window_start": 20
+    },
+    {
+      "canonical": true,
+      "episode_id": 11022,
+      "episode_index": 82,
+      "name": "ep11022_v0_s00004",
+      "used_text": "Take the lid off the pot",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 9029,
+      "episode_index": 83,
+      "name": "ep9029_v0_s00028",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 8896,
+      "episode_index": 84,
+      "name": "ep8896_v0_s00028",
+      "used_text": "Unfold the cloth on the table once",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 46170,
+      "episode_index": 85,
+      "name": "ep46170_v0_s00004",
+      "used_text": "Move the tape measure to the right",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 39393,
+      "episode_index": 86,
+      "name": "ep39393_v0_s00016",
+      "used_text": "Put the pen in the mug",
+      "window_start": 16
+    },
+    {
+      "canonical": true,
+      "episode_id": 40738,
+      "episode_index": 87,
+      "name": "ep40738_v0_s00092",
+      "used_text": "Move the pink bowl to the left, pick up the black ceramic bowl and pour its contents into the pink bowl",
+      "window_start": 92
+    },
+    {
+      "canonical": true,
+      "episode_id": 16907,
+      "episode_index": 88,
+      "name": "ep16907_v0_s00004",
+      "used_text": "Put the orange pepper on the pan",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 67045,
+      "episode_index": 89,
+      "name": "ep67045_v0_s00008",
+      "used_text": "Open or close curtain (ex: blanket on bed, shower curtain, shades)",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 69447,
+      "episode_index": 90,
+      "name": "ep69447_v0_s00008",
+      "used_text": "Pick up the pineapple plush toy and put it in the box",
+      "window_start": 8
+    },
+    {
+      "canonical": true,
+      "episode_id": 51382,
+      "episode_index": 91,
+      "name": "ep51382_v0_s00000",
+      "used_text": "Press button (ex: light switch, elevators, microwave button)",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 49658,
+      "episode_index": 92,
+      "name": "ep49658_v0_s00004",
+      "used_text": "Remove the wrench from the toolbox and put it inside the large blue cup on the right",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 28817,
+      "episode_index": 93,
+      "name": "ep28817_v0_s00156",
+      "used_text": "Move object to a new position and orientation (ex: grasping, relocating, flipping)",
+      "window_start": 156
+    },
+    {
+      "canonical": true,
+      "episode_id": 62784,
+      "episode_index": 94,
+      "name": "ep62784_v0_s00004",
+      "used_text": "Put the blue object inside the drawer and close it",
+      "window_start": 4
+    },
+    {
+      "canonical": true,
+      "episode_id": 4015,
+      "episode_index": 95,
+      "name": "ep4015_v0_s00000",
+      "used_text": "Take the cloth on the desk pad and put it on the table",
+      "window_start": 0
+    },
+    {
+      "canonical": true,
+      "episode_id": 65802,
+      "episode_index": 96,
+      "name": "ep65802_v0_s00016",
+      "used_text": "Fold, spread out, or clump object (ex: cloth, charging cord, clothes)",
+      "window_start": 16
+    },
+    {
+      "canonical": true,
+      "episode_id": 9732,
+      "episode_index": 97,
+      "name": "ep9732_v0_s00028",
+      "used_text": "Hang or unhang object (ex: towel on hook, clothes over chair)",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 69642,
+      "episode_index": 98,
+      "name": "ep69642_v0_s00028",
+      "used_text": "Pick up the folk from the dryer and put it in the sink",
+      "window_start": 28
+    },
+    {
+      "canonical": true,
+      "episode_id": 65294,
+      "episode_index": 99,
+      "name": "ep65294_v0_s00020",
+      "used_text": "Open the soap bottle",
+      "window_start": 20
+    }
+  ]
+}
