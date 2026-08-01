@@ -281,3 +281,24 @@ tpu create v6 -n 64 --name exp02-overfit100-s3ext10k-yixun \
 - **Acceptance:** preflights green (pinned snapshot, dataset byte-verify, manifest-bound context table); restore reports start_step=2500; loss resumes ≈0.145 and declines; no NaN; 3 new checkpoints saved and retained; ~1.07 steps/s.
 - **Follow-on evals (same approval umbrella, D11 structure):** s3_intermediate at 5000 and 7500 (seed-0 canonical), segment-final 3×3 + full-set at 10000 — launched at fc9ac52 after training lands (resume staging ON, ffmpeg fix live → ceilings populate).
 - **Job id:** `20260801-032202-ee7d478b-exp02-overfit100-s3ext10k-yixun` (submitted 2026-08-01T03:22Z). Final `COMMIT=81ae5717cf631e654c6f2af918360a6e98787c3c` — the tip at submission (docs-only commits above ee10749; code byte-identical to review-APPROVED fc9ac52 throughout).
+
+## Job 24 — v6e-8 SAMPLING-STEPS PROBE (H1/H2 discriminator) @ ckpt 2500 — launched 2026-08-01
+
+Commit: `f4210037f795f605baf579c9e04243d200ed01a7` (tip at submission; probe code = review-APPROVED `a921917`, docs commits above). **Approved by Yixun: "approve sampling probe" (2026-08-01); design approval-pinned in code (arms {25,50,100}, ckpt 2500, baseline 25, 30 canonical windows).**
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --worker0-only --name exp02-o100-probe-steps-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env RUN_NAME="wan-overfit100-s3-20260730" \
+  --env CHECKPOINT_STEP=2500 \
+  --env COMMIT="f4210037f795f605baf579c9e04243d200ed01a7" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/probe_wan_overfit100_sampling.sh
+```
+
+- **What:** 30 seeded canonical windows × sampling arms {25, 50, 100} at step-2500, seed 0, correct context; standalone diagnostic, verdict-isolated by construction (canonical output only: `validation_probe_sampling/probe_steps_ckpt2500.json`, confirmed unoccupied pre-launch).
+- **Cost:** ~55 min on v6e-8 (37 min rollouts + decodes + setup); no resume — a preemption restarts it (single writer confirmed: no prior attempt exists). Predeclared fallback if weather turns: resubmit with PROBE_NUM_WINDOWS=15.
+- **Acceptance:** (i) validity — probe 25-arm agrees row-level with the landed segment-final seed-0 correct rows for the same 30 windows (reference mean 0.8100125855 / median 0.8059329625; mismatch invalidates the PROBE, not the checkpoint); (ii) read-out — paired per-window deltas 50−25 and 100−25: material lift ⇒ H2 discretization component real; flat ⇒ sampling-side H2 excluded, residual gap is the training objective (H1 + objective mismatch).
+- **Job id:** (appended at submission)
