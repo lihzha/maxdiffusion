@@ -6,8 +6,8 @@ Every finding is addressed here; the resolution record is appended to the review
 **overclaiming causation from an elimination that was narrower than I described** — corrected throughout.
 I independently re-derived the reviewer's measurements from the artifacts and they all reproduce exactly.
 
-> Pending: the step-10,000 **full-set** pass (1,629 windows) is still running. No conclusion below depends on
-> it; it decides only the stronger tier at the 10k generation.
+> **Complete as of 2026-08-01T18:05Z** — the step-10,000 full-set pass landed (1,629/1,629, role ok) and is
+> incorporated below. It changed no conclusion, but it did correct one factual claim: see §2.
 
 ## 1. The question, and the plain answer
 
@@ -15,8 +15,8 @@ I independently re-derived the reviewer's measurements from the artifacts and th
 trajectories, conditioned on a per-trajectory language instruction plus the first-frame latent?
 
 **Answer.** **No — at the tested budget and recipe, the predeclared criterion was not met.** At 10,000 steps,
-0 of 100 canonical windows reached m_corr ≥ 0.95 (cohort mean 0.8414, best window 0.9484); at 2,500 steps the
-full-set tier reached 6.4% against a required 90%. This experiment does **not** show that the model can never
+0 of 100 canonical windows reached m_corr ≥ 0.95 (cohort mean 0.8414, best window 0.9484), and the full-set
+tier reached 14.1% against a required 90%. This experiment does **not** show that the model can never
 memorize this set — it shows that this recipe, at this budget, does not.
 
 ## 2. Verdicts
@@ -33,7 +33,7 @@ re-running step 2500 under the 10k eval generation — not worth the compute.)
 | Tier | Rule | Measured | Verdict |
 | --- | --- | --- | --- |
 | Canonical | ≥90% of 100 at m_corr ≥ 0.95 | **0/100 (0.0%)**; mean 0.8414, max 0.9484 | **not established** |
-| Full-set | ≥90% of 1,629 at seed-0 ≥ 0.90 | *pass in flight* | pending |
+| Full-set | ≥90% of 1,629 at seed-0 ≥ 0.90 | **229/1,629 (14.1%)**; mean 0.8322, max 0.9509 | **not established** |
 
 **Verdict A — step 2,500 (`e27fdc3`), both tiers — historical:**
 
@@ -42,8 +42,15 @@ re-running step 2500 under the 10k eval generation — not worth the compute.)
 | Canonical | 0/100 (0.0%); mean 0.8133, max 0.9461 | not established |
 | Full-set | 105/1,629 (6.4%); mean 0.7984, max 0.9480 | not established |
 
-No canonical window reached 0.95 at **any** checkpoint. The 10k full-set cohort has not yet been measured, so
-the "no window anywhere" statement is scoped to the canonical cohort plus the 2500 full set.
+**Correction, now that the last cohort is measured.** No *canonical* window reached 0.95 at any checkpoint.
+But in the 1,629-window full set at 10,000 steps, **2 windows crossed 0.95** (max 0.9509) — the only crossings
+observed in the experiment. v2's "no window in either cohort at any training budget" was therefore wrong in
+the strict sense; the accurate statement is that crossings exist and are vanishingly rare (0.1%). The verdict
+is untouched. This is precisely the claim the review (item 7) required me to scope to measured cohorts, and
+scoping it is what made the correction routine instead of a retraction.
+
+**Full-set movement across the extension:** ≥0.90 rose 105 → 229 windows (6.4% → 14.1%), mean 0.7984 → 0.8322
+— real progress, roughly 6× short of the bar.
 
 ## 3. Reliability audit — precisely what was validated
 
@@ -194,6 +201,7 @@ expectations; any direct adapter comparison needs a matched experiment.
 - Artifacts committed under `overfit100_s3_artifacts/`; HTML report at
   `overfit100_01_memorization_trajectory_results.html` (regenerates from the artifacts).
 - Checkpoints {250, 500, 1000, 1750, 2500, 5000, 7500, 10000} retained on GCS.
+- **All planned passes are complete.** Both tiers measured at both generations; no eval work outstanding.
 - Open decisions for Yixun: **merge or leave unmerged** (SOP: merge only on confirmed success; the formal
   answer is *not established*, so the default is to leave code on the branch with docs on `yixun-dev`, matching
   the exp_01 precedent), and the **exp_03 direction** per §7 — including whether to run the three cheap

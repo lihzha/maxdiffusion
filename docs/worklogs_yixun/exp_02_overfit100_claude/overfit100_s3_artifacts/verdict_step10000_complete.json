@@ -14,7 +14,7 @@
     }
   },
   "admitted_artifacts": {
-    "s3_full_set": 0,
+    "s3_full_set": 1,
     "s3_segment_final": 1
   },
   "artifact_roles": [
@@ -23,6 +23,12 @@
       "ok": true,
       "reasons": [],
       "role": "s3_segment_final"
+    },
+    {
+      "checkpoint_step": 10000,
+      "ok": true,
+      "reasons": [],
+      "role": "s3_full_set"
     }
   ],
   "c_star": 10000,
@@ -440,11 +446,10 @@
     "checkpoint_step": 10000,
     "claim": "full-set memorization",
     "established": false,
-    "evaluable": false,
-    "fraction": null,
-    "n_measured": 0,
-    "n_windows": 0,
-    "reason": "no role-validated s3_full_set pass was supplied, so the stronger tier is not evaluable and only the canonical-window claim is made (plan D11's two-tier structure).",
+    "evaluable": true,
+    "fraction": 0.14057704112952732,
+    "n_measured": 1629,
+    "n_windows": 1629,
     "required_fraction": 0.9,
     "seed": 0,
     "threshold": 0.9
