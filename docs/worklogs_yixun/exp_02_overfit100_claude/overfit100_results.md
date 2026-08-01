@@ -108,3 +108,29 @@ Verdict CLI (10k generation, c*=10000, denominator 100, coverage complete): head
 **New finding — the text signal STRENGTHENS with training.** Ablation gaps vs correct: at 2500, null −0.0141 / shuffled −0.0310; at 10000, null **−0.0393** / shuffled **−0.0530**. The model leans on the instruction *more* as it memorizes more (~3× wider gap), which is the cleanest evidence yet that the conditioning path is genuinely used and not a nuisance variable.
 
 **Process note (fail-closed guard fired correctly):** the verdict CLI **refused** to build one verdict from the 2500 artifacts (eval commit `e27fdc3`) mixed with the 10k artifacts (`46c5f41`) — "one verdict must be built from one run's passes". Correct and intended: exp_02 therefore reports **two internally-consistent verdicts**, one per eval-code generation, rather than one silently-mixed claim. The 2500 verdict (both tiers) stands as committed; the 10k verdict comprises segment-final@10000 + full-set@10000 (pending).
+
+## S3 step-10000 full-set (s3_full_set, 1,629 rollouts) + FINAL VERDICT — landed 2026-08-01T~18:05Z
+
+Job 28 `20260801-142941-95e2e0a1-…-fullset10k`, SUCCEEDED on attempt 2. **Resume carried it through a
+preemption at 533/1,629** — it continued from staged rows rather than restarting, which is the difference
+between finishing and never finishing under the day's spot weather. Role ok, 1,629 rows, aux 1,629/1,629.
+
+**FINAL VERDICT — step-10,000 generation (eval `46c5f41`), c\*=10000, both tiers evaluable, coverage complete:**
+
+| Tier | Rule | Measured | Verdict |
+| --- | --- | --- | --- |
+| Canonical | ≥90% of 100 at m_corr ≥ 0.95 | 0/100 (0.0%); mean 0.8414 | **not established** |
+| Full-set | ≥90% of 1,629 at seed-0 ≥ 0.90 | **229/1,629 (14.1%)**; mean 0.8322 | **not established** |
+
+**Full-set distribution at 10k** (seed 0, correct): mean 0.8322, median 0.8402, min 0.4445, **max 0.9509**;
+≥0.95: **2** (0.1%); ≥0.90: 229 (14.1%); ≥0.85: 714 (43.8%); ≥0.80: 1,216 (74.6%); ≥0.70: 1,571 (96.4%).
+
+**Correction to an earlier claim.** At 2,500 steps no window anywhere reached 0.95, and I had written that no
+window did "at any training budget". That is now **false in the strict sense**: at 10,000 steps **2 of 1,629
+full-set windows crossed 0.95** (max 0.9509) — the first crossings observed in the experiment. The verdict is
+unaffected (0.1% against a required 90%), and the canonical cohort still has none, but the corrected statement
+is: *crossings exist and are vanishingly rare*. The analysis-review finding that forced me to scope this claim
+to measured cohorts (review item 7) is what made the correction visible rather than embarrassing.
+
+**Progress across the extension (full-set tier):** ≥0.90 rose 105 → 229 windows (6.4% → 14.1%) and the mean
+0.7984 → 0.8322 between steps 2,500 and 10,000 — real movement, ~6× short of the bar.
