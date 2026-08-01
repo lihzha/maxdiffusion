@@ -256,3 +256,28 @@ Commit: `b52dcc6430da83251ca2a061f88cef6758b718b3` (post aux-fix; trainer path c
 
 Commit: `e27fdc37df3c9a10d6059833c4078160a955b8fc`. Approved by Query 7.
 - **Job ids:** `…-160842-…-i250`, `…-160849-…-i500`, `…-160855-…-i1000`, `…-160901-…-i1750`, `…-160907-…-final2500`, `…-160912-…-fullset` (all 20260731; outcomes pending)
+
+## Job 23 — v6e-64 S3 EXTENSION to 10k (resume from step 2500) — launched 2026-08-01
+
+Commit: `9d339dc208fdf11393f83800985e348233821950` (fc9ac52; trainer path byte-identical to e27fdc3 lineage — resume series touched eval/launchers only, verified by empty `git diff e27fdc3..fc9ac52 -- trainers/ input_pipeline/ pyconfig.py`). **Approved by Yixun: "extend to 10k" (2026-08-01, in response to the complete two-tier step-2500 verdict).**
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 64 --name exp02-overfit100-s3ext10k-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env RUN_NAME="wan-overfit100-s3-20260730" \
+  --env MAX_TRAIN_STEPS=10000 \
+  --env CHECKPOINT_STEPS="[250,500,1000,1750,2500,5000,7500,10000]" \
+  --env DATA_DIR="gs://v6_east1d/datasets/exp02_overfit100/train100" \
+  --env EXPECTED_WINDOWS=1629 --env NUM_TEXT_SLOTS=100 \
+  --env COMMIT="9d339dc208fdf11393f83800985e348233821950" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/train_wan_overfit100.sh
+```
+
+- **Mechanics:** same RUN_NAME → Orbax restores step-2500 (params/opt_state/step; dataloader reseeded seed+2500 per the documented partial-resume convention); LR = absolute 250-step warmup then CONSTANT 1e-5 (D9 — segment-invariant, extension-safe by design); checkpoint_steps extends the retained list, planner saves only {5000, 7500, 10000}.
+- **Cost estimate:** first segment did 2,500 steps in 39 min on v6e-64 → 7,500 steps ≈ **2 h** compute (plus queue/preemption weather).
+- **Acceptance:** preflights green (pinned snapshot, dataset byte-verify, manifest-bound context table); restore reports start_step=2500; loss resumes ≈0.145 and declines; no NaN; 3 new checkpoints saved and retained; ~1.07 steps/s.
+- **Follow-on evals (same approval umbrella, D11 structure):** s3_intermediate at 5000 and 7500 (seed-0 canonical), segment-final 3×3 + full-set at 10000 — launched at fc9ac52 after training lands (resume staging ON, ffmpeg fix live → ceilings populate).
+- **Job id:** (appended at submission)
