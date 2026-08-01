@@ -223,13 +223,24 @@ def main() -> None:
     full2500 = _load("step_002500_s3_full_set_aggregation.json")
     full10k = _load("step_010000_s3_full_set_aggregation.json")
     probe = _load("probe_steps_ckpt2500.json")
-    verdict = _load("verdict_step2500_complete.json")
-    verdict10k = _load("verdict_step10000_complete.json")
+    # Verdicts are per eval-generation. Pick the one whose c_star matches the checkpoint
+    # this report is displaying; never fall back to another generation's verdict.
+    verdicts = []
+    for f in sorted(ART.glob("verdict_*.json")):
+        try:
+            verdicts.append(json.loads(f.read_text()))
+        except json.JSONDecodeError:
+            continue
 
     final_seg = seg10k or seg2500
-    final_full = full10k or full2500
     final_step = final_seg["checkpoint_step"] if final_seg else 0
-    v = verdict10k or verdict
+    # A verdict is built from ONE generation's passes: never pair a full-set pass with a
+    # segment-final pass from a different checkpoint/eval-commit. The success statistic
+    # refuses such a mix outright; the report must not display one either.
+    final_full = next(
+        (f for f in (full10k, full2500) if f and f["checkpoint_step"] == final_step), None
+    )
+    v = next((x for x in verdicts if x.get("c_star") == final_step), None)
 
     mc = m_corr(final_seg) if final_seg else {}
     mc_vals = sorted(mc.values())
@@ -245,7 +256,9 @@ def main() -> None:
         (
             "Full-set windows at SSIM ≥ 0.90",
             f"{full_at_bar} / {len(full_vals)}" if full_vals else "pending",
-            f"{100*full_at_bar/len(full_vals):.1f}% · needs ≥ 90%" if full_vals else "1,629-window tier",
+            f"{100*full_at_bar/len(full_vals):.1f}% · needs ≥ 90% · step {final_step:,}"
+            if full_vals
+            else f"1,629-window tier at step {final_step:,} — pass still running",
         ),
         ("Saturation", f"+{(traj[-1]['mean']-traj[-3]['mean']):.4f}" if len(traj) >= 3 else "—",
          f"gain over last {traj[-1]['step']-traj[-3]['step']:,} steps" if len(traj) >= 3 else ""),
@@ -300,16 +313,20 @@ def main() -> None:
 
     verdict_banner = ""
     if v:
-        h = v["headline"]
-        f = v["full_set_claim"]
+        h, f = v["headline"], v["full_set_claim"]
+        full_txt = (
+            f'The full-set tier requires \u2265 90% of 1,629 windows at \u2265 0.90; measured '
+            f'<strong>{100*f["fraction"]:.1f}%</strong>.'
+            if f.get("evaluable")
+            else "The full-set tier's pass at this checkpoint is still running."
+        )
+        word = "NOT ESTABLISHED" if not h["established"] else "ESTABLISHED"
         verdict_banner = (
-            f'<div class="verdict"><div class="verdict-word">NOT ESTABLISHED</div>'
-            f'<p>The canonical tier requires ≥ 90% of the 100-window cohort at m_corr ≥ 0.95; measured '
-            f'<strong>{100*h["fraction"]:.1f}%</strong>. The full-set tier requires ≥ 90% of 1,629 windows at '
-            f'≥ 0.90; measured <strong>{100*f["fraction"]:.1f}%</strong>'
-            f'{" (c* = " + format(v.get("c_star", final_step), ",") + ")" if v.get("c_star") else ""}.</p></div>'
-            if not h["established"]
-            else f'<div class="verdict ok"><div class="verdict-word">ESTABLISHED</div></div>'
+            f'<div class="verdict"><div class="verdict-word">{word} \u00b7 STEP {final_step:,}</div>'
+            f'<p>The canonical tier requires \u2265 90% of the 100-window cohort at m_corr \u2265 0.95; '
+            f'measured <strong>{100*h["fraction"]:.1f}%</strong>. {full_txt} '
+            f'This verdict is built only from step-{final_step:,} passes \u2014 the success statistic '
+            f'refuses to mix passes from different eval commits into one claim.</p></div>'
         )
 
     dist_vals = mc_vals
