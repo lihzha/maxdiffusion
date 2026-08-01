@@ -1,6 +1,10 @@
 # exp_02 `overfit100` — Analysis (Planner)
 
-**v3, written 2026-08-01**, revising v2 against the Codex analysis review
+**v4, written 2026-08-01** — adds §5b with the three Yixun-approved diagnostics (D1/D2/D3), which resolve
+H5, H6 and H7 and replace the qualitative "leading explanation" with a quantitative mechanism. v3's text is
+otherwise preserved; where the diagnostics change a claim, §5b says so explicitly.
+
+**v3**, revising v2 against the Codex analysis review
 (`overfit100_codex_analysis_review.md`, verdict SOUND-WITH-REVISIONS: 3 MAJOR / 4 MODERATE / 2 MINOR).
 Every finding is addressed here; the resolution record is appended to the review file. v2's central error was
 **overclaiming causation from an elimination that was narrower than I described** — corrected throughout.
@@ -146,6 +150,51 @@ actually establish:
 **Honest summary: the objective/rollout mismatch is the leading explanation, and further identical training
 is a poor investment — but exp_02 has narrowed the field, not identified a binding cause.**
 
+## 5b. Diagnostics D1–D3 (Yixun-approved) — H5, H6, H7 resolved; the mechanism quantified
+
+Three cheap measurements were run on existing checkpoints/artifacts. Full numbers in `_results.md`; script and
+artifact in `diagnostics/`. They resolve every alternative §5 had left open, and together they replace the
+qualitative story with a quantitative one.
+
+**D3 — episode weighting (H6): REFUTED.** Episodes contributing 1–5 windows score 0.8319; those contributing
+21–99 score 0.8364. Flat across quartiles, r = −0.092, sign opposite to the hypothesis. Eliminated.
+
+**D1 — per-frame SSIM (H7): the free frame is negligible; compounding is visible directly.** The pinned frame
+0 scores 0.9721 but is 1 of 33 frames, lifting the reported mean by only **+0.0060** — so the ~0.84 is genuine
+prediction, and H7's inflation concern is answered in the negative. The real finding is the shape: SSIM decays
+monotonically from 0.9142 (frame 1) to 0.7106 (frame 32), **−0.204 across the rollout**. Critically, *every*
+window starts in the same place — frame-0 fidelity is 0.966–0.983 regardless of final score — and they fan out
+along the trajectory (decay −0.041 for the best window, −0.299 for the worst). **If the rollout preserved
+frame-0 fidelity, most windows would clear the 0.95 bar.** Method self-validates: mp4-decoded mean-over-frames
+reproduces the eval's recorded SSIM to mean |diff| 0.0024.
+
+**D2 — the fixed-RNG one-step loss instrument (H5): RESOLVED, and it corrects the framing.** This is the
+instrument §3 flagged as missing. Three results:
+
+1. **The optimization has not saturated.** The paired final leg (7,500→10,000) still reduces one-step loss at
+   **42σ**, 1,609/1,629 windows improving; 2500→10000 is 48.6σ with 1,627/1,629 improving. Both "the objective
+   saturated" and "this run saturated" are **false** — training is still descending, at 0.0035 per 2,500 steps
+   and decelerating.
+2. **The loss→SSIM mapping is linear and tight**: SSIM ≈ 0.9885 − 1.201 × loss, **r = −0.9994** across all
+   eight checkpoints, per-leg ratio 0.99–1.50 with no trend. This *revises* v3's framing: the rollout metric
+   never stopped responding to the objective. **The SSIM plateau is a consequence of the loss plateau, not a
+   failure of transfer.**
+3. **The bar's price:** SSIM 0.95 sits at one-step loss ≈ **0.032**, a further **74% reduction** from 0.1223 —
+   unreachable at the observed, decelerating rate. *(Local linear fit over 0.19–0.12; need not hold at 0.03.)*
+
+**The synthesis — two levers, now named precisely.** The fitted line's intercept implies a *perfect* one-step
+denoiser would score ≈0.989, above the bar; its slope of 1.2 is the price the rollout charges for each unit of
+one-step error — which is exactly the compounding D1 shows frame by frame. So:
+
+- **Lower the loss floor** (optimization, capacity, LR): measured as decelerating and 74% short. Poor odds.
+- **Lower the slope** (train on the trajectory the eval actually runs, so one-step error stops compounding):
+  D1 shows the headroom is real, since every window's frame 0 already clears the bar.
+
+This is the sharpest statement exp_02 supports, and it strengthens rather than replaces §5's conclusion: the
+objective/rollout relationship is the binding constraint, and it is now measured (slope 1.2, intercept 0.989)
+rather than inferred. What remains genuinely untested is whether a *different optimization regime* (LR was
+locked at 1e-5) could reach a materially lower loss floor.
+
 ## 6. Text conditioning: dependence on the correct context grows with training
 
 | | correct | null (empty) | shuffled (deranged) |
@@ -170,21 +219,20 @@ ran at the ablation checkpoints only (2500 and 10000), not at every checkpoint.
 **Do not run another identical extension.** That is the one strong operational conclusion: the measured gain
 rate makes another 10k steps worth perhaps ~0.005 mean SSIM.
 
-Before any large exp_03 commitment, three **cheap, decisive** measurements — all runnable on existing
-checkpoints and artifacts, no new training:
+**The three cheap diagnostics have now been run** (§5b) and they point one way: the defect is the ~1.2×
+amplification of one-step error into rollout error, not representation quality, not episode weighting, not a
+free pinned frame, and not a saturated optimizer.
 
-1. **Future-only / per-frame SSIM** from the existing rollouts (H7). Separates the free pinned frame from the
-   predicted remainder and tells you how much of 0.84 is real prediction.
-2. **The fixed-RNG one-step loss instrument** across the retained checkpoints (H5). Distinguishes "the
-   objective saturated" from "this optimization run saturated" — the single largest hole in the current story.
-3. **Per-episode breakdown against window count** (H6). Tests whether episodes with few windows are simply
-   under-trained relative to how the verdict counts them.
-
-Then, if the objective hypothesis still stands, **exp_03 should attack the compounding directly** — train on
+**exp_03 should attack the compounding directly** — train on
 the trajectory the eval actually runs (multi-step / scheduled sampling, or a short-horizon rollout loss atop
 the denoising objective). Also worth predeclaring: a success metric appropriate to the recipe (latent-space
 reconstruction, or a perceptual metric with a calibrated bar), chosen **in advance** rather than used to
 reinterpret exp_02 after the fact.
+
+**One thing still worth testing cheaply before exp_03:** an LR/optimizer sweep at fixed short budget. D2
+shows the loss is still descending but decelerating, and LR was locked at 1e-5 throughout — the one lever §5b
+could not rule out. A few short runs at 2e-5 / 5e-5 would bound how much of the remaining 74% is reachable by
+optimization alone.
 
 **On the adapter program — a reference point, not a bound.** v2 claimed frozen adapters "should not be
 expected to beat" 0.84; that is unsupported and is withdrawn. A particular full-FT optimization run does not
