@@ -130,12 +130,14 @@ Published mode is now **compare-only**: `_write_json_immutable` / `_write_text_i
 `_write_rows_csv` take `compare_only=True`, under which a missing artifact is refused instead of
 created, so the create-if-absent path is unreachable there.
 
-> **One deliberate non-binding, argued:** the marker records `run_signature_sha256` for provenance
-> but re-verification does **not** require it to match. A later commit must still be able to verify
-> a published directory by recomputation — that is exactly what compare-only mode is for — and the
-> artifacts are already authenticated by the aggregation hash plus the role/step/manifest/row-count
-> binding. Requiring signature equality would turn every legitimate re-verification at a newer SHA
-> into a hard failure.
+> **Retracted by pass 4 — see `overfit100_codex_code_eval-resume4_review.md` finding 2.** This
+> record originally claimed that the marker's `run_signature_sha256` was deliberately non-binding
+> and that a newer commit could still re-verify a published directory. That was **false as
+> written**: compare-only mode regenerates and byte-compares the marker (rebinding the hash), and
+> `aggregation.json` embeds `COMMIT`, so a newer commit fails the aggregation comparison first.
+> The reviewer ruled the stricter behaviour SAFE and it is now documented as the real contract:
+> published re-verification is **same-signature/same-commit only**, and a newer commit is expected
+> to refuse.
 
 **Tests:** `test_the_marker_records_what_it_authenticates`,
 `test_an_unparseable_or_foreign_marker_hard_fails_at_entry` (6 shapes: empty, blank, corrupt, list,
