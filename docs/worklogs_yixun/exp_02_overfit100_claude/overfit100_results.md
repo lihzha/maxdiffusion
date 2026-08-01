@@ -39,3 +39,20 @@ Job `20260731-160907-6359b989-exp02-o100-s3ev-final2500-yixun`, SUCCEEDED on att
 **Checkpoint trajectory (canonical-100 mean, correct mode):** 0.7580 (250) → 0.7707 (500) → 0.7892 (1000) → 0.8020 (1750) → **0.8133 (2500)** — monotone, ~+0.011 per 750 steps at the tail, not saturated; train loss at 2500 was 0.145 and still falling. Read: memorization is progressing but far from the 0.95 bar at ~390 epochs — the D10 extension question (continue past 2,500 steps) is now the live decision.
 
 **Aux:** all 900 rows `FileNotFoundError: ffmpeg` (expected — pre-fix tarball, issue #8); VAE ceilings recoverable via the checkpoint-independent backfill; primary metrics unaffected.
+
+## S3 step-2500 full-set (s3_full_set, 1,629 rollouts) + COMPLETE TWO-TIER VERDICT — landed 2026-08-01T01:25Z-ish (attempt 9)
+
+Job `20260731-160912-184642ed-exp02-o100-s3ev-fullset-yixun`, SUCCEEDED attempt 9 (8 preemption kills; the same calm window carried both big passes). Artifact: `.../validation/step_002500_s3_full_set/aggregation.json` (1,629 rows, role ok, covered 1,629/1,629). Committed copy + complete verdict in `overfit100_s3_artifacts/`.
+
+**COMPLETE TWO-TIER VERDICT (verdict CLI, both artifacts admitted):**
+
+| Tier | Established | Detail |
+| --- | --- | --- |
+| Canonical-window memorization (≥90% of 100 at m_corr ≥ 0.95) | **NO** | fraction 0.0 (0/100), mean m_corr 0.8133 |
+| Full-set memorization (≥90% of 1,629 at seed-0 SSIM ≥ 0.90, c*=2500) | **NO** | fraction **0.0645** (105/1,629) |
+
+**Full-set distribution (seed 0, correct mode):** mean 0.7984, median 0.8111, min 0.2589, max 0.9480; ≥0.90: 105 (6.4%); ≥0.85: 435 (26.7%); ≥0.80: 891 (54.7%); ≥0.70: 1,413 (86.7%). Consistent with the canonical cohort (mean 0.8133) — the full set adds a harder tail (min 0.259 vs canonical min 0.587).
+
+**Bottom line at 2,500 steps (~390 epochs):** memorization is real, text-conditioned, monotonically improving, and uniformly incomplete — no window in either cohort reaches 0.95. Train loss 0.145 still falling. The D10 extension question (continue S3 beyond 2,500 steps) is the live decision; the alternative reading (rollout-error / objective-mismatch ceiling) is examined in `_analysis.md`.
+
+**Aux:** all rows ffmpeg-missing as in segment-final (issue #8; pre-fix tarball); primary metrics unaffected; ceilings recoverable via the checkpoint-independent backfill.
