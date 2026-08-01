@@ -31,9 +31,9 @@ Last updated: 2026-07-31
 - **Status:** standing rule for every reviewer call; classified infrastructure (launch-env), no code change.
 
 ### 6. gcloud/gsutil reauth expires silently and recurs (infra, standing)
-- **Symptom:** fourth recurrence 2026-07-31 (previously 2026-07-29 ×2 + earlier) — `ReauthUnattendedError` / "Reauthentication required" from gsutil; the `tpu` CLI then reports jobs as "not found". A 2.5 h monitoring loop once read auth failures as "PENDING" because the poll's error fallback conflated them with a missing status file.
+- **Symptom:** fifth recurrence 2026-08-01 ~08:25Z (blocked the four 10k eval launches; caught immediately by empty-listing anomaly + stderr probe), fourth 2026-07-31 (previously 2026-07-29 ×2 + earlier) — `ReauthUnattendedError` / "Reauthentication required" from gsutil; the `tpu` CLI then reports jobs as "not found". A 2.5 h monitoring loop once read auth failures as "PENDING" because the poll's error fallback conflated them with a missing status file.
 - **Workaround:** user runs `gcloud auth login` (account yh4742@princeton.edu). **Monitoring rule:** poll scripts must treat gsutil stderr containing "Reauth" as an ALARM state (stop and surface), never as pending/absent.
-- **Status:** standing; recurs on a multi-hour cadence during long sessions. Auth verified working as of 2026-07-31 21:50 UTC.
+- **Status:** standing; recurs on a ~4-h cadence during long sessions. Rule reaffirmed: any silently-empty gsutil listing for objects known to exist = probe stderr immediately, never trust an empty result.
 
 ### 7. Shared side-adapter trainer: checkpoint retention works by accident with keep_period=-1 (real bug, latent)
 - **Symptom:** `wan_ti2v_side_adapter_trainer` forwards `checkpoint_keep_period or None` to Orbax, so the repo-wide default `-1` reaches it verbatim; retention then rests on Python's `step % -1 == 0` being truthy — every checkpoint survives BY ACCIDENT. Flip the default or pass a positive keep_period and eviction semantics change silently (max_to_keep=3 then evicts early checkpoints, which would have deleted exp-critical baselines).
