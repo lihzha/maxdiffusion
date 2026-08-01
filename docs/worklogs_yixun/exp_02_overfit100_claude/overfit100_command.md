@@ -353,3 +353,36 @@ done
   worst `ep30738_v0_s00132` (0.6756) · 25th `ep4358_v0_s00040` (0.8068) · median `ep4015_v0_s00000`
   (0.8446) · 75th `ep50125_v0_s00028` (0.8805) · best `ep36295_v0_s00020` (0.9484).
 - **Job ids (submitted 2026-08-01T18:14Z):** ckpt 2500 → `20260801-181353-3e7419e4-exp02-o100-vid-2500-yixun`; ckpt 10000 → `20260801-181420-9e61cb62-exp02-o100-vid-10000-yixun`.
+
+## Job 31 — v6e-8 DIAGNOSTIC D2: fixed-RNG one-step loss instrument, all 8 checkpoints — launched 2026-08-01
+
+**Approved by Yixun** ("run the three cheap diagnostics"). Closes the instrument gap called out in
+`_analysis.md` §3/§5-H5: the reported losses were noisy *training* logs, never the deterministic
+all-window one-step instrument. Distinguishes "the objective saturated" from "this optimization run saturated".
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+tpu create v6 -n 8 --worker0-only --name exp02-o100-d2-valloss-yixun \
+  --code-dir . \
+  --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+  --env RUN_NAME="wan-overfit100-s3-20260730" \
+  --env CHECKPOINT_STEPS="250,500,1000,1750,2500,5000,7500,10000" \
+  --env TRAIN_COMMIT="81ae5717cf631e654c6f2af918360a6e98787c3c" \
+  --env COMMIT="09f65f6be078374108812403d3fb8dc83bee3843" \
+  --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+  -- bash bash_scripts/eval_wan_overfit100_val_loss.sh
+```
+
+- **What it measures:** per-window one-step denoising loss at a **deterministic (t, ε) keyed by
+  (episode_id, window_start)** — identical noise draw at every checkpoint, so the curve is comparable
+  across checkpoints in a way training logs never were. All 1,629 windows, seed 0.
+- **TRAIN_COMMIT nuance (documented, not hidden):** checkpoints ≤2500 were produced by Job 16
+  (`b52dcc6`) and >2500 by the Job 23 extension (`81ae571`). One SHA is stamped for the whole sweep;
+  this is sound because the trainer path was verified **byte-identical** between them
+  (`git diff` over `trainers/`, `input_pipeline/`, `pyconfig.py` is empty). The extension SHA is used.
+- **Cost:** ~30–50 min on v6e-8 (8 Orbax restores of the 5B + 1,629 one-step forwards each; no rollouts,
+  no VAE decode — the loss arm frees the VAE at startup).
+- **Acceptance:** 8 checkpoint rows; per-window count 1,629 each; loss finite and monotone-ish; the value at
+  2500/10000 should sit in the neighbourhood of the training logs (~0.145 / ~0.12) but is the *authoritative*
+  number since it is fixed-RNG.
+- **Job id:** (appended at submission)
