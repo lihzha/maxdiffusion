@@ -259,7 +259,7 @@ Commit: `e27fdc37df3c9a10d6059833c4078160a955b8fc`. Approved by Query 7.
 
 ## Job 23 — v6e-64 S3 EXTENSION to 10k (resume from step 2500) — launched 2026-08-01
 
-Commit: `9d339dc208fdf11393f83800985e348233821950` (fc9ac52; trainer path byte-identical to e27fdc3 lineage — resume series touched eval/launchers only, verified by empty `git diff e27fdc3..fc9ac52 -- trainers/ input_pipeline/ pyconfig.py`). **Approved by Yixun: "extend to 10k" (2026-08-01, in response to the complete two-tier step-2500 verdict).**
+Commit: `ee10749bdd3d2224fe93f9834a828ed20d26aa79` (launch tip; code files byte-identical to review-APPROVED fc9ac52 — only docs commits on top; trainer path byte-identical to e27fdc3 lineage — resume series touched eval/launchers only, verified by empty `git diff e27fdc3..fc9ac52 -- trainers/ input_pipeline/ pyconfig.py`). **Approved by Yixun: "extend to 10k" (2026-08-01, in response to the complete two-tier step-2500 verdict).**
 
 ```bash
 cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
@@ -271,7 +271,7 @@ tpu create v6 -n 64 --name exp02-overfit100-s3ext10k-yixun \
   --env CHECKPOINT_STEPS="[250,500,1000,1750,2500,5000,7500,10000]" \
   --env DATA_DIR="gs://v6_east1d/datasets/exp02_overfit100/train100" \
   --env EXPECTED_WINDOWS=1629 --env NUM_TEXT_SLOTS=100 \
-  --env COMMIT="9d339dc208fdf11393f83800985e348233821950" \
+  --env COMMIT="ee10749bdd3d2224fe93f9834a828ed20d26aa79" \
   --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
   -- bash bash_scripts/train_wan_overfit100.sh
 ```
