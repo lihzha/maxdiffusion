@@ -362,6 +362,17 @@ eval_pass_role: ''   # MANDATORY: one of s2_gate / s3_intermediate / s3_segment_
 #   over this key. Resume is single-process only: multi-host jobs disable staging entirely so the
 #   decode's collectives cannot desynchronize between hosts.
 overfit100_eval_resume: True
+
+# delta (H1 sampling probe): knobs for the STANDALONE diagnostic
+# src/maxdiffusion/probe_overfit100_sampling_steps.py, which asks whether a longer sampler closes
+# the gap at checkpoint 2500. The probe is verdict-isolated -- it writes a plain diagnostic JSON to
+# validation_probe_sampling/ and cannot produce an admissible artifact -- so these keys never affect
+# an eval pass. NOTE the rollout's step count is side_adapter_sampling_steps (25, fixed by the D9
+# recipe and by the role contract); the probe overrides it PER ARM through a read-only config view,
+# never globally.
+probe_sampling_steps_list: [25, 50, 100]
+probe_num_windows: 30
+validation_probe_output_dir: ''
 eval_windows: 'canonical'
 rollout_seeds: '0,1,2'
 context_modes: 'correct'
