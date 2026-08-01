@@ -72,3 +72,15 @@ Job 24 `20260801-042558-e41be63a-exp02-o100-probe-steps-yixun`, attempt 1. 30 se
 Paired deltas: 50−25 mean **−0.0074** (0/30 improved); 100−25 mean **−0.0121** (0/30 improved).
 
 **Read:** sampling-side H2 EXCLUDED. More integration steps strictly degrade reconstruction — velocity-field error compounding dominates discretization error already at 25 steps. No sampling knob recovers the gap to 0.95; the remaining hypotheses are H1 (more training — being tested by the 10k extension) and the one-step-objective ceiling (recipe change territory). Open question noted for the record: the monotone degradation suggests FEWER steps might do marginally better; untested (arms approval-pinned), not decision-relevant now.
+
+## Extension intermediates i5000 + i7500 (s3_intermediate, seed-0 canonical) — landed 2026-08-01T~15:20–15:45Z
+
+Jobs 25/26, both SUCCEEDED attempt 1, role ok, **aux 100/100 populated for the first time** (ffmpeg fix live; VAE ceiling mean 0.9493, min 0.8812 — context only, does not bound the decoded-vs-decoded metric). Artifacts committed alongside.
+
+| step | mean | median | max | ≥0.95 | ≥0.90 | ≥0.85 | gain/250 steps |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2500 | 0.8133 | 0.8133 | 0.9461 | 0/100 | 8 | 28 | 0.0038 |
+| 5000 | 0.8320 | 0.8319 | 0.9472 | 0/100 | 12 | 41 | 0.0019 |
+| 7500 | 0.8377 | 0.8372 | 0.9475 | 0/100 | 17 | 43 | 0.0006 |
+
+**Read: saturation ≈0.84.** Per-250-step gain fell 0.0038 → 0.0019 → 0.0006 (6× decay over 5k steps); the best window is frozen at ~0.947; no window has crossed 0.95 at any checkpoint. Tracks the loss flattening (0.145→0.132→0.127) and the §8 projection (0.82–0.84 at 10k). Combined with the probe (sampling axis closed), the picture entering the 10k verdict: **the one-step-denoising→25-step-rollout recipe saturates near mean 0.84 / max ~0.95 on this cohort — the D11 bar is not reachable by more training at this rate.**
