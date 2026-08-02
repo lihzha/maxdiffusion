@@ -45,6 +45,12 @@ Last updated: 2026-07-31
 - **Fix:** commit `9c26070` on the exp_02 branch — ffmpeg-ensure block byte-identical across both launchers (enforced by test), executed-under-bash tests with PATH shims, loud one-line aux-degradation startup warning (names ffmpeg/gsutil), FATAL exit if install fails; +14 tests (suite 1,021). Focused Codex review pending as of this update.
 - **Status:** fix committed, unreviewed; ceilings for already-run S3 intermediates recoverable via a cheap checkpoint-independent backfill job.
 
+### 9. Codex reviewer account hit its usage limit (infra, BLOCKING the review discipline)
+- **Symptom:** 2026-08-02 ~23:45Z — every `codex exec` returns "You've hit your usage limit … try again at Aug 7th, 2026 11:35 PM". Account-wide (verified with a minimal call), not model- or effort-specific. ~30 xhigh review passes across exp_02/exp_03 this week consumed the quota.
+- **Impact:** the SOP's Reviewer role (Codex `gpt-5.6-sol` xhigh) is unavailable; per the SOP, no silent substitution. exp_03 round-3 strengthening (`371816c`) is committed but NOT re-reviewed; S1 cannot be packaged per the SOP until review capacity returns or Yixun explicitly directs a substitute/waiver.
+- **Options (Yixun's call):** (a) purchase credits at chatgpt.com/codex/settings/usage; (b) wait for the Aug 7 reset; (c) explicitly approve a substitute reviewer for the interim (would be recorded in every affected review file per the SOP's no-silent-substitution rule).
+- **Status:** OPEN — blocking exp_03 review cycles; non-review work (TPU measurement jobs on already-reviewed code, doc syntheses) continues.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
