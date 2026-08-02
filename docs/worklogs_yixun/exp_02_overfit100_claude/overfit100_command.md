@@ -386,3 +386,48 @@ tpu create v6 -n 8 --worker0-only --name exp02-o100-d2-valloss-yixun \
   2500/10000 should sit in the neighbourhood of the training logs (~0.145 / ~0.12) but is the *authoritative*
   number since it is fixed-RNG.
 - **Job id:** (appended at submission)
+
+## Jobs 32–34 — v6e-64 LR SWEEP: 3 arms × +2,500 steps from ckpt 10000 — launched 2026-08-02
+
+**Approved by Yixun** ("run the LR sweep at 2e-5 and 5e-5" + AskUserQuestion: add the 1e-5 control arm).
+Purpose: bound how much of the remaining 74% one-step-loss gap (D2) is reachable by optimization alone —
+the one lever the diagnostics could not rule out; Wan 2.1's own pretraining used 1e-4 (tech report p.15),
+so 2e-5/5e-5 are well inside the architecture's stable regime.
+
+**Design.** Each arm = fresh RUN_NAME seeded by a server-side copy of the step-10,000 checkpoint (22.03 GiB)
+into its own `checkpoints/` dir; Orbax restores it as latest and continues to 12,500. Warmup (absolute, 250
+steps) is long past, so each arm jumps straight to its LR on restore — Adam moments carry over; an instability
+would show as loss divergence and is an acceptable, informative outcome for the 5e-5 arm. No code changes:
+`LEARNING_RATE` was already plumbed (train_wan_overfit100.sh:113/207).
+
+Commit `2fcbeba1911a34c9db57ac6c8ebc718b688f2ce3`; trainer path unchanged (byte-identical since e27fdc3 lineage).
+
+```bash
+cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_02_overfit100
+for ARM_LR in "lr1e5c:1e-5" "lr2e5:2e-5" "lr5e5:5e-5"; do
+  ARM=${ARM_LR%%:*}; LR=${ARM_LR##*:}
+  tpu create v6 -n 64 --name "exp02-o100-${ARM}-yixun" \
+    --code-dir . \
+    --setup-cmd "EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu" \
+    --env RUN_NAME="wan-overfit100-s3ext-${ARM}-20260802" \
+    --env LEARNING_RATE="$LR" \
+    --env MAX_TRAIN_STEPS=12500 \
+    --env CHECKPOINT_STEPS="[250,500,1000,1750,2500,5000,7500,10000,12500]" \
+    --env DATA_DIR="gs://v6_east1d/datasets/exp02_overfit100/train100" \
+    --env EXPECTED_WINDOWS=1629 --env NUM_TEXT_SLOTS=100 \
+    --env COMMIT="2fcbeba1911a34c9db57ac6c8ebc718b688f2ce3" \
+    --env HF_HUB_DISABLE_XET=1 --env HF_HUB_ENABLE_HF_TRANSFER=0 \
+    -- bash bash_scripts/train_wan_overfit100.sh
+done
+```
+
+- **Cost:** 3 × ~39 min v6e-64 (arms run 2,500 steps each; save scheduler plans only step 12,500 — the listed
+  earlier steps are < start_step and skipped).
+- **Acceptance (per arm):** preflights green; restore reports start_step=10000; `lr=` line shows the arm's
+  LR; loss continues from ≈0.12 without NaN/divergence (5e-5 divergence = informative negative, not a bug);
+  checkpoint 12,500 saved.
+- **Measurement (follow-on, same approval):** one loss-instrument job per arm (`CHECKPOINT_STEPS="10000,12500"`,
+  RUN_NAME per arm) — the 10,000 reading must reproduce **0.12227** exactly (identical bytes; validity anchor);
+  the 12,500 readings are the A/B/C answer. Baseline for context: 1e-5's measured decelerating rate
+  ≈0.0035/2,500 at this point; the control arm measures it directly.
+- **Job ids:** (appended at submission)
