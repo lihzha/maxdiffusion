@@ -442,3 +442,8 @@ reproduce the anchor **0.12227** exactly (identical bytes = validity check), 125
 Preliminary from training logs (noisy, non-authoritative): lr2e5 ended at logged loss ≈0.093 — well below
 the 1e-5 trend; instrument decides.
 
+## Job 37 — v6e-8 LOSS-INSTRUMENT for lr5e5 — launched 2026-08-02T~23:20Z
+
+Same predeclared measurement as Jobs 35–36. lr5e5 SUCCEEDED attempt 3 (two maintenance kills; each restart
+from the 10k seed per the no-intermediate-saves design). Job id: `20260802-225142-dba871b9-exp02-o100-inst-lr5e5-yixun`.
+
