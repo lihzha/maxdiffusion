@@ -1,4 +1,4 @@
-# exp_03 `rollout_objective` — Plan v3 (Planner)
+# exp_03 `rollout_objective` — Plan v3.1 (Planner)
 
 **v3, 2026-08-02** — adds **Tier 2 (from-scratch)** per Yixun's Query 2: keep the continue-from-10k
 A/B/C arms (now "Tier 1"), and retrain from step 0 with the new losses — A0/B0/C0 plus a fresh one-step
@@ -116,40 +116,64 @@ baseline step time; memory peak = B's, since A adds no differentiated activation
 complementary" is licensed only under this literal implementation.
 
 
-## 1b. Tier 2 — from-scratch arms (Query 2)
+## 1b. Tier 2 — from-scratch arms (Query 2; v3.1 = delta-review adopted in full)
 
-**Arms:** A0, B0, C0, ctrl0 — identical objectives to Tier 1's A/B/C plus the plain one-step objective
-(ctrl0), all starting from the SAME Wan2.2 init exp_02 started from (the pinned pretrained snapshot; no
-copied checkpoint), same data/seed/GBS/LR as exp_02's S3.
+**Arms:** A0, B0, C0, ctrl0 — Tier-1's objectives plus the plain one-step objective, all from the SAME
+pinned pretrained Wan2.2 snapshot exp_02 started from (no copied checkpoint), same data/seed/GBS/LR as
+exp_02's S3.
 
-**Budget (Planner's choice): 2,500 steps per arm**, checkpoints {250, 1000, 2500}. Rationale: exp_02
-measured this exact segment for the plain objective (loss 0.586→0.146; canonical seed-0 SSIM 0.758→0.814),
-so 2,500 steps is where a from-scratch objective difference is already visible and directly comparable
-against a dense existing reference curve; the marginal value of longer from-scratch arms is decided AFTER
-these land (extension = separate approval).
+**Framing (delta-review 1).** Tier 2 is an **early from-init screen**: it measures the objectives' effect
+during the FIRST 2,500 updates against a densely-measured reference segment. It does not test optima — the
+plain arm was still improving at 2,500 — and a null here is a null **at this budget only**; any matched
+continuation is a separate approval. (Reference curves, correctly attributed: fixed-RNG instrument loss
+0.1919129606 / 0.1685259684 / 0.1459819537 and canonical seed-0 SSIM 0.7580458496 / 0.7891791855 /
+0.8139005632 at steps 250/1000/2500. The 0.586→0.146 figures elsewhere are logged training loss — a
+different, noisier quantity.)
 
-**Why ctrl0 runs fresh rather than reusing exp_02's run:** (i) Yixun listed it explicitly; (ii) it is a
-full-scale REPLICATION TEST of exp_02 through the new trainer's hook path — ctrl0 must reproduce exp_02's
-measured loss curve (0.19191/0.16853/0.14598 at 250/1000/2500 on the fixed-RNG instrument) and its
-canonical SSIM (0.7580/0.7892/0.8139) within tolerance; a failure means the new trainer changed the plain
-objective and INVALIDATES Tier-1/Tier-2 comparisons until fixed — this is the tier's most important guard;
-(iii) it gives exact RNG/data-order parity with A0/B0/C0 under the purpose-folded scheme.
+**Budget: 2,500 steps per arm**, checkpoints {250, 1000, 2500}.
 
-**What Tier 2 answers that Tier 1 cannot:** Tier 1 asks whether the new objectives rescue a model already
-optimized 10k steps under teacher forcing (a possibly locked-in basin). Tier 2 asks whether training under
-the new objective FROM THE START reaches a different optimum. A0/B0/C0 ≫ ctrl0 with Tier 1 flat would mean
-the objectives work but cannot rescue a converged plain-objective model; both tiers moving means the
-objective helps everywhere; both flat kills the objective hypothesis outright.
+**ctrl0 as a REPLICATION guard — operational spec (delta-review 2, adopted verbatim):**
+- **RNG:** ctrl0 (and the shared draws in A0/B0/C0) preserve **exp_02's exact RNG stream** (the sequential
+  split stream from `key(seed+1)` in the trainer); ONLY new-objective draws (p_ss coins, index supports,
+  self-generation ε) come from auxiliary purpose-folded keys that never advance the shared stream. A unit
+  test pins stream-preservation (ctrl0's per-step shared draws ≡ exp_02 trainer's, exact).
+- **Hard AND-gate at EVERY checkpoint {250, 1000, 2500}**, against full-precision anchors above:
+  `|Δ mean fixed-RNG loss| ≤ 1e-4` ∧ `|Δ canonical mean SSIM| ≤ 5e-4` ∧ `max_window |Δ SSIM| ≤ 1e-3`,
+  same 100-row cohort/role/seed/context/sampling-steps, valid provenance, no averaging across checkpoints.
+- **Cross-generation bridge:** the guard's SSIM anchors come from exp_02's eval generation; the bitwise
+  extraction certificate (§3) is the bridge. If extraction is anything but bitwise, the exp_02 reference
+  checkpoints {250, 1000, 2500} are RE-EVALUATED under the post-extraction generation and those become the
+  anchors.
+- **Failure = STOP Tier 2** (diagnose, fix, rerun ctrl0 in a fresh root). Scope: ctrl0 guards **Tier 2**;
+  S2a (Tier 1) may proceed in parallel — Tier 1's own guard is the hook-parity test + its control arm.
 
-**Tier-2 gates (predeclared):** primary — arm − ctrl0 ≥ +0.02 canonical seed-0 mean SSIM at step 2,500
-(same paired-bootstrap CI protocol); mechanism metrics (D1 slopes, sigma traces) at 2,500 per arm;
-loss-instrument sweep over {250, 1000, 2500} per arm in ONE job each, read as deviation-from-line (the
-exp_02 line is the null; breaking it is the objective working). Cross-tier comparisons (A0@2500 vs A@12500
-etc.) are exploratory only — different cumulative budgets — and are predeclared as non-gated.
+**Confound handling (delta-review 3):**
+- Cross-tier readings identify a **training-history package** (weights + Adam state + schedule), not
+  "basin lock-in" specifically; §2's outcome table is worded accordingly.
+- **Preemption rule:** any Tier-2 arm preempted before step 2,500 **restarts from the pinned init** (the
+  intermediate checkpoints exist for measurement, not resume — resuming from them would reseed the data
+  iterator mid-segment and break order parity). Predeclared; a preemption costs the arm's full segment.
+- **S1.5 runs from BOTH states:** the 10k checkpoint (Tier 1) and the pretrained init (Tier 2 — incl.
+  forced-full-p_ss A0/C0 diagnostics and B0/C0 rollout-gradient checks); S1.6 mesh-fit probes B/C updates
+  from both states.
+- All Tier-2 endpoint comparisons at the single post-extraction evaluator commit, immutable roots.
 
-**Tier-2 cost:** 4 × ~39 min v6e-64 training (A0 ~1.6×, B0 ~2.5×, C0 ~3× step-time overhead ⇒ ~0.65 h /
-1.6 h / 2 h / 2.6 h respectively ≈ **6.9 h v6e-64 total**) + 4 × ~30 min SSIM evals + 4 × ~20 min
-instrument jobs (v6e-8). p_ss ramp for A0/C0: same spec, keyed from global step 0.
+**ctrl0-first, operationally (delta-review 4):** ctrl0's training completes, all THREE instrument readings
+and all THREE canonical SSIM evals land, and every AND-gate passes — only then do A0/B0/C0 launch.
+
+**What Tier 2 answers:** whether the objectives change the first 2,500 updates from init, where Tier 1 asks
+whether they move an already-converged plain-objective model. A0/B0/C0 ≫ ctrl0 with Tier 1 flat ⇒ the
+objectives help early training but do not rescue the converged state (under THIS history package); both
+tiers move ⇒ the objectives help broadly; both flat ⇒ no effect detectable at these budgets.
+
+**Tier-2 gates:** arm − ctrl0 ≥ +0.02 canonical seed-0 mean SSIM at 2,500 (paired-bootstrap CI protocol);
+D1 slopes + sigma traces at 2,500; per-arm instrument sweep over {250, 1000, 2500} in one job, read as
+deviation-from-line.
+
+**Tier-2 cost (corrected, delta-review 5):** training ≈ 0.65 + 1.04 + 1.63 + 1.95 = **5.3 h v6e-64**
+(multipliers 1 / 1.6 / 2.5 / 3.0 on the 39-min baseline; 6.9 h retained only as a contingency reservation).
+Evals: ctrl0 needs SSIM passes at all three checkpoints (guard) = 3, plus 3 experimental endpoints, plus 4
+instrument jobs ≈ **6 × ~30 min + 4 × ~20 min v6e-8**.
 
 ## 2. Outcome readings
 
@@ -211,10 +235,10 @@ resume staging, seeding-by-checkpoint-copy procedure (LR-sweep pattern).
 - **S2a — Tier-1 trials (v6e-64):** A, B, C; +2,500 updates each from the copied step-10,000 checkpoint;
   then per trial: `s3_intermediate` eval with `WRITE_VIDEOS=True` + loss instrument + D1 + sigma-trajectory
   trace; control re-eval at the post-extraction commit (fresh root, videos on) if not already run.
-- **S2b — Tier-2 from-scratch arms (v6e-64):** ctrl0 FIRST (the replication guard — if it fails to
-  reproduce exp_02's curves, STOP Tier 2 and fix the trainer before burning A0/B0/C0), then A0, B0, C0;
-  budget and gates per §1b. S2a and S2b may interleave on the queue; ctrl0-before-{A0,B0,C0} is the only
-  ordering constraint.
+- **S2b — Tier-2 from-scratch arms (v6e-64):** ctrl0 FIRST in the strong sense of §1b (training + all 3
+  instrument readings + all 3 SSIM evals + every AND-gate pass) before any A0/B0/C0 launch; guard failure
+  stops Tier 2 only. S2a may proceed in parallel; ctrl0-complete-before-{A0,B0,C0} is the ordering
+  constraint.
 - **S3 (conditional):** extend the winner; only then the formal D11 `s3_segment_final`/full-set machinery.
 
 ## 5. Risks (updated)
