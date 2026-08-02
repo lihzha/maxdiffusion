@@ -31,7 +31,7 @@ Last updated: 2026-07-31
 - **Status:** standing rule for every reviewer call; classified infrastructure (launch-env), no code change.
 
 ### 6. gcloud/gsutil reauth expires silently and recurs (infra, standing)
-- **Symptom:** fifth recurrence 2026-08-01 ~08:25Z (blocked the four 10k eval launches; caught immediately by empty-listing anomaly + stderr probe), fourth 2026-07-31 (previously 2026-07-29 ×2 + earlier) — `ReauthUnattendedError` / "Reauthentication required" from gsutil; the `tpu` CLI then reports jobs as "not found". A 2.5 h monitoring loop once read auth failures as "PENDING" because the poll's error fallback conflated them with a missing status file.
+- **Symptom:** sixth recurrence 2026-08-02 (blocked the LR-sweep checkpoint copies; caught on first failed gsutil), fifth 2026-08-01 ~08:25Z (blocked the four 10k eval launches; caught immediately by empty-listing anomaly + stderr probe), fourth 2026-07-31 (previously 2026-07-29 ×2 + earlier) — `ReauthUnattendedError` / "Reauthentication required" from gsutil; the `tpu` CLI then reports jobs as "not found". A 2.5 h monitoring loop once read auth failures as "PENDING" because the poll's error fallback conflated them with a missing status file.
 - **Workaround:** user runs `gcloud auth login` (account yh4742@princeton.edu). **Monitoring rule:** poll scripts must treat gsutil stderr containing "Reauth" as an ALARM state (stop and surface), never as pending/absent.
 - **Status:** standing; recurs on a ~4-h cadence during long sessions. Rule reaffirmed: any silently-empty gsutil listing for objects known to exist = probe stderr immediately, never trust an empty result.
 
