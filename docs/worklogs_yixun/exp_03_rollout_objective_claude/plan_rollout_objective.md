@@ -1,4 +1,4 @@
-# exp_03 `rollout_objective` — Plan v2.1 (Planner)
+# exp_03 `rollout_objective` — Plan v2.2 (Planner)
 
 **v2.1, 2026-08-02** — v2 plus the re-review's four residual closures (data-order stability by
 save-schedule construction; D1 slope analysis as a new predeclared script; exact index supports for A/B;
@@ -67,12 +67,15 @@ step = the SAME extracted function the eval uses (§3). σ grid = the eval's 25-
 `0..24` from highest σ to the last positive σ, with the terminal σ=0 boundary excluded from every draw; all
 σ arithmetic in FP32 (min positive grid σ ≈ 0.1724 — reviewer-verified, no clamp needed).
 
-**Exact index supports (re-review P4 residual):**
-- Trial A: draw `k_A ~ Uniform{1, 2}` FIRST, then `hi ~ Uniform{i : k_A ≤ i ≤ 24}`, set `lo = hi − k_A`.
-  The teacher-forced branch (prob 1−p_ss) uses the SAME `(hi, lo)` draw and simply forms `z_{σ_lo}` from the
-  interpolant — so the loss-point distribution over σ_lo is identical between branches by construction.
-- Trial B: `hi ~ Uniform{i : 2 ≤ i ≤ 24}`, path `hi → hi−1 → hi−2 = lo` (consecutive grid steps, exactly the
-  eval's step sequence restricted to a window).
+**Exact index supports (re-review P4 residual; direction corrected in v2.2 — the grid is DESCENDING in σ,
+index 0 = highest σ, and the eval advances `i → i+1` toward lower σ; start/end indices below follow the
+eval's direction):**
+- Trial A: draw `k_A ~ Uniform{1, 2}` FIRST, then start `s ~ Uniform{0 .. 24 − k_A}`, end `e = s + k_A`;
+  σ_hi = σ[s] (larger), σ_lo = σ[e] (smaller, never terminal since e ≤ 24). The teacher-forced branch
+  (prob 1−p_ss) uses the SAME `(s, e)` draw and forms `z_{σ[e]}` from the interpolant — the loss-point
+  distribution over σ_lo is identical between branches by construction.
+- Trial B: start `s ~ Uniform{0 .. 22}`, path `s → s+1 → s+2 = e` (consecutive grid steps in the eval's own
+  advancing direction); σ_hi = σ[s], σ_lo = σ[e].
 - Trial C: each batch draws BOTH supports independently (A's and B's), computes both losses on the same
   examples, and combines.
 

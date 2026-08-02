@@ -81,3 +81,11 @@ baseline per update — S1/S1.6 measure the real budget before S2 approval; (2) 
 covers cohort uncertainty, not training-seed variability; (3) A is a compound exposure+label intervention —
 scheduled sampling alone requires A′; (4) gain-per-TPU-hour is descriptive efficiency, not a compute-matched
 causal comparison.
+
+## Closing pass (plan v2.1) and v2.2 fix
+
+Closures (1) data-order-by-construction, (2) D1 slope script, (4) sigma trace: **SOUND**. Closure (3)
+**UNSOUND** — index-direction inversion: the σ grid descends (index 0 = highest σ; the eval advances
+`i → i+1`), so v2.1's `lo = hi − k_A` walked the sampler backward toward HIGHER σ. **v2.2** rewrites the
+supports in the eval's direction: A: `k_A~U{1,2}`, start `s~U{0..24−k_A}`, end `e = s+k_A`; B: `s~U{0..22}`,
+path `s→s+1→s+2`; σ_hi = σ[s] > σ_lo = σ[e], terminal never reached since e ≤ 24.
