@@ -441,3 +441,8 @@ exp03_k_b: 2                # trial B: differentiated rollout steps (fixed by th
 exp03_lambda: 0.5           # trial C: weight on L_A in lambda*L_A + (1-lambda)*L_B
 exp03_p_ss_max: 0.5         # trial A: scheduled-sampling probability after the ramp
 exp03_p_ss_ramp_steps: 500  # trial A: linear 0 -> p_ss_max over this many SEGMENT steps
+# Where the p_ss ramp's clock starts. The plan words it as "global step - 10,000" because Tier 1
+# continues from the exp_02 step-10,000 checkpoint; Tier 2 trains from the pretrained init at step
+# 0. One expression covers both if the origin is configuration: 0 for Tier 2 (the default), 10000
+# for the Tier-1 arms. Keyed to the GLOBAL step, so the ramp survives a resume.
+exp03_ramp_origin: 0

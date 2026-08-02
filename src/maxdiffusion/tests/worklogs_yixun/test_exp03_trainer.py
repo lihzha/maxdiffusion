@@ -394,13 +394,27 @@ def test_the_control_arm_step_equals_the_parent_step_exactly():
 
 
 @pytest.mark.parametrize("objective", ["corrective_ss", "rollout_loss", "combined"])
-def test_an_unimplemented_objective_refuses_to_start(objective):
+def test_every_declared_objective_now_resolves_to_its_implementation(objective):
+    # Round 3 landed the three trials: each resolves to ITS loss (never silently to the control's).
     _, _, config, _ = _fixture()
     config.exp03_objective = objective
-    with pytest.raises(NotImplementedError) as excinfo:
+    loss_fn, step_fn = _exp03_trainer(config)._loss_and_step_fns()
+    assert loss_fn is exp03.EXP03_LOSSES[objective]
+    assert loss_fn is not parent._denoising_loss
+    assert step_fn is not parent._train_step
+    assert set(exp03.EXP03_IMPLEMENTED_OBJECTIVES) == set(exp03.EXP03_OBJECTIVES)
+
+
+def test_a_declared_but_unimplemented_objective_would_still_refuse(monkeypatch):
+    # The refusal path stays live for anything declared without an implementation -- the guard that
+    # keeps a future arm from quietly training the control under its run name.
+    _, _, config, _ = _fixture()
+    config.exp03_objective = "corrective_ss"
+    monkeypatch.setattr(exp03, "EXP03_OBJECTIVES", exp03.EXP03_OBJECTIVES + ("future_arm",))
+    monkeypatch.setattr(exp03, "EXP03_IMPLEMENTED_OBJECTIVES", ("control",))
+    config.exp03_objective = "future_arm"
+    with pytest.raises((NotImplementedError, KeyError)):
         _exp03_trainer(config)._loss_and_step_fns()
-    message = str(excinfo.value)
-    assert objective in message and "round 3" in message
 
 
 def test_an_unknown_objective_is_a_config_error_not_a_silent_control_run():
@@ -502,9 +516,19 @@ def test_the_auxiliary_key_is_derived_not_split_so_it_cannot_advance_the_stream(
     for (a_key, a_loss), (b_key, b_loss) in zip(interleaved, plain):
         assert np.array_equal(a_key, b_key)
         assert a_loss == b_loss
-    # ...and the derivation never touches the training key: no split of it appears in the source.
-    source = Path(exp03.__file__).read_text()
-    assert "jax.random.split" not in source
+    # ...and the DERIVATION never touches the training key: no split appears inside exp03_aux_key
+    # itself. (The trial objectives do split the SHARED stream -- in exp_02's exact order -- which
+    # is the point: their epsilon and dropout keys are the control's.)
+    import ast
+
+    tree = ast.parse(Path(exp03.__file__).read_text())
+    fold_fn = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "exp03_aux_key"
+    )
+    splits = [
+        node for node in ast.walk(fold_fn) if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "split"
+    ]
+    assert not splits
 
 
 def test_the_auxiliary_key_is_tracer_safe_and_agrees_with_eager():
@@ -782,6 +806,7 @@ def test_the_config_is_the_overfit100_config_plus_the_exp03_keys():
         "exp03_lambda",
         "exp03_p_ss_max",
         "exp03_p_ss_ramp_steps",
+        "exp03_ramp_origin",
     }
     assert not set(base_cfg) - set(exp03_cfg), "keys were dropped from the exp_02 config"
     assert exp03_cfg["model_type"] == "EXP03_TI2V"
@@ -794,6 +819,7 @@ def test_the_config_is_the_overfit100_config_plus_the_exp03_keys():
     assert exp03_cfg["exp03_lambda"] == 0.5
     assert exp03_cfg["exp03_p_ss_max"] == 0.5
     assert exp03_cfg["exp03_p_ss_ramp_steps"] == 500
+    assert exp03_cfg["exp03_ramp_origin"] == 0  # Tier 2 default; Tier-1 arms pass 10000
 
 
 def test_the_config_types_survive_pyconfig_override_rules():
@@ -803,7 +829,7 @@ def test_the_config_types_survive_pyconfig_override_rules():
     assert type(cfg["exp03_objective"]) is str
     assert type(cfg["exp03_k_a"]) is int and type(cfg["exp03_k_b"]) is int
     assert type(cfg["exp03_lambda"]) is float and type(cfg["exp03_p_ss_max"]) is float
-    assert type(cfg["exp03_p_ss_ramp_steps"]) is int
+    assert type(cfg["exp03_p_ss_ramp_steps"]) is int and type(cfg["exp03_ramp_origin"]) is int
 
 
 def test_the_launcher_passes_every_exp03_knob_through():
@@ -817,6 +843,7 @@ def test_the_launcher_passes_every_exp03_knob_through():
         ("EXP03_LAMBDA", "exp03_lambda"),
         ("EXP03_P_SS_MAX", "exp03_p_ss_max"),
         ("EXP03_P_SS_RAMP_STEPS", "exp03_p_ss_ramp_steps"),
+        ("EXP03_RAMP_ORIGIN", "exp03_ramp_origin"),
     ):
         assert f'{env}="${{{env}:-' in text, env  # env-overridable with a default
         assert f'{key}="${{{env}}}"' in text, key  # ...and actually forwarded
@@ -915,6 +942,7 @@ _ALLOWED_DEFAULT_DELTAS = {
     "EXP03_LAMBDA",
     "EXP03_P_SS_MAX",
     "EXP03_P_SS_RAMP_STEPS",
+    "EXP03_RAMP_ORIGIN",
 }
 _ALLOWED_OVERRIDE_DELTAS = {
     "exp03_objective",
@@ -923,6 +951,7 @@ _ALLOWED_OVERRIDE_DELTAS = {
     "exp03_lambda",
     "exp03_p_ss_max",
     "exp03_p_ss_ramp_steps",
+    "exp03_ramp_origin",
 }
 
 
@@ -956,6 +985,7 @@ def test_the_launcher_defaults_do_not_drift_from_the_overfit100_launcher():
         "EXP03_LAMBDA",
         "EXP03_P_SS_MAX",
         "EXP03_P_SS_RAMP_STEPS",
+        "EXP03_RAMP_ORIGIN",
     }
     _assert_maps_agree(base, mine, _ALLOWED_DEFAULT_DELTAS, "launcher defaults")
 
