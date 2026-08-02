@@ -98,3 +98,14 @@ direction, with A ending at `e ≤ 24`, B ending at `24` at most, and neither re
 Plan cycle closed: v1 → review (2 BLOCKER + 5 MAJOR) → v2 (all adopted) → re-review (4 residuals) → v2.1 →
 closing pass (1 UNSOUND: index direction) → v2.2 → **APPROVE-PLAN**. Surfaced to Yixun for approval with
 this full record.
+
+## Delta review (Tier 2, plan v3) — REQUEST-REVISION → v3.1 adoptions
+
+All 5 findings adopted verbatim: (1) Tier 2 reframed as an early from-init screen (no optimum claims; null
+scoped to the budget; training-loss vs instrument attribution fixed); (2) ctrl0 guard operationalized —
+exp_02's exact RNG stream preserved (aux folded keys only for new-objective draws) + hard AND-gate
+(|Δloss| ≤ 1e-4, |ΔSSIM_mean| ≤ 5e-4, max_window |ΔSSIM| ≤ 1e-3) at every checkpoint against full-precision
+anchors + bitwise-certificate bridge (else re-evaluate exp_02 references); (3) confounds handled —
+"training-history package" wording, restart-from-init preemption rule, S1.5/S1.6 from both states, one eval
+generation; (4) ctrl0-first strengthened to training+instrument+SSIM+gates before A0/B0/C0, scope = Tier 2
+only; (5) cost corrected to 5.3 h v6e-64 (+6.9 h as contingency label), eval count 6+4.
