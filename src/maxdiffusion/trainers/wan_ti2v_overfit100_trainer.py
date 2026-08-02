@@ -122,8 +122,17 @@ def _denoising_loss(
     rng: jax.Array,
     config,
     scheduler: FlaxFlowMatchScheduler,
+    *,
+    global_step=None,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """One-step flow-matching velocity MSE with per-episode text context.
+
+    ``global_step`` is the run's DYNAMIC step counter, threaded through so every objective has the
+    same signature. The plain objective has no step-dependent term and ignores it -- the argument
+    changes nothing about this computation, which is what keeps the control path byte-identical.
+    exp_03's trials read it (their ``p_ss`` ramp and their auxiliary rng keys are functions of the
+    global step), and it must be the LOOP's step: ``state.step`` restarts at 0 after a restore,
+    because Orbax brings back params and opt_state only.
 
     Byte-parity with ``wan_ti2v_full_ft_trainer._denoising_loss`` (same shared helpers,
     same frame-0 pin, same ``eps - z_video`` target, same fresh noise, one plain
@@ -132,6 +141,7 @@ def _denoising_loss(
     example's ``episode_index`` instead of one broadcast null embedding. With every table
     row equal to the null embedding the two losses agree bitwise (tested).
     """
+    del global_step  # the plain objective is stepwise-stationary
     noise_rng, step_rng, dropout_rng = jax.random.split(rng, 3)
     weights_dtype = _dtype(config.weights_dtype)
     activations_dtype = _dtype(config.activations_dtype)
@@ -199,11 +209,16 @@ def _make_train_step(denoising_loss):
     ``trainers/wan_ti2v_exp03_trainer.exp03_aux_key``) rather than from this stream.
     """
 
-    def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
+    def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config, *, global_step=None):
         rng, loss_rng = jax.random.split(rng)
 
         def loss_fn(params):
-            return denoising_loss(params, state, data, loss_rng, config, scheduler)
+            if global_step is None:
+                # No step threaded: call the loss with exp_02's exact 6-argument shape. Legacy
+                # callers (and the exp_02 test that spies on the loss with that signature) keep
+                # working unchanged; production always threads the step, below.
+                return denoising_loss(params, state, data, loss_rng, config, scheduler)
+            return denoising_loss(params, state, data, loss_rng, config, scheduler, global_step=global_step)
 
         grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
         (loss, aux), grads = grad_fn(state.params)
@@ -233,7 +248,7 @@ def _make_train_step(denoising_loss):
     return _train_step
 
 
-def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
+def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config, *, global_step=None):
     """The plain one-step objective's train step -- exp_02's, unchanged.
 
     A thin dispatch into the factory rather than ``_make_train_step(_denoising_loss)`` bound at
@@ -242,7 +257,7 @@ def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, schedul
     that property is part of the settled behaviour this refactor must not change. The body is the
     factory's, so there is still exactly one implementation of the step.
     """
-    return _make_train_step(_denoising_loss)(state, data, rng, scheduler, config)
+    return _make_train_step(_denoising_loss)(state, data, rng, scheduler, config, global_step=global_step)
 
 
 def _eval_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
@@ -1213,9 +1228,17 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
         loss_fn, train_step_fn = self._loss_and_step_fns()
         if jax.process_index() == 0:
             max_logging.log(f"[wan_overfit100] objective: {getattr(loss_fn, '__name__', loss_fn)}")
+
+        # The DYNAMIC global step crosses the jit boundary as a positional argument: the loop's
+        # step, not ``state.step`` (which Orbax leaves at its freshly-built value after a restore,
+        # since only params and opt_state come back). Traced, so a resumed segment recompiles
+        # nothing and every step-keyed draw an objective makes lands on the true global step.
+        def _jit_train_step(state, data, rng, global_step):
+            return train_step_fn(state, data, rng, scheduler, config, global_step=global_step)
+
         p_train_step = jax.jit(
-            functools.partial(train_step_fn, scheduler=scheduler, config=config),
-            in_shardings=(state_shardings, data_shardings, None),
+            _jit_train_step,
+            in_shardings=(state_shardings, data_shardings, None, None),
             out_shardings=(state_shardings, None, None),
             donate_argnums=(0,),
         )
@@ -1277,7 +1300,7 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
             for step in range(start_step, config.max_train_steps):
                 next_batch_future = executor.submit(load_next_batch, train_iter, batch, config)
                 with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-                    state, metrics, rng = p_train_step(state, batch, rng)
+                    state, metrics, rng = p_train_step(state, batch, rng, jnp.asarray(step, dtype=jnp.int32))
                     metrics["scalar"]["learning/loss"].block_until_ready()
 
                 recent_loss.append(float(metrics["scalar"]["learning/loss"]))

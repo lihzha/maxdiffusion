@@ -29,6 +29,8 @@ from __future__ import annotations
 import hashlib
 
 import jax
+import jax.numpy as jnp
+import numpy as np
 
 from maxdiffusion import max_logging
 from maxdiffusion.trainers.wan_ti2v_overfit100_trainer import (
@@ -65,24 +67,31 @@ def _purpose_id(purpose: str) -> int:
     return int.from_bytes(hashlib.sha256(purpose.encode("utf-8")).digest()[:4], "big")
 
 
-def exp03_aux_key(*, seed: int, global_step: int, purpose: str) -> jax.Array:
+def exp03_aux_key(*, seed: int, global_step, purpose: str) -> jax.Array:
     """An auxiliary key for a NEW-objective draw, derived without touching the shared stream.
 
-    ``fold_in(fold_in(key(seed + offset), global_step), purpose_id)``. Three properties matter and
+    ``fold_in(fold_in(key(seed + offset), global_step), purpose_id)``. Four properties matter and
     each is tested:
 
     * **Non-advancing.** It is derived from the config seed, not split off the training rng, so a
       step that draws from it leaves the shared stream in exactly the state exp_02 would have left
       it in. This is what lets ctrl0 be a bitwise replication guard while A/B/C add randomness.
     * **Resume-stable.** Keyed on the global step, not on how many times it has been called, so a
-      preempted-and-restarted segment draws the same values at the same steps.
+      preempted-and-restarted segment draws the same values at the same steps. The caller must pass
+      the LOOP's step: ``state.step`` is not resume-safe, because a restore brings back params and
+      opt_state and leaves the freshly-built step behind.
     * **Cross-arm aligned.** The same ``(seed, step, purpose)`` gives the same key in every arm, so
       where two arms make the same kind of draw they make the *same* draw.
+    * **Tracer-safe.** ``global_step`` arrives as a traced scalar from inside the compiled train
+      step, so it is folded in as an array and never coerced with ``int()``. ``seed`` and
+      ``purpose`` are static (config values), so they may stay Python-level. The non-negative check
+      therefore applies only when the step is a concrete Python integer -- under tracing there is
+      no value to check, and a fabricated one would be worse than none.
     """
-    if int(global_step) < 0:
+    if isinstance(global_step, (int, np.integer)) and not isinstance(global_step, bool) and int(global_step) < 0:
         raise ValueError(f"global_step must be non-negative; got {global_step}")
     key = jax.random.key(int(seed) + EXP03_AUX_SEED_OFFSET)
-    key = jax.random.fold_in(key, int(global_step))
+    key = jax.random.fold_in(key, jnp.asarray(global_step, dtype=jnp.uint32))
     return jax.random.fold_in(key, _purpose_id(purpose))
 
 

@@ -19,6 +19,7 @@ harness pattern), so the optimizer step, the gradient and the state update are g
 from __future__ import annotations
 
 import inspect
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -178,8 +179,11 @@ def test_the_hook_is_what_the_loop_uses():
     # The refactor is pointless if start_training still names the module-level functions.
     source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
     assert "self._loss_and_step_fns()" in source
-    assert "functools.partial(train_step_fn" in source
+    # The hook's step is what gets compiled (through the 4-argument production adapter), and the
+    # module-level function is never re-bound behind the hook's back.
+    assert "return train_step_fn(state, data, rng, scheduler, config, global_step=global_step)" in source
     assert "functools.partial(_train_step" not in source
+    assert "jax.jit(\n            _jit_train_step," in source
 
 
 def test_the_step_still_binds_this_modules_loss_late(monkeypatch):
@@ -190,9 +194,9 @@ def test_the_step_still_binds_this_modules_loss_late(monkeypatch):
     seen = []
     real = parent._denoising_loss
 
-    def spy(params, st, batch, rng, cfg, sched):
+    def spy(params, st, batch, rng, cfg, sched, **kwargs):
         seen.append("called")
-        return real(params, st, batch, rng, cfg, sched)
+        return real(params, st, batch, rng, cfg, sched, **kwargs)
 
     monkeypatch.setattr(parent, "_denoising_loss", spy)
     parent._train_step(state, data, jax.random.key(5), scheduler, config)
@@ -201,11 +205,164 @@ def test_the_step_still_binds_this_modules_loss_late(monkeypatch):
     assert seen == ["called", "called"]
 
 
+def test_the_loss_call_shape_is_exp02s_when_no_step_is_threaded():
+    # exp_02's suite spies on _denoising_loss with its ORIGINAL six-argument signature. Threading
+    # the step must not break that contract, so the step is passed only when there is one.
+    state, data, config, scheduler = _fixture()
+    seen = []
+
+    def strict_spy(params, st, batch, rng, cfg, sched):  # NO **kwargs, on purpose
+        seen.append("legacy")
+        return parent._denoising_loss(params, st, batch, rng, cfg, sched)
+
+    step_fn = parent._make_train_step(strict_spy)
+    step_fn(state, data, jax.random.key(2), scheduler, config)  # legacy shape
+    assert seen == ["legacy"]
+
+    def step_aware_spy(params, st, batch, rng, cfg, sched, *, global_step=None):
+        seen.append(("threaded", global_step))
+        return parent._denoising_loss(params, st, batch, rng, cfg, sched)
+
+    parent._make_train_step(step_aware_spy)(
+        state, data, jax.random.key(2), scheduler, config, global_step=jnp.asarray(41, jnp.int32)
+    )
+    assert seen[-1][0] == "threaded" and int(seen[-1][1]) == 41
+
+
 def test_the_parent_hook_returns_the_plain_objective():
     trainer = parent.WanTI2VOverfit100Trainer.__new__(parent.WanTI2VOverfit100Trainer)
     loss_fn, step_fn = trainer._loss_and_step_fns()
     assert loss_fn is parent._denoising_loss
     assert step_fn is parent._train_step
+
+
+# ---------------------------------------------------------------------------------------------
+# 1b. The JIT certificate — parity where production actually runs, not only eagerly.
+# ---------------------------------------------------------------------------------------------
+
+
+def _production_jit(step_fn, scheduler, config, *, counter=None):
+    """Compile a step exactly the way ``start_training`` does: 4 positional args, step last."""
+
+    def _jit_train_step(state, data, rng, global_step):
+        if counter is not None:
+            counter.append(1)  # the body runs once per TRACE, so this counts traces
+        return step_fn(state, data, rng, scheduler, config, global_step=global_step)
+
+    return jax.jit(_jit_train_step)
+
+
+def _pre_refactor_jit(scheduler, config, *, counter=None):
+    """The verbatim pre-refactor step behind the same 4-argument boundary (it ignores the step)."""
+
+    def _jit_train_step(state, data, rng, global_step):
+        if counter is not None:
+            counter.append(1)
+        del global_step
+        return _pre_refactor_train_step(state, data, rng, scheduler, config)
+
+    return jax.jit(_jit_train_step)
+
+
+def _assert_states_identical(got, want):
+    """Params, the FULL AdamW optimizer state, and the step counter — all exact."""
+    for label, left, right in (
+        ("params", got.params, want.params),
+        ("opt_state", got.opt_state, want.opt_state),
+    ):
+        got_leaves = jax.tree_util.tree_leaves(left)
+        want_leaves = jax.tree_util.tree_leaves(right)
+        assert len(got_leaves) == len(want_leaves) and got_leaves, label
+        for a, b in zip(got_leaves, want_leaves):
+            assert np.array_equal(np.asarray(a), np.asarray(b)), label
+    assert int(got.step) == int(want.step)
+
+
+def test_the_compiled_steps_agree_over_repeated_cached_calls():
+    # The production boundary: jitted, AdamW (so mu/nu/count all travel), several cached calls in
+    # sequence so a divergence in the carried optimizer state would compound into view.
+    state, data, config, scheduler = _fixture(tx=optax.adamw(1e-3))
+    _, control_step = _exp03_trainer(config)._loss_and_step_fns()
+    my_traces: list[int] = []
+    their_traces: list[int] = []
+    mine = _production_jit(control_step, scheduler, config, counter=my_traces)
+    theirs = _pre_refactor_jit(scheduler, config, counter=their_traces)
+
+    my_state, their_state = state, state
+    my_rng = their_rng = jax.random.key(19)
+    for step in range(4):
+        global_step = jnp.asarray(step, dtype=jnp.int32)
+        my_state, my_metrics, my_rng = mine(my_state, data, my_rng, global_step)
+        their_state, their_metrics, their_rng = theirs(their_state, data, their_rng, global_step)
+        _assert_states_identical(my_state, their_state)
+        assert set(my_metrics["scalar"]) == set(their_metrics["scalar"])
+        for key, value in their_metrics["scalar"].items():
+            assert np.array_equal(np.asarray(my_metrics["scalar"][key]), np.asarray(value)), (step, key)
+        assert np.array_equal(np.asarray(jax.random.key_data(my_rng)), np.asarray(jax.random.key_data(their_rng)))
+    assert int(my_state.step) == 4  # the optimizer really stepped four times
+    # Each compiled EXACTLY once across the four calls: no per-step retrace from the closure, and
+    # the dynamic global step does not specialize the cache.
+    assert sum(my_traces) == 1, sum(my_traces)
+    assert sum(their_traces) == 1, sum(their_traces)
+
+
+def test_the_compiled_steps_have_the_same_jaxpr():
+    state, data, config, scheduler = _fixture(tx=optax.adamw(1e-3))
+    _, control_step = _exp03_trainer(config)._loss_and_step_fns()
+    args = (state, data, jax.random.key(21), jnp.asarray(3, dtype=jnp.int32))
+
+    def mine(s, d, r, g):
+        return control_step(s, d, r, scheduler, config, global_step=g)
+
+    def theirs(s, d, r, g):
+        del g
+        return _pre_refactor_train_step(s, d, r, scheduler, config)
+
+    my_jaxpr = jax.make_jaxpr(mine)(*args)
+    their_jaxpr = jax.make_jaxpr(theirs)(*args)
+    my_primitives = sorted(str(eqn.primitive) for eqn in my_jaxpr.jaxpr.eqns)
+    their_primitives = sorted(str(eqn.primitive) for eqn in their_jaxpr.jaxpr.eqns)
+    assert my_primitives == their_primitives
+    assert len(my_jaxpr.jaxpr.eqns) == len(their_jaxpr.jaxpr.eqns)
+
+
+def test_the_control_step_ignores_the_threaded_global_step():
+    # The control must be stepwise-stationary: the same inputs at different global steps give the
+    # same result, bit for bit. (A trial will NOT have this property -- that is the point.)
+    state, data, config, scheduler = _fixture(tx=optax.adamw(1e-3))
+    _, control_step = _exp03_trainer(config)._loss_and_step_fns()
+    compiled = _production_jit(control_step, scheduler, config)
+    rng = jax.random.key(23)
+    first = compiled(state, data, rng, jnp.asarray(0, dtype=jnp.int32))
+    later = compiled(state, data, rng, jnp.asarray(10_000, dtype=jnp.int32))
+    _assert_states_identical(first[0], later[0])
+    for key, value in first[1]["scalar"].items():
+        assert np.array_equal(np.asarray(value), np.asarray(later[1]["scalar"][key])), key
+    # ...and eager equals compiled, with and without the argument.
+    eager = control_step(state, data, rng, scheduler, config)
+    _assert_states_identical(first[0], eager[0])
+
+
+def test_the_production_loop_threads_the_loops_step_not_the_states():
+    import ast
+    import textwrap
+
+    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert "p_train_step(state, batch, rng, jnp.asarray(step, dtype=jnp.int32))" in source
+    assert "in_shardings=(state_shardings, data_shardings, None, None)" in source
+    # And the loop never READS state.step -- checked structurally, so the comment explaining why
+    # is not mistaken for the thing it warns against. (Restore brings back params and opt_state;
+    # state.step is whatever the freshly built state had, so a step-keyed draw would restart.)
+    tree = ast.parse(textwrap.dedent(source))
+    reads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "step"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "state"
+    ]
+    assert not reads
 
 
 # =============================================================================================
@@ -348,6 +505,123 @@ def test_the_auxiliary_key_is_derived_not_split_so_it_cannot_advance_the_stream(
     # ...and the derivation never touches the training key: no split of it appears in the source.
     source = Path(exp03.__file__).read_text()
     assert "jax.random.split" not in source
+
+
+def test_the_auxiliary_key_is_tracer_safe_and_agrees_with_eager():
+    # It is computed INSIDE the compiled train step, where the global step is a tracer. An int()
+    # coercion there raises; the values must also be the ones eager code would produce.
+    for step in (0, 1, 250, 12_499):
+        eager = exp03.exp03_aux_key(seed=0, global_step=step, purpose="index_support")
+        compiled = jax.jit(lambda value: exp03.exp03_aux_key(seed=0, global_step=value, purpose="index_support"))(
+            jnp.asarray(step, dtype=jnp.int32)
+        )
+        assert np.array_equal(np.asarray(jax.random.key_data(eager)), np.asarray(jax.random.key_data(compiled))), step
+    # ...and a draw made from it is likewise identical across the boundary.
+    eager_draw = jax.random.normal(exp03.exp03_aux_key(seed=0, global_step=7, purpose="p_ss_coin"), (4,))
+    compiled_draw = jax.jit(
+        lambda value: jax.random.normal(exp03.exp03_aux_key(seed=0, global_step=value, purpose="p_ss_coin"), (4,))
+    )(jnp.asarray(7, dtype=jnp.int32))
+    assert np.array_equal(np.asarray(eager_draw), np.asarray(compiled_draw))
+    # The fold really is on an array, and no int() coercion of the step reaches it: the only
+    # int(global_step) allowed is inside the concrete-value guard (checked structurally below).
+    import ast
+
+    tree = ast.parse(Path(exp03.__file__).read_text())
+    fold_fn = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "exp03_aux_key"
+    )
+    guard_lines = {node.lineno for node in ast.walk(fold_fn) if isinstance(node, ast.If)}
+    coercions = [
+        node
+        for node in ast.walk(fold_fn)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", "") == "int"
+        and any(getattr(arg, "id", "") == "global_step" for arg in node.args)
+        and node.lineno not in guard_lines
+    ]
+    assert not coercions, "int(global_step) outside the concrete-value guard would raise on a tracer"
+    assert "jnp.asarray(global_step" in Path(exp03.__file__).read_text()
+
+
+def _aux_recording_loss(params, state, data, rng, config, scheduler, *, global_step=None):
+    """A stand-in for a round-3 objective: its value IS a draw keyed on the global step.
+
+    Deliberately free of the shared stream, so what this records is exactly the step-keyed
+    auxiliary draw. (The shared stream restarts on resume by design -- that is exp_02's settled
+    behaviour -- so mixing it in would mask the property under test.)
+    """
+    key = exp03.exp03_aux_key(seed=int(config.seed), global_step=global_step, purpose="p_ss_coin")
+    draw = jax.random.normal(key, ())
+    gain = jax.tree_util.tree_leaves(params)[0].astype(jnp.float32)
+    loss = draw + 0.0 * jnp.sum(gain)
+    zero = jnp.asarray(0.0, dtype=jnp.float32)
+    aux = {
+        "velocity_mse": loss,
+        "sigma_mean": zero,
+        "timestep_mean": zero,
+        "v_pred_l2": zero,
+        "v_target_l2": zero,
+        "z_noisy_std": zero,
+        "z_target_std": zero,
+        "z_init_anchor_mse": zero,
+    }
+    return loss, aux
+
+
+def _run_segment(compiled, state, data, rng, steps):
+    """``for step in range(*steps)`` exactly as start_training does; returns the per-step draws."""
+    draws = []
+    for step in range(*steps):
+        state, metrics, rng = compiled(state, data, rng, jnp.asarray(step, dtype=jnp.int32))
+        draws.append((step, float(metrics["scalar"]["learning/loss"])))
+    return state, rng, draws
+
+
+def test_the_step_keyed_draws_survive_a_real_save_and_restore(tmp_path):
+    # THE resume-safety property, end to end through the PRODUCTION restore path: an uninterrupted
+    # run and a run preempted at step 3 and restored must make the same auxiliary draw at the same
+    # GLOBAL step. This is why the loop's step is threaded rather than state.step.
+    state, data, config, scheduler = _fixture(tx=optax.adamw(1e-3))
+    step_fn = parent._make_train_step(_aux_recording_loss)
+    compiled = _production_jit(step_fn, scheduler, config)
+
+    _, _, uninterrupted = _run_segment(compiled, state, data, jax.random.key(config.seed + 1), (0, 6))
+
+    trainer = _exp03_trainer(
+        SimpleNamespace(**{**vars(config), "checkpoint_max_to_keep": None, "save_final_checkpoint": True})
+    )
+    manager = trainer._build_checkpoint_manager(str(tmp_path / "ckpt"))
+    mid_state, _, first_half = _run_segment(compiled, state, data, jax.random.key(config.seed + 1), (0, 3))
+    trainer._save_checkpoint(manager, 3, mid_state)
+    manager.wait_until_finished()
+
+    # A genuine restart: a freshly built state, the production restore, the loop resuming at the
+    # restored step with a fresh key -- exp_02's actual resume semantics.
+    fresh_state, _, _, _ = _fixture(tx=optax.adamw(1e-3))
+    restored, start_step = trainer._maybe_restore(manager, fresh_state)
+    assert start_step == 3
+    _, _, second_half = _run_segment(compiled, restored, data, jax.random.key(config.seed + 1), (start_step, 6))
+
+    assert [step for step, _ in first_half + second_half] == list(range(6))
+    assert first_half + second_half == uninterrupted
+    # ...and the draws really vary with the step, so the equality above is not vacuous.
+    assert len({value for _, value in uninterrupted}) == 6
+
+    # The counterfactual that motivates threading the LOOP's step: state.step is NOT the global
+    # step after a restore, so keying on it would have restarted the draws at 0.
+    assert int(restored.step) == 0 != start_step
+
+
+def test_the_compiled_step_can_key_an_objective_on_the_global_step():
+    # A round-3 objective compiles and gets DIFFERENT draws at different steps, from one trace.
+    state, data, config, scheduler = _fixture(tx=optax.adamw(1e-3))
+    traces: list[int] = []
+    compiled = _production_jit(parent._make_train_step(_aux_recording_loss), scheduler, config, counter=traces)
+    rng = jax.random.key(3)
+    first = compiled(state, data, rng, jnp.asarray(0, dtype=jnp.int32))[1]["scalar"]["learning/loss"]
+    later = compiled(state, data, rng, jnp.asarray(1, dtype=jnp.int32))[1]["scalar"]["learning/loss"]
+    assert float(first) != float(later)
+    assert sum(traces) == 1  # the step is dynamic, not a compile-time constant
 
 
 def test_the_auxiliary_key_is_deterministic_purpose_scoped_and_step_keyed():
@@ -565,11 +839,95 @@ def test_the_launcher_keeps_the_overfit100_safety_apparatus():
     assert "ffmpeg" in text
 
 
-def test_the_launcher_is_otherwise_the_overfit100_launcher():
-    # Guards against the clone drifting: every non-exp03 command-line override the exp_02 launcher
-    # passes must still be passed here.
-    base = _OVERFIT100_LAUNCHER.read_text()
-    text = _LAUNCHER.read_text()
-    overrides = [line.strip() for line in base.splitlines() if line.strip().endswith('}" \\') and "=" in line]
-    missing = [line for line in overrides if line not in text]
-    assert not missing, missing
+_DEFAULT_ASSIGNMENT = re.compile(r'^([A-Z][A-Z0-9_]*)="\$\{\1:?-(.*)\}"$')
+
+
+def _launcher_defaults(text: str) -> dict[str, str]:
+    """``NAME="${NAME:-value}"`` -> ``{NAME: value}`` — every env-overridable DEFAULT."""
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        match = _DEFAULT_ASSIGNMENT.match(raw.strip())
+        if match:
+            out[match.group(1)] = match.group(2)
+    return out
+
+
+def _launcher_overrides(text: str) -> dict[str, str]:
+    """Every ``key=value`` the launcher passes to train_wan.py, conditionals included verbatim."""
+    block = text[text.index("python src/maxdiffusion/train_wan.py") :]
+    out: dict[str, str] = {}
+    for raw in block.splitlines()[1:]:
+        line = raw.strip()
+        if line.endswith("\\"):
+            line = line[:-1].strip()
+        if not line or line.endswith(".yml"):
+            continue
+        if line.startswith("${"):
+            out[line] = ""  # a conditional override: compared as a whole, so dropping it shows up
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        out[key] = value
+    return out
+
+
+# The ONLY differences the exp_03 launcher is allowed to have. Deliberately tight: anything else
+# that differs is drift between two launchers that must otherwise stay the same recipe.
+_ALLOWED_DEFAULT_DELTAS = {
+    "RUN_NAME",
+    "OUTPUT_DIR",
+    "EXP03_OBJECTIVE",
+    "EXP03_K_A",
+    "EXP03_K_B",
+    "EXP03_LAMBDA",
+    "EXP03_P_SS_MAX",
+    "EXP03_P_SS_RAMP_STEPS",
+}
+_ALLOWED_OVERRIDE_DELTAS = {
+    "exp03_objective",
+    "exp03_k_a",
+    "exp03_k_b",
+    "exp03_lambda",
+    "exp03_p_ss_max",
+    "exp03_p_ss_ramp_steps",
+}
+
+
+def _assert_maps_agree(base: dict, mine: dict, allowlist: set, what: str):
+    """Bidirectional comparison outside the allowlist: same keys AND same values."""
+    base_keys = set(base) - allowlist
+    my_keys = set(mine) - allowlist
+    assert my_keys == base_keys, (
+        f"{what} drifted: only in exp03 {sorted(my_keys - base_keys)}, "
+        f"missing from exp03 {sorted(base_keys - my_keys)}"
+    )
+    differing = {key: (base[key], mine[key]) for key in base_keys if base[key] != mine[key]}
+    assert not differing, f"{what} values drifted: {differing}"
+
+
+def test_the_launcher_defaults_do_not_drift_from_the_overfit100_launcher():
+    # Not a suffix filter: the parsed DEFAULT map is compared in both directions, so changing a
+    # shared default (LEARNING_RATE, WARMUP_STEPS, PER_DEVICE_BATCH_SIZE, ...) is a failure.
+    base = _launcher_defaults(_OVERFIT100_LAUNCHER.read_text())
+    mine = _launcher_defaults(_LAUNCHER.read_text())
+    assert "LEARNING_RATE" in base and "MAX_TRAIN_STEPS" in base  # the parser really parsed
+    assert set(mine) - set(base) == {
+        "EXP03_OBJECTIVE",
+        "EXP03_K_A",
+        "EXP03_K_B",
+        "EXP03_LAMBDA",
+        "EXP03_P_SS_MAX",
+        "EXP03_P_SS_RAMP_STEPS",
+    }
+    _assert_maps_agree(base, mine, _ALLOWED_DEFAULT_DELTAS, "launcher defaults")
+
+
+def test_every_command_line_override_survives_the_clone():
+    # Includes the OPTIONAL tfrecord_shuffle_buffer_size conditional, which a suffix filter missed.
+    base = _launcher_overrides(_OVERFIT100_LAUNCHER.read_text())
+    mine = _launcher_overrides(_LAUNCHER.read_text())
+    assert any("tfrecord_shuffle_buffer_size" in key for key in base), "the parser missed the conditional"
+    assert "learning_rate" in base and "hardware" in base
+    _assert_maps_agree(base, mine, _ALLOWED_OVERRIDE_DELTAS, "launcher overrides")
+    assert set(mine) - set(base) == _ALLOWED_OVERRIDE_DELTAS
