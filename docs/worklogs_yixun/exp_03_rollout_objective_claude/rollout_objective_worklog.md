@@ -172,3 +172,23 @@
   step's Euler broadcast); (c) differentiated forwards use exp_02's training convention
   (`deterministic=False` + dropout), stop-gradient state-producing forwards use the eval convention.
 - **Next** — focused Codex review of round 3.
+
+## 2026-08-02T09:15:00Z — Round-3 STRENGTHENING (Codex REQUEST-REVISION on 01c6362)
+
+- **Verdict** — 2 MAJOR + 1 MINOR + 1 LOW; core math verified correct (A entirely; B apart from the
+  convention; C literal). D1 BLESSED (Tier-1 launches must pass `EXP03_RAMP_ORIGIN=10000`
+  explicitly), D2 BLESSED with an S1.5 caveat (quantify support-gradient variance), D3: A sound,
+  B amend. Record + response in `rollout_objective_codex_code_losses_review.md`.
+- **Closed** — (1) B and C's B-term now differentiate the DETERMINISTIC eval sampler; (2) B's tests
+  detect rather than reproduce the convention — an independently written unroll, a stub that observes
+  `deterministic`, fp32 AND production bf16, loss exact in both and gradients exact in fp32 with the
+  bf16 scan-accumulation-order difference stated and bounded; (3) exact support certificates against
+  independently constructed `randint` draws from the named keys, and the corrective identity over
+  every positive sigma 0..24; (4) `self_gen_noise` removed, stale "unimplemented" text scrubbed,
+  `EXP03_IMPLEMENTED_OBJECTIVES` derived from the dispatch table, explicit `NotImplementedError` and
+  a refusal test that exercises the real path. The tautological ramp assertion is now a
+  counterfactual.
+- **Result** — suite 1399 passed / 2 skipped (+28). Five new mutants killed incl. "guard the guard";
+  round-3's own mutants re-verified after the test rewrite.
+- **Next** — focused re-review; then the S1 smoke package (explicit ramp origins + the A/B/C overhead
+  STOP budgets).
