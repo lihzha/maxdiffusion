@@ -1,4 +1,4 @@
-# exp_03 `rollout_objective` — Plan v3.1 (Planner)
+# exp_03 `rollout_objective` — Plan v3.2 (Planner)
 
 **v3, 2026-08-02** — adds **Tier 2 (from-scratch)** per Yixun's Query 2: keep the continue-from-10k
 A/B/C arms (now "Tier 1"), and retrain from step 0 with the new losses — A0/B0/C0 plus a fresh one-step
