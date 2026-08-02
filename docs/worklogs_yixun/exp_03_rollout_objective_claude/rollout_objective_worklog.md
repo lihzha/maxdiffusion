@@ -142,3 +142,33 @@
   drifted; one XLA flag inside LIBTPU_INIT_ARGS drifted), plus a control (exported literal drifted).
 - **Result** — suite 1340 passed / 2 skipped (unchanged; the round widened an existing test).
 - **Next** — closing micro-pass by the coordinator; then round 3 (A/B/C losses).
+
+## 2026-08-02T07:30:00Z — Cycle A round 3: the A/B/C objectives
+
+- **Goal** — the scientific heart: corrective scheduled sampling (A), short-horizon rollout loss (B),
+  and the literal weighted combination (C), replacing round 2's `NotImplementedError` stubs.
+- **A (`corrective_ss`)** — `k_A ~ U{1..exp03_k_a}` drawn FIRST, then `s ~ U{0..24-k_A}`, `e = s+k_A`
+  (plan v2.2's direction-corrected supports; the terminal index 25 is unreachable by construction).
+  Teacher-forced `z_{σ[s]}` from the SHARED-stream ε; with probability `p_ss` the state is advanced
+  `k_A` steps of the EXTRACTED sampler under `stop_gradient`, else the interpolant at `σ[e]` — the
+  same `(s, e)` draw either way, so the loss point's distribution is identical between branches. One
+  differentiated forward at `σ[e]`, target `v* = (z_lo − z_gt)/σ_lo`, exp_02's exact pin masking.
+- **B (`rollout_loss`)** — teacher-forced start, `k_B = 2` extracted-sampler steps under `lax.scan`
+  with `jax.remat` per step, gradients through both forwards, endpoint MSE against the same-ε ideal
+  interpolant divided by `(σ_hi − σ_lo)²`.
+- **C (`combined`)** — both losses on the same batch with independently drawn supports (different
+  aux purposes ⇒ structural independence), `λ·L_A + (1−λ)·L_B`, one Adam update.
+- **RNG** — new purposes `k_a_draw` and `index_support_rollout` beside the existing `p_ss_coin` /
+  `index_support`; the shared stream is split in exp_02's exact order so an arm's ε and dropout key at
+  a step are the control's (`step_rng` is deliberately unused). `self_gen_noise` stays declared but
+  unused — A's self-generated state comes from the sampler on the SAME ε, which is what keeps the two
+  branches comparable.
+- **Result** — suite 1371 passed / 2 skipped (+31). Six mutants killed: corrective denominator σ_hi;
+  stop-grad dropped; horizon normalization dropped; C's weights swapped; support off-by-one reaching
+  the terminal σ; ramp ignoring the origin. Control parity still bites (a drifted control loss fails).
+- **Flagged for review** — (a) `exp03_ramp_origin` (new config key, default 0) generalizes the plan's
+  "global step − 10,000" so Tier 1 and Tier 2 share one expression; (b) supports are drawn PER BATCH,
+  not per example (the plan's own wording for C, and per-example indices would break the extracted
+  step's Euler broadcast); (c) differentiated forwards use exp_02's training convention
+  (`deterministic=False` + dropout), stop-gradient state-producing forwards use the eval convention.
+- **Next** — focused Codex review of round 3.
