@@ -135,3 +135,8 @@ embedded newline (proving the continuation join, not a truncated first line).
 Full worklogs suite **1340 passed / 2 skipped** (unchanged: this round widened an existing test
 rather than adding cases). ``black``/``ruff`` clean, ``bash -n`` clean, staged-tree
 ``git diff --check`` clean. No push, no launch.
+
+## Closing micro-pass (c985c91): **APPROVE — round 2 CLOSED, round-3 GO**
+
+"Closes finding 3; read-only execution confirmed parser non-vacuity and killed both named mutants plus the
+exported-literal control under the unchanged comparison logic."
