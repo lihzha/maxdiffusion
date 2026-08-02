@@ -1,153 +1,162 @@
-# exp_03 `rollout_objective` — Plan v1 (Planner)
+# exp_03 `rollout_objective` — Plan v2 (Planner)
 
-**Written 2026-08-02.** Answers Query 1: three trials — **A** multi-step / scheduled sampling, **B**
-short-horizon rollout loss, **C** the convex combination λ·L_A + (1−λ)·L_B. Surfaced for Codex plan review,
-then Yixun approval, before any implementation. All launches approval-gated per announcement 02.
+**v2, 2026-08-02** — revises v1 against the Codex plan review (REQUEST-REVISION: 2 BLOCKER + 5 MAJOR; all
+findings adopted, none rejected — resolutions appended to the review file). The two central upgrades:
+**C now implements Yixun's literal `λ·L_A + (1−λ)·L_B` as a true weighted same-batch loss** (v1's stochastic
+alternation was not the asked-for objective under finite-run Adam), and the estimand is honestly named
+**update-matched, not compute-matched**, with compute reported. The reviewer verified A's corrective-target
+math against the actual Euler step rule (exact on-path reduction; min positive σ ≈ 0.1724 so no clamp needed).
 
 ## 0. Question and success frame
 
 **Question.** Does training on (or toward) the trajectory the eval actually runs lift rollout reconstruction
-above exp_02's measured plateau, at matched additional compute?
+above exp_02's measured plateau, at a matched **update** budget?
 
-**Inherited facts this plan is built on (exp_02, all measured):**
-- One-step loss → rollout SSIM is linear and tight: `SSIM ≈ 0.9885 − 1.201 · loss` (r = −0.9994). The
-  intercept clears the 0.95 bar; the ~1.2 slope is the compounding price. exp_03's target is the **slope**.
-- Per-frame SSIM starts ≈0.97 for every window and decays monotonically along the 25-step rollout
-  (D1). The representation is largely present; the trajectory spends it.
-- More identical training is measured to plateau (0.0035 loss / 2,500 steps and decelerating at step 10k);
-  more sampler steps make things strictly worse; CFG does not exist in this path; capacity and episode
-  weighting are excluded. The parallel LR sweep is bounding the optimization-floor lever.
-- The eval contract is settled and reusable verbatim: canonical-100 cohort, m_corr statistic, 25-step
-  role-locked rollout, fail-closed admission, the per-frame D1 script, and the fixed-RNG loss instrument.
+**Inherited measured facts:** one-step loss → rollout SSIM is linear (`SSIM ≈ 0.9885 − 1.201·loss`,
+r = −0.9994) — intercept above the bar, slope = the compounding price; per-frame SSIM starts ≈0.97 for every
+window and decays along the rollout (D1); more identical training plateaus (D2, 42σ but 0.0035/2,500 steps
+and decelerating); more sampler steps strictly hurt; no CFG exists in this path; capacity and episode
+weighting excluded. The LR sweep (running) bounds the optimization-floor lever in parallel.
 
-**Primary success criterion (predeclared).** At matched budget (+2,500 steps from the exp_02 step-10,000
-checkpoint, GBS 256, LR 1e-5), a trial **beats the 1e-5 control arm's canonical-100 mean m_corr by ≥ +0.02**
-(≈6× the control's expected gain, far outside seed/eval noise) **at the settled 25-step eval**. Secondary
-(mechanism) criterion: the D1 per-frame decay slope (frames 1→32) shrinks by ≥ 25% vs control. Stretch:
-any window ≥ 0.95 in the canonical cohort (exp_02 never produced one). Formal D11 two-tier claims are NOT
-re-run per trial; they return only if a winner is extended (S3).
+**Estimand (renamed per review P2).** All trials are **update-matched**: +2,500 optimizer steps from the
+exp_02 step-10,000 checkpoint, GBS 256, LR 1e-5, against the LR-sweep `lr1e5c` control arm. This matches
+examples and Adam updates, NOT FLOPs: A adds `k_A` stop-grad forwards; B differentiates 2 forwards; C pays
+both. Per-trial forward/backward counts and TPU-hours are recorded in `_results.md` and a compute-normalized
+reading (gain per TPU-hour) is reported alongside the primary update-matched one.
 
-**Comparator discipline.** Every trial resumes from the SAME exp_02 step-10,000 checkpoint with the SAME
-LR/optimizer/data as the LR-sweep control arm (`wan-overfit100-s3ext-lr1e5c-20260802`, +2,500 steps of the
-plain objective). One shared control anchors both experiments; no trial gets its own bespoke baseline.
+**Primary metric (corrected per review P3).** **Canonical seed-0 mean SSIM** over the 100-window cohort at
+the settled 25-step eval (role `s3_intermediate`) — the exact statistic of exp_02's intermediate passes.
+(`m_corr` needs 3 seeds; it returns only at S3 on a winner, via `s3_segment_final`.)
 
-## 1. The three trials — operational definitions
+**Success gates (predeclared):**
+- **Primary (practical-effect gate):** trial − control ≥ **+0.02** canonical seed-0 mean SSIM. This is ~5×
+  the control's expected gain (≈0.0042 via the linear map × the measured 0.0035 loss trend). It is a
+  practical-effect threshold, NOT a statistical one; a **paired per-episode bootstrap CI** (10k resamples of
+  the 100 episodes, trial−control paired per window) is reported with it, and a gate pass with a CI
+  overlapping zero is reported as "gate met, not significant".
+- **Mechanism A (temporal):** D1 per-frame decay slope — per-window OLS on frames 1→32 over **all 100
+  canonical windows** (trial evals and the control re-eval run `WRITE_VIDEOS=True`), reduction =
+  `1 − mean_slope_trial / mean_slope_control`, with a paired bootstrap CI; predeclared threshold ≥ 25%.
+- **Mechanism B (sigma-trajectory, new per review P7):** fixed-ε latent error vs the ideal interpolant at
+  every sigma step of the 25-step rollout, control vs trials (D1 measures temporal decay of decoded frames;
+  this measures denoising-trajectory divergence directly — the thing the objectives actually target).
+- **Instrument:** the fixed-RNG one-step plain loss on all 1,629 windows per trial checkpoint, including
+  exact reproduction of the 10k anchor **0.12227** pre-training and the trial's deviation from the exp_02
+  loss→SSIM line (a trial that beats the line demonstrates slope reduction; one that rides it merely moved
+  along it).
+- **Stretch:** any canonical window ≥ 0.95.
 
-Shared notation: flow-matching interpolant `z_σ = (1−σ)·z_gt + σ·ε`; the network predicts velocity
-`v ≈ ε − z_gt`; frame-0 latent is pinned to `z_i0` everywhere (training and rollout, as in exp_02); the
-sampler step is the SAME code the eval rollout uses (see §3, "one sampler" rule).
+## 1. The three trials (v2 definitions)
 
-### Trial A — scheduled sampling (input-side; gradients through ONE forward)
+Shared: interpolant `z_σ = (1−σ)·z_gt + σ·ε`; network predicts velocity; frame-0 pinned everywhere; sampler
+step = the SAME extracted function the eval uses (§3). σ grid = the eval's 25-step shifted grid; terminal
+σ = 0 excluded from all σ_lo draws (min positive grid σ ≈ 0.1724 — reviewer-verified, no clamp needed); all
+σ arithmetic in FP32.
 
-Teacher forcing trains the model only on inputs lying exactly on the GT interpolant path; at eval it sees
-its own slightly-off-path states, and D1 shows the error compounding. A trains on **self-generated inputs**:
+### Trial A — corrective scheduled sampling (renamed per review P6)
 
-1. Sample `σ_hi > σ_lo` (two points on the eval sigma grid; `σ_hi` from the training σ-distribution,
-   `σ_lo` the next grid point(s) down).
-2. Form `z_{σ_hi}` from GT + fresh ε (teacher-forced start).
-3. With probability `p_ss` (scheduled: 0 → `p_ss_max` over the segment), advance `k_A ∈ {1, 2}` sampler
-   steps `σ_hi → σ_lo` using the model itself, **stop-gradient** on these steps; else set
-   `z_{σ_lo}` from the GT interpolant (plain objective).
-4. One-step velocity loss at `σ_lo` on the (possibly self-generated) input, target `ε_eff − z_gt` — where
-   for self-generated inputs the effective target is the velocity that points the CURRENT state back to the
-   GT path: `v* = (z_{σ_lo} − z_gt) / σ_lo` (the flow toward `z_gt` from wherever the model actually is;
-   reduces exactly to `ε − z_gt` on-path). This "corrective target" is the load-bearing design choice — it
-   teaches the model to steer back to the memorized clip from its own drifted states.
+1. Draw grid indices `hi > lo` (lo never terminal); form `z_{σ_hi} = (1−σ_hi)z_gt + σ_hi ε`.
+2. With probability `p_ss` (linear 0 → **p_ss_max = 0.5** over the first **500** segment steps, then
+   constant; schedule keyed to **global step − 10,000** so it survives resume): advance `k_A ~ Uniform{1,2}`
+   sampler steps with **stop-gradient**; else stay teacher-forced.
+3. One differentiated forward at `σ_lo`; target `v* = (z_{σ_lo} − z_gt)/σ_lo` — the corrective velocity,
+   exact under the Euler rule `z_next = z + (σ_next − σ)·v` (contraction `z_next − z_gt = (σ_next/σ)(z − z_gt)`),
+   reducing exactly to `ε − z_gt` on-path.
 
-Cost: `k_A` extra forwards WITHOUT gradient per A-batch (~+`k_A`·0.5× step time at p_ss=1). Memory: same as
-baseline (one differentiated forward). Risk: distribution of self-generated `z_{σ_lo}` early in training is
-noisy — mitigated by the p_ss ramp.
+**Honest naming (review P6):** A changes BOTH input exposure and the label. A win supports "corrective
+scheduled sampling", not scheduled sampling per se. The S1.5 probe (§4) measures the label's isolated effect
+(same-ε label vs corrective label on identical self-generated states) so the confound is quantified before
+S2; a pure-scheduled-sampling arm A′ is predeclared as a follow-up ONLY if A wins and isolation matters.
 
-### Trial B — short-horizon rollout loss (output-side; gradients through k forwards)
+### Trial B — short-horizon rollout loss
 
-Directly penalize accumulated error over a short window of the real sampler:
+1. Draw a grid start (non-terminal); form `z_{σ_hi}` teacher-forced.
+2. `k_B = 2` sampler steps with gradients through both forwards (`lax.scan` over the shared step fn,
+   `jax.remat` per step).
+3. Loss (horizon-normalized per review P1): `MSE(z_{σ_lo}, ẑ_{σ_lo}) / (σ_hi − σ_lo)²` with
+   `ẑ_{σ_lo} = (1−σ_lo)z_gt + σ_lo ε` (same ε) — zero at the optimum `v ≡ ε − z_gt` (reviewer-verified);
+   without the normalizer, start-index draws re-weight the loss by the nonuniform grid spacing squared.
+   Pin masking identical to exp_02's loss; unit test zero-at-optimum, masking parity, and dtype rounding.
 
-1. Sample a start index on the eval sigma grid; form `z_{σ_hi}` from GT + fresh ε.
-2. Run `k_B = 2` sampler steps `σ_hi → σ_mid → σ_lo` **with gradients through both forwards**
-   (`jax.remat` per step; the two-step unroll is a `lax.scan` of the shared step fn).
-3. Loss: `MSE(z_{σ_lo}, ẑ_{σ_lo})` against the SAME-ε GT interpolant point
-   `ẑ_{σ_lo} = (1−σ_lo)·z_gt + σ_lo·ε` — i.e., "after k real sampler steps, be where the GT path is",
-   with per-element masking of the pinned frame exactly as exp_02's loss masks it.
+### Trial C — the literal combination (changed per review P2/P6)
 
-Cost: ~2× baseline step time, ~2× activation traffic under remat (S1 smoke gate verifies fit at GBS 256 on
-v6e-64; fallback `per_device_batch_size` halving + 2× steps is predeclared as NOT a comparability break for
-S1 only). Risk: memory; and short-horizon (k=2 of 25) may under-train long-range compounding — that is
-exactly what the D1 slope metric will show.
+**True weighted same-batch loss:** every step computes BOTH `L_A` and `L_B` on the same batch and optimizes
+`λ·L_A + (1−λ)·L_B`, λ = 0.5, single Adam update. This is exactly Yixun's Query-1 objective — no alternation,
+no expectation argument needed. Cost: A's stop-grad forwards + B's differentiated unroll every step (≈2.5–3×
+baseline step time; memory peak = B's, since A adds no differentiated activations — S1 verifies). "C wins ⇒
+complementary" is licensed only under this literal implementation.
 
-### Trial C — the combination (λ = 0.5 v1)
-
-`L_C = λ·L_A + (1−λ)·L_B`, **implemented as stochastic batch alternation**: each step is an A-step with
-probability λ else a B-step. Expectation-equivalent to the weighted sum, and avoids paying A's extra
-forwards AND B's unroll memory in one step. λ = 0.5 fixed for v1; a λ sweep only if C wins and is extended.
-
-## 2. Trial-vs-mechanism predictions (what each outcome means)
+## 2. Outcome readings
 
 | Outcome | Reading |
 | --- | --- |
-| A wins | Exposure bias (off-path inputs) is the binding term; corrective targets suffice without unroll cost |
-| B wins | Credit assignment through the sampler matters; scheduled inputs without trajectory gradients are not enough |
-| C wins | The terms are complementary (input-distribution + trajectory-gradient) |
-| None beat control | Short-horizon objective changes cannot fix 25-step compounding at this scale/budget — points to inference-time or architectural remedies, and exp_02's plateau stands as the recipe family's ceiling |
+| A wins | Off-path exposure + corrective supervision is the binding fix (label isolation via S1.5 / optional A′) |
+| B wins | Gradient credit assignment through the sampler is required |
+| C wins | The terms are complementary (literal λ-combination) |
+| None beat control | Short-horizon objective changes don't fix 25-step compounding at this scale/budget; exp_02's plateau stands as the recipe family's ceiling; remedies move to inference-time/architecture |
 
 ## 3. Implementation plan (per file)
 
-**One-sampler rule (binding):** the k-step advances in A and B call the *same* step function the eval
-rollout uses (extracted, not duplicated), so the trained trajectory operator and the evaluated one are the
-same code object. A unit test pins that A/B's step ≡ eval's step on fixed inputs.
+**One-sampler rule with a bitwise gate (review P5).** The single-step sampler fn is extracted from
+`generate_wan_side_adapter.py` into `models/wan/overfit100_sampling.py`; trainers and eval both import it.
+Because this touches proven eval code, the extraction commit must pass: (i) the existing suite's rollout
+tests, (ii) a **bitwise reproduction** of the landed 30-window seed-0 SSIM scalars (probe harness), and the
+control arm's eval is RE-RUN at the post-extraction commit into a fresh immutable root — **every exp_03
+comparison uses that single post-extraction eval commit** (one-generation rule, learned from exp_02).
 
-- `src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py` — **no behavioral change** (control keeps
-  running through the settled path).
-- **NEW** `src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py` — subclass of the exp_02 trainer;
-  dispatched by `model_type: EXP03_TI2V`; reads `exp03_objective ∈ {scheduled_sampling, rollout_loss,
-  combined}`, `exp03_k_a`, `exp03_k_b`, `exp03_lambda`, `exp03_p_ss_max`, `exp03_p_ss_ramp_steps`. Owns the
-  three loss builders; A's corrective target and B's same-ε target as above; frame-0 pinning inside every
-  advanced step; stop-grad boundaries explicit.
-- **NEW** shared step extraction: the single-step sampler fn moves from `generate_wan_side_adapter.py`'s
-  rollout into a small module both import (`models/wan/overfit100_sampling.py`), byte-behavior pinned by
-  tests on both call sites (the eval path must remain bit-identical — its bitwise reproducibility is a
-  proven asset we must not lose).
-- `src/maxdiffusion/configs/base_wan_5b_exp03.yml` — clone of the overfit100 config + the exp03 keys;
-  same data/manifest/eval keys so the entire exp_02 eval stack runs on exp_03 runs unchanged.
-- `bash_scripts/train_wan_exp03.sh` — clone of the overfit100 training launcher + `EXP03_*` envs.
-- Tests (TDD, `src/maxdiffusion/tests/worklogs_yixun/test_exp03_*`): corrective-target math (on-path
-  reduction to the plain target; off-path direction checks), same-ε target correctness, stop-grad boundaries
-  (A's advance carries no grad; B's carries grad through exactly k forwards — checked via `jax.grad`
-  structure), p_ss ramp schedule, λ alternation statistics, one-sampler equivalence, config plumbing,
-  masking parity with exp_02's loss, memory-shape smoke (CPU).
+- **NEW** `src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py` — `EXP03_TI2V` dispatch (provenance).
+  **Binding hook (review P4):** the exp_02 parent binds module-level `_train_step`/`_denoising_loss`; the
+  subclass overrides an explicit, tested `_loss_and_step_fns()` hook (parent refactored to route through the
+  hook with byte-identical behavior — pinned by a parity test `p_ss=0 ∧ plain objective ≡ exp_02 step`).
+  Same `Overfit100TrainState`, same Orbax item shapes (restore-roundtrip test against a real checkpoint
+  structure); config keys `exp03_objective ∈ {corrective_ss, rollout_loss, combined}`, `exp03_k_a=2max`,
+  `exp03_k_b=2`, `exp03_lambda=0.5`, `exp03_p_ss_max=0.5`, `exp03_p_ss_ramp_steps=500`.
+- **RNG discipline (review P2):** purpose-folded keys from `(global_step, purpose)` so ε draws, grid draws,
+  p_ss coin flips, and k_A draws are (a) identical across arms at the same step where purposes align, and
+  (b) resume-stable. Data order: identical seed ⇒ identical shuffle across arms (predeclared; verified in S1
+  logs by comparing first-batch episode indices across arms).
+- `src/maxdiffusion/configs/base_wan_5b_exp03.yml` — overfit100 config + exp03 keys.
+- `bash_scripts/train_wan_exp03.sh` — overfit100 launcher + `EXP03_*` envs.
+- Tests (TDD): corrective-target exactness on-path & off-path (vs the Euler contraction, per the reviewer's
+  identity), every valid unequal grid interval, terminal-σ exclusion, B zero-at-optimum & horizon
+  normalization & masking parity, stop-grad boundaries (grad flows through exactly the intended forwards —
+  checked structurally), C's same-batch weighted gradient equals λ∇L_A+(1−λ)∇L_B on a toy model, p_ss ramp
+  keyed to global step (resume test), RNG purpose-folding, hook-parity (p_ss=0 ≡ exp_02), config plumbing,
+  restore roundtrip.
 
-**Reused unchanged:** train100 dataset + manifest, eval launcher + D11 machinery, loss instrument,
-per-frame D1 script, resume staging. Evals run at role `s3_intermediate` on each trial's RUN_NAME.
+**Reused unchanged:** train100 dataset + manifest, eval launcher/roles, loss instrument, D1 script,
+resume staging, seeding-by-checkpoint-copy procedure (LR-sweep pattern).
 
-## 4. Staged compute (every launch Yixun-gated)
+## 4. Staged compute (each launch Yixun-gated)
 
-- **S1 smoke (v6e-8):** 30 steps per trial, tiny batch. Gates: losses finite; B fits memory at target batch
-  (else predeclared fallback); A's self-generated states in sane stats envelope; grad norms comparable to
-  baseline; step-time overhead measured (predeclared budget: A ≤ 1.6×, B ≤ 2.5× baseline step time).
-- **S2 trials (v6e-64):** three runs, each +2,500 steps from the exp_02 step-10,000 checkpoint (seeded the
-  LR-sweep way), LR 1e-5, GBS 256. Then per trial: `s3_intermediate` eval (seed-0, canonical-100) + loss
-  instrument + D1 per-frame script. Compare against the shared lr1e5c control.
-- **S3 (conditional):** extend the winner (if the ≥+0.02 criterion is met) and only then re-run the formal
-  D11 two-tier verdict on the extended run.
+- **S1 — CPU/tiny smoke (v6e-8):** losses finite; hook parity; overhead measured per trial (budgets: A ≤ 1.6×,
+  B ≤ 2.5×, C ≤ 3.2× baseline step time — exceeding a budget is a STOP, not a silent accept).
+- **S1.5 — no-update discriminator probe (v6e-8, NEW per review P7):** at the 10k checkpoint, no optimizer
+  updates: raw + normalized A/B/C losses; grad norms and grad **cosine vs the plain objective**; A's same-ε
+  label vs corrective label on identical self-generated states (the P6 confound, quantified); `p_ss=0`
+  parity through the new trainer (loss equals exp_02's to fp tolerance); per-sigma-step latent error vs the
+  ideal interpolant for the plain model (mechanism-B baseline trace).
+- **S1.6 — target-mesh fit probe (v6e-64, one step, NEW per review P4):** compile + one update of B and C at
+  GBS 256 on the real mesh (remat/scan certified where it will run). Cheap (minutes).
+- **S2 — trials (v6e-64):** A, B, C; +2,500 updates each from the copied step-10,000 checkpoint; then per
+  trial: `s3_intermediate` eval with `WRITE_VIDEOS=True` + loss instrument + D1 + sigma-trajectory trace;
+  control re-eval at the post-extraction commit (fresh root, videos on) if not already run.
+- **S3 (conditional):** extend the winner; only then the formal D11 `s3_segment_final`/full-set machinery.
 
-Budget note: S2 ≈ 3 × (39 min × overhead) v6e-64 + 3 × ~30 min v6e-8 evals; well under one exp_02 day.
+## 5. Risks (updated)
 
-## 5. Risks / open questions (for the reviewer)
-
-1. **A's corrective target divides by σ_lo** — near-zero σ_lo inflates the target; mitigation: exclude the
-   lowest grid point from σ_lo candidates (predeclared) or clamp. Reviewer: check the formulation.
-2. **B's same-ε target** assumes the sampler should track the *stochastic* interpolant point rather than the
-   conditional mean; for memorization of a single (z_gt, text) pair this is the intended fixed point, but
-   the reviewer should audit the flow-matching math.
-3. **Off-path velocity semantics (A):** `v* = (z − z_gt)/σ` implies a σ-parameterized contraction field;
-   confirm consistency with the scheduler's update rule so the composed step is a contraction toward z_gt.
-4. **Eval comparability:** trials change the objective, not the eval; the 25-step contract stays locked.
-   Any trial-specific eval temptation (e.g., "B looks better at 2 steps") is out of scope for the verdict.
-5. **The control already exists** (LR-sweep lr1e5c). If its result arrives first, S2 trials are judged
-   against the measured number; no re-run.
+1. **Interpretability** (the reviewer's headline risk): addressed by C-literal, A-renaming + S1.5 label
+   isolation, and the sigma-trajectory metric (temporal D1 alone cannot attribute reduced sampler
+   compounding).
+2. **Eval-code motion:** gated bitwise (§3); the one-generation rule prevents any cross-commit verdict mixing.
+3. **B/C memory & step-time:** S1 budgets + S1.6 mesh probe before any v6e-64 training commitment.
+4. **p_ss ramp × short segment:** ramp completes in 500 of 2,500 steps; A trains at full p_ss for 80% of the
+   segment. If A shows instability in S1.5 grad diagnostics, p_ss_max drops to 0.25 (predeclared fallback).
+5. **Shared control:** `lr1e5c` (LR sweep) is the comparator; its eval is re-run at the post-extraction
+   commit so all comparisons share one eval generation.
 
 ## 6. Artifacts & bookkeeping
 
-Standard SOP set under `docs/worklogs_yixun/exp_03_rollout_objective_claude/` (this plan, reviews with
-strengthening records, `_command.md` at launch time, worklog, params, results, analysis, HTML report).
-Coder = Opus subagent per round; reviewer = Codex `gpt-5.6-sol` xhigh; closed cycles with mutation
-spot-checks as in exp_02.
+Standard SOP set under `exp_03_rollout_objective_claude/`. Coder = Opus subagent; Reviewer = Codex
+`gpt-5.6-sol` xhigh; closed cycles with mutation spot-checks. `_command.md` entries at launch time; every
+run's forward/backward counts and TPU-hours recorded for the compute-normalized reading.
