@@ -1,6 +1,8 @@
-# exp_03 `rollout_objective` — Plan v2 (Planner)
+# exp_03 `rollout_objective` — Plan v2.1 (Planner)
 
-**v2, 2026-08-02** — revises v1 against the Codex plan review (REQUEST-REVISION: 2 BLOCKER + 5 MAJOR; all
+**v2.1, 2026-08-02** — v2 plus the re-review's four residual closures (data-order stability by
+save-schedule construction; D1 slope analysis as a new predeclared script; exact index supports for A/B;
+the sigma-trajectory trace operationalized per file). v2 revised v1 against the Codex plan review (REQUEST-REVISION: 2 BLOCKER + 5 MAJOR; all
 findings adopted, none rejected — resolutions appended to the review file). The two central upgrades:
 **C now implements Yixun's literal `λ·L_A + (1−λ)·L_B` as a true weighted same-batch loss** (v1's stochastic
 alternation was not the asked-for objective under finite-run Adam), and the estimand is honestly named
@@ -36,10 +38,22 @@ the settled 25-step eval (role `s3_intermediate`) — the exact statistic of exp
   overlapping zero is reported as "gate met, not significant".
 - **Mechanism A (temporal):** D1 per-frame decay slope — per-window OLS on frames 1→32 over **all 100
   canonical windows** (trial evals and the control re-eval run `WRITE_VIDEOS=True`), reduction =
-  `1 − mean_slope_trial / mean_slope_control`, with a paired bootstrap CI; predeclared threshold ≥ 25%.
+  `1 − mean_slope_trial / mean_slope_control`, paired per-episode bootstrap (10,000 resamples, **95% CI,
+  bootstrap seed 0**); predeclared threshold ≥ 25%. **Implemented as a NEW committed script**
+  `diagnostics/d1_per_frame_slopes.py` (the exp_02 `d1_per_frame_ssim.py` computes aggregate means and
+  endpoint drops only — it is NOT reused for this metric); unit tests on synthetic decay curves with known
+  slopes; the exp_02 self-validation check (mean-over-frames vs recorded SSIM) is retained.
 - **Mechanism B (sigma-trajectory, new per review P7):** fixed-ε latent error vs the ideal interpolant at
   every sigma step of the 25-step rollout, control vs trials (D1 measures temporal decay of decoded frames;
   this measures denoising-trajectory divergence directly — the thing the objectives actually target).
+  **Operationalized (re-review P7 residual)** as a NEW probe module `diagnostics/sigma_trajectory_trace.py`:
+  imports the extracted step fn (§3), runs the 25-step rollout over the SAME 30-window seeded canonical
+  subsample the exp_02 sampling probe used, ε keyed by `window_fold_key(0, episode_id, window_start)` (the
+  eval's own keying), records `‖z_{σ_i} − ((1−σ_i)z_gt + σ_i ε)‖² / numel` at every i, writes one immutable
+  JSON per checkpoint under the run's `validation_probe_sampling/` root (canonical path rules from the
+  exp_02 probe review apply). The existing eval rollout is NOT modified — the trace is its own harness on
+  the shared step fn. Unit tests: trace of a perfect velocity oracle is identically zero; trace length/keys;
+  path canonicality.
 - **Instrument:** the fixed-RNG one-step plain loss on all 1,629 windows per trial checkpoint, including
   exact reproduction of the 10k anchor **0.12227** pre-training and the trial's deviation from the exp_02
   loss→SSIM line (a trial that beats the line demonstrates slope reduction; one that rides it merely moved
@@ -49,9 +63,18 @@ the settled 25-step eval (role `s3_intermediate`) — the exact statistic of exp
 ## 1. The three trials (v2 definitions)
 
 Shared: interpolant `z_σ = (1−σ)·z_gt + σ·ε`; network predicts velocity; frame-0 pinned everywhere; sampler
-step = the SAME extracted function the eval uses (§3). σ grid = the eval's 25-step shifted grid; terminal
-σ = 0 excluded from all σ_lo draws (min positive grid σ ≈ 0.1724 — reviewer-verified, no clamp needed); all
-σ arithmetic in FP32.
+step = the SAME extracted function the eval uses (§3). σ grid = the eval's 25-step shifted grid, indices
+`0..24` from highest σ to the last positive σ, with the terminal σ=0 boundary excluded from every draw; all
+σ arithmetic in FP32 (min positive grid σ ≈ 0.1724 — reviewer-verified, no clamp needed).
+
+**Exact index supports (re-review P4 residual):**
+- Trial A: draw `k_A ~ Uniform{1, 2}` FIRST, then `hi ~ Uniform{i : k_A ≤ i ≤ 24}`, set `lo = hi − k_A`.
+  The teacher-forced branch (prob 1−p_ss) uses the SAME `(hi, lo)` draw and simply forms `z_{σ_lo}` from the
+  interpolant — so the loss-point distribution over σ_lo is identical between branches by construction.
+- Trial B: `hi ~ Uniform{i : 2 ≤ i ≤ 24}`, path `hi → hi−1 → hi−2 = lo` (consecutive grid steps, exactly the
+  eval's step sequence restricted to a window).
+- Trial C: each batch draws BOTH supports independently (A's and B's), computes both losses on the same
+  examples, and combines.
 
 ### Trial A — corrective scheduled sampling (renamed per review P6)
 
@@ -113,8 +136,13 @@ comparison uses that single post-extraction eval commit** (one-generation rule, 
   `exp03_k_b=2`, `exp03_lambda=0.5`, `exp03_p_ss_max=0.5`, `exp03_p_ss_ramp_steps=500`.
 - **RNG discipline (review P2):** purpose-folded keys from `(global_step, purpose)` so ε draws, grid draws,
   p_ss coin flips, and k_A draws are (a) identical across arms at the same step where purposes align, and
-  (b) resume-stable. Data order: identical seed ⇒ identical shuffle across arms (predeclared; verified in S1
-  logs by comparing first-batch episode indices across arms).
+  (b) resume-stable.
+- **Data-order stability by construction (re-review P2 residual):** the segment saves NO intermediate
+  checkpoints — `checkpoint_steps` contains nothing in (10000, 12500) — so ANY preemption restarts the whole
+  segment from the step-10,000 checkpoint with the same iterator seed (`seed + 10000`). Data order is
+  therefore identical across arms AND across queue retries by construction, not by comparison; the
+  first-batch log check remains only as a sanity print. (Cost: a preemption re-runs up to 2,500 steps ≈ 39
+  min — acceptable; predeclared.)
 - `src/maxdiffusion/configs/base_wan_5b_exp03.yml` — overfit100 config + exp03 keys.
 - `bash_scripts/train_wan_exp03.sh` — overfit100 launcher + `EXP03_*` envs.
 - Tests (TDD): corrective-target exactness on-path & off-path (vs the Euler contraction, per the reviewer's
