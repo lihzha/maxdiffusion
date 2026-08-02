@@ -434,7 +434,6 @@ enable_ondemand_xprof: False
 #   corrective_ss-- trial A, corrective scheduled sampling
 #   rollout_loss -- trial B, short-horizon rollout loss
 #   combined     -- trial C, the literal lambda*L_A + (1-lambda)*L_B
-# Non-control objectives raise NotImplementedError until round 3 lands them.
 exp03_objective: 'control'
 exp03_k_a: 2                # trial A: max scheduled-sampling advance, k_A ~ U{1..k_a}
 exp03_k_b: 2                # trial B: differentiated rollout steps (fixed by the plan)

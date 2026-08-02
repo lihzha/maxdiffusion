@@ -6,13 +6,12 @@ snapshot, dataset byte-verify, manifest-bound context table), the same optimizer
 checkpoint schedule and loop. Only :meth:`Exp03Trainer._loss_and_step_fns` is overridden, because
 that is the one thing exp_03 changes.
 
-**This round implements ``exp03_objective: control`` only** — and implements it by returning the
-parent's own functions *by identity*, not by a copy that would merely look equal. That is what makes
-ctrl0 a replication guard rather than a second implementation: with the same seed, data order and
-checkpoint bytes, ctrl0 through this trainer executes exactly the code exp_02 executed. The three
-real objectives (``corrective_ss``, ``rollout_loss``, ``combined``) are accepted by the config
-surface and raise :class:`NotImplementedError` until round 3, so a launch that names one fails at
-startup instead of quietly training the control.
+``exp03_objective: control`` returns the parent's own functions *by identity*, not a copy that would
+merely look equal. That is what makes ctrl0 a replication guard rather than a second implementation:
+with the same seed, data order and checkpoint bytes, ctrl0 through this trainer executes exactly the
+code exp_02 executed. The three trials (``corrective_ss``, ``rollout_loss``, ``combined``) are
+implemented below; anything declared without an implementation raises :class:`NotImplementedError`
+at startup rather than quietly training the control under another arm's run name.
 
 **RNG discipline (plan v3.1 §1b, delta-review 2).** The *shared stream* is exp_02's: a single
 ``jax.random.key(seed + 1)`` advanced by exactly one ``split`` per step inside the train step, whose
@@ -61,7 +60,6 @@ EXP03_MODEL_TYPE = "EXP03_TI2V"
 # exp_02's; the other three are the trials.
 EXP03_CONTROL_OBJECTIVE = "control"
 EXP03_OBJECTIVES = (EXP03_CONTROL_OBJECTIVE, "corrective_ss", "rollout_loss", "combined")
-EXP03_IMPLEMENTED_OBJECTIVES = EXP03_OBJECTIVES  # round 3 landed the three trials
 
 # Auxiliary-key purposes. Named rather than numbered so adding one later cannot renumber the
 # others: the purpose's id is a hash of its NAME (see _purpose_id).
@@ -70,8 +68,10 @@ EXP03_AUX_PURPOSES = (
     "k_a_draw",  # trial A: k_A ~ U{1..exp03_k_a}, drawn FIRST (plan v2.2)
     "index_support",  # trial A: the start index s ~ U{0 .. 24 - k_A}
     "index_support_rollout",  # trial B: the start index s ~ U{0 .. 22}
-    "self_gen_noise",  # reserved: see the note in _corrective_ss_loss
 )
+# There is deliberately NO self-generation noise purpose: A's off-path state is produced by the
+# sampler from the SAME epsilon as its teacher-forced branch, which is exactly what makes the two
+# branches comparable. A separate noise draw would break that.
 
 # Offset for the auxiliary root key. The shared stream is key(seed + 1); the auxiliary root is a
 # DIFFERENT key, not a descendant of it, so the two can never collide or interleave.
@@ -330,9 +330,8 @@ def _corrective_ss_loss(params, state, data, rng, config, scheduler, *, global_s
     ``v* = (z_lo - z_gt) / sigma_lo``, which is exact under the Euler rule
     (``z_next - z_gt = (sigma_next / sigma) (z - z_gt)``) and reduces to ``eps - z_gt`` on-path.
 
-    The ``self_gen_noise`` purpose stays declared but unused: the self-generated state is produced
-    by the sampler from the SAME epsilon as the teacher-forced branch, which is what keeps the two
-    branches comparable, so no fresh noise is drawn for it.
+    No fresh noise is drawn for the self-generated state: it is produced by the sampler from the
+    SAME epsilon as the teacher-forced branch, which is what keeps the two branches comparable.
     """
     if global_step is None:
         raise ValueError("the exp_03 trial objectives need the threaded global_step (round-2 plumbing)")
@@ -385,10 +384,10 @@ def _corrective_ss_loss(params, state, data, rng, config, scheduler, *, global_s
 def _rollout_loss(params, state, data, rng, config, scheduler, *, global_step=None):
     """Trial B — short-horizon rollout loss, horizon-normalized.
 
-    Teacher-forced start at ``sigma[s]``, then ``k_B`` steps of the EXTRACTED sampler with gradients
-    flowing through every forward (``lax.scan`` with ``jax.remat`` per step, so the unroll is
-    rematerialized rather than held), scored against the ideal trajectory point with the SAME
-    epsilon and divided by ``(sigma_hi - sigma_lo)**2``. Without that normalizer the nonuniform grid
+    Teacher-forced start at ``sigma[s]``, then ``k_B`` steps of the EXTRACTED sampler in the EVAL
+    convention (``deterministic=True``) with gradients flowing through every forward (``lax.scan``
+    with ``jax.remat`` per step, so the unroll is rematerialized rather than held), scored against
+    the ideal trajectory point with the SAME epsilon and divided by ``(sigma_hi - sigma_lo)**2``. Without that normalizer the nonuniform grid
     would reweight the loss by the square of the step size (plan review P1); with it, the optimum
     ``v = eps - z_gt`` gives exactly zero at every support.
     """
@@ -401,7 +400,12 @@ def _rollout_loss(params, state, data, rng, config, scheduler, *, global_step=No
     sigma_hi = ctx.sigmas[start].astype(jnp.float32)
     sigma_lo = ctx.sigmas[end].astype(jnp.float32)
 
-    velocity_fn = _training_velocity_fn(ctx)
+    # THE approved operator: B is a short-horizon rollout loss through the sampler the EVALUATION
+    # runs, so both differentiated forwards use the eval convention. Differentiability does not
+    # require training mode -- gradients flow through a deterministic forward exactly as well --
+    # and with a future nonzero dropout the training convention would differentiate a different
+    # trajectory than the one the experiment is about (round-3 review D3).
+    velocity_fn = _sampling_velocity_fn(ctx)
 
     @jax.remat
     def _step(carry, offset):
@@ -481,6 +485,9 @@ EXP03_LOSSES = {
     "combined": _combined_loss,
 }
 
+# Derived from the dispatch table, never hand-maintained: what is implemented is what can be run.
+EXP03_IMPLEMENTED_OBJECTIVES = (EXP03_CONTROL_OBJECTIVE, *EXP03_LOSSES)
+
 
 class Exp03Trainer(WanTI2VOverfit100Trainer):
     """The exp_02 overfit100 trainer with a switchable objective (``model_type: EXP03_TI2V``).
@@ -496,7 +503,13 @@ class Exp03Trainer(WanTI2VOverfit100Trainer):
             # BY IDENTITY, not by copy: ctrl0's job is to reproduce exp_02, and the only way to be
             # sure it does is to run the same functions.
             return _denoising_loss, _train_step
-        loss_fn = EXP03_LOSSES[objective]
+        loss_fn = EXP03_LOSSES.get(objective)
+        if loss_fn is None:
+            raise NotImplementedError(
+                f"exp03_objective={objective!r} is declared by plan v3.1 but has no implementation; "
+                f"implemented objectives are {sorted(('control', *EXP03_LOSSES))}. Refusing to start rather "
+                f"than silently training the control under another arm's run name."
+            )
         return loss_fn, _make_train_step(loss_fn)
 
     def start_training(self):

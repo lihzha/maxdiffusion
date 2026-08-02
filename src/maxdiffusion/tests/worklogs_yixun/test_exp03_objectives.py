@@ -52,7 +52,12 @@ class _StubTransformer(nnx.Module):
         hidden = kwargs["hidden_states"].astype(jnp.float32)
         t_mean = jnp.mean(kwargs["timestep"].astype(jnp.float32))
         ctx_mean = jnp.mean(kwargs["encoder_hidden_states"].astype(jnp.float32))
-        return self.gain[...] * jnp.tanh(hidden) + 0.01 * t_mean + 0.001 * ctx_mean
+        # The stub OBSERVES the convention. The real Wan model is currently insensitive to the flag
+        # (configured dropout is 0.0), which is exactly why a test that ignores it would certify the
+        # wrong operator: B is defined through the sampler the EVALUATION runs.
+        training_mode = 0.0 if bool(kwargs.get("deterministic", True)) else 0.37
+        out = self.gain[...] * jnp.tanh(hidden) + 0.01 * t_mean + 0.001 * ctx_mean + training_mode
+        return out.astype(kwargs["hidden_states"].dtype)
 
 
 class _OracleTransformer(nnx.Module):
@@ -132,7 +137,7 @@ def test_the_corrective_target_reduces_to_the_plain_target_on_path():
     z_gt = data["z_video"][:_BSZ].astype(jnp.float32)
     z_i0 = data["z_i0"][:_BSZ].astype(jnp.float32)
     eps = jax.random.normal(rng, z_gt.shape, dtype=jnp.float32)
-    for index in (0, 7, 24):
+    for index in range(_STEPS):  # 0..24: every index with a positive sigma
         sigma = float(sigmas[index])
         on_path = apply_first_frame_pin((1.0 - sigma) * z_gt + sigma * eps, z_i0)
         corrective = (on_path - z_gt) / sigma
@@ -141,8 +146,10 @@ def test_the_corrective_target_reduces_to_the_plain_target_on_path():
         assert np.allclose(np.asarray(corrective[:, :, 1:]), np.asarray(plain[:, :, 1:]), atol=1e-5), index
 
 
-@pytest.mark.parametrize("index", [0, 5, 12, 23])
+@pytest.mark.parametrize("index", list(range(_STEPS)))
 def test_the_corrective_target_is_the_exact_one_step_correction_off_path(index):
+    # EVERY valid positive sigma, index 0..24 inclusive -- 24 is the smallest positive grid sigma
+    # (~0.1724), where a missing clamp would show up first (plan review P1).
     # The reviewer's identity: with v* = (z - z_gt)/sigma, the Euler rule gives
     # z_next - z_gt = (sigma_next / sigma) (z - z_gt) -- an exact contraction toward the truth.
     state, data, config, scheduler = _fixture()
@@ -187,6 +194,44 @@ def test_the_implementation_uses_sigma_lo_as_the_denominator():
 # =============================================================================================
 # 2. The index supports (plan v2.2, direction-corrected).
 # =============================================================================================
+
+
+def test_the_corrective_support_is_exactly_the_named_keyed_draw():
+    # Not a frequency window: the draw must be bit-for-bit the randint an independent caller gets
+    # from the NAMED key with the plan's bounds. A biased keyed mapping -- or reusing one purpose's
+    # key for the other draw -- changes the value and fails here.
+    for step in (0, 1, 7, 250, 12_499):
+        k_expected = jax.random.randint(exp03.exp03_aux_key(seed=0, global_step=step, purpose="k_a_draw"), (), 1, 3)
+        s_expected = jax.random.randint(
+            exp03.exp03_aux_key(seed=0, global_step=step, purpose="index_support"),
+            (),
+            0,
+            _STEPS - int(k_expected),
+        )
+        start, end, k_a = exp03.corrective_support(seed=0, global_step=step, num_steps=_STEPS, k_a_max=2)
+        assert int(k_a) == int(k_expected), step
+        assert int(start) == int(s_expected), step
+        assert int(end) == int(s_expected) + int(k_expected), step
+    # ...and the two purposes are genuinely different keys (a reuse mutant would collapse them).
+    assert not np.array_equal(
+        np.asarray(jax.random.key_data(exp03.exp03_aux_key(seed=0, global_step=7, purpose="k_a_draw"))),
+        np.asarray(jax.random.key_data(exp03.exp03_aux_key(seed=0, global_step=7, purpose="index_support"))),
+    )
+
+
+def test_the_rollout_support_is_exactly_the_named_keyed_draw():
+    for step in (0, 1, 7, 250, 12_499):
+        s_expected = jax.random.randint(
+            exp03.exp03_aux_key(seed=0, global_step=step, purpose="index_support_rollout"), (), 0, _STEPS - 2
+        )
+        start, end = exp03.rollout_support(seed=0, global_step=step, num_steps=_STEPS, k_b=2)
+        assert int(start) == int(s_expected), step
+        assert int(end) == int(s_expected) + 2, step
+    # B's key is its own: using A's start purpose here would be a silent correlation between arms.
+    assert not np.array_equal(
+        np.asarray(jax.random.key_data(exp03.exp03_aux_key(seed=0, global_step=7, purpose="index_support"))),
+        np.asarray(jax.random.key_data(exp03.exp03_aux_key(seed=0, global_step=7, purpose="index_support_rollout"))),
+    )
 
 
 def test_the_corrective_support_matches_the_plans_exact_distribution():
@@ -382,47 +427,160 @@ def test_trial_a_takes_no_gradient_through_the_off_path_advance():
     ), "the advance does not depend on the params -- this test proves nothing"
 
 
-def test_trial_b_takes_gradient_through_both_rollout_forwards():
-    # Equality against an EXPLICIT two-step unroll pins "exactly two differentiated forwards":
-    # one step, or three, or a detached scan would all differ.
-    state, data, config, scheduler = _fixture(objective="rollout_loss")
+def _independent_rollout_loss(params, state, data, rng, config, scheduler, *, global_step, deterministic=True):
+    """An INDEPENDENT two-step rollout loss: written from primitives, not from the trainer's parts.
+
+    It reconstructs the prologue (exp_02's 3-way split, the same epsilon), draws B's support from
+    the named auxiliary key, walks two grid steps with an EXPLICIT velocity closure whose
+    ``deterministic`` flag is this function's argument, and scores the endpoint. Nothing here calls
+    ``_training_velocity_fn``/``_sampling_velocity_fn``/``_interpolant_at``, so it can DETECT the
+    trainer's convention instead of reproducing it. The Euler step itself is the extracted
+    ``overfit100_sampler_step`` -- the one-sampler rule, verified in round 1.
+    """
+    from maxdiffusion.models.wan.side_adapter_wan import _dtype
+    from maxdiffusion.trainers.wan_ti2v_side_adapter_trainer import _build_noise
+
+    noise_rng, _step_rng, _dropout_rng = jax.random.split(rng, 3)
+    weights_dtype = _dtype(config.weights_dtype)
+    bsz = config.global_batch_size_to_train_on
+    transformer = nnx.merge(state.graphdef, params, state.rest_of_state)
+
+    z_i0 = data["z_i0"][:bsz].astype(jnp.float32)
+    z_gt = data["z_video"][:bsz].astype(jnp.float32)
+    context = state.context_table[data["episode_index"][:bsz].astype(jnp.int32)].astype(
+        _dtype(config.activations_dtype)
+    )
+    eps = _build_noise(noise_rng, z_gt.shape, jnp.float32, config)
+    sigmas, timesteps = _grid(config, scheduler)
+
+    start = jax.random.randint(
+        exp03.exp03_aux_key(seed=int(config.seed), global_step=global_step, purpose="index_support_rollout"),
+        (),
+        0,
+        int(config.side_adapter_sampling_steps) - int(config.exp03_k_b),
+    )
+    end = start + int(config.exp03_k_b)
+
+    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+        return transformer(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            deterministic=deterministic,
+        )
+
+    def interpolant(index):
+        sigma = sigmas[index].astype(jnp.float32)
+        return apply_first_frame_pin((1.0 - sigma) * z_gt + sigma * eps, z_i0)
+
+    z = interpolant(start).astype(weights_dtype)
+    for offset in range(int(config.exp03_k_b)):
+        z = overfit100_sampler_step(
+            z,
+            start + offset,
+            velocity_fn=velocity_fn,
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            z_i0=z_i0.astype(weights_dtype),
+        )
+    horizon = (sigmas[start].astype(jnp.float32) - sigmas[end].astype(jnp.float32)) ** 2
+    return masked_velocity_mse(z.astype(jnp.float32), interpolant(end), bsz) / horizon
+
+
+@pytest.mark.parametrize("weights_dtype", ["float32", "bfloat16"])
+def test_trial_b_is_the_deterministic_eval_sampler_rollout(weights_dtype):
+    # THE convention claim, in fp32 and in the production bf16: B's loss and its gradient must equal
+    # an independently written DETERMINISTIC two-step unroll, and must NOT equal the training-mode
+    # one (the stub distinguishes them, so the training-convention mutant fails here).
+    state, data, config, scheduler = _fixture(
+        objective="rollout_loss", weights_dtype=weights_dtype, activations_dtype=weights_dtype
+    )
     rng = jax.random.key(19)
     global_step = jnp.asarray(23, jnp.int32)
 
     def production(params):
         return exp03._rollout_loss(params, state, data, rng, config, scheduler, global_step=global_step)[0]
 
-    def explicit_two_steps(params):
-        ctx = exp03._exp03_prologue(params, state, data, rng, config, scheduler)
-        start, end = exp03.rollout_support(seed=0, global_step=global_step, num_steps=_STEPS, k_b=2)
-        velocity_fn = exp03._training_velocity_fn(ctx)
-        z = exp03._interpolant_at(ctx, start).astype(ctx.weights_dtype)
-        for offset in range(2):
-            z = overfit100_sampler_step(
-                z,
-                start + offset,
-                velocity_fn=velocity_fn,
-                sigmas=ctx.sigmas,
-                timesteps=ctx.timesteps,
-                context=ctx.context,
-                z_i0=ctx.z_i0.astype(ctx.weights_dtype),
-            )
-        ideal = exp03._interpolant_at(ctx, end)
-        horizon = (ctx.sigmas[start].astype(jnp.float32) - ctx.sigmas[end].astype(jnp.float32)) ** 2
-        return masked_velocity_mse(z.astype(jnp.float32), ideal, ctx.b) / horizon
+    def eval_convention(params):
+        return _independent_rollout_loss(
+            params, state, data, rng, config, scheduler, global_step=global_step, deterministic=True
+        )
+
+    def training_convention(params):
+        return _independent_rollout_loss(
+            params, state, data, rng, config, scheduler, global_step=global_step, deterministic=False
+        )
+
+    # Loss: EXACT -- same operations, same order, same dtypes.
+    assert np.array_equal(np.asarray(production(state.params)), np.asarray(eval_convention(state.params)))
+    assert not np.array_equal(
+        np.asarray(production(state.params)), np.asarray(training_convention(state.params))
+    ), "the stub cannot see the convention -- this test would certify either operator"
 
     got = jax.grad(production)(state.params)
-    want = jax.grad(explicit_two_steps)(state.params)
-    for left, right in zip(jax.tree_util.tree_leaves(got), jax.tree_util.tree_leaves(want)):
-        assert np.allclose(np.asarray(left), np.asarray(right), rtol=1e-5, atol=1e-7)
-    assert any(abs(float(np.asarray(leaf))) > 0 for leaf in jax.tree_util.tree_leaves(got))
+    want = jax.grad(eval_convention)(state.params)
+    wrong = jax.grad(training_convention)(state.params)
+    got_leaves = jax.tree_util.tree_leaves(got)
+    assert got_leaves and all(float(np.abs(np.asarray(leaf)).max()) > 0 for leaf in got_leaves)
 
-    # ...and a detached scan is NOT what production does.
-    def detached(params):
-        return jax.lax.stop_gradient(production(params)) + 0.0 * jax.tree_util.tree_leaves(params)[0]
+    def _relative_gap(left_tree, right_tree) -> float:
+        gaps = [
+            float(np.max(np.abs(np.asarray(a) - np.asarray(b))) / max(float(np.max(np.abs(np.asarray(b)))), 1e-12))
+            for a, b in zip(jax.tree_util.tree_leaves(left_tree), jax.tree_util.tree_leaves(right_tree))
+        ]
+        return max(gaps)
 
-    detached_grad = jax.tree_util.tree_leaves(jax.grad(detached)(state.params))[0]
-    assert not np.array_equal(np.asarray(detached_grad), np.asarray(jax.tree_util.tree_leaves(got)[0]))
+    reference_gap = _relative_gap(got, want)
+    wrong_gap = _relative_gap(got, wrong)
+    if weights_dtype == "float32":
+        # EXACT: production differs from the reference only by jax.remat, which recomputes the same
+        # forward values rather than approximating them.
+        for left, right in zip(got_leaves, jax.tree_util.tree_leaves(want)):
+            assert np.array_equal(np.asarray(left), np.asarray(right))
+    else:
+        # NOT exact, and stated: in bfloat16 the reverse pass of lax.scan accumulates the parameter
+        # cotangent in a different ORDER than an unrolled Python loop, which is visible at ~1e-4
+        # relative in bf16 (it is exactly 0 in fp32, asserted above). The claim being certified is
+        # the OPERATOR, so what must hold here is that the eval-convention reference is orders of
+        # magnitude closer than the training-convention one.
+        assert reference_gap < 5e-3, reference_gap
+    assert wrong_gap > 50 * max(reference_gap, 1e-12), (wrong_gap, reference_gap)
+
+
+def test_trial_b_takes_gradient_through_both_rollout_forwards():
+    # "Exactly two differentiated forwards": equality against the two-step reference (above) plus a
+    # one-step and a three-step reference that must both DIFFER.
+    state, data, config, scheduler = _fixture(objective="rollout_loss")
+    rng = jax.random.key(19)
+    global_step = jnp.asarray(23, jnp.int32)
+    grad_two = jax.grad(
+        lambda params: exp03._rollout_loss(params, state, data, rng, config, scheduler, global_step=global_step)[0]
+    )(state.params)
+    for k_b in (1, 3):
+        other_config = SimpleNamespace(**{**vars(config), "exp03_k_b": k_b})
+        grad_other = jax.grad(
+            lambda params: _independent_rollout_loss(
+                params, state, data, rng, other_config, scheduler, global_step=global_step
+            )
+        )(state.params)
+        assert not np.array_equal(
+            np.asarray(jax.tree_util.tree_leaves(grad_two)[0]),
+            np.asarray(jax.tree_util.tree_leaves(grad_other)[0]),
+        ), k_b
+    assert float(np.abs(np.asarray(jax.tree_util.tree_leaves(grad_two)[0])).max()) > 0
+
+
+def test_trial_c_inherits_the_deterministic_rollout_operator():
+    # C's B-term is the same operator (the review's "C inherits this defect" is what this pins).
+    state, data, config, scheduler = _fixture(objective="combined")
+    rng = jax.random.key(19)
+    global_step = jnp.asarray(23, jnp.int32)
+    _, aux = exp03._combined_loss(state.params, state, data, rng, config, scheduler, global_step=global_step)
+    independent = _independent_rollout_loss(
+        state.params, state, data, rng, config, scheduler, global_step=global_step, deterministic=True
+    )
+    assert np.array_equal(np.asarray(aux["loss_b"]), np.asarray(independent))
 
 
 def test_trial_c_is_the_literal_weighted_combination():
@@ -493,8 +651,14 @@ def test_the_ramp_is_resume_stable_and_tracer_safe():
     jitted = jax.jit(lambda step: exp03.exp03_p_ss(config, step))
     for step in (10000, 10250, 10500, 12499):
         assert abs(float(jitted(jnp.asarray(step, jnp.int32))) - float(exp03.exp03_p_ss(config, step))) < 1e-7
-    # Resume: the value depends only on the global step, not on how many steps this process ran.
-    assert float(exp03.exp03_p_ss(config, 10250)) == float(exp03.exp03_p_ss(config, 10250))
+    # Resume, non-tautologically: at global step 10250 the ramp must read 0.25 (half of a 500-step
+    # ramp from origin 10000) whether the process started at 10000 or resumed at 10100. A ramp keyed
+    # to a SEGMENT-LOCAL counter would read (10250-10100)/500 * 0.5 = 0.15 after such a resume, so
+    # the value is compared against that counterfactual as well as against the right answer.
+    assert abs(float(exp03.exp03_p_ss(config, 10250)) - 0.25) < 1e-6
+    resumed_origin = SimpleNamespace(**{**vars(config), "exp03_ramp_origin": 10100})
+    assert abs(float(exp03.exp03_p_ss(resumed_origin, 10250)) - 0.15) < 1e-6
+    assert float(exp03.exp03_p_ss(config, 10250)) != float(exp03.exp03_p_ss(resumed_origin, 10250))
 
 
 def test_a_zero_length_ramp_is_immediately_at_p_max():

@@ -136,8 +136,10 @@ SKIP_HF_PREFETCH="${SKIP_HF_PREFETCH:-0}"
 
 # exp_03: the objective and its knobs (plan v3.1 §1). EXP03_OBJECTIVE is the experiment variable;
 # the rest are the trials' hyperparameters, passed always so a run's log records what it ran with.
-# Non-control objectives raise NotImplementedError until round 3, i.e. a mistyped arm fails at
-# startup instead of quietly training the control.
+# A mistyped or unimplemented objective fails at startup instead of quietly training the control.
+# TIER 1 arms MUST pass EXP03_RAMP_ORIGIN=10000 explicitly (the default below is Tier-2-oriented):
+# the p_ss ramp is keyed to global_step - origin, and a Tier-1 arm resuming from the step-10,000
+# checkpoint with origin 0 would start at full p_ss instead of ramping.
 EXP03_OBJECTIVE="${EXP03_OBJECTIVE:-control}"
 EXP03_K_A="${EXP03_K_A:-2}"
 EXP03_K_B="${EXP03_K_B:-2}"

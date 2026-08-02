@@ -405,16 +405,33 @@ def test_every_declared_objective_now_resolves_to_its_implementation(objective):
     assert set(exp03.EXP03_IMPLEMENTED_OBJECTIVES) == set(exp03.EXP03_OBJECTIVES)
 
 
-def test_a_declared_but_unimplemented_objective_would_still_refuse(monkeypatch):
-    # The refusal path stays live for anything declared without an implementation -- the guard that
-    # keeps a future arm from quietly training the control under its run name.
+def test_a_declared_but_unimplemented_objective_refuses_with_notimplementederror(monkeypatch):
+    # The REAL path: an objective the config surface accepts (validate_exp03_config reads
+    # EXP03_OBJECTIVES) but the dispatch table has no entry for. It must raise NotImplementedError
+    # naming the arm -- not a bare KeyError, and never a silent fallback to the control.
     _, _, config, _ = _fixture()
-    config.exp03_objective = "corrective_ss"
     monkeypatch.setattr(exp03, "EXP03_OBJECTIVES", exp03.EXP03_OBJECTIVES + ("future_arm",))
-    monkeypatch.setattr(exp03, "EXP03_IMPLEMENTED_OBJECTIVES", ("control",))
     config.exp03_objective = "future_arm"
-    with pytest.raises((NotImplementedError, KeyError)):
-        _exp03_trainer(config)._loss_and_step_fns()
+    assert exp03.validate_exp03_config(config) == "future_arm"  # the config surface accepts it...
+    with pytest.raises(NotImplementedError) as excinfo:
+        _exp03_trainer(config)._loss_and_step_fns()  # ...and the dispatch refuses it
+    message = str(excinfo.value)
+    assert "future_arm" in message and "control" in message
+
+
+def test_the_implemented_set_is_derived_from_the_dispatch_table():
+    # Not hand-maintained: what is implemented is what can be run.
+    assert set(exp03.EXP03_IMPLEMENTED_OBJECTIVES) == {"control", *exp03.EXP03_LOSSES}
+    assert set(exp03.EXP03_IMPLEMENTED_OBJECTIVES) == set(exp03.EXP03_OBJECTIVES)
+
+
+def test_no_unused_rng_purpose_is_declared():
+    # self_gen_noise was removed: A's off-path state uses the SAME epsilon as its teacher-forced
+    # branch, and a declared-but-undrawn purpose misstates that design.
+    assert "self_gen_noise" not in exp03.EXP03_AUX_PURPOSES
+    source = Path(exp03.__file__).read_text()
+    for purpose in exp03.EXP03_AUX_PURPOSES:
+        assert source.count(f'purpose="{purpose}"') >= 1, f"{purpose} is declared but never drawn"
 
 
 def test_an_unknown_objective_is_a_config_error_not_a_silent_control_run():
