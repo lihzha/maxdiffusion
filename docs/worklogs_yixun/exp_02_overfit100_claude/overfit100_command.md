@@ -430,4 +430,5 @@ done
   RUN_NAME per arm) — the 10,000 reading must reproduce **0.12227** exactly (identical bytes; validity anchor);
   the 12,500 readings are the A/B/C answer. Baseline for context: 1e-5's measured decelerating rate
   ≈0.0035/2,500 at this point; the control arm measures it directly.
-- **Job ids:** (appended at submission)
+- **Seed verification:** all three arm checkpoints byte-identical to source (23,654,557,930 bytes each). Note: first copy attempt hung — gsutil `-m` multiprocessing deadlock on macOS (21 orphaned workers, 0 objects); fixed with `-o "GSUtil:parallel_process_count=1"` (threads only). Recorded for the next 22 GiB copy.
+- **Job ids (submitted 2026-08-02T17:22Z):** lr1e5c → `20260802-172153-c53c6a93-exp02-o100-lr1e5c-yixun`; lr2e5 → `20260802-172220-d3198513-exp02-o100-lr2e5-yixun`; lr5e5 → `20260802-172247-e5ce902d-exp02-o100-lr5e5-yixun`.
