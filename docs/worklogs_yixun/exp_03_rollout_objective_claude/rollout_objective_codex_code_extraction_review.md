@@ -123,3 +123,30 @@ two named evasions and a private second grid are now mutants that fail it.
 No push, no launch. The S1.5 on-hardware bitwise gate against the landed 30-window scalars remains
 where the plan put it, and the post-extraction evaluator does not inherit exp_02's PROVEN status
 until it passes.
+
+## Re-review (e4a11a4) — APPROVE, round 1 CLOSED
+
+```
+APPROVE
+
+1. CLOSED — D1 now enforces equal 33-frame videos, frames 1–32, complete 100-window identical cohorts, matching unique episode IDs, required aggregations, and per-arm self-validation.
+2. CLOSED — Seed 0, 30 windows, and 25 steps are asserted before restore; constants drive cohort/grid construction and returned lengths are validated.
+3. CLOSED — The per-window oracle floor uses latent dtype, accompanies raw error in each JSON entry, and the fp32 reference dtype/reporting policy is explicit.
+4. CLOSED — Exact parity covers 25-step fp32/bf16 chains, adapter guide scales 1.0/5.0 in both dtypes with all metrics, and the FULL_FT branch.
+5. CLOSED — The AST guard binds one shared-grid assignment, one single-return shared-step body with exact keywords, and one `fori_loop`; all three evasive mutants are covered.
+6. EQUIVALENT — Accepted for finite production bf16 latents: when subtraction can affect a bf16 rounding boundary, its exact result fits within fp32 precision; larger exponent gaps round identically. The 4,096-pair check corroborates this argument.
+
+Round-2 (trainer + hook): **GO**. The recorded 1296 passed / 2 skipped result is consistent with the changes; this read-only runtime lacks pytest/JAX, so I could not independently rerun it.
+tokens used
+93,756
+APPROVE
+
+1. CLOSED — D1 now enforces equal 33-frame videos, frames 1–32, complete 100-window identical cohorts, matching unique episode IDs, required aggregations, and per-arm self-validation.
+2. CLOSED — Seed 0, 30 windows, and 25 steps are asserted before restore; constants drive cohort/grid construction and returned lengths are validated.
+3. CLOSED — The per-window oracle floor uses latent dtype, accompanies raw error in each JSON entry, and the fp32 reference dtype/reporting policy is explicit.
+4. CLOSED — Exact parity covers 25-step fp32/bf16 chains, adapter guide scales 1.0/5.0 in both dtypes with all metrics, and the FULL_FT branch.
+5. CLOSED — The AST guard binds one shared-grid assignment, one single-return shared-step body with exact keywords, and one `fori_loop`; all three evasive mutants are covered.
+6. EQUIVALENT — Accepted for finite production bf16 latents: when subtraction can affect a bf16 rounding boundary, its exact result fits within fp32 precision; larger exponent gaps round identically. The 4,096-pair check corroborates this argument.
+
+Round-2 (trainer + hook): **GO**. The recorded 1296 passed / 2 skipped result is consistent with the changes; this read-only runtime lacks pytest/JAX, so I could not independently rerun it.
+```
