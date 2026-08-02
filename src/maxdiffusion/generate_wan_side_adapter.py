@@ -73,12 +73,17 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 
 from maxdiffusion import max_logging, pyconfig
 from maxdiffusion.models.wan.side_adapter_wan import (
-    _build_per_token_timestep,
     _dtype,
     apply_first_frame_pin,
-    build_rollout_sigmas,
-    rollout_timesteps_from_sigmas,
     wan_action_adapter_forward,
+)
+
+# exp_03 plan §3, the one-sampler rule: the rollout's per-step arithmetic lives in ONE module that
+# the exp_03 trainers unroll under jax.grad and the sigma-trajectory diagnostic traces. The eval
+# does not own a private copy of the step -- it calls the same function.
+from maxdiffusion.models.wan.overfit100_sampling import (
+    overfit100_sampler_grid,
+    overfit100_sampler_step,
 )
 
 # Cycle-D strengthening (D1/D2): the cohort math, the artifact schema tag, the pass roles and the
@@ -282,13 +287,13 @@ def _rollout_sample(state, data: dict, rng: jax.Array, scheduler, config):
     actions = data["actions"].astype(weights_dtype)
     b, _, f_lat, h_lat, w_lat = z_video.shape
 
-    sigmas = build_rollout_sigmas(
-        config.side_adapter_sampling_steps,
-        config.flow_shift,
-        scheduler.config.sigma_min,
-        scheduler.config.sigma_max,
+    sigmas, timesteps = overfit100_sampler_grid(
+        num_inference_steps=config.side_adapter_sampling_steps,
+        flow_shift=config.flow_shift,
+        sigma_min=scheduler.config.sigma_min,
+        sigma_max=scheduler.config.sigma_max,
+        num_train_timesteps=scheduler.config.num_train_timesteps,
     )
-    timesteps = rollout_timesteps_from_sigmas(sigmas, scheduler.config.num_train_timesteps)
     null_context = jnp.broadcast_to(
         state.null_context.astype(weights_dtype),
         (b, state.null_context.shape[1], state.null_context.shape[2]),
@@ -297,40 +302,50 @@ def _rollout_sample(state, data: dict, rng: jax.Array, scheduler, config):
     z = jax.random.normal(rng, z_video.shape, dtype=z_video.dtype)
     z = apply_first_frame_pin(z, z_i0)
 
-    def _body(i, current):
-        step_t = jnp.broadcast_to(timesteps[i], (b,))
-        timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
+    # Only the VELOCITY differs between the adapter and full-FT paths; the timestep construction,
+    # the Euler update and the frame-0 pin are the shared sampler step (exp_03 plan §3, one-sampler
+    # rule). ``deterministic=True`` and the CFG branch stay exactly where they were, inside this
+    # closure -- the extraction moved the arithmetic around the forward, not the forward.
+    def _velocity(hidden_states, timestep, encoder_hidden_states):
         if is_full_ft:
             # one plain transformer forward: no adapter, no actions, no CFG (plan §3).
             # Structurally the same call as the adapter path's frozen v_uncond branch
             # below, but here it is the trainable prediction itself.
-            v = transformer(
-                hidden_states=current,
-                timestep=timestep_2d,
-                encoder_hidden_states=null_context,
+            return transformer(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
                 deterministic=True,
             )
-        else:
-            v_cond = wan_action_adapter_forward(
-                transformer,
-                adapters,
-                hidden_states=current,
-                timestep=timestep_2d,
-                encoder_hidden_states=null_context,
-                actions=actions,
+        v_cond = wan_action_adapter_forward(
+            transformer,
+            adapters,
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            actions=actions,
+            deterministic=True,
+        )
+        if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
+            v_uncond = transformer(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
                 deterministic=True,
             )
-            if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
-                v_uncond = transformer(
-                    hidden_states=current,
-                    timestep=timestep_2d,
-                    encoder_hidden_states=null_context,
-                    deterministic=True,
-                )
-                v = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
-            else:
-                v = v_cond
-        return apply_first_frame_pin(current + (sigmas[i + 1] - sigmas[i]).astype(current.dtype) * v, z_i0)
+            return v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
+        return v_cond
+
+    def _body(i, current):
+        return overfit100_sampler_step(
+            current,
+            i,
+            velocity_fn=_velocity,
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=null_context,
+            z_i0=z_i0,
+        )
 
     z_pred = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), _body, z)
     diff = z_pred.astype(jnp.float32) - z_video.astype(jnp.float32)
@@ -1226,12 +1241,17 @@ def overfit100_context_for_mode(context_table, null_context, mode: str, episode_
 def _rollout_overfit100_sample(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
     """exp_01's full-FT rollout, with the per-window text context supplied in the batch.
 
-    Line-for-line the ``_rollout_sample`` full-FT branch -- same ``build_rollout_sigmas`` grid,
-    same ``rollout_timesteps_from_sigmas``, same per-token timestep, same frame-0 pin before and
-    inside the loop, same Euler update, one plain transformer forward per step with no actions,
-    no adapter and no CFG -- except that ``encoder_hidden_states`` is ``data["context"]`` (the
-    mode's row of ``state.context_table``, or the null embedding) instead of
-    ``state.null_context``. Pinned bitwise-equal to the exp_01 path by a parity test.
+    Line-for-line the ``_rollout_sample`` full-FT branch -- same grid, same per-token timestep,
+    same frame-0 pin before and inside the loop, same Euler update, one plain transformer forward
+    per step with no actions, no adapter and no CFG -- except that ``encoder_hidden_states`` is
+    ``data["context"]`` (the mode's row of ``state.context_table``, or the null embedding) instead
+    of ``state.null_context``. Pinned bitwise-equal to the exp_01 path by a parity test.
+
+    Since exp_03 (plan §3) the grid and the per-step arithmetic come from
+    ``models/wan/overfit100_sampling.py`` -- the same functions the exp_03 trainers unroll under
+    ``jax.grad`` -- so "the objective trains on the trajectory the eval runs" is a property of the
+    code. The motion was pure: an exact-equality parity test pins the extracted step against a
+    verbatim copy of the pre-extraction body.
     """
     weights_dtype = _dtype(config.weights_dtype)
     transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
@@ -1240,29 +1260,39 @@ def _rollout_overfit100_sample(state: Overfit100TrainState, data: dict, rng: jax
     z_video = data["z_video"].astype(weights_dtype)
     b, _, f_lat, h_lat, w_lat = z_video.shape
 
-    sigmas = build_rollout_sigmas(
-        config.side_adapter_sampling_steps,
-        config.flow_shift,
-        scheduler.config.sigma_min,
-        scheduler.config.sigma_max,
+    sigmas, timesteps = overfit100_sampler_grid(
+        num_inference_steps=config.side_adapter_sampling_steps,
+        flow_shift=config.flow_shift,
+        sigma_min=scheduler.config.sigma_min,
+        sigma_max=scheduler.config.sigma_max,
+        num_train_timesteps=scheduler.config.num_train_timesteps,
     )
-    timesteps = rollout_timesteps_from_sigmas(sigmas, scheduler.config.num_train_timesteps)
     context = data["context"].astype(weights_dtype)
     context = jnp.broadcast_to(context, (b, context.shape[1], context.shape[2]))
 
     z = jax.random.normal(rng, z_video.shape, dtype=z_video.dtype)
     z = apply_first_frame_pin(z, z_i0)
 
-    def _body(i, current):
-        step_t = jnp.broadcast_to(timesteps[i], (b,))
-        timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
-        v = transformer(
-            hidden_states=current,
-            timestep=timestep_2d,
-            encoder_hidden_states=context,
+    # The velocity, and nothing else: the timestep construction, the Euler update and the frame-0
+    # pin are the shared sampler step the exp_03 trainers unroll (plan §3).
+    def _velocity(hidden_states, timestep, encoder_hidden_states):
+        return transformer(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
             deterministic=True,
         )
-        return apply_first_frame_pin(current + (sigmas[i + 1] - sigmas[i]).astype(current.dtype) * v, z_i0)
+
+    def _body(i, current):
+        return overfit100_sampler_step(
+            current,
+            i,
+            velocity_fn=_velocity,
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            z_i0=z_i0,
+        )
 
     z_pred = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), _body, z)
     diff = z_pred.astype(jnp.float32) - z_video.astype(jnp.float32)

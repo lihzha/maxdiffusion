@@ -902,8 +902,18 @@ def test_loss_eval_module_cannot_reach_a_video_decoder():
 
 def test_the_overfit100_rollout_ignores_the_pipeline_sampling_knobs():
     source = Path(gen.__file__).read_text()
-    assert "num_inference_steps" not in source
     assert "guidance_scale" not in source
+    # exp_03 moved the grid construction into overfit100_sampling.overfit100_sampler_grid, whose
+    # PARAMETER is named num_inference_steps. The claim is unchanged and is now checked as what it
+    # always meant: the pipeline knob of that name is never read -- every occurrence is the keyword
+    # being fed from side_adapter_sampling_steps.
+    assert "config.num_inference_steps" not in source
+    assert '"num_inference_steps"' not in source
+    occurrences = [line.strip() for line in source.splitlines() if "num_inference_steps" in line]
+    assert occurrences, "the grid call vanished -- this test is no longer watching anything"
+    assert all(
+        line.startswith("num_inference_steps=config.side_adapter_sampling_steps") for line in occurrences
+    ), occurrences
     rollout = source[
         source.index("def _rollout_overfit100_sample") : source.index("def _build_overfit100_validation_state")
     ]

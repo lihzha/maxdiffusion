@@ -1,0 +1,328 @@
+"""exp_03 Mechanism B — the SIGMA-TRAJECTORY trace (plan v3.1, review P7).
+
+D1 measures temporal decay of decoded frames. It cannot, on its own, establish that *sampler
+compounding* was reduced — that is a statement about the denoising trajectory, and this is the
+instrument for it. At every step of the 25-step rollout the trace records how far the sampler's
+state has drifted from the ideal interpolant it would be on if the velocity were perfect::
+
+    error_i = || z_{sigma_i} - ((1 - sigma_i) * z_gt + sigma_i * eps) ||^2 / numel
+
+with frame 0 pinned on both sides, exactly as the rollout pins it. Two properties make this
+readable rather than merely suggestive:
+
+* **It starts at exactly zero.** The eval's initial state is ``eps`` (``sigma_0 = 1``), which *is*
+  the interpolant at ``sigma_0``, so index 0 has no arithmetic in it at all.
+* **A perfect velocity keeps it zero.** With ``v = eps - z_gt`` the Euler rule maps the interpolant
+  at ``sigma_i`` onto the interpolant at ``sigma_{i+1}`` identically, so any growth in the trace is
+  the model's error compounding and nothing else. (Unit-tested with an oracle.)
+
+**It traces the operator the eval runs.** The step comes from
+``models/wan/overfit100_sampling.py`` — the same function ``generate_wan_side_adapter`` calls and
+the exp_03 trainers unroll (plan §3, one-sampler rule). The eval rollout itself is NOT modified;
+this is its own harness on the shared step.
+
+**Isolation, inherited from the exp_02 probe review.** Same 30-window seeded cohort (reusing
+``probe_overfit100_sampling_steps.probe_cohort``), same per-window key
+``window_fold_key(0, episode_id, window_start)``, one immutable JSON per checkpoint under the run's
+canonical ``validation_probe_sampling/`` root, and a hard refusal of any path component that names a
+verdict role directory. It writes no role, no cohort denominator and no aggregation schema, so it
+cannot be mistaken for admissible evidence.
+"""
+
+from __future__ import annotations
+
+import statistics
+from typing import Sequence
+
+import jax
+import jax.numpy as jnp
+from absl import app
+from flax.linen import partitioning as nn_partitioning
+from jax.sharding import NamedSharding, PartitionSpec as P
+
+import maxdiffusion.generate_wan_side_adapter as gen
+import maxdiffusion.probe_overfit100_sampling_steps as probe
+from maxdiffusion import max_logging, pyconfig
+from maxdiffusion.models.wan.overfit100_sampling import (
+    overfit100_sampler_grid,
+    overfit100_sampler_step,
+)
+from maxdiffusion.models.wan.side_adapter_wan import apply_first_frame_pin
+
+TRACE_SCHEMA = "exp03_sigma_trajectory_trace_v1"
+TRACE_OUTPUT_DIR = probe.PROBE_OUTPUT_DIR  # the same non-role diagnostic root
+TRACE_CONTEXT_MODE = "correct"
+TRACE_SEED = 0  # the eval's own seed-0 keying, so the trace lines up with the landed rows
+TRACE_NUM_WINDOWS = 30  # the exp_02 probe's cohort, reused so the two diagnostics are comparable
+
+
+def trace_grid(*, num_inference_steps: int, flow_shift: float, sigma_min: float = 0.0, sigma_max: float = 1.0):
+    """The eval's ``(sigmas, timesteps)`` — built by the shared sampler module, never re-derived."""
+    return overfit100_sampler_grid(
+        num_inference_steps=num_inference_steps,
+        flow_shift=flow_shift,
+        sigma_min=sigma_min,
+        sigma_max=sigma_max,
+        num_train_timesteps=1000,
+    )
+
+
+def ideal_interpolant(z_gt: jax.Array, eps: jax.Array, sigma: float, z_i0: jax.Array) -> jax.Array:
+    """``pin((1 - sigma) * z_gt + sigma * eps)`` — where a perfect sampler would be at ``sigma``."""
+    value = (1.0 - float(sigma)) * z_gt + float(sigma) * eps
+    return apply_first_frame_pin(value, z_i0)
+
+
+def interpolant_error(z: jax.Array, z_gt: jax.Array, eps: jax.Array, sigma: float, z_i0: jax.Array) -> float:
+    """``|| z - ideal ||^2 / numel`` at one sigma."""
+    diff = z.astype(jnp.float32) - ideal_interpolant(z_gt, eps, sigma, z_i0).astype(jnp.float32)
+    return float(jnp.mean(diff**2))
+
+
+def trace_noise_key(*, episode_id: int, window_start: int) -> jax.Array:
+    """The EVAL's per-window key — identical draw, so the trace starts where the rollout starts."""
+    return gen.window_fold_key(TRACE_SEED, int(episode_id), int(window_start))
+
+
+def trace_noise(*, episode_id: int, window_start: int, shape, dtype=jnp.float32) -> jax.Array:
+    """The fixed epsilon for one window (the rollout's own initial noise)."""
+    return jax.random.normal(trace_noise_key(episode_id=episode_id, window_start=window_start), shape, dtype=dtype)
+
+
+def sigma_trace(
+    velocity_fn,
+    *,
+    z_gt: jax.Array,
+    z_i0: jax.Array,
+    eps: jax.Array,
+    context: jax.Array,
+    sigmas: jax.Array,
+    timesteps: jax.Array,
+) -> list[float]:
+    """Interpolant error at every grid index, ``0 .. N`` (``N + 1`` values).
+
+    The rollout is re-run here rather than instrumented in place: the eval path stays untouched, and
+    the loop is a plain Python loop because it runs once per window over 25 steps and must hand back
+    a value per step.
+    """
+    num_steps = int(sigmas.shape[0]) - 1
+    z = apply_first_frame_pin(eps, z_i0)
+    errors = [interpolant_error(z, z_gt, eps, float(sigmas[0]), z_i0)]
+    for index in range(num_steps):
+        z = overfit100_sampler_step(
+            z,
+            index,
+            velocity_fn=velocity_fn,
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            z_i0=z_i0,
+        )
+        errors.append(interpolant_error(z, z_gt, eps, float(sigmas[index + 1]), z_i0))
+    return errors
+
+
+def trace_rows(velocity_fn, *, z_gt, z_i0, eps, context, sigmas, timesteps) -> list[dict]:
+    """:func:`sigma_trace` with each error labelled by its grid index and sigma."""
+    errors = sigma_trace(
+        velocity_fn, z_gt=z_gt, z_i0=z_i0, eps=eps, context=context, sigmas=sigmas, timesteps=timesteps
+    )
+    return [
+        {"index": index, "sigma": float(sigmas[index]), "error": float(error)} for index, error in enumerate(errors)
+    ]
+
+
+def trace_cohort(manifest_path: str, *, seed: int = TRACE_SEED, num_windows: int = TRACE_NUM_WINDOWS) -> list[dict]:
+    """The exp_02 sampling probe's cohort selection, REUSED (not re-implemented)."""
+    return probe.probe_cohort(manifest_path, seed=int(seed), num_windows=int(num_windows))
+
+
+def trace_output_path(config, checkpoint_step: int) -> str:
+    """``<output_dir>/<run_name>/validation_probe_sampling/sigma_trace_ckpt<step>.json``.
+
+    Canonical only, with the exp_02 probe review's rule enforced: a diagnostic must never be written
+    where the verdict's evidence lives, so any path component naming a ``step_<n>_<role>`` directory
+    is refused outright.
+    """
+    root = f"{str(config.output_dir).rstrip('/')}/{config.run_name}/{TRACE_OUTPUT_DIR}"
+    path = f"{root.rstrip('/')}/sigma_trace_ckpt{int(checkpoint_step)}.json"
+    offenders = [part for part in path.split("/") if part.startswith("step_")]
+    if offenders:
+        raise ValueError(
+            f"refusing the trace output path {path!r}: component(s) {offenders} name a verdict role directory. A "
+            f"diagnostic must never be written where the verdict's evidence lives -- fix output_dir/run_name."
+        )
+    parts = path.split("/")
+    if len(parts) < 2 or parts[-2] != TRACE_OUTPUT_DIR:
+        raise ValueError(f"refusing the trace output path {path!r}: it is not directly under {TRACE_OUTPUT_DIR}/")
+    return path
+
+
+def mean_trace(rows: Sequence[dict]) -> list[dict]:
+    """The cohort mean error at each grid index — the curve the arms are compared on."""
+    if not rows:
+        return []
+    lengths = {len(row["trace"]) for row in rows}
+    if len(lengths) != 1:
+        raise ValueError(f"windows traced different step counts {sorted(lengths)}; the mean curve is not defined")
+    length = lengths.pop()
+    out = []
+    for index in range(length):
+        entries = [row["trace"][index] for row in rows]
+        sigmas = {round(float(entry["sigma"]), 9) for entry in entries}
+        if len(sigmas) != 1:
+            raise ValueError(f"windows disagree about sigma at index {index}: {sorted(sigmas)}")
+        out.append(
+            {
+                "index": index,
+                "sigma": float(entries[0]["sigma"]),
+                "error": statistics.fmean(float(entry["error"]) for entry in entries),
+            }
+        )
+    return out
+
+
+def trace_artifact(config, *, checkpoint_step: int, cohort, rows) -> dict:
+    """The diagnostic JSON. Carries NO verdict fields — it is not admissible evidence."""
+    return {
+        "schema": TRACE_SCHEMA,
+        "kind": "diagnostic",
+        "note": (
+            "Sigma-trajectory diagnostic (exp_03 Mechanism B). NOT an evaluation artifact: no role, no "
+            "cohort denominator, no aggregation schema. It cannot enter the success statistic."
+        ),
+        "checkpoint_step": int(checkpoint_step),
+        "checkpoint_dir": str(getattr(config, "checkpoint_dir", "")),
+        "run_name": str(getattr(config, "run_name", "")),
+        "commit": gen._eval_code_commit(),
+        "eval_data_dir": str(getattr(config, "eval_data_dir", "")),
+        "model_manifest_path": str(getattr(config, "model_manifest_path", "")),
+        "context_mode": TRACE_CONTEXT_MODE,
+        "rollout_seed": TRACE_SEED,
+        "cohort_seed": int(getattr(config, "seed", 0)),
+        "sampling_steps": int(getattr(config, "side_adapter_sampling_steps", 0)),
+        "cohort": [str(window["name"]) for window in cohort],
+        "mean_trace": mean_trace(rows),
+        "rows": list(rows),
+    }
+
+
+def write_trace_artifact(path: str, payload: dict) -> None:
+    """Immutable write, reusing the eval path's compare-or-refuse writer."""
+    gen._write_json_immutable(path, payload)
+
+
+def _log_mean_trace(curve: Sequence[dict]) -> None:
+    max_logging.log("[exp03_sigma_trace] mean interpolant error per sigma step")
+    for entry in curve:
+        max_logging.log(
+            f"[exp03_sigma_trace]   i={entry['index']:>3} sigma={entry['sigma']:.4f} error={entry['error']:.6f}"
+        )
+
+
+def run_trace(config) -> dict:
+    """Trace the cohort at one checkpoint and write the diagnostic JSON."""
+    manifest_path = str(getattr(config, "model_manifest_path", ""))
+    cohort = trace_cohort(
+        manifest_path, seed=int(getattr(config, "seed", TRACE_SEED)), num_windows=int(config.probe_num_windows)
+    )
+    (
+        trainer,
+        pipeline,
+        mesh,
+        state,
+        state_shardings,
+        null_context,
+        checkpoint_step,
+    ) = gen._restore_overfit100_validation_state(config)
+    scheduler, _ = trainer._create_scheduler()
+    sigmas, timesteps = overfit100_sampler_grid(
+        num_inference_steps=config.side_adapter_sampling_steps,
+        flow_shift=config.flow_shift,
+        sigma_min=scheduler.config.sigma_min,
+        sigma_max=scheduler.config.sigma_max,
+        num_train_timesteps=scheduler.config.num_train_timesteps,
+    )
+    replicated = NamedSharding(mesh, P())
+    weights_dtype = gen._dtype(config.weights_dtype)
+    transformer = gen.nnx.merge(state.graphdef, state.params, state.rest_of_state)
+
+    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+        return transformer(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            deterministic=True,
+        )
+
+    samples = gen.read_overfit100_samples(config, cohort)
+    if jax.process_index() == 0:
+        max_logging.log(
+            f"[exp03_sigma_trace] step={checkpoint_step} windows={len(samples)} "
+            f"steps={config.side_adapter_sampling_steps} seed={TRACE_SEED} mode={TRACE_CONTEXT_MODE}"
+        )
+
+    rows: list[dict] = []
+    for sample in samples:
+        z_i0 = jax.device_put(jnp.asarray(sample.z_i0[None]).astype(weights_dtype), replicated)
+        z_gt = jax.device_put(jnp.asarray(sample.z_video[None]).astype(weights_dtype), replicated)
+        context = gen.overfit100_context_for_mode(
+            state.context_table, null_context, TRACE_CONTEXT_MODE, sample.episode_index, None
+        ).astype(weights_dtype)
+        context = jnp.broadcast_to(context, (z_gt.shape[0], context.shape[1], context.shape[2]))
+        eps = trace_noise(
+            episode_id=sample.episode_id, window_start=sample.window_start, shape=z_gt.shape, dtype=z_gt.dtype
+        )
+        with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+            window_trace = trace_rows(
+                velocity_fn,
+                z_gt=z_gt,
+                z_i0=z_i0,
+                eps=eps,
+                context=context,
+                sigmas=sigmas,
+                timesteps=timesteps,
+            )
+        if jax.process_index() != 0:
+            continue
+        rows.append(
+            {
+                "name": sample.name,
+                "episode_id": int(sample.episode_id),
+                "episode_index": int(sample.episode_index),
+                "window_start": int(sample.window_start),
+                "trace": window_trace,
+            }
+        )
+        max_logging.log(
+            f"[exp03_sigma_trace] {sample.name} first={window_trace[0]['error']:.6f} "
+            f"last={window_trace[-1]['error']:.6f}"
+        )
+
+    if jax.process_index() != 0:
+        return {}
+    payload = trace_artifact(config, checkpoint_step=checkpoint_step, cohort=cohort, rows=rows)
+    path = trace_output_path(config, checkpoint_step)
+    write_trace_artifact(path, payload)
+    _log_mean_trace(payload["mean_trace"])
+    max_logging.log(f"[exp03_sigma_trace] wrote {path} ({len(rows)} windows)")
+    return payload
+
+
+def run(argv: Sequence[str]):
+    pyconfig.initialize(argv)
+    config = pyconfig.config
+    if str(getattr(config, "model_type", "")) != gen.OVERFIT100_MODEL_TYPE:
+        raise ValueError(
+            f"the sigma-trajectory trace requires model_type == {gen.OVERFIT100_MODEL_TYPE!r}; "
+            f"got {config.model_type!r}"
+        )
+    return run_trace(config)
+
+
+def main(argv: Sequence[str]) -> None:  # pragma: no cover - entry point
+    run(argv)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    app.run(main)

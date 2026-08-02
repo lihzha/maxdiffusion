@@ -94,25 +94,27 @@ def test_each_arm_gets_its_own_config_view_without_mutating_the_base():
     assert base.side_adapter_sampling_steps == 25
 
 
-def test_each_arm_builds_its_own_sigma_schedule(monkeypatch):
+def test_each_arm_builds_its_own_sigma_schedule():
     # The per-arm correctness claim, asserted on what the rollout actually constructs: one sigma
     # schedule per arm, of that arm's length. A shared/stale jit would show the same count twice.
-    seen: list[int] = []
-    real = gen.build_rollout_sigmas
-    monkeypatch.setattr(gen, "build_rollout_sigmas", lambda n, *a, **kw: seen.append(int(n)) or real(n, *a, **kw))
+    # (exp_03 moved the grid construction into models/wan/overfit100_sampling.py; the rollout now
+    # calls gen.overfit100_sampler_grid, so that is the seam this test observes.)
     base = SimpleNamespace(
         side_adapter_sampling_steps=25, flow_shift=5.0, weights_dtype="float32", activations_dtype="float32"
     )
     scheduler = SimpleNamespace(config=SimpleNamespace(sigma_min=0.0, sigma_max=1.0, num_train_timesteps=1000))
+    seen: list[int] = []
     for steps in (25, 50, 100):
-        gen.build_rollout_sigmas(
-            probe.arm_config(base, steps).side_adapter_sampling_steps,
-            base.flow_shift,
-            scheduler.config.sigma_min,
-            scheduler.config.sigma_max,
+        sigmas, timesteps = gen.overfit100_sampler_grid(
+            num_inference_steps=probe.arm_config(base, steps).side_adapter_sampling_steps,
+            flow_shift=base.flow_shift,
+            sigma_min=scheduler.config.sigma_min,
+            sigma_max=scheduler.config.sigma_max,
+            num_train_timesteps=scheduler.config.num_train_timesteps,
         )
+        seen.append(len(timesteps))
+        assert len(sigmas) == steps + 1  # n + 1 sigmas, so the count is observable
     assert seen == [25, 50, 100]
-    assert len(real(50, 5.0, 0.0, 1.0)) == 51  # n + 1 sigmas, so the count is observable
 
 
 # --------------------------------------------------------------------------------------
