@@ -109,3 +109,10 @@ anchors + bitwise-certificate bridge (else re-evaluate exp_02 references); (3) c
 "training-history package" wording, restart-from-init preemption rule, S1.5/S1.6 from both states, one eval
 generation; (4) ctrl0-first strengthened to training+instrument+SSIM+gates before A0/B0/C0, scope = Tier 2
 only; (5) cost corrected to 5.3 h v6e-64 (+6.9 h as contingency label), eval count 6+4.
+
+## Final verdict (plan v3.1): **APPROVE-PLAN**
+
+All five Tier-2 adoptions verified (early-screen framing; RNG-stream preservation + AND-gate guard;
+continuity controls; strong ctrl0-first; corrected costs). Full cycle: v1 → 7 findings → v2 → 4 residuals →
+v2.1 → index fix → v2.2 APPROVE → Query 2 → v3 → 5 delta findings → v3.1 → **APPROVE-PLAN**. Surfaced to
+Yixun for the approval that gates all implementation and launches.
