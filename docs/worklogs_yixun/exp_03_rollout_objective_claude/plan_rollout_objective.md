@@ -1,6 +1,9 @@
-# exp_03 `rollout_objective` — Plan v2.2 (Planner)
+# exp_03 `rollout_objective` — Plan v3 (Planner)
 
-**v2.1, 2026-08-02** — v2 plus the re-review's four residual closures (data-order stability by
+**v3, 2026-08-02** — adds **Tier 2 (from-scratch)** per Yixun's Query 2: keep the continue-from-10k
+A/B/C arms (now "Tier 1"), and retrain from step 0 with the new losses — A0/B0/C0 plus a fresh one-step
+control (ctrl0) — same Wan init as exp_02. Planner-chosen budget: **2,500 steps per from-scratch arm**
+(§4b). No launch before Yixun approves this version. v2.1 added the re-review's four residual closures (data-order stability by
 save-schedule construction; D1 slope analysis as a new predeclared script; exact index supports for A/B;
 the sigma-trajectory trace operationalized per file). v2 revised v1 against the Codex plan review (REQUEST-REVISION: 2 BLOCKER + 5 MAJOR; all
 findings adopted, none rejected — resolutions appended to the review file). The two central upgrades:
@@ -112,6 +115,42 @@ no expectation argument needed. Cost: A's stop-grad forwards + B's differentiate
 baseline step time; memory peak = B's, since A adds no differentiated activations — S1 verifies). "C wins ⇒
 complementary" is licensed only under this literal implementation.
 
+
+## 1b. Tier 2 — from-scratch arms (Query 2)
+
+**Arms:** A0, B0, C0, ctrl0 — identical objectives to Tier 1's A/B/C plus the plain one-step objective
+(ctrl0), all starting from the SAME Wan2.2 init exp_02 started from (the pinned pretrained snapshot; no
+copied checkpoint), same data/seed/GBS/LR as exp_02's S3.
+
+**Budget (Planner's choice): 2,500 steps per arm**, checkpoints {250, 1000, 2500}. Rationale: exp_02
+measured this exact segment for the plain objective (loss 0.586→0.146; canonical seed-0 SSIM 0.758→0.814),
+so 2,500 steps is where a from-scratch objective difference is already visible and directly comparable
+against a dense existing reference curve; the marginal value of longer from-scratch arms is decided AFTER
+these land (extension = separate approval).
+
+**Why ctrl0 runs fresh rather than reusing exp_02's run:** (i) Yixun listed it explicitly; (ii) it is a
+full-scale REPLICATION TEST of exp_02 through the new trainer's hook path — ctrl0 must reproduce exp_02's
+measured loss curve (0.19191/0.16853/0.14598 at 250/1000/2500 on the fixed-RNG instrument) and its
+canonical SSIM (0.7580/0.7892/0.8139) within tolerance; a failure means the new trainer changed the plain
+objective and INVALIDATES Tier-1/Tier-2 comparisons until fixed — this is the tier's most important guard;
+(iii) it gives exact RNG/data-order parity with A0/B0/C0 under the purpose-folded scheme.
+
+**What Tier 2 answers that Tier 1 cannot:** Tier 1 asks whether the new objectives rescue a model already
+optimized 10k steps under teacher forcing (a possibly locked-in basin). Tier 2 asks whether training under
+the new objective FROM THE START reaches a different optimum. A0/B0/C0 ≫ ctrl0 with Tier 1 flat would mean
+the objectives work but cannot rescue a converged plain-objective model; both tiers moving means the
+objective helps everywhere; both flat kills the objective hypothesis outright.
+
+**Tier-2 gates (predeclared):** primary — arm − ctrl0 ≥ +0.02 canonical seed-0 mean SSIM at step 2,500
+(same paired-bootstrap CI protocol); mechanism metrics (D1 slopes, sigma traces) at 2,500 per arm;
+loss-instrument sweep over {250, 1000, 2500} per arm in ONE job each, read as deviation-from-line (the
+exp_02 line is the null; breaking it is the objective working). Cross-tier comparisons (A0@2500 vs A@12500
+etc.) are exploratory only — different cumulative budgets — and are predeclared as non-gated.
+
+**Tier-2 cost:** 4 × ~39 min v6e-64 training (A0 ~1.6×, B0 ~2.5×, C0 ~3× step-time overhead ⇒ ~0.65 h /
+1.6 h / 2 h / 2.6 h respectively ≈ **6.9 h v6e-64 total**) + 4 × ~30 min SSIM evals + 4 × ~20 min
+instrument jobs (v6e-8). p_ss ramp for A0/C0: same spec, keyed from global step 0.
+
 ## 2. Outcome readings
 
 | Outcome | Reading |
@@ -169,9 +208,13 @@ resume staging, seeding-by-checkpoint-copy procedure (LR-sweep pattern).
   ideal interpolant for the plain model (mechanism-B baseline trace).
 - **S1.6 — target-mesh fit probe (v6e-64, one step, NEW per review P4):** compile + one update of B and C at
   GBS 256 on the real mesh (remat/scan certified where it will run). Cheap (minutes).
-- **S2 — trials (v6e-64):** A, B, C; +2,500 updates each from the copied step-10,000 checkpoint; then per
-  trial: `s3_intermediate` eval with `WRITE_VIDEOS=True` + loss instrument + D1 + sigma-trajectory trace;
-  control re-eval at the post-extraction commit (fresh root, videos on) if not already run.
+- **S2a — Tier-1 trials (v6e-64):** A, B, C; +2,500 updates each from the copied step-10,000 checkpoint;
+  then per trial: `s3_intermediate` eval with `WRITE_VIDEOS=True` + loss instrument + D1 + sigma-trajectory
+  trace; control re-eval at the post-extraction commit (fresh root, videos on) if not already run.
+- **S2b — Tier-2 from-scratch arms (v6e-64):** ctrl0 FIRST (the replication guard — if it fails to
+  reproduce exp_02's curves, STOP Tier 2 and fix the trainer before burning A0/B0/C0), then A0, B0, C0;
+  budget and gates per §1b. S2a and S2b may interleave on the queue; ctrl0-before-{A0,B0,C0} is the only
+  ordering constraint.
 - **S3 (conditional):** extend the winner; only then the formal D11 `s3_segment_final`/full-set machinery.
 
 ## 5. Risks (updated)
