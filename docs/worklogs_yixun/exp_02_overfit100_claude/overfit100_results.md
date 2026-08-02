@@ -293,3 +293,33 @@ bytes) — the instrument is measuring what it claims to.
    directly relevant to exp_03's deviation-from-line metric. An `s3_intermediate` eval at lr2e5's step
    12,500 would answer it (~30 min v6e-8; NOT yet launched — needs approval, proposed to Yixun).
 4. lr5e5 pending (attempt 2 running); its instrument job launches on completion.
+
+## LR sweep COMPLETE (Job 37 landed) — 2026-08-03T~00:15Z
+
+| arm | LR | loss @10000 (anchor) | loss @12500 | Δ / 2,500 steps | × control |
+| --- | --- | --- | --- | --- | --- |
+| lr1e5c | 1e-5 | 0.12227 ✓ | 0.12003 | −0.00224 | 1× |
+| lr2e5 | 2e-5 | 0.12227 ✓ | 0.09793 | −0.02434 | 10.9× |
+| **lr5e5** | **5e-5** | **0.12227 ✓** | **0.06061** | **−0.06166** | **27.5×** |
+
+All three anchors bit-exact; all arms trained stably (no NaN/divergence; lr5e5 needed 3 attempts for
+*infra* reasons only). The response is strongly super-linear in LR over this range.
+
+**Headline: the exp_02 "plateau" was an LR artifact, fully.** At 5e-5, one 2,500-step segment took the
+100-episode model to **0.0606 — below the 10-episode S2 run's 2,500-step floor (0.061)**, erasing in 39
+minutes what the analysis had framed as a scale-driven optimization ceiling. The exp_02 §5 narrative is
+now: the one-step objective was never the binding constraint at these budgets; **LR 1e-5 was**. (H2b — the
+compounding slope — remains real and measured (D1, probe); what changed is that the loss FLOOR was nowhere
+near reached, so the "74% gap unreachable" arithmetic is void.)
+
+**Linear-map predictions (the line is now the live question):** lr2e5 → SSIM ≈ 0.871; lr5e5 → **≈ 0.916**.
+If the map holds off the 1e-5 path, the 5e-5 checkpoint would clear 0.90 mean — within sight of the 0.95
+bar for the first time. If it does NOT hold (rollout quality decoupling from one-step loss at high LR —
+e.g. sharper minima compounding worse), that is itself the strongest possible motivation for exp_03's
+objectives. **Either outcome is decision-grade; the SSIM evals at both checkpoints are the single most
+valuable pending measurement** (2 × ~30 min v6e-8, settled eval path; proposed, awaiting approval).
+
+exp_03 interaction: the Tier-1 arms currently resume from the 1e-5 step-10,000 checkpoint with LR 1e-5 —
+per plan, judged against the matched lr1e5c control, so their internal validity is intact. But if 5e-5's
+SSIM confirms, the interesting frontier moves (e.g. A/B/C at 5e-5, or from the lr5e5 checkpoint) — a plan
+question for after the SSIM evals land.
