@@ -839,14 +839,46 @@ def test_the_launcher_keeps_the_overfit100_safety_apparatus():
     assert "ffmpeg" in text
 
 
-_DEFAULT_ASSIGNMENT = re.compile(r'^([A-Z][A-Z0-9_]*)="\$\{\1:?-(.*)\}"$')
+# DOTALL: a joined multiline value (LIBTPU_INIT_ARGS) is one string with newlines in it.
+_ASSIGNMENT = re.compile(r"^(?:export\s+)?([A-Z][A-Z0-9_]*)=(.*)$", re.DOTALL)
+
+
+def _logical_lines(text: str) -> list[str]:
+    """Join backslash-continued lines, so a multiline value is ONE entry.
+
+    ``LIBTPU_INIT_ARGS`` spans ~25 continued lines of XLA flags. Parsing line by line would let any
+    one of those flags drift between the two launchers unnoticed, which is exactly the hole this
+    closes: the whole value is compared verbatim, as a single string.
+    """
+    joined: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        line = raw.rstrip("\n")
+        if buffer:
+            buffer += "\n" + line
+        else:
+            buffer = line
+        if line.endswith("\\"):
+            continue
+        joined.append(buffer)
+        buffer = ""
+    if buffer:
+        joined.append(buffer)
+    return joined
 
 
 def _launcher_defaults(text: str) -> dict[str, str]:
-    """``NAME="${NAME:-value}"`` -> ``{NAME: value}`` — every env-overridable DEFAULT."""
+    """Every uppercase assignment -> its value, VERBATIM.
+
+    Covers three shapes the earlier suffix-based parser missed and that a clone can silently drift:
+    ``export``-prefixed environment defaults (``export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu,cpu}"``),
+    plain literal exports (``export PYTHONUNBUFFERED=1``), and multiline continued values
+    (``LIBTPU_INIT_ARGS``). The value is kept as written -- including the ``${NAME:-...}`` wrapper --
+    so a changed default, a changed XLA flag, or a changed fallback all show up as a value mismatch.
+    """
     out: dict[str, str] = {}
-    for raw in text.splitlines():
-        match = _DEFAULT_ASSIGNMENT.match(raw.strip())
+    for line in _logical_lines(text):
+        match = _ASSIGNMENT.match(line.strip())
         if match:
             out[match.group(1)] = match.group(2)
     return out
@@ -911,7 +943,12 @@ def test_the_launcher_defaults_do_not_drift_from_the_overfit100_launcher():
     # shared default (LEARNING_RATE, WARMUP_STEPS, PER_DEVICE_BATCH_SIZE, ...) is a failure.
     base = _launcher_defaults(_OVERFIT100_LAUNCHER.read_text())
     mine = _launcher_defaults(_LAUNCHER.read_text())
-    assert "LEARNING_RATE" in base and "MAX_TRAIN_STEPS" in base  # the parser really parsed
+    # The parser really parsed -- including the shapes a suffix filter misses.
+    assert "LEARNING_RATE" in base and "MAX_TRAIN_STEPS" in base
+    assert "JAX_PLATFORMS" in base and "PYTHONUNBUFFERED" in base  # export-prefixed
+    assert "LIBTPU_INIT_ARGS" in base  # multiline
+    assert base["LIBTPU_INIT_ARGS"].count("--xla") > 10, "the continued XLA flags were not joined"
+    assert "\n" in base["LIBTPU_INIT_ARGS"]  # ...as ONE entry
     assert set(mine) - set(base) == {
         "EXP03_OBJECTIVE",
         "EXP03_K_A",

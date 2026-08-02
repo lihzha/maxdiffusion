@@ -129,3 +129,16 @@
 - **Result** — suite 1340 passed / 2 skipped (+9). Six mutants killed incl. both named launcher
   examples; a meta-mutation confirms the allowlist's tightness is load-bearing.
 - **Next** — re-review; round 3 (A/B/C losses) still gated on it.
+
+## 2026-08-02T05:05:00Z — Round-2 residual: drift parser covers export/multiline defaults
+
+- **Trigger** — re-review of `a072ae2`: BLOCKER + JIT-parity MAJOR closed, conditional `global_step`
+  approved; one residual on the launcher drift parser kept round 3 NO-GO.
+- **Fix** — `_logical_lines` joins backslash continuations, `_ASSIGNMENT` accepts an `export` prefix
+  and uses `re.DOTALL`, so `export`-prefixed defaults and the ~25-line `LIBTPU_INIT_ARGS` are now
+  compared verbatim as single entries. Bidirectional comparison + tight allowlist unchanged; parser
+  non-vacuity asserted (>10 `--xla` and an embedded newline inside the joined value).
+- **Mutations** — the reviewer's two examples both now FAIL as required (JAX_PLATFORMS default
+  drifted; one XLA flag inside LIBTPU_INIT_ARGS drifted), plus a control (exported literal drifted).
+- **Result** — suite 1340 passed / 2 skipped (unchanged; the round widened an existing test).
+- **Next** — closing micro-pass by the coordinator; then round 3 (A/B/C losses).
