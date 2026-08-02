@@ -63,3 +63,21 @@ All 7 findings **adopted**; none rejected. Plan v2 changes:
 | P7 | **S1.5 no-update discriminator probe** added (losses, grad norms, grad cosine vs plain, label isolation, p_ss=0 parity). **Sigma-trajectory metric** added as Mechanism B (fixed-ε latent error vs ideal interpolant per sigma step) — D1 alone cannot attribute reduced sampler compounding. |
 
 Reviewer's headline interpretability risk (temporal-D1-only attribution + A's dual change + C's non-literal loss) is addressed by exactly these three: the sigma-trajectory metric, S1.5 label isolation, and C-literal.
+
+## Re-review (plan v2) — verdict and v2.1 closures
+
+**Verdict: REQUEST-REVISION** — P1/P5/P6 RESOLVED (+ P2's core: update-matched estimand and literal C);
+four residuals, each closed in **plan v2.1**:
+
+| Residual | v2.1 closure |
+| --- | --- |
+| P2: resume-stable data order (iterator reseeded with `seed+start_step`; preempted arms could diverge) | **Stability by construction:** no intermediate saves in (10000, 12500) ⇒ any preemption restarts the whole segment from 10,000 with the same iterator seed ⇒ identical order across arms and retries. Predeclared; 39-min re-run cost accepted. |
+| P3: D1 script computes aggregates, not the declared per-window OLS/CI | New predeclared script `diagnostics/d1_per_frame_slopes.py` (OLS frames 1→32, reduction formula, 10k-resample paired bootstrap, 95% CI, seed 0, synthetic-slope unit tests). |
+| P4: index supports underspecified | Exact supports: A draws `k_A~U{1,2}` then `hi~U{i: k_A≤i≤24}`, `lo=hi−k_A`, teacher-forced branch shares the draw; B: `hi~U{2..24}`, consecutive path; C draws both supports per batch. |
+| P7: sigma-trajectory metric not operationalized | New probe module `diagnostics/sigma_trajectory_trace.py` on the extracted step fn; 30-window probe cohort; eval's own ε keying; immutable per-checkpoint JSON under the probe root; oracle-zero unit test. Eval rollout untouched. |
+
+**Approval-time considerations (reviewer's, to be surfaced to Yixun verbatim):** (1) C costs ~2.5–3×
+baseline per update — S1/S1.6 measure the real budget before S2 approval; (2) the paired episode bootstrap
+covers cohort uncertainty, not training-seed variability; (3) A is a compound exposure+label intervention —
+scheduled sampling alone requires A′; (4) gain-per-TPU-hour is descriptive efficiency, not a compute-matched
+causal comparison.
