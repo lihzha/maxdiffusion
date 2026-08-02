@@ -89,3 +89,12 @@ Closures (1) data-order-by-construction, (2) D1 slope script, (4) sigma trace: *
 `i → i+1`), so v2.1's `lo = hi − k_A` walked the sampler backward toward HIGHER σ. **v2.2** rewrites the
 supports in the eval's direction: A: `k_A~U{1,2}`, start `s~U{0..24−k_A}`, end `e = s+k_A`; B: `s~U{0..22}`,
 path `s→s+1→s+2`; σ_hi = σ[s] > σ_lo = σ[e], terminal never reached since e ≤ 24.
+
+## Final verdict (plan v2.2): **APPROVE-PLAN**
+
+"The supports correctly follow the descending 25-point positive-sigma grid in the eval's `i → i+1`
+direction, with A ending at `e ≤ 24`, B ending at `24` at most, and neither reaching terminal index `25`."
+
+Plan cycle closed: v1 → review (2 BLOCKER + 5 MAJOR) → v2 (all adopted) → re-review (4 residuals) → v2.1 →
+closing pass (1 UNSOUND: index direction) → v2.2 → **APPROVE-PLAN**. Surfaced to Yixun for approval with
+this full record.
