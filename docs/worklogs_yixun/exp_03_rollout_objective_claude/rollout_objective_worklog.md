@@ -112,3 +112,20 @@
   off the training root; control loss drifted; control arm returning a copy instead of the parent's
   functions; dispatch dropped; unimplemented objective silently falling back to the control.
 - **Next** — focused Codex review of round 2; then round 3 (the A/B/C losses).
+
+## 2026-08-02T03:40:00Z — Cycle A round 2 STRENGTHENING (Codex REQUEST-REVISION on c0aaaa2)
+
+- **Verdict** — 1 BLOCKER + 2 MAJOR, round 3 NO-GO until re-reviewed. Record + response in
+  `rollout_objective_codex_code_trainer_review.md`.
+- **Closed** — (1) the global step now crosses the jit boundary as a dynamic scalar (4-arg compiled
+  adapter, `jnp.asarray(step, int32)` from the LOOP, never `state.step`), and `exp03_aux_key` folds a
+  traced uint32 with no `int()` coercion; resume-safety is proven end-to-end through the production
+  save/restore path. (2) A JIT parity certificate: both steps compiled with AdamW, four cached calls,
+  params + full optimizer state + `state.step` + every metric + rng exact, one trace each, matching
+  jaxprs. (3) The launcher drift test parses default and override maps and compares them
+  bidirectionally under a tight allowlist.
+- **Compatibility** — when no step is threaded the loss keeps exp_02's exact six-argument call shape,
+  so the exp_02 spy test passes untouched; both shapes pinned.
+- **Result** — suite 1340 passed / 2 skipped (+9). Six mutants killed incl. both named launcher
+  examples; a meta-mutation confirms the allowlist's tightness is load-bearing.
+- **Next** — re-review; round 3 (A/B/C losses) still gated on it.
