@@ -432,3 +432,13 @@ done
   ≈0.0035/2,500 at this point; the control arm measures it directly.
 - **Seed verification:** all three arm checkpoints byte-identical to source (23,654,557,930 bytes each). Note: first copy attempt hung — gsutil `-m` multiprocessing deadlock on macOS (21 orphaned workers, 0 objects); fixed with `-o "GSUtil:parallel_process_count=1"` (threads only). Recorded for the next 22 GiB copy.
 - **Job ids (submitted 2026-08-02T17:22Z):** lr1e5c → `20260802-172153-c53c6a93-exp02-o100-lr1e5c-yixun`; lr2e5 → `20260802-172220-d3198513-exp02-o100-lr2e5-yixun`; lr5e5 → `20260802-172247-e5ce902d-exp02-o100-lr5e5-yixun`.
+
+## Jobs 35–36 — v6e-8 LOSS-INSTRUMENT for completed LR-sweep arms — launched 2026-08-02T~22:10Z
+
+Predeclared measurement from the Jobs 32–34 package (same approval). lr1e5c + lr2e5 SUCCEEDED attempt 1
+(checkpoints 12500 verified); lr5e5 on attempt 2 after a maintenance kill (restart-from-10k per design —
+its instrument job launches when it lands). CHECKPOINT_STEPS="10000,12500" per arm: the 10000 reading must
+reproduce the anchor **0.12227** exactly (identical bytes = validity check), 12500 is the answer.
+Preliminary from training logs (noisy, non-authoritative): lr2e5 ended at logged loss ≈0.093 — well below
+the 1e-5 trend; instrument decides.
+
