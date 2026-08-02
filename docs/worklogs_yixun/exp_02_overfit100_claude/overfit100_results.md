@@ -269,3 +269,27 @@ and names them precisely:
 - **lower the loss floor** (optimization/capacity/LR) — measured as decelerating and 74% short; poor odds;
 - **lower the slope** (train on the trajectory the eval runs, so one-step error stops compounding) — this is
   the objective change, and D1 shows the headroom is real: every window's frame 0 already clears the bar.
+
+## LR sweep, first two arms (Jobs 32–36) — instrument verdict — 2026-08-02T~22:40Z
+
+**Validity:** both arms reproduce the step-10,000 anchor **0.12227 exactly** (n=1,629, identical checkpoint
+bytes) — the instrument is measuring what it claims to.
+
+| arm | LR | loss @10000 | loss @12500 | Δ over 2,500 steps |
+| --- | --- | --- | --- | --- |
+| lr1e5c (control) | 1e-5 | 0.12227 | 0.12003 | **−0.00224** |
+| lr2e5 | 2e-5 | 0.12227 | **0.09793** | **−0.02434** |
+
+**Findings:**
+1. **The control confirms the trend was honest:** −0.0022 lands right on the decelerating extrapolation
+   (predicted ≤0.0035). Nothing about the 1e-5 plateau was mis-measured.
+2. **Doubling the LR bought 10.9× the control's gain at the same update budget.** 2e-5's single 2,500-step
+   segment (−0.0243) equals the ENTIRE 7,500-step extension at 1e-5 (0.14598→0.12227 = −0.0237). The
+   "optimization floor" of the exp_02 analysis was **substantially an artifact of the locked LR**, exactly
+   the H5 caveat the analysis review forced us to keep open. §5's "dose is low-value" claim is hereby
+   REVISED: dose at 1e-5 is low-value; dose at higher LR was a live lever all along.
+3. **Predicted SSIM via the linear map:** 0.9885 − 1.201×0.09793 ≈ **0.871** (vs control ≈0.842) — IF the
+   loss→SSIM mapping holds off the 1e-5 optimization path, which is now itself a testable question and
+   directly relevant to exp_03's deviation-from-line metric. An `s3_intermediate` eval at lr2e5's step
+   12,500 would answer it (~30 min v6e-8; NOT yet launched — needs approval, proposed to Yixun).
+4. lr5e5 pending (attempt 2 running); its instrument job launches on completion.
