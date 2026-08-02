@@ -37,8 +37,9 @@ from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_itera
 from maxdiffusion.models.wan.side_adapter_wan import (
     NNXWanSideAdapterStack,
     adapter_param_count,
-    apply_first_frame_pin,
+    build_noisy_pinned_latents,
     build_rollout_sigmas,
+    masked_velocity_mse,
     wan_action_adapter_forward,
     _build_per_token_timestep,
     _dtype,
@@ -159,9 +160,7 @@ def _denoising_loss(
     )
 
     eps = _build_noise(noise_rng, z_video_f32.shape, jnp.float32, config)
-    sigma_b = sigma_t.reshape((b, 1, 1, 1, 1))
-    z_t_f32 = (1.0 - sigma_b) * z_video_f32 + sigma_b * eps
-    z_t_f32 = apply_first_frame_pin(z_t_f32, z_i0_f32)
+    z_t_f32 = build_noisy_pinned_latents(z_video_f32, z_i0_f32, eps, sigma_t)
     z_t = z_t_f32.astype(weights_dtype)
 
     v_cond = wan_action_adapter_forward(
@@ -189,11 +188,7 @@ def _denoising_loss(
         v_pred = v_cond
 
     v_target = eps - z_video_f32
-    mask = jnp.ones((1, z_video_f32.shape[1], f_lat, h_lat, w_lat), dtype=jnp.float32)
-    mask = mask.at[:, :, :1, :, :].set(0.0)
-    diff = (v_pred.astype(jnp.float32) - v_target.astype(jnp.float32)) * mask
-    n_valid = jnp.maximum(jnp.sum(mask) * b, 1.0)
-    loss = jnp.sum(diff**2) / n_valid
+    loss = masked_velocity_mse(v_pred, v_target, b)
     aux = {
         "velocity_mse": loss,
         "sigma_mean": jnp.mean(sigma_t.astype(jnp.float32)),
