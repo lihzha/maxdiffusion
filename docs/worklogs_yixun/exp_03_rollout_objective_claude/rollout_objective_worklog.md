@@ -77,3 +77,38 @@
   4,096 random pairs) and reported rather than chased.
 - **Next** — re-review of this SHA; round 2 (exp03 trainer + binding hook) does not stack until it
   passes.
+
+## 2026-08-03T01:20:00Z — Cycle A round 2: exp_03 trainer + binding hook (ctrl0-capable)
+
+- **Goal** — make ctrl0 runnable end-to-end through a trainer of its own, with the A/B/C objectives'
+  seats built but empty (round 3 fills them).
+- **Parent refactor (byte-identical)** — `_train_step` is now `_make_train_step(loss_fn)`, and
+  `WanTI2VOverfit100Trainer._loss_and_step_fns()` is the hook `start_training` routes through. The
+  module-level `_train_step` stayed a *thin dispatch* into the factory rather than a closure bound at
+  import, so this module's `_denoising_loss` remains LATE-bound — exp_02's suite pins that property
+  (it patches the name and asserts the spy fires) and it is settled behaviour. exp_02's suite passes
+  untouched.
+- **NEW `trainers/wan_ti2v_exp03_trainer.py`** — `Exp03Trainer`, dispatched by `model_type:
+  EXP03_TI2V`. `exp03_objective: control` returns the parent's `(_denoising_loss, _train_step)` **by
+  identity**, which is what makes ctrl0 a replication guard rather than a second implementation; the
+  three trials raise `NotImplementedError` at startup (before the ~5B load) so a mistyped arm cannot
+  quietly train the control under a trial's run name.
+- **RNG discipline (delta-review 2)** — `exp03_aux_key(seed, global_step, purpose)` derives auxiliary
+  keys from `key(seed + 1_000_003)` folded with the step and a sha256-of-the-NAME purpose id. Derived,
+  never split off the training stream; keyed on the global step, so resume-stable; same key in every
+  arm at the same (step, purpose). Tested: the exp_03 control run's shared draws equal the
+  pre-refactor trainer's exactly, over a multi-step run and across a resume boundary, and interleaving
+  aux draws changes nothing.
+- **Compatibility** — same `Overfit100TrainState`, same Orbax items (`params`/`opt_state`/`step`), same
+  preflights, all asserted by identity of the inherited methods; real save→corrupt→restore roundtrip
+  through the production `_save_checkpoint`/`_maybe_restore`, plus the empty-dir (Tier-2 from-init)
+  path returning step 0.
+- **Config + launcher** — `configs/base_wan_5b_exp03.yml` is exp_02's config plus the six `exp03_*`
+  keys, with `model_type` the ONLY changed value (asserted key-by-key); `bash_scripts/train_wan_exp03.sh`
+  clones the overfit100 training launcher with `EXP03_*` passthroughs, keeping the manifest pin, HF
+  prefetch, local-only snapshot resolution and COMMIT export. No ffmpeg block — training arm, loss-arm
+  precedent, justified in a comment.
+- **Result** — suite 1331 passed / 2 skipped (+35). Six mutants killed: hook bypassed; aux key split
+  off the training root; control loss drifted; control arm returning a copy instead of the parent's
+  functions; dispatch dropped; unimplemented objective silently falling back to the control.
+- **Next** — focused Codex review of round 2; then round 3 (the A/B/C losses).
