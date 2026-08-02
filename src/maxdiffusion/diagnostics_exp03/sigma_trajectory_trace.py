@@ -12,14 +12,29 @@ readable rather than merely suggestive:
 
 * **It starts at exactly zero.** The eval's initial state is ``eps`` (``sigma_0 = 1``), which *is*
   the interpolant at ``sigma_0``, so index 0 has no arithmetic in it at all.
-* **A perfect velocity keeps it zero.** With ``v = eps - z_gt`` the Euler rule maps the interpolant
-  at ``sigma_i`` onto the interpolant at ``sigma_{i+1}`` identically, so any growth in the trace is
-  the model's error compounding and nothing else. (Unit-tested with an oracle.)
+* **A perfect velocity keeps it zero — to the arithmetic's precision.** With ``v = eps - z_gt`` the
+  Euler rule maps the interpolant at ``sigma_i`` onto the interpolant at ``sigma_{i+1}``
+  *algebraically*. In float32 that is ~1e-14 and the growth in the trace really is model error and
+  nothing else. In **bfloat16** — the production ``weights_dtype`` — the incremental accumulation
+  does not reproduce the interpolant exactly, so a finite-precision FLOOR exists. It is therefore
+  measured rather than assumed: :func:`oracle_floor` re-runs each window with the exact velocity and
+  the result travels in the JSON as ``floor``, in the same entry as the ``error`` it bounds.
+
+  **Predeclared reporting choice:** the reported metric is the **RAW** error, with the floor
+  alongside; subtracting it is an analysis decision to be stated when the numbers are read, not a
+  correction applied silently here. The reference interpolant is evaluated in float32
+  (:data:`TRACE_REFERENCE_DTYPE`) so the reference contributes no rounding of its own.
 
 **It traces the operator the eval runs.** The step comes from
 ``models/wan/overfit100_sampling.py`` — the same function ``generate_wan_side_adapter`` calls and
 the exp_03 trainers unroll (plan §3, one-sampler rule). The eval rollout itself is NOT modified;
 this is its own harness on the shared step.
+
+**The design is approval-pinned** (:func:`assert_approved_trace_design`, checked before the ~5B
+load): cohort seed 0, exactly 30 windows, exactly the settled 25-step sampler, with the resulting
+cohort and grid lengths verified afterwards. Constants in a module do not constrain a run whose
+config supplies the values, and a trace taken on another cohort or another sampler is a different
+measurement that would corrupt the cross-arm comparison instead of announcing itself.
 
 **Isolation, inherited from the exp_02 probe review.** Same 30-window seeded cohort (reusing
 ``probe_overfit100_sampling_steps.probe_cohort``), same per-window key
@@ -54,6 +69,37 @@ TRACE_OUTPUT_DIR = probe.PROBE_OUTPUT_DIR  # the same non-role diagnostic root
 TRACE_CONTEXT_MODE = "correct"
 TRACE_SEED = 0  # the eval's own seed-0 keying, so the trace lines up with the landed rows
 TRACE_NUM_WINDOWS = 30  # the exp_02 probe's cohort, reused so the two diagnostics are comparable
+TRACE_SAMPLING_STEPS = 25  # the settled eval sampler; a trace of another sampler is another metric
+
+# The reference interpolant is evaluated in FLOAT32 regardless of the rollout's latent dtype, and
+# it is documented here because it is a choice, not an accident: the reference then carries no
+# rounding of its own, so the trace is "how far the (possibly bf16) rollout drifted from the exact
+# trajectory" rather than a difference of two approximations.
+TRACE_REFERENCE_DTYPE = jnp.float32
+
+
+def assert_approved_trace_design(*, seed: int, num_windows: int, sampling_steps: int) -> None:
+    """Refuse anything but the approved trace (seed 0, 30 windows, the 25-step eval sampler).
+
+    The exp_02 probe review's lesson, applied before the ~5B load: constants in a module do not
+    constrain a run whose config supplies the values. A trace taken on a different cohort or a
+    different sampler is a different measurement, and Mechanism B's readings are compared across
+    arms -- so a silent substitution would corrupt the comparison rather than announce itself.
+    """
+    if int(seed) != TRACE_SEED:
+        raise ValueError(
+            f"the sigma trace is pinned to cohort seed {TRACE_SEED} (the eval's own seed-0 keying), got {int(seed)}; "
+            f"another seed selects other windows and the arms would no longer be comparable"
+        )
+    if int(num_windows) != TRACE_NUM_WINDOWS:
+        raise ValueError(
+            f"the sigma trace is pinned to the {TRACE_NUM_WINDOWS}-window probe cohort, got {int(num_windows)}"
+        )
+    if int(sampling_steps) != TRACE_SAMPLING_STEPS:
+        raise ValueError(
+            f"the sigma trace is pinned to the settled {TRACE_SAMPLING_STEPS}-step eval sampler, got "
+            f"{int(sampling_steps)}; tracing another sampler measures another trajectory"
+        )
 
 
 def trace_grid(*, num_inference_steps: int, flow_shift: float, sigma_min: float = 0.0, sigma_max: float = 1.0):
@@ -68,14 +114,20 @@ def trace_grid(*, num_inference_steps: int, flow_shift: float, sigma_min: float 
 
 
 def ideal_interpolant(z_gt: jax.Array, eps: jax.Array, sigma: float, z_i0: jax.Array) -> jax.Array:
-    """``pin((1 - sigma) * z_gt + sigma * eps)`` — where a perfect sampler would be at ``sigma``."""
-    value = (1.0 - float(sigma)) * z_gt + float(sigma) * eps
-    return apply_first_frame_pin(value, z_i0)
+    """``pin((1 - sigma) * z_gt + sigma * eps)`` — where a perfect sampler would be at ``sigma``.
+
+    Evaluated in :data:`TRACE_REFERENCE_DTYPE` (float32), so the reference is the exact trajectory
+    to the precision of the trace's own arithmetic even when the rollout runs in bfloat16.
+    """
+    value = (1.0 - float(sigma)) * z_gt.astype(TRACE_REFERENCE_DTYPE) + float(sigma) * eps.astype(
+        TRACE_REFERENCE_DTYPE
+    )
+    return apply_first_frame_pin(value, z_i0.astype(TRACE_REFERENCE_DTYPE))
 
 
 def interpolant_error(z: jax.Array, z_gt: jax.Array, eps: jax.Array, sigma: float, z_i0: jax.Array) -> float:
     """``|| z - ideal ||^2 / numel`` at one sigma."""
-    diff = z.astype(jnp.float32) - ideal_interpolant(z_gt, eps, sigma, z_i0).astype(jnp.float32)
+    diff = z.astype(TRACE_REFERENCE_DTYPE) - ideal_interpolant(z_gt, eps, sigma, z_i0)
     return float(jnp.mean(diff**2))
 
 
@@ -122,13 +174,54 @@ def sigma_trace(
     return errors
 
 
+def oracle_velocity_fn(z_gt: jax.Array, eps: jax.Array):
+    """The PERFECT velocity ``eps - z_gt``, in the latents' own dtype.
+
+    Built in the latents' dtype on purpose: the floor it produces is the floor of the *production*
+    arithmetic, not of an idealized float32 rehearsal of it.
+    """
+    exact = (eps - z_gt).astype(z_gt.dtype)
+
+    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+        del timestep, encoder_hidden_states
+        return exact.astype(hidden_states.dtype)
+
+    return velocity_fn
+
+
+def oracle_floor(*, z_gt, z_i0, eps, context, sigmas, timesteps) -> list[float]:
+    """The finite-precision FLOOR: what the trace reads when the velocity is exactly right.
+
+    In float32 this is ~1e-14 and the trace is "model error, and nothing else". In bfloat16 -- the
+    production ``weights_dtype`` -- the incremental Euler accumulation does NOT reproduce the
+    interpolant exactly, so a nonzero floor exists and must be visible next to the number it
+    contaminates. Costs one network-free rollout per window.
+    """
+    return sigma_trace(
+        oracle_velocity_fn(z_gt, eps),
+        z_gt=z_gt,
+        z_i0=z_i0,
+        eps=eps,
+        context=context,
+        sigmas=sigmas,
+        timesteps=timesteps,
+    )
+
+
 def trace_rows(velocity_fn, *, z_gt, z_i0, eps, context, sigmas, timesteps) -> list[dict]:
-    """:func:`sigma_trace` with each error labelled by its grid index and sigma."""
+    """:func:`sigma_trace` labelled by grid index and sigma, WITH the finite-precision floor.
+
+    ``error`` is the RAW error -- the predeclared reported metric -- and ``floor`` travels beside it
+    in the same entry (so the two can never be misaligned). Subtracting the floor is an analysis
+    decision to be made and stated when the numbers are read, not a silent correction applied here.
+    """
     errors = sigma_trace(
         velocity_fn, z_gt=z_gt, z_i0=z_i0, eps=eps, context=context, sigmas=sigmas, timesteps=timesteps
     )
+    floor = oracle_floor(z_gt=z_gt, z_i0=z_i0, eps=eps, context=context, sigmas=sigmas, timesteps=timesteps)
     return [
-        {"index": index, "sigma": float(sigmas[index]), "error": float(error)} for index, error in enumerate(errors)
+        {"index": index, "sigma": float(sigmas[index]), "error": float(error), "floor": float(floor[index])}
+        for index, error in enumerate(errors)
     ]
 
 
@@ -172,13 +265,14 @@ def mean_trace(rows: Sequence[dict]) -> list[dict]:
         sigmas = {round(float(entry["sigma"]), 9) for entry in entries}
         if len(sigmas) != 1:
             raise ValueError(f"windows disagree about sigma at index {index}: {sorted(sigmas)}")
-        out.append(
-            {
-                "index": index,
-                "sigma": float(entries[0]["sigma"]),
-                "error": statistics.fmean(float(entry["error"]) for entry in entries),
-            }
-        )
+        entry = {
+            "index": index,
+            "sigma": float(entries[0]["sigma"]),
+            "error": statistics.fmean(float(item["error"]) for item in entries),
+        }
+        if all("floor" in item for item in entries):
+            entry["floor"] = statistics.fmean(float(item["floor"]) for item in entries)
+        out.append(entry)
     return out
 
 
@@ -200,7 +294,13 @@ def trace_artifact(config, *, checkpoint_step: int, cohort, rows) -> dict:
         "context_mode": TRACE_CONTEXT_MODE,
         "rollout_seed": TRACE_SEED,
         "cohort_seed": int(getattr(config, "seed", 0)),
-        "sampling_steps": int(getattr(config, "side_adapter_sampling_steps", 0)),
+        "sampling_steps": TRACE_SAMPLING_STEPS,
+        "reference_dtype": str(jnp.dtype(TRACE_REFERENCE_DTYPE)),
+        "latent_dtype": str(getattr(config, "weights_dtype", "")),
+        "reported_metric": (
+            "RAW interpolant error; 'floor' beside it is the finite-precision oracle floor at the same "
+            "index (a perfect velocity's reading). Subtract only as a stated analysis choice."
+        ),
         "cohort": [str(window["name"]) for window in cohort],
         "mean_trace": mean_trace(rows),
         "rows": list(rows),
@@ -216,16 +316,23 @@ def _log_mean_trace(curve: Sequence[dict]) -> None:
     max_logging.log("[exp03_sigma_trace] mean interpolant error per sigma step")
     for entry in curve:
         max_logging.log(
-            f"[exp03_sigma_trace]   i={entry['index']:>3} sigma={entry['sigma']:.4f} error={entry['error']:.6f}"
+            f"[exp03_sigma_trace]   i={entry['index']:>3} sigma={entry['sigma']:.4f} "
+            f"error={entry['error']:.6f} floor={entry.get('floor', float('nan')):.6f}"
         )
 
 
 def run_trace(config) -> dict:
     """Trace the cohort at one checkpoint and write the diagnostic JSON."""
     manifest_path = str(getattr(config, "model_manifest_path", ""))
-    cohort = trace_cohort(
-        manifest_path, seed=int(getattr(config, "seed", TRACE_SEED)), num_windows=int(config.probe_num_windows)
+    # Cheap refusal BEFORE the ~5B load: the approved trace, or nothing.
+    assert_approved_trace_design(
+        seed=int(getattr(config, "seed", -1)),
+        num_windows=int(getattr(config, "probe_num_windows", -1)),
+        sampling_steps=int(getattr(config, "side_adapter_sampling_steps", -1)),
     )
+    cohort = trace_cohort(manifest_path, seed=TRACE_SEED, num_windows=TRACE_NUM_WINDOWS)
+    if len(cohort) != TRACE_NUM_WINDOWS:
+        raise ValueError(f"the cohort selection returned {len(cohort)} windows, not {TRACE_NUM_WINDOWS}")
     (
         trainer,
         pipeline,
@@ -237,12 +344,17 @@ def run_trace(config) -> dict:
     ) = gen._restore_overfit100_validation_state(config)
     scheduler, _ = trainer._create_scheduler()
     sigmas, timesteps = overfit100_sampler_grid(
-        num_inference_steps=config.side_adapter_sampling_steps,
+        num_inference_steps=TRACE_SAMPLING_STEPS,
         flow_shift=config.flow_shift,
         sigma_min=scheduler.config.sigma_min,
         sigma_max=scheduler.config.sigma_max,
         num_train_timesteps=scheduler.config.num_train_timesteps,
     )
+    if int(sigmas.shape[0]) != TRACE_SAMPLING_STEPS + 1 or int(timesteps.shape[0]) != TRACE_SAMPLING_STEPS:
+        raise ValueError(
+            f"the grid came back as {int(sigmas.shape[0])} sigmas / {int(timesteps.shape[0])} timesteps; "
+            f"the pinned {TRACE_SAMPLING_STEPS}-step trace needs {TRACE_SAMPLING_STEPS + 1} / {TRACE_SAMPLING_STEPS}"
+        )
     replicated = NamedSharding(mesh, P())
     weights_dtype = gen._dtype(config.weights_dtype)
     transformer = gen.nnx.merge(state.graphdef, state.params, state.rest_of_state)
@@ -296,7 +408,7 @@ def run_trace(config) -> dict:
         )
         max_logging.log(
             f"[exp03_sigma_trace] {sample.name} first={window_trace[0]['error']:.6f} "
-            f"last={window_trace[-1]['error']:.6f}"
+            f"last={window_trace[-1]['error']:.6f} floor_last={window_trace[-1]['floor']:.6f}"
         )
 
     if jax.process_index() != 0:

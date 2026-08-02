@@ -21,7 +21,9 @@ The trace tests use a perfect velocity oracle, whose trace is zero by the interp
 from __future__ import annotations
 
 import ast
+import inspect
 import json
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -64,16 +66,18 @@ def test_the_slope_uses_the_frame_index_as_the_regressor():
     # VALUES' order with a different spacing does not; pin the axis explicitly.
     slope = -0.01
     values = _curve(0.9, slope, n_frames=40)
-    assert d1.window_slope(values) == pytest.approx(slope, abs=1e-12)
+    assert d1.window_slope(values, expected_frames=40) == pytest.approx(slope, abs=1e-12)
     flat = [0.5] * 40
-    assert d1.window_slope(flat) == pytest.approx(0.0, abs=1e-12)
+    assert d1.window_slope(flat, expected_frames=40) == pytest.approx(0.0, abs=1e-12)
     rising = _curve(0.5, +0.002, n_frames=40)
-    assert d1.window_slope(rising) > 0.0
+    assert d1.window_slope(rising, expected_frames=40) > 0.0
 
 
 def test_a_window_shorter_than_the_fit_window_is_refused():
     with pytest.raises(ValueError):
         d1.window_slope([0.9, 0.8])  # one usable point cannot define a slope
+    with pytest.raises(ValueError):
+        d1.window_slope([0.9, 0.8], expected_frames=2)
 
 
 def test_the_reduction_formula_is_one_minus_the_slope_ratio():
@@ -135,6 +139,7 @@ def test_a_degenerate_cohort_gives_a_point_interval():
 
 def test_the_predeclared_threshold_is_recorded_in_the_module():
     assert d1.D1_REDUCTION_THRESHOLD == 0.25
+    assert (d1.D1_LAST_FRAME, d1.D1_FRAME_COUNT, d1.D1_COHORT_SIZE) == (32, 33, 100)
     assert d1.D1_BOOTSTRAP_RESAMPLES == 10000
     assert d1.D1_BOOTSTRAP_SEED == 0
     assert d1.D1_CI == 0.95
@@ -144,6 +149,7 @@ def test_the_exp02_self_validation_check_is_retained():
     # The frames come from lossy MP4s, so the script must keep proving that mean-over-frames tracks
     # the SSIM the eval recorded for the same window.
     per_window = {"ep100_v0_s00000": _curve(0.9, -0.002), "ep101_v0_s00000": _curve(0.8, -0.003)}
+    assert all(len(values) == d1.D1_FRAME_COUNT for values in per_window.values())
     recorded = {name: float(np.mean(values)) for name, values in per_window.items()}
     report = d1.self_validation(per_window, recorded)
     assert report["n"] == 2
@@ -234,7 +240,9 @@ def test_the_trace_rows_carry_their_sigma_and_index():
     assert [row["index"] for row in rows] == list(range(_STEPS + 1))
     assert rows[0]["sigma"] == pytest.approx(1.0)
     assert rows[-1]["sigma"] == 0.0
-    assert all(set(row) == {"index", "sigma", "error"} for row in rows)
+    # The finite-precision floor travels in the SAME entry as the error it bounds, so the two can
+    # never be misaligned by an index.
+    assert all(set(row) == {"index", "sigma", "error", "floor"} for row in rows)
 
 
 def test_the_trace_uses_the_extracted_sampler_step():
@@ -344,3 +352,273 @@ def test_the_trace_touches_no_verdict_machinery():
         "eval_pass_role",
     ):
         assert forbidden not in source, forbidden
+
+
+# ---------------------------------------------------------------------------------------------
+# Round-1 strengthening: fail-closed D1 contracts, the trace's approval pin, the bf16 floor.
+# ---------------------------------------------------------------------------------------------
+
+
+def _write_video_dirs(root, names, *, missing=None):
+    """Directory skeletons; ``decode`` is stubbed, so the files only need to exist."""
+    root.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        directory = root / name
+        directory.mkdir()
+        for filename in ("ground_truth.mp4", "sample.mp4"):
+            if missing and name in missing and filename in missing[name]:
+                continue
+            (directory / filename).write_bytes(b"")
+
+
+def _stub_decode(monkeypatch, *, frames=None):
+    """Synthetic videos whose SSIM really decays: the sample drifts from the ground truth."""
+    count = int(frames or d1.D1_FRAME_COUNT)
+
+    def decode(path):
+        path = Path(path)
+        rng = np.random.default_rng(zlib.crc32(path.parent.name.encode()))
+        base = rng.random((count, 12, 12, 3)).astype(np.float32)
+        if path.name == "ground_truth.mp4":
+            return base
+        # The trial drifts half as fast as the control, so the reduction is a real 0.5-ish number.
+        factor = 0.01 if "trial" in path.parent.parent.name else 0.02
+        drift = (np.arange(count, dtype=np.float32) * factor)[:, None, None, None]
+        return np.clip(base + drift * rng.normal(size=base.shape).astype(np.float32), 0.0, 1.0)
+
+    monkeypatch.setattr(d1, "decode", decode)
+
+
+def test_unequal_videos_are_refused_rather_than_truncated():
+    left = np.zeros((33, 8, 8, 3), dtype=np.float32)
+    right = np.zeros((30, 8, 8, 3), dtype=np.float32)
+    with pytest.raises(ValueError) as excinfo:
+        d1.per_frame_ssim(left, right)
+    assert "length" in str(excinfo.value)
+    # ...and the exact 33-frame window is required even when the two agree.
+    with pytest.raises(ValueError):
+        d1.per_frame_ssim(right, right)
+
+
+def test_a_window_missing_a_video_is_a_hard_failure(tmp_path, monkeypatch):
+    _stub_decode(monkeypatch)
+    root = tmp_path / "videos"
+    _write_video_dirs(root, [f"ep{100 + i}_v0_s00000" for i in range(3)], missing={"ep101_v0_s00000": {"sample.mp4"}})
+    with pytest.raises(ValueError) as excinfo:
+        d1.per_window_slopes(root, expected_windows=3)
+    assert "sample.mp4" in str(excinfo.value)
+
+
+def test_a_short_cohort_is_a_hard_failure(tmp_path, monkeypatch):
+    _stub_decode(monkeypatch)
+    root = tmp_path / "videos"
+    _write_video_dirs(root, [f"ep{100 + i}_v0_s00000" for i in range(3)])
+    with pytest.raises(ValueError) as excinfo:
+        d1.per_window_slopes(root)  # the production default is the 100-window cohort
+    assert str(d1.D1_COHORT_SIZE) in str(excinfo.value)
+    assert len(d1.per_window_slopes(root, expected_windows=3)) == 3
+
+
+def _slope_table(names, *, slope=-0.004, episode_offset=0):
+    return {
+        name: {
+            "per_frame": _curve(0.95, slope),
+            "slope": slope,
+            "episode_id": int(name[2:].split("_", 1)[0]) + episode_offset,
+        }
+        for name in names
+    }
+
+
+def test_the_two_arms_must_present_the_identical_cohort():
+    names = [f"ep{100 + i}_v0_s00000" for i in range(d1.D1_COHORT_SIZE)]
+    trial = _slope_table(names)
+    assert d1.assert_paired_cohorts(trial, _slope_table(names)) == sorted(names)
+    # A window only one arm rendered is a hard failure, NOT an intersection.
+    short = _slope_table(names[:-1])
+    with pytest.raises(ValueError) as excinfo:
+        d1.assert_paired_cohorts(trial, short)
+    assert "only in the trial" in str(excinfo.value)
+    with pytest.raises(ValueError):
+        d1.assert_paired_cohorts(short, trial)
+    # Right size, wrong composition.
+    swapped = _slope_table(names[:-1] + ["ep999_v0_s00000"])
+    with pytest.raises(ValueError):
+        d1.assert_paired_cohorts(trial, swapped)
+
+
+def test_the_paired_cohort_must_be_the_full_hundred_with_unique_episodes():
+    names = [f"ep{100 + i}_v0_s00000" for i in range(30)]
+    with pytest.raises(ValueError) as excinfo:
+        d1.assert_paired_cohorts(_slope_table(names), _slope_table(names))
+    assert str(d1.D1_COHORT_SIZE) in str(excinfo.value)
+
+    full = [f"ep{100 + i}_v0_s00000" for i in range(d1.D1_COHORT_SIZE)]
+    duplicated = _slope_table(full)
+    duplicated[full[1]]["episode_id"] = duplicated[full[0]]["episode_id"]
+    with pytest.raises(ValueError) as excinfo:
+        d1.assert_paired_cohorts(duplicated, _slope_table(full))
+    assert "episode ids repeat" in str(excinfo.value)
+    # ...and the arms must agree about which episode a window belongs to.
+    with pytest.raises(ValueError):
+        d1.assert_paired_cohorts(_slope_table(full), _slope_table(full, episode_offset=1))
+
+
+def test_the_self_validation_inputs_are_part_of_the_run_contract():
+    signature = inspect.signature(d1.compare)
+    assert list(signature.parameters) == [
+        "trial_root",
+        "control_root",
+        "trial_aggregation",
+        "control_aggregation",
+    ]
+    assert all(parameter.default is inspect.Parameter.empty for parameter in signature.parameters.values())
+
+
+def test_compare_runs_the_full_contract_end_to_end(tmp_path, monkeypatch):
+    names = [f"ep{100 + i}_v0_s00000" for i in range(d1.D1_COHORT_SIZE)]  # the real 100-window cohort
+    _stub_decode(monkeypatch)
+    trial_root, control_root = tmp_path / "trial", tmp_path / "control"
+    _write_video_dirs(trial_root, names)
+    _write_video_dirs(control_root, names)
+
+    def _aggregation(path, offset):
+        payload = {
+            "rows": [{"name": name, "seed": 0, "context_mode": "correct", "ssim": 0.75 + offset} for name in names]
+        }
+        path.write_text(json.dumps(payload))
+        return path
+
+    trial_json = _aggregation(tmp_path / "trial.json", 0.0)
+    control_json = _aggregation(tmp_path / "control.json", 0.0)
+    result = d1.compare(trial_root, control_root, trial_json, control_json)
+    assert result["n_windows"] == len(names)
+    assert set(result["self_validation"]) == {"trial", "control"}
+    assert result["self_validation"]["trial"]["n"] == len(names)
+    assert result["bootstrap"]["n_episodes"] == len(names)
+
+    # A window with no seed-0 correct row in the aggregation is a failure, not a quiet skip.
+    thin = json.loads(trial_json.read_text())
+    thin["rows"] = thin["rows"][:-1]
+    (tmp_path / "thin.json").write_text(json.dumps(thin))
+    with pytest.raises(ValueError) as excinfo:
+        d1.compare(trial_root, control_root, tmp_path / "thin.json", control_json)
+    assert "self-validation" in str(excinfo.value)
+
+
+def test_the_trace_design_is_approval_pinned():
+    assert trace.TRACE_SAMPLING_STEPS == 25
+    trace.assert_approved_trace_design(seed=0, num_windows=30, sampling_steps=25)
+
+
+@pytest.mark.parametrize(
+    "seed,num_windows,sampling_steps,needle",
+    [
+        (1, 30, 25, "seed"),
+        (0, 15, 25, "window"),
+        (0, 100, 25, "window"),
+        (0, 30, 50, "step"),
+        (0, 30, 25 - 1, "step"),
+    ],
+)
+def test_a_hostile_trace_config_is_refused(seed, num_windows, sampling_steps, needle):
+    with pytest.raises(ValueError) as excinfo:
+        trace.assert_approved_trace_design(seed=seed, num_windows=num_windows, sampling_steps=sampling_steps)
+    assert needle in str(excinfo.value).lower()
+
+
+def test_the_driver_pins_the_design_before_the_model_loads(monkeypatch):
+    # The refusal must happen BEFORE _restore_overfit100_validation_state: a ~5B load that then
+    # throws has already burned the slot.
+    loaded = []
+    monkeypatch.setattr(
+        gen,
+        "_restore_overfit100_validation_state",
+        lambda config: loaded.append(config) or (_ for _ in ()).throw(AssertionError("must not be reached")),
+    )
+    config = SimpleNamespace(
+        model_manifest_path=str(_MANIFEST),
+        seed=1,  # hostile
+        probe_num_windows=30,
+        side_adapter_sampling_steps=25,
+    )
+    with pytest.raises(ValueError):
+        trace.run_trace(config)
+    assert loaded == []
+
+
+def test_the_oracle_floor_is_measured_at_the_production_dtype():
+    # fp32: the floor is numerically zero, so "growth is model error and nothing else" holds.
+    z_gt, z_i0, eps, context, sigmas, timesteps = _trace_inputs()
+    fp32_floor = trace.oracle_floor(z_gt=z_gt, z_i0=z_i0, eps=eps, context=context, sigmas=sigmas, timesteps=timesteps)
+    assert fp32_floor[0] == 0.0 and max(fp32_floor) < 1e-10
+
+    # bfloat16 (the production weights_dtype): the incremental Euler accumulation does NOT
+    # reproduce the interpolant, so the floor is real and must be reported, not assumed away.
+    bf16 = jnp.bfloat16
+    z_gt_b, z_i0_b, eps_b = z_gt.astype(bf16), z_i0.astype(bf16), eps.astype(bf16)
+    bf16_floor = trace.oracle_floor(
+        z_gt=z_gt_b, z_i0=z_i0_b, eps=eps_b, context=context.astype(bf16), sigmas=sigmas, timesteps=timesteps
+    )
+    assert bf16_floor[0] == 0.0  # the start is still exact
+    assert max(bf16_floor) > max(fp32_floor)
+    assert len(bf16_floor) == len(fp32_floor) == _STEPS + 1
+
+
+def test_the_oracle_at_production_dtype_still_traces_far_below_any_signal():
+    # The floor must be small enough that Mechanism B can read a model effect through it.
+    bf16 = jnp.bfloat16
+    z_gt, z_i0, eps, context, sigmas, timesteps = _trace_inputs()
+    z_gt, z_i0, eps, context = (value.astype(bf16) for value in (z_gt, z_i0, eps, context))
+
+    def oracle(hidden_states, timestep, encoder_hidden_states):
+        del timestep, encoder_hidden_states
+        return (eps - z_gt).astype(hidden_states.dtype)
+
+    errors = trace.sigma_trace(
+        oracle, z_gt=z_gt, z_i0=z_i0, eps=eps, context=context, sigmas=sigmas, timesteps=timesteps
+    )
+    stuck = trace.sigma_trace(
+        lambda hidden_states, timestep, encoder_hidden_states: jnp.zeros_like(hidden_states),
+        z_gt=z_gt,
+        z_i0=z_i0,
+        eps=eps,
+        context=context,
+        sigmas=sigmas,
+        timesteps=timesteps,
+    )
+    assert max(errors) < 1e-3
+    assert max(errors) < 0.01 * max(stuck)  # the floor is two orders below a wrong model's reading
+
+
+def test_the_reported_metric_is_raw_error_with_the_floor_alongside():
+    doc = trace.__doc__ or ""
+    assert "RAW" in doc and "floor" in doc
+    assert str(jnp.dtype(trace.TRACE_REFERENCE_DTYPE)) == "float32"
+    payload = trace.trace_artifact(
+        SimpleNamespace(
+            output_dir="/tmp/x",
+            run_name="r",
+            checkpoint_dir="gs://x/ck",
+            eval_data_dir="gs://x/train100",
+            model_manifest_path=str(_MANIFEST),
+            seed=0,
+            weights_dtype="bfloat16",
+        ),
+        checkpoint_step=12500,
+        cohort=[{"name": "ep100_v0_s00000"}],
+        rows=[
+            {
+                "name": "ep100_v0_s00000",
+                "trace": [
+                    {"index": 0, "sigma": 1.0, "error": 0.0, "floor": 0.0},
+                    {"index": 1, "sigma": 0.9, "error": 0.2, "floor": 0.001},
+                ],
+            }
+        ],
+    )
+    assert payload["reference_dtype"] == "float32"
+    assert payload["latent_dtype"] == "bfloat16"
+    assert "RAW" in payload["reported_metric"]
+    assert payload["sampling_steps"] == trace.TRACE_SAMPLING_STEPS
+    assert payload["mean_trace"][1]["floor"] == pytest.approx(0.001)

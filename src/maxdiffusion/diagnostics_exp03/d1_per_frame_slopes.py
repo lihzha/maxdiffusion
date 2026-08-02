@@ -18,6 +18,14 @@ The exp_02 self-validation check is **retained**: frames are decoded from lossy 
 mean-over-frames must keep tracking the SSIM the eval recorded for the same window. The frame-index
 trend, not the absolute level, is the finding.
 
+**Fail-closed by contract.** Every input check refuses rather than repairs: videos must be equal
+length and exactly 33 frames, the fit window is exactly frames 1-32, a window directory missing an
+MP4 is an error, and the trial and control must present the IDENTICAL 100-window cohort with unique,
+matching episode ids. The exp_02 script could afford ``min(len(a), len(b))`` and a skipped window
+because it printed a mean for a human; this output feeds a predeclared gate, where a quietly smaller
+or differently-composed cohort is exactly the failure that would be impossible to detect afterwards.
+Both aggregations are required arguments for the same reason.
+
 This module is deliberately dependency-light (numpy + ffmpeg) and computes no verdict: it reads the
 rendered videos and the published aggregation of a pass and prints/returns a diagnostic reading.
 """
@@ -34,6 +42,9 @@ import numpy as np
 
 # Predeclared, before any trial ran.
 D1_FIRST_FRAME = 1  # frame 0 is the pinned condition; the fit starts at frame 1
+D1_LAST_FRAME = 32  # ...and ends at frame 32, the window's last decoded frame
+D1_FRAME_COUNT = D1_LAST_FRAME + 1  # 33 frames: the pinned one plus frames 1..32
+D1_COHORT_SIZE = 100  # the canonical cohort; a partial read is not the predeclared statistic
 D1_REDUCTION_THRESHOLD = 0.25
 D1_BOOTSTRAP_RESAMPLES = 10000
 D1_BOOTSTRAP_SEED = 0
@@ -84,25 +95,51 @@ def ssim_frame(x: np.ndarray, y: np.ndarray, k: int = 7, data_range: float = 1.0
     return float(np.mean(vals))
 
 
-def per_frame_ssim(pred: np.ndarray, target: np.ndarray) -> list[float]:
-    """SSIM per frame over the frames both videos have."""
-    t = min(len(pred), len(target))
-    return [ssim_frame(pred[i], target[i]) for i in range(t)]
+def per_frame_ssim(pred: np.ndarray, target: np.ndarray, *, expected_frames: int = D1_FRAME_COUNT) -> list[float]:
+    """SSIM per frame — FAIL-CLOSED on length.
+
+    The old exp_02 script took ``min(len(pred), len(target))`` because it only ever printed a mean.
+    Here the output feeds a predeclared gate, and a truncated pair would quietly shorten the fit
+    window for one arm and bias the slope comparison, so unequal or short videos are an error.
+    """
+    if len(pred) != len(target):
+        raise ValueError(
+            f"the rendered videos disagree on length ({len(pred)} vs {len(target)} frames); a truncated "
+            f"comparison would bias the slope, so this pair is refused rather than trimmed"
+        )
+    if len(pred) != int(expected_frames):
+        raise ValueError(
+            f"expected {int(expected_frames)} decoded frames (frame 0 pinned + frames "
+            f"{D1_FIRST_FRAME}..{D1_LAST_FRAME}); got {len(pred)}"
+        )
+    return [ssim_frame(pred[i], target[i]) for i in range(len(pred))]
 
 
 # ------------------------------------------------------------------------------------- slopes
 
 
-def window_slope(values: Sequence[float], first_frame: int = D1_FIRST_FRAME) -> float:
-    """OLS slope of SSIM on the FRAME INDEX over ``values[first_frame:]``.
+def window_slope(
+    values: Sequence[float],
+    first_frame: int = D1_FIRST_FRAME,
+    *,
+    expected_frames: int = D1_FRAME_COUNT,
+) -> float:
+    """OLS slope of SSIM on the FRAME INDEX over frames ``first_frame .. expected_frames - 1``.
 
-    The regressor is the frame index itself (``first_frame, first_frame+1, ...``), so the slope is
-    "SSIM lost per frame" and is comparable across windows of equal length regardless of where the
-    fit starts.
+    The regressor is the frame index itself, so the slope is "SSIM lost per frame". The window is
+    EXACT, not "whatever frames this video happened to have": the predeclared statistic is frames
+    1-32, and a window of another length is refused so it can be investigated rather than averaged
+    in. (``expected_frames`` exists so unit tests can state a different length explicitly; the
+    production callers never pass it.)
     """
     series = np.asarray(values, dtype=np.float64)
     if series.ndim != 1:
         raise ValueError(f"per-frame SSIM must be one-dimensional; got shape {series.shape}")
+    if series.size != int(expected_frames):
+        raise ValueError(
+            f"the predeclared fit window is frames {first_frame}..{int(expected_frames) - 1} "
+            f"({int(expected_frames)} values incl. the pinned frame 0); got {series.size}"
+        )
     fitted = series[first_frame:]
     if fitted.size < 2:
         raise ValueError(
@@ -195,19 +232,42 @@ def self_validation(per_window: Mapping[str, Sequence[float]], recorded_ssim: Ma
 # ---------------------------------------------------------------------------------------- I/O
 
 
-def per_window_slopes(video_root: Path, first_frame: int = D1_FIRST_FRAME) -> dict[str, dict]:
-    """``{window_name: {"slope", "per_frame", "episode_id"}}`` from a pass's rendered videos."""
+def per_window_slopes(
+    video_root: Path,
+    first_frame: int = D1_FIRST_FRAME,
+    *,
+    expected_windows: int = D1_COHORT_SIZE,
+    expected_frames: int = D1_FRAME_COUNT,
+) -> dict[str, dict]:
+    """``{window_name: {"slope", "per_frame", "episode_id"}}`` from a pass's rendered videos.
+
+    FAIL-CLOSED throughout: a window directory missing either MP4 is an error (the old script
+    skipped it), and the number of windows read must be exactly the canonical cohort. A gate
+    computed over "whatever rendered" is not the predeclared gate.
+    """
+    root = Path(video_root)
+    if not root.is_dir():
+        raise ValueError(f"{root} is not a directory of per-window video folders")
     out: dict[str, dict] = {}
-    for directory in sorted(p for p in Path(video_root).iterdir() if p.is_dir()):
+    for directory in sorted(p for p in root.iterdir() if p.is_dir()):
         gt_path, pred_path = directory / "ground_truth.mp4", directory / "sample.mp4"
-        if not (gt_path.exists() and pred_path.exists()):
-            continue
-        values = per_frame_ssim(decode(pred_path), decode(gt_path))
+        missing = [p.name for p in (gt_path, pred_path) if not p.exists()]
+        if missing:
+            raise ValueError(
+                f"window {directory.name} is missing {missing} under {root}; a silently skipped window "
+                f"changes the cohort the gate is computed over"
+            )
+        values = per_frame_ssim(decode(pred_path), decode(gt_path), expected_frames=expected_frames)
         out[directory.name] = {
             "per_frame": values,
-            "slope": window_slope(values, first_frame),
+            "slope": window_slope(values, first_frame, expected_frames=expected_frames),
             "episode_id": _episode_id_from_name(directory.name),
         }
+    if len(out) != int(expected_windows):
+        raise ValueError(
+            f"expected the {int(expected_windows)}-window canonical cohort under {root}, found {len(out)}; "
+            f"D1 is predeclared over the full cohort, not over whatever a pass happened to render"
+        )
     return out
 
 
@@ -228,27 +288,91 @@ def recorded_ssim_from_aggregation(path: Path, *, seed: int = 0, context_mode: s
     }
 
 
-def compare(trial_root: Path, control_root: Path) -> dict:
-    """The full Mechanism-A reading for one trial against the control."""
+def assert_paired_cohorts(trial: Mapping[str, dict], control: Mapping[str, dict]) -> list[str]:
+    """The two arms must present the IDENTICAL cohort — not an intersection of it.
+
+    Analysing ``set(trial) & set(control)`` is how a partially-failed pass quietly turns into a
+    smaller, differently-composed experiment. Every mismatch is named in the error so the operator
+    can see which side is short.
+    """
+    only_trial = sorted(set(trial) - set(control))
+    only_control = sorted(set(control) - set(trial))
+    if only_trial or only_control:
+        raise ValueError(
+            f"the trial and control cohorts differ: {len(only_trial)} window(s) only in the trial "
+            f"(e.g. {only_trial[:3]}), {len(only_control)} only in the control (e.g. {only_control[:3]}). "
+            f"D1 compares the same windows or it compares nothing."
+        )
+    names = sorted(trial)
+    if len(names) != int(D1_COHORT_SIZE):
+        raise ValueError(f"the paired cohort has {len(names)} windows; the predeclared D1 cohort is {D1_COHORT_SIZE}")
+    episode_ids = [trial[name]["episode_id"] for name in names]
+    if len(set(episode_ids)) != len(episode_ids):
+        duplicates = sorted({value for value in episode_ids if episode_ids.count(value) > 1})
+        raise ValueError(
+            f"episode ids repeat across windows {duplicates}; the paired bootstrap resamples EPISODES, so a "
+            f"repeated episode would be double-counted as an independent unit"
+        )
+    mismatched = [name for name in names if trial[name]["episode_id"] != control[name]["episode_id"]]
+    if mismatched:
+        raise ValueError(f"trial and control disagree about the episode id of {mismatched[:3]}")
+    return names
+
+
+def compare(
+    trial_root: Path,
+    control_root: Path,
+    trial_aggregation: Path,
+    control_aggregation: Path,
+) -> dict:
+    """The full Mechanism-A reading for one trial against the control.
+
+    The aggregations are REQUIRED, not optional extras: the frames come from lossy MP4s, so the
+    exp_02 self-validation (mean-over-frames vs the SSIM the eval recorded) is part of the run
+    contract, and a reading produced without it is not interpretable.
+    """
     trial = per_window_slopes(Path(trial_root))
     control = per_window_slopes(Path(control_root))
-    shared = sorted(set(trial) & set(control))
-    if not shared:
-        raise ValueError("the two passes share no window directories; the slopes cannot be paired")
+    names = assert_paired_cohorts(trial, control)
     pairs = [
         {
             "episode_id": trial[name]["episode_id"],
             "trial_slope": trial[name]["slope"],
             "control_slope": control[name]["slope"],
         }
-        for name in shared
+        for name in names
     ]
-    return {"n_windows": len(shared), "windows": shared, "bootstrap": paired_bootstrap_reduction(pairs)}
+    validations = {}
+    for label, windows, aggregation in (
+        ("trial", trial, trial_aggregation),
+        ("control", control, control_aggregation),
+    ):
+        recorded = recorded_ssim_from_aggregation(Path(aggregation))
+        per_window = {name: data["per_frame"] for name, data in windows.items()}
+        missing = sorted(set(per_window) - set(recorded))
+        if missing:
+            raise ValueError(
+                f"the {label} aggregation has no seed-0 correct-mode row for {len(missing)} rendered "
+                f"window(s), e.g. {missing[:3]}; the self-validation would silently cover fewer windows"
+            )
+        validations[label] = self_validation(per_window, recorded)
+    return {
+        "n_windows": len(names),
+        "windows": names,
+        "bootstrap": paired_bootstrap_reduction(pairs),
+        "self_validation": validations,
+    }
 
 
 def main() -> None:  # pragma: no cover - the on-disk driver
-    trial_root, control_root = Path(sys.argv[1]), Path(sys.argv[2])
-    result = compare(trial_root, control_root)
+    if len(sys.argv) != 5:
+        raise SystemExit(
+            "usage: d1_per_frame_slopes.py <trial_video_root> <control_video_root> "
+            "<trial_aggregation.json> <control_aggregation.json>\n"
+            "All four are required: the self-validation against the eval's recorded SSIM is part of the "
+            "run contract, not an optional extra."
+        )
+    result = compare(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]))
     stats = result["bootstrap"]
     print(f"windows paired: {result['n_windows']}  episodes: {stats['n_episodes']}")
     print(f"mean slope  trial {stats['mean_slope_trial']:+.6f}   control {stats['mean_slope_control']:+.6f}")
@@ -258,16 +382,12 @@ def main() -> None:  # pragma: no cover - the on-disk driver
         f"(seed {stats['seed']}, {stats['resamples']} resamples)"
     )
     print(f"predeclared threshold >= {stats['threshold']:.2f}: {'MET' if stats['meets_threshold'] else 'not met'}")
-
-    if len(sys.argv) > 4:
-        for label, root, aggregation in (("trial", trial_root, sys.argv[3]), ("control", control_root, sys.argv[4])):
-            per_window = {name: data["per_frame"] for name, data in per_window_slopes(Path(root)).items()}
-            report = self_validation(per_window, recorded_ssim_from_aggregation(Path(aggregation)))
-            print(
-                f"self-validation ({label}): n={report['n']} mean|diff| {report['mean_abs_diff']:.4f} "
-                f"max|diff| {report['max_abs_diff']:.4f} "
-                f"(from-video {report['mean_from_video']:.4f} vs recorded {report['mean_recorded']:.4f})"
-            )
+    for label, report in result["self_validation"].items():
+        print(
+            f"self-validation ({label}): n={report['n']} mean|diff| {report['mean_abs_diff']:.4f} "
+            f"max|diff| {report['max_abs_diff']:.4f} "
+            f"(from-video {report['mean_from_video']:.4f} vs recorded {report['mean_recorded']:.4f})"
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -27,6 +27,7 @@ from __future__ import annotations
 import ast
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -37,6 +38,7 @@ import maxdiffusion.generate_wan_side_adapter as gen
 from maxdiffusion.models.wan import overfit100_sampling as sampling
 from maxdiffusion.models.wan.side_adapter_wan import (
     _build_per_token_timestep,
+    _dtype,
     apply_first_frame_pin,
     build_rollout_sigmas,
     rollout_timesteps_from_sigmas,
@@ -148,10 +150,12 @@ def test_the_extracted_step_reproduces_the_pre_extraction_step_bit_for_bit(dtype
         assert np.array_equal(np.asarray(got), np.asarray(expected)), f"index {index} drifted ({dtype})"
 
 
-def test_the_whole_rollout_reproduces_the_pre_extraction_loop_bit_for_bit():
-    # Compounding is the point: 25 chained steps amplify any drift the single-step test could miss.
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_the_whole_rollout_reproduces_the_pre_extraction_loop_bit_for_bit(dtype):
+    # Compounding is the point: 25 chained steps amplify any drift the single-step test could miss,
+    # and bfloat16 -- the production weights_dtype -- is where a reordered cast would show up first.
     sigmas, timesteps = _reference_grid()
-    z0, z_i0, context = _inputs(jnp.float32)
+    z0, z_i0, context = _inputs(dtype)
     transformer = _StubTransformer()
 
     def velocity_fn(hidden_states, timestep, encoder_hidden_states):
@@ -194,6 +198,7 @@ def test_the_whole_rollout_reproduces_the_pre_extraction_loop_bit_for_bit():
         ),
         z0,
     )
+    assert got.dtype == reference.dtype == dtype
     assert np.array_equal(np.asarray(got), np.asarray(reference))
 
 
@@ -234,6 +239,191 @@ def test_the_euler_update_is_exposed_on_its_own_and_pins_frame_zero():
 
 
 # ---------------------------------------------------------------------------------------------
+# 1b. The ADAPTER path — the scope extension's own certificate.
+# _rollout_sample was rewired too (otherwise a duplicate step survived in the same file), so its
+# CFG/adapter velocity needs the same verbatim-reference treatment, at BOTH guide-scale branches.
+# ---------------------------------------------------------------------------------------------
+
+
+class _StubAdapters:
+    """Stands in for the merged adapter module (identity marker, so merge is observable)."""
+
+    def __init__(self, tag: float):
+        self.tag = tag
+
+
+def _stub_adapter_forward(
+    transformer, adapters, *, hidden_states, timestep, encoder_hidden_states, actions, deterministic
+):
+    """A deterministic stand-in for wan_action_adapter_forward that reads every input."""
+    base = transformer(
+        hidden_states=hidden_states,
+        timestep=timestep,
+        encoder_hidden_states=encoder_hidden_states,
+        deterministic=deterministic,
+    )
+    action_term = jnp.mean(actions.astype(jnp.float32)) * adapters.tag
+    return (base.astype(jnp.float32) + 0.05 * action_term).astype(hidden_states.dtype)
+
+
+def _reference_rollout_sample(state, data, rng, scheduler, config):
+    """VERBATIM copy of generate_wan_side_adapter._rollout_sample at eb7a59c (pre-extraction).
+
+    Kept unrefactored on purpose. ``wan_action_adapter_forward``/``nnx.merge`` resolve in this test
+    module, which is how the stubs get in without touching the arithmetic.
+    """
+    weights_dtype = _dtype(config.weights_dtype)
+    is_full_ft = getattr(config, "model_type", "") == "FULL_FT_TI2V"
+    if is_full_ft:
+        transformer = _merge(state.graphdef, state.params, state.rest_of_state)
+        adapters = None
+    else:
+        adapters = _merge(state.graphdef, state.params, state.rest_of_state)
+        transformer = _merge(state.transformer_graphdef, state.transformer_params, state.transformer_rest)
+
+    z_i0 = data["z_i0"].astype(weights_dtype)
+    z_video = data["z_video"].astype(weights_dtype)
+    actions = data["actions"].astype(weights_dtype)
+    b, _, f_lat, h_lat, w_lat = z_video.shape
+
+    sigmas = build_rollout_sigmas(
+        config.side_adapter_sampling_steps,
+        config.flow_shift,
+        scheduler.config.sigma_min,
+        scheduler.config.sigma_max,
+    )
+    timesteps = rollout_timesteps_from_sigmas(sigmas, scheduler.config.num_train_timesteps)
+    null_context = jnp.broadcast_to(
+        state.null_context.astype(weights_dtype),
+        (b, state.null_context.shape[1], state.null_context.shape[2]),
+    )
+
+    z = jax.random.normal(rng, z_video.shape, dtype=z_video.dtype)
+    z = apply_first_frame_pin(z, z_i0)
+
+    def _body(i, current):
+        step_t = jnp.broadcast_to(timesteps[i], (b,))
+        timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=1)
+        if is_full_ft:
+            v = transformer(
+                hidden_states=current,
+                timestep=timestep_2d,
+                encoder_hidden_states=null_context,
+                deterministic=True,
+            )
+        else:
+            v_cond = _stub_adapter_forward(
+                transformer,
+                adapters,
+                hidden_states=current,
+                timestep=timestep_2d,
+                encoder_hidden_states=null_context,
+                actions=actions,
+                deterministic=True,
+            )
+            if abs(config.side_adapter_guide_scale - 1.0) > 1e-6:
+                v_uncond = transformer(
+                    hidden_states=current,
+                    timestep=timestep_2d,
+                    encoder_hidden_states=null_context,
+                    deterministic=True,
+                )
+                v = v_uncond + config.side_adapter_guide_scale * (v_cond - v_uncond)
+            else:
+                v = v_cond
+        return apply_first_frame_pin(current + (sigmas[i + 1] - sigmas[i]).astype(current.dtype) * v, z_i0)
+
+    z_pred = jax.lax.fori_loop(0, int(config.side_adapter_sampling_steps), _body, z)
+    diff = z_pred.astype(jnp.float32) - z_video.astype(jnp.float32)
+    metrics = {
+        "latent_mse": jnp.mean(diff**2),
+        "latent_mae": jnp.mean(jnp.abs(diff)),
+        "z_pred_std": jnp.std(z_pred.astype(jnp.float32)),
+        "z_target_std": jnp.std(z_video.astype(jnp.float32)),
+        "z_init_anchor_mse": jnp.mean((z_pred[:, :, :1].astype(jnp.float32) - z_i0.astype(jnp.float32)) ** 2),
+    }
+    return z_pred, metrics
+
+
+def _merge(graphdef, params, rest):
+    """The stub ``nnx.merge``: the graphdef IS the module in these tests."""
+    del params, rest
+    return graphdef
+
+
+def _adapter_state_and_data(dtype, *, full_ft: bool = False):
+    transformer = _StubTransformer()
+    adapters = _StubAdapters(tag=0.7)
+    # In the FULL_FT branch the transformer IS the trainable module, so it is what ``graphdef``
+    # merges to -- exactly as the real state is built.
+    state = SimpleNamespace(
+        graphdef=transformer if full_ft else adapters,
+        params=None,
+        rest_of_state=None,
+        transformer_graphdef=transformer,
+        transformer_params=None,
+        transformer_rest=None,
+        null_context=jnp.asarray(np.random.default_rng(5).normal(size=(1, 7, 8)), dtype=jnp.float32),
+    )
+    rng_np = np.random.default_rng(6)
+    data = {
+        "z_i0": jnp.asarray(rng_np.normal(size=(_B, _C, 1, _H, _W)), dtype=dtype),
+        "z_video": jnp.asarray(rng_np.normal(size=(_B, _C, _F, _H, _W)), dtype=dtype),
+        "actions": jnp.asarray(rng_np.normal(size=(_B, 32, 7)), dtype=dtype),
+    }
+    return state, data
+
+
+@pytest.mark.parametrize("guide_scale", [1.0, 5.0])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_the_adapter_rollout_reproduces_its_pre_extraction_self_bit_for_bit(monkeypatch, guide_scale, dtype):
+    # Both CFG branches: guide 1.0 takes the no-CFG shortcut, guide 5.0 takes the two-forward
+    # combination. The REAL gen._rollout_sample is compared against the verbatim copy above.
+    monkeypatch.setattr(gen, "wan_action_adapter_forward", _stub_adapter_forward)
+    monkeypatch.setattr(gen.nnx, "merge", _merge)
+    state, data = _adapter_state_and_data(dtype)
+    config = SimpleNamespace(
+        weights_dtype={jnp.float32: "float32", jnp.bfloat16: "bfloat16"}[dtype],
+        model_type="SIDE_ADAPTER_TI2V",
+        side_adapter_sampling_steps=_STEPS,
+        flow_shift=_SHIFT,
+        side_adapter_guide_scale=guide_scale,
+    )
+    scheduler = SimpleNamespace(
+        config=SimpleNamespace(sigma_min=_SIGMA_MIN, sigma_max=_SIGMA_MAX, num_train_timesteps=_NUM_TRAIN_TIMESTEPS)
+    )
+    rng = jax.random.key(3)
+    got, got_metrics = gen._rollout_sample(state, data, rng, scheduler, config)
+    want, want_metrics = _reference_rollout_sample(state, data, rng, scheduler, config)
+    assert got.dtype == want.dtype
+    assert np.array_equal(np.asarray(got), np.asarray(want))
+    assert set(got_metrics) == set(want_metrics)
+    for key in want_metrics:
+        assert np.array_equal(np.asarray(got_metrics[key]), np.asarray(want_metrics[key])), key
+
+
+def test_the_full_ft_branch_of_the_adapter_rollout_also_reproduces_itself(monkeypatch):
+    # The FULL_FT_TI2V branch of the same function (exp_01's path), same treatment.
+    monkeypatch.setattr(gen, "wan_action_adapter_forward", _stub_adapter_forward)
+    monkeypatch.setattr(gen.nnx, "merge", _merge)
+    state, data = _adapter_state_and_data(jnp.float32, full_ft=True)
+    config = SimpleNamespace(
+        weights_dtype="float32",
+        model_type="FULL_FT_TI2V",
+        side_adapter_sampling_steps=_STEPS,
+        flow_shift=_SHIFT,
+        side_adapter_guide_scale=1.0,
+    )
+    scheduler = SimpleNamespace(
+        config=SimpleNamespace(sigma_min=_SIGMA_MIN, sigma_max=_SIGMA_MAX, num_train_timesteps=_NUM_TRAIN_TIMESTEPS)
+    )
+    rng = jax.random.key(4)
+    got, _ = gen._rollout_sample(state, data, rng, scheduler, config)
+    want, _ = _reference_rollout_sample(state, data, rng, scheduler, config)
+    assert np.array_equal(np.asarray(got), np.asarray(want))
+
+
+# ---------------------------------------------------------------------------------------------
 # 2. One sampler, one definition.
 # ---------------------------------------------------------------------------------------------
 
@@ -267,6 +457,68 @@ def test_each_eval_rollout_calls_the_extracted_step(rollout):
     assert "_build_per_token_timestep" not in called
     body = ast.unparse(_function_node(_GEN_SOURCE, rollout))
     assert "sigmas[i + 1] - sigmas[i]" not in body
+
+
+@pytest.mark.parametrize("rollout", ["_rollout_overfit100_sample", "_rollout_sample"])
+def test_each_rollout_body_is_nothing_but_one_shared_step_call(rollout):
+    """The BINDING form of the guard: structure, not source strings.
+
+    Source-string checks confirm today's file is clean but are evadable -- a body could call the
+    shared step and then add its own update using renamed indices or ``jnp.subtract``, and every
+    forbidden substring would still be absent. So this asserts the shape instead: the loop body is
+    exactly ``return overfit100_sampler_step(...)``, its sigma/timestep arguments are the names
+    bound by the ONE grid call, and the loop runs that body. There is nowhere left to put a second
+    update.
+    """
+    node = _function_node(_GEN_SOURCE, rollout)
+
+    bodies = [child for child in ast.walk(node) if isinstance(child, ast.FunctionDef) and child.name == "_body"]
+    assert len(bodies) == 1, f"{rollout} defines {len(bodies)} loop bodies"
+    statements = bodies[0].body
+    assert len(statements) == 1, f"the loop body has {len(statements)} statements; it must be one return"
+    assert isinstance(statements[0], ast.Return)
+    call = statements[0].value
+    assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+    assert call.func.id == "overfit100_sampler_step"
+    assert not call.args or len(call.args) == 2  # (current, i) positionally, nothing else
+    keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+    assert set(keywords) == {"velocity_fn", "sigmas", "timesteps", "context", "z_i0"}
+
+    grid_assignments = [
+        child
+        for child in ast.walk(node)
+        if isinstance(child, ast.Assign)
+        and isinstance(child.value, ast.Call)
+        and isinstance(child.value.func, ast.Name)
+        and child.value.func.id == "overfit100_sampler_grid"
+    ]
+    assert len(grid_assignments) == 1, "the grid must come from exactly one shared-grid call"
+    target = grid_assignments[0].targets[0]
+    assert isinstance(target, ast.Tuple)
+    assert [element.id for element in target.elts] == ["sigmas", "timesteps"]
+    # ...and THOSE names are what the step consumes.
+    assert isinstance(keywords["sigmas"], ast.Name) and keywords["sigmas"].id == "sigmas"
+    assert isinstance(keywords["timesteps"], ast.Name) and keywords["timesteps"].id == "timesteps"
+    # No other assignment may rebind them (a second, private grid).
+    rebinds = {
+        id(child)
+        for child in ast.walk(node)
+        if isinstance(child, ast.Assign)
+        and any(
+            isinstance(element, ast.Name) and element.id in {"sigmas", "timesteps"}
+            for target in child.targets
+            for element in ast.walk(target)
+        )
+    }
+    assert len(rebinds) == 1, "sigmas/timesteps are bound more than once -- a second, private grid"
+
+    loops = [
+        child
+        for child in ast.walk(node)
+        if isinstance(child, ast.Call) and getattr(child.func, "attr", "") == "fori_loop"
+    ]
+    assert len(loops) == 1
+    assert isinstance(loops[0].args[2], ast.Name) and loops[0].args[2].id == "_body"
 
 
 def test_no_duplicate_step_implementation_survives_in_the_eval_module():

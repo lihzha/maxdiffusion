@@ -57,3 +57,23 @@
   test byte-matched `num_inference_steps`, which is now the extracted grid builder's PARAMETER name. Both
   now assert the same claim at the new seam — the pipeline knob is still never read.
 - **Next** — focused Codex review of this round; then cycle A round 2 (exp03 trainer + binding hook).
+
+## 2026-08-02T23:05:00Z — Cycle A round 1 STRENGTHENING (Codex REQUEST-REVISION on 8ccaf3a)
+
+- **Verdict** — 2 HIGH + 3 MEDIUM, all hardening; the motion itself VERIFIED inert at both call sites
+  and the `_rollout_sample` scope extension ruled sound. Record + strengthening response in
+  `rollout_objective_codex_code_extraction_review.md`.
+- **Closed** — (1) D1 is fail-closed everywhere: equal 33-frame videos, exact 1-32 fit, no skipped
+  windows, identical 100-window cohorts with unique matching episode ids, both aggregations required;
+  (2) the trace's design is approval-pinned (seed 0 / 30 windows / 25 steps) *before* the ~5B load,
+  with cohort and grid lengths verified after; (3) the bf16 finite-precision floor is measured by an
+  exact-velocity re-run and travels in the same JSON entry as the error it bounds — reported metric
+  predeclared as RAW, reference dtype float32 and documented; (4) chain parity now fp32 AND bf16, plus
+  a verbatim whole-function pre-extraction reference for the adapter path at guide scales 1 and 5 and
+  for the FULL_FT branch; (5) the AST guard binds structure — one `_body`, one returned shared-step
+  call, one grid binding, one `fori_loop` — so the reviewer's named evasions fail it.
+- **Result** — suite 1296 passed / 2 skipped (+25). Ten mutants killed incl. all three evasive AST
+  ones; one mutant proven **equivalent** (fp32-then-round == bf16 subtract, verified bit-identical over
+  4,096 random pairs) and reported rather than chased.
+- **Next** — re-review of this SHA; round 2 (exp03 trainer + binding hook) does not stack until it
+  passes.
