@@ -102,3 +102,36 @@ conditional found).
 * ``black --line-length 119``, ``ruff check`` clean; staged-tree ``git diff --check`` clean.
 
 No push, no launch.
+
+## Residual micro-round — coder response (drift parser covers export/multiline defaults)
+
+Re-review closed the BLOCKER and the JIT-parity MAJOR and approved the conditional ``global_step``
+pass-through; one residual remained on finding 3.
+
+**The hole.** ``_launcher_defaults`` matched only bare ``NAME="${NAME:-...}"`` lines, so two whole
+classes of shared default were invisible: ``export``-prefixed environment defaults
+(``export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu,cpu}"``, ``export PYTHONUNBUFFERED=1``) and the
+~25-line backslash-continued ``LIBTPU_INIT_ARGS``. Either could drift between the two launchers with
+the parsed maps still identical — and an XLA flag that differs between the control's launcher and an
+arm's is exactly the kind of thing that would show up later as an unexplained AND-gate failure.
+
+**The fix.** ``_logical_lines`` joins backslash-continued lines first, so a multiline value is ONE
+entry; ``_ASSIGNMENT`` now accepts an optional ``export`` prefix and is compiled with ``re.DOTALL``
+so the joined value (newlines and all) is captured whole. Values are kept **verbatim**, including the
+``${NAME:-...}`` wrapper, so a changed default, a changed fallback and a changed XLA flag are all
+plain value mismatches. The bidirectional comparison and the tight allowlist are unchanged.
+Non-vacuity is asserted on the parser itself: ``JAX_PLATFORMS`` and ``PYTHONUNBUFFERED`` present
+(export shapes), ``LIBTPU_INIT_ARGS`` present with more than ten ``--xla`` occurrences and an
+embedded newline (proving the continuation join, not a truncated first line).
+
+**Mutations — the reviewer's two examples, plus one control:**
+
+1. **named** — ``JAX_PLATFORMS`` default drifted (``tpu,cpu`` -> ``cpu``) -> **FAIL** (was passing
+   before this round);
+2. **named** — one XLA flag inside ``LIBTPU_INIT_ARGS`` drifted
+   (``--xla_tpu_scoped_vmem_limit_kib`` 65536 -> 32768) -> **FAIL** (was passing before this round);
+3. *control* — an exported literal drifted (``export PYTHONUNBUFFERED`` 1 -> 0) -> **FAIL**.
+
+Full worklogs suite **1340 passed / 2 skipped** (unchanged: this round widened an existing test
+rather than adding cases). ``black``/``ruff`` clean, ``bash -n`` clean, staged-tree
+``git diff --check`` clean. No push, no launch.
