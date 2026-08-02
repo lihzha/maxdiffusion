@@ -1,0 +1,443 @@
+# Wan2.2 TI2V 5B — exp_03 `rollout_objective` (trains on the trajectory the eval runs).
+#
+# Purpose: does training on (or toward) the 25-step sampler trajectory the evaluation actually
+# runs lift rollout reconstruction above exp_02's measured plateau, at a matched UPDATE budget?
+# Design, arms, gates and the two tiers:
+# docs/worklogs_yixun/exp_03_rollout_objective_claude/plan_rollout_objective.md (v3.1). This file
+# is exp_02's overfit100 config with the exp03_* keys appended and nothing else changed, so an arm
+# differs from the control in the objective alone. Dispatched by
+# model_type: EXP03_TI2V (train_wan.py -> Exp03Trainer).
+# This is a full standalone copy of base_wan_5b_full_ft.yml (pyconfig loads exactly one
+# file, no includes) with only the deltas noted below. Everything not marked `delta` is
+# byte-identical to the exp_01 full-FT config and is pinned to it by a test.
+#
+# THE experimental delta vs exp_01: the single reused NULL text embedding becomes a
+# per-episode context table [num_text_slots, wan_max_sequence_length, text_dim] built
+# once at startup from the dataset's episodes.json sidecar; the loss gathers row
+# `episode_index` per example (plan D7/D8). Everything else -- fully-trainable 5B
+# transformer, one-step flow-matching objective, frame-0 pin, fresh noise, CFG bypass at
+# guide_scale 1.0, FSDP -- is unchanged. Actions do not exist in schema v2 at all.
+#
+# DATA (plan D6, built by data_preprocessing/build_overfit100_dataset.py): schema-v2
+# TFRecords {name, episode_id, episode_index, window_start, z_i0 f16 [48,1,12,20],
+# z_video f16 [48,9,12,20], instruction} plus episodes.json / summary.json / _SUCCESS
+# sidecars. The trainer REQUIRES _SUCCESS (written last, after promotion) and asserts
+# expected_windows against the built record count before reading anything.
+#
+# ---------------------------------------------------------------------------------------
+# S2 (10-episode gate, v6e-8, plan D10) runs THIS file with these CLI overrides:
+#   train_data_dir=gs://v6_east1d/datasets/exp02_overfit100/train10 \
+#   eval_data_dir=gs://v6_east1d/datasets/exp02_overfit100/train10 \
+#   expected_windows=167 num_text_slots=10 \
+#   checkpoint_steps=[250,500,1000,2500] \
+#   per_device_batch_size=4.0            # v6e-8 -> GBS 32
+# S3 (100-episode run, v6e-64, GBS 256) runs it with NO overrides beyond run_name; later
+# segments only raise max_train_steps and extend checkpoint_steps (all retained).
+# ---------------------------------------------------------------------------------------
+#
+# CHECKPOINT SCHEDULE (plan D7 / Codex plan-review v3 H2): saves happen when
+# (step + 1) is in checkpoint_steps -- an explicit NON-uniform list that no single
+# `checkpoint_every` cadence can express -- and the trainer builds its OWN Orbax
+# CheckpointManager with max_to_keep=None so every listed checkpoint (segment finals
+# included) survives, across resumes. checkpoint_every stays 0 here (the list governs);
+# checkpoint_keep_period is inert under max_to_keep=None. Storage, predeclared: ~30 GB
+# per checkpoint (bf16 params + both Adam moments) => S2 ~120 GB, S3 segment 1 ~150 GB.
+#
+# CONTEXT TABLE MEMORY (plan D8/F5): 100 slots x 512 tokens x 4096 dims x 2 B (bf16) =
+# 400 MiB, replicated, logged in the startup memory audit. It is NOT part of params or
+# opt_state, so it never enters a checkpoint -- it is rebuilt deterministically from
+# episodes.json on every start (including resumes).
+
+run_name: ''
+
+metrics_file: ""
+write_metrics: True
+timing_metrics_file: ""
+write_timing_metrics: True
+gcs_metrics: False
+save_config_to_gcs: False
+log_period: 10
+wandb_project: 'maxdiffusion-wan-overfit100'   # delta: exp_02's own W&B project
+wandb_entity: ''
+
+# delta (cycle-C review C1): the launcher OVERRIDES this with the RESOLVED LOCAL SNAPSHOT
+# directory for the manifest's pinned revision (.../snapshots/<sha>/). The bare repo id below
+# is only a placeholder -- the trainer REFUSES to start unless the path it is handed carries
+# the pinned revision, because a bare repo id resolves to the MUTABLE hub default and a future
+# repo update would silently change the transformer or the T5 that builds the context table
+# while the run still claimed the reviewed recipe.
+pretrained_model_name_or_path: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers'
+model_name: wan2.2
+model_type: 'EXP03_TI2V'   # delta: dispatch to Exp03Trainer (exp_03 rollout_objective)
+wan_transformer_pretrained_model_name_or_path: ''
+unet_checkpoint: ''
+revision: ''
+from_pt: True
+
+# delta (C1): the model-provenance pin. model_manifest_path is the AUTHORITY -- the trainer
+# reads vae_fingerprint.revision from it and refuses to start when expected_model_revision
+# (filled in by the launcher from the same manifest) disagrees, so a launcher cannot claim a
+# pin the committed manifest does not carry. The dataset's latents were encoded with exactly
+# this snapshot (manifest pin: b8fff7315c768468a5333511427288870b2e9635).
+model_manifest_path: 'docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json'
+expected_model_revision: ''
+
+weights_dtype: 'bfloat16'
+activations_dtype: 'bfloat16'
+precision: "DEFAULT"
+scan_layers: False
+jit_initializers: True
+split_head_dim: True
+
+replicate_vae: False
+attention: 'flash'
+use_memory_efficient_attention: False
+flash_min_seq_length: 4096
+flash_block_sizes: {}
+norm_num_groups: 32
+dropout: 0.0
+mask_padding_tokens: True
+attention_sharding_uniform: True
+
+train_text_encoder: False
+text_encoder_learning_rate: 0.0
+snr_gamma: -1.0
+
+timestep_bias: {
+  strategy: "none",
+  multiplier: 1.0,
+  begin: 0,
+  end: 1000,
+  portion: 0.25
+}
+
+base_output_directory: ""
+hardware: 'tpu'
+skip_jax_distributed_system: False
+
+mesh_axes: ['data', 'fsdp', 'context', 'tensor']
+logical_axis_rules: [
+                      ['batch', ['data', 'fsdp']],
+                      ['activation_batch', ['data', 'fsdp']],
+                      ['activation_self_attn_heads', ['context', 'tensor']],
+                      ['activation_cross_attn_q_length', ['context', 'tensor']],
+                      ['activation_length', 'context'],
+                      ['activation_heads', 'tensor'],
+                      ['mlp', 'tensor'],
+                      ['embed', ['context', 'fsdp']],
+                      ['heads', 'tensor'],
+                      ['norm', 'tensor'],
+                      ['conv_batch', ['data', 'context', 'fsdp']],
+                      ['out_channels', 'tensor'],
+                      ['conv_out', 'context'],
+                    ]
+vae_logical_axis_rules: [
+                          ['activation_batch', 'redundant'],
+                          ['activation_length', 'vae_spatial'],
+                          ['activation_heads', null],
+                          ['activation_kv_length', null],
+                          ['embed', null],
+                          ['heads', null],
+                          ['norm', null],
+                          ['conv_batch', 'redundant'],
+                          ['out_channels', 'vae_spatial'],
+                          ['conv_out', 'vae_spatial'],
+                          ['conv_in', 'vae_spatial'],
+                        ]
+data_sharding: [['data', 'fsdp', 'context', 'tensor']]
+
+dcn_data_parallelism: 1
+dcn_fsdp_parallelism: -1
+dcn_context_parallelism: 1
+dcn_tensor_parallelism: 1
+ici_data_parallelism: 1
+ici_fsdp_parallelism: -1
+ici_context_parallelism: 1
+ici_tensor_parallelism: 1
+allow_split_physical_axes: False
+
+# Dataset (delta: exp_02 schema v2 -- NO `actions` field):
+# z_i0          float16 [48, 1, 12, 20]
+# z_video       float16 [48, 9, 12, 20]
+# episode_index int64   scalar  -> the context-table row for this window
+# (name / episode_id / window_start / instruction are on the record too; the trainer
+#  reads only the three fields above and takes the text from episodes.json.)
+dataset_name: ''
+train_split: 'train'
+dataset_type: 'tfrecord'
+cache_latents_text_encoder_outputs: True
+dataset_save_location: ''
+load_tfrecord_cached: False
+train_data_dir: 'gs://v6_east1d/datasets/exp02_overfit100/train100'   # delta (D6); S2: .../train10
+eval_data_dir: 'gs://v6_east1d/datasets/exp02_overfit100/train100'   # delta: in-training eval on the TRAIN set (memorization)
+dataset_config_name: ''
+jax_cache_dir: ''
+hf_data_dir: ''
+hf_train_files: ''
+hf_access_token: ''
+image_column: 'image'
+caption_column: 'text'
+enable_data_shuffling: True
+tfrecord_shuffle_buffer_size: -1
+reuse_example_batch: False
+
+# delta (D6/G3): the exact built window count the reader must see. The trainer compares it
+# to the count cycle B recorded in _SUCCESS ('records'; summary.json 'sets.<set>.written'
+# as fallback) and REFUSES to train on a mismatch -- this is what stops an accidental
+# train10-config-on-train100-data run. train100 -> 1629, train10 -> 167.
+expected_windows: 1629
+# delta (D8): one context-table row per built episode (train100 -> 100, train10 -> 10).
+num_text_slots: 100
+# delta (D8/F5): the bounded T5 encode loop's chunk size. Positive prompts only; no
+# negative prompt is ever encoded.
+text_encode_batch: 8
+# NOTE (cycle-C review C2, hardened by follow-up F2): the startup preflight streams every shard
+# once and verifies its sha256 + md5 against the fingerprints cycle B published in summary.json
+# (itself bound to _SUCCESS.summary_sha256) -- the only check that catches a byte mutation
+# preserving both the record count and the byte length. There is deliberately NO config knob for
+# this: an opt-out admitted exactly that mutation, and ~375 MB (train100) / ~38 MB (train10) read
+# once before the 5B load is negligible against the S1/S2/S3 budget.
+
+# Wan2.2 TI2V 5B architecture. The loader reads the detailed transformer config
+# from the pretrained diffusers checkpoint; these values keep config-derived
+# helper shapes aligned with Wan2.2 2.2 latents.
+in_channels: 48
+out_channels: 48
+text_dim: 4096
+freq_dim: 256
+ffn_dim: 13824
+num_layers: 40
+num_attention_heads: 40
+attention_head_dim: 128
+
+# Cached DROID latent window geometry: 33 raw frames -> 9 latent frames.
+latent_channels: 48
+latent_frames: 9
+latent_height: 12
+latent_width: 20
+height: 192
+width: 320
+num_frames: 32
+wan_max_sequence_length: 512
+
+# Side adapter: INERT here (no adapter is built). Only side_adapter_guide_scale /
+# side_adapter_noise_mode / side_adapter_sampling_steps / side_adapter_t_sampling /
+# flow_* are consumed (objective + rollout), exactly as in exp_01.
+action_adapter_type: 'side_adapter'
+action_dim: 7
+action_len: 32
+action_repr: 'delta'
+action_tokens: 8
+action_hidden: 512
+action_heads: 4
+side_adapter_layers: '0-29'
+side_adapter_hidden: 512
+side_adapter_heads: 8
+pre_context_tokens: 8
+pre_context_heads: 8
+side_adapter_sampling_steps: 25
+side_adapter_noise_mode: 'fresh'   # asserted by the trainer ('fixed' silently breaks generation)
+side_adapter_t_sampling: 'uniform'
+side_adapter_logit_normal_mu: 0.0
+side_adapter_logit_normal_sigma: 1.0
+side_adapter_guide_scale: 1.0   # CFG bypass -- asserted by the trainer
+flow_shift: 5.0
+flow_sigma_min: 0.0
+flow_sigma_max: 1.0
+
+# Training loop.
+learning_rate: 1.e-5   # delta (D9): locked. Keep the '.' so yaml parses a float (1e-5 parses as str)
+scale_lr: False
+max_train_samples: -1
+max_train_steps: 2500   # delta (D10): S3 first segment (and the S2 gate length)
+num_train_epochs: 1
+seed: 0
+output_dir: 'gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100'   # delta: exp_02 checkpoint root
+# Batch recipe: per_device_batch_size is the ONLY authoritative knob -- pyconfig's
+# user_init RECOMPUTES both global_batch_size_to_* keys as int(num_devices *
+# per_device_batch_size) at initialize time. 4.0 -> GBS 256 on the v6e-64 S3 target
+# (and GBS 32 on the v6e-8 S1/S2 target). The 256s below document the resolved v6e-64
+# values; they are inert inputs kept coherent so the standalone yml never contradicts
+# itself.
+per_device_batch_size: 4.0
+global_batch_size: 0
+global_batch_size_to_train_on: 256
+global_batch_size_to_load: 256
+
+# delta (D9): ABSOLUTE warmup of 250 steps, honored by the trainer's _build_optimizer.
+# The shared factory derives warmup from learning_rate_schedule_steps *
+# warmup_steps_fraction, which would rescale the warmup whenever a resumable S3 segment
+# raises max_train_steps; warmup_steps pins it. The fraction pair below is kept
+# self-consistent (2500 * 0.1 == 250) so the inherited fallback path agrees.
+warmup_steps: 250
+warmup_steps_fraction: 0.1
+learning_rate_schedule_steps: 2500
+save_optimizer: True
+
+adam_b1: 0.9
+adam_b2: 0.999
+adam_eps: 1.e-8
+adam_weight_decay: 1.e-2
+opt_enable_grad_clipping: False
+max_grad_value: 1.0
+opt_enable_grad_global_norm_clipping: True
+max_grad_norm: 1.0
+disable_training_weights: True
+
+remat_policy: "FULL"
+names_which_can_be_saved: []
+names_which_can_be_offloaded: []
+
+# delta (D7/H2): the EXPLICIT save schedule. Non-uniform, so no `checkpoint_every`
+# cadence can produce it; the trainer's own CheckpointManager (max_to_keep=None) retains
+# every entry, so the S2/S3 gate baselines (step 250) survive to the end of the segment.
+# S2 override: checkpoint_steps=[250,500,1000,2500]
+checkpoint_steps: [250, 500, 1000, 1750, 2500]
+checkpoint_every: 0   # delta: 0 -> the list alone governs (kept for compatibility)
+checkpoint_dir: ""
+checkpoint_step: -1
+checkpoint_keep_period: -1   # delta: inert under max_to_keep=None
+enable_single_replica_ckpt_restoring: False
+save_final_checkpoint: True
+
+eval_every: 0   # delta: no in-training one-step eval; D11 evaluation is separate rollout tooling
+eval_max_batches: 4
+
+enable_profiler: False
+skip_first_n_steps_for_profiler: 5
+profiler_steps: 10
+enable_jax_named_scopes: False
+
+# Inference/config compatibility fields.
+num_eval_videos: 1
+validation_output_dir: ''
+validation_start_index: 0
+validation_ordinals: ''
+# Keys for the cycle-D evaluators (rollout + one-step val loss). All CLI-overridable.
+validation_checkpoint_steps: ''
+validation_expected_count: 0
+validation_loss_output_dir: ''
+validation_seed: 0
+
+# delta (cycle D, plan D11): the exp_02 ROLLOUT-eval knobs, consumed by
+# generate_wan_side_adapter.py's OVERFIT100_TI2V branch (validate_wan_overfit100.sh passes them
+# from env vars). validation_ordinals / validation_start_index / num_eval_videos above are the
+# exp_01 selectors and are IGNORED in this mode -- eval_windows selects instead.
+#
+# eval_pass_role: MANDATORY (cycle-D review D2). Which D11 coverage cell this pass is:
+#   s2_gate            -- the 10-episode gate cohort, 3 seeds, correct (+ ablations at 2500);
+#   s3_intermediate    -- 1 seed, correct mode, the full canonical cohort;
+#   s3_segment_final   -- 3 seeds x {correct,null,shuffled} over the full canonical cohort. ONLY
+#                         this role's artifacts may enter C3_100 (the success statistic);
+#   s3_full_set        -- seed 0, correct mode, EVERY built window (the stronger claim's input).
+#   The pass is REFUSED before the model load if its seeds/modes/windows/sampling steps do not
+#   satisfy the declared role, the artifact records the role, and the role is part of the output
+#   path (so the canonical and full-set passes cannot overwrite each other).
+# eval_windows: the --eval-windows spec. 'canonical' = the median window of every episode in the
+#   set (start = 4*floor((n_windows-1)/2), n_windows from the COMMITTED manifest, which is also
+#   what fixes the success statistic's denominator); 'all' = every built window of the set (the
+#   s3_full_set scope); otherwise a comma-separated list of schema-v2 window names
+#   (ep<ID>_v0_s<START>), rolled out in the listed order.
+# rollout_seeds: the fixed seeds per window. D11: 3 seeds at segment-final checkpoints, 1 at
+#   intermediate ones. Each rollout's noise is keyed on (seed, episode_id, window_start), so the
+#   list ORDER never changes a number.
+# context_modes: 'correct' (the episode's own instruction) and/or the ablations 'null' (the
+#   exp_01 empty-prompt embedding) / 'shuffled' (a seeded derangement of instruction VALUES --
+#   never a string equal to the episode's own, plan §1). Ablations are reported context and never
+#   enter the success statistic. S2/S3 segment finals run 'correct,null,shuffled'.
+# write_videos: gate the GT/pred/comparison mp4s so intermediate checkpoints stay storage-light
+#   (metrics + the aggregation artifact are ALWAYS written).
+# eval_aux_rgb: also score against the true DROID RGB frames (pinned MP4 pull) paired with the
+#   per-window VAE ceiling. Best-effort: an unavailable source marks the aux block null and never
+#   fails the run.
+# flagged_windows: collision-flagged window names from the build's duplicate audit. RECORDED in
+#   the aggregation artifact only -- the plan fixes the denominator at build time, so a flagged
+#   window always stays in the statistic (G4).
+eval_pass_role: ''   # MANDATORY: one of s2_gate / s3_intermediate / s3_segment_final / s3_full_set
+# overfit100_eval_resume: per-(window, mode, seed) STAGING + resume, default ON. Each completed
+#   rollout is written to <step_root>/staging_rows/<mode>/seed_<n>/<window>.json with an envelope
+#   binding it to (checkpoint_step, pass_role, manifest_sha256, code commit); a restarted pass
+#   admits only rows whose envelope matches EXACTLY and hard-fails on any mismatch or corruption.
+#   Needed because the step-2500 passes (900 and 1,629 rollouts) outlive typical spot uptime.
+#   Override at launch with the env var OVERFIT100_EVAL_RESUME=0 (or =1), which takes precedence
+#   over this key. Resume is single-process only: multi-host jobs disable staging entirely so the
+#   decode's collectives cannot desynchronize between hosts.
+overfit100_eval_resume: True
+
+# delta (H1 sampling probe): knobs for the STANDALONE diagnostic
+# src/maxdiffusion/probe_overfit100_sampling_steps.py, which asks whether a longer sampler closes
+# the gap at checkpoint 2500. The probe is verdict-isolated -- it writes a plain diagnostic JSON to
+# validation_probe_sampling/ and cannot produce an admissible artifact -- so these keys never affect
+# an eval pass. NOTE the rollout's step count is side_adapter_sampling_steps (25, fixed by the D9
+# recipe and by the role contract); the probe overrides it PER ARM through a read-only config view,
+# never globally.
+probe_sampling_steps_list: [25, 50, 100]
+probe_num_windows: 30
+eval_windows: 'canonical'
+rollout_seeds: '0,1,2'
+context_modes: 'correct'
+context_shuffle_seed: 0
+write_videos: False
+eval_aux_rgb: True
+flagged_windows: ''
+min_guidance_scale: 1.0
+max_guidance_scale: 2.5
+guidance_scale: 5.0
+guidance_rescale: 0.0
+num_inference_steps: 25
+fps: 16
+fps_id: 6
+motion_bucket_id: 127
+cond_aug: 0.02
+decode_chunk_size: 8
+vae_scale_factor: 0.18215
+vae_scaling_factor: 0.18215
+image_url: ''
+prompt: ''
+prompt_2: ''
+negative_prompt: ''
+do_classifier_free_guidance: True
+image_encoder_pretrained_model_name_or_path: ''
+lightning_from_pt: False
+lightning_repo: ""
+lightning_ckpt: ""
+enable_lora: False
+lora_config: {
+  rank: [],
+  lora_model_name_or_path: [],
+  weight_name: [],
+  adapter_name: [],
+  scale: [],
+  from_pt: []
+}
+
+enable_mllog: False
+quantization: ''
+quantization_local_shard_count: -1
+compile_topology_num_slices: -1
+use_qwix_quantization: False
+weight_quantization_calibration_method: "absmax"
+act_quantization_calibration_method: "absmax"
+bwd_quantization_calibration_method: "absmax"
+qwix_module_path: ".*"
+
+enable_generate_video_for_eval: False
+enable_ssim: False
+enable_ml_diagnostics: False
+profiler_gcs_path: ""
+enable_ondemand_xprof: False
+
+# ---------------------------------------------------------------------------------------------
+# exp_03 `rollout_objective` (plan v3.1 §1). The objective is the ONLY experiment variable; every
+# other key above is exp_02's, unchanged, so an arm differs from the control in one place.
+#   control      -- the plain one-step objective, i.e. exp_02's (used by ctrl0 and the Tier-1 base)
+#   corrective_ss-- trial A, corrective scheduled sampling
+#   rollout_loss -- trial B, short-horizon rollout loss
+#   combined     -- trial C, the literal lambda*L_A + (1-lambda)*L_B
+# Non-control objectives raise NotImplementedError until round 3 lands them.
+exp03_objective: 'control'
+exp03_k_a: 2                # trial A: max scheduled-sampling advance, k_A ~ U{1..k_a}
+exp03_k_b: 2                # trial B: differentiated rollout steps (fixed by the plan)
+exp03_lambda: 0.5           # trial C: weight on L_A in lambda*L_A + (1-lambda)*L_B
+exp03_p_ss_max: 0.5         # trial A: scheduled-sampling probability after the ramp
+exp03_p_ss_ramp_steps: 500  # trial A: linear 0 -> p_ss_max over this many SEGMENT steps

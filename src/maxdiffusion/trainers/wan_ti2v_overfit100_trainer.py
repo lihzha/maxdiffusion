@@ -185,36 +185,64 @@ def _denoising_loss(
     return loss, aux
 
 
+def _make_train_step(denoising_loss):
+    """Build the train step around a denoising loss — THE seam exp_03 overrides.
+
+    The arithmetic below is unchanged from the version that bound ``_denoising_loss`` directly;
+    only the binding moved, so a subclass can supply another objective without replacing
+    ``start_training`` (exp_03 plan §3, review P4). ``_train_step`` is this factory applied to the
+    plain loss, and a parity test pins the refactored step byte-identical to the pre-refactor one.
+
+    The RNG stream is part of what stays identical: exactly one ``split`` per step, in this order,
+    whatever the loss. exp_02's runs are settled history and ctrl0 must replicate them, so any new
+    objective's extra draws have to come from auxiliary keys (see
+    ``trainers/wan_ti2v_exp03_trainer.exp03_aux_key``) rather than from this stream.
+    """
+
+    def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
+        rng, loss_rng = jax.random.split(rng)
+
+        def loss_fn(params):
+            return denoising_loss(params, state, data, loss_rng, config, scheduler)
+
+        grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+        (loss, aux), grads = grad_fn(state.params)
+        grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
+        max_abs_grad = jax.tree_util.tree_reduce(
+            lambda m, arr: jnp.maximum(m, jnp.max(jnp.abs(arr))), grads, initializer=-1.0
+        )
+        state = state.apply_gradients(grads=grads)
+        metrics = {
+            "scalar": {
+                "learning/loss": loss,
+                "learning/velocity_mse": aux["velocity_mse"],
+                "learning/grad_norm": grad_norm,
+                "learning/max_abs_grad": max_abs_grad,
+                "learning/sigma_mean": aux["sigma_mean"],
+                "learning/timestep_mean": aux["timestep_mean"],
+                "learning/v_pred_l2": aux["v_pred_l2"],
+                "learning/v_target_l2": aux["v_target_l2"],
+                "learning/z_noisy_std": aux["z_noisy_std"],
+                "learning/z_target_std": aux["z_target_std"],
+                "learning/z_init_anchor_mse": aux["z_init_anchor_mse"],
+            },
+            "scalars": {},
+        }
+        return state, metrics, rng
+
+    return _train_step
+
+
 def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
-    rng, loss_rng = jax.random.split(rng)
+    """The plain one-step objective's train step -- exp_02's, unchanged.
 
-    def loss_fn(params):
-        return _denoising_loss(params, state, data, loss_rng, config, scheduler)
-
-    grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-    (loss, aux), grads = grad_fn(state.params)
-    grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
-    max_abs_grad = jax.tree_util.tree_reduce(
-        lambda m, arr: jnp.maximum(m, jnp.max(jnp.abs(arr))), grads, initializer=-1.0
-    )
-    state = state.apply_gradients(grads=grads)
-    metrics = {
-        "scalar": {
-            "learning/loss": loss,
-            "learning/velocity_mse": aux["velocity_mse"],
-            "learning/grad_norm": grad_norm,
-            "learning/max_abs_grad": max_abs_grad,
-            "learning/sigma_mean": aux["sigma_mean"],
-            "learning/timestep_mean": aux["timestep_mean"],
-            "learning/v_pred_l2": aux["v_pred_l2"],
-            "learning/v_target_l2": aux["v_target_l2"],
-            "learning/z_noisy_std": aux["z_noisy_std"],
-            "learning/z_target_std": aux["z_target_std"],
-            "learning/z_init_anchor_mse": aux["z_init_anchor_mse"],
-        },
-        "scalars": {},
-    }
-    return state, metrics, rng
+    A thin dispatch into the factory rather than ``_make_train_step(_denoising_loss)`` bound at
+    import time, so this module's ``_denoising_loss`` stays LATE-bound: exp_02's suite pins that
+    the step calls *this module's* loss (it monkeypatches the name and asserts the spy is hit), and
+    that property is part of the settled behaviour this refactor must not change. The body is the
+    factory's, so there is still exactly one implementation of the step.
+    """
+    return _make_train_step(_denoising_loss)(state, data, rng, scheduler, config)
 
 
 def _eval_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
@@ -1108,6 +1136,20 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
             state = jax.device_put(state, state_shardings)
         return state, state_shardings
 
+    def _loss_and_step_fns(self):
+        """``(loss_fn, train_step_fn)`` for this run — THE binding hook (exp_03 review P4).
+
+        The parent binds the plain objective. A subclass overrides THIS, not ``start_training``:
+        merely subclassing could not select another objective while the loop referenced the
+        module-level functions directly, and duplicating a 170-line ``start_training`` to change two
+        names is how the two copies drift apart.
+
+        The periodic in-loop eval deliberately does NOT route through the hook: it stays the plain
+        one-step objective for every arm, so its curve means the same thing across arms and matches
+        the fixed-RNG loss instrument the experiment reports.
+        """
+        return _denoising_loss, _train_step
+
     def start_training(self):
         config = self.config
         # ---- PREFLIGHT (cycle-C review C1/C2/C3): everything that can fail cheaply fails
@@ -1168,8 +1210,11 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
             )
 
         train_iter = self._load_dataset(mesh, is_training=True, seed=config.seed + start_step)
+        loss_fn, train_step_fn = self._loss_and_step_fns()
+        if jax.process_index() == 0:
+            max_logging.log(f"[wan_overfit100] objective: {getattr(loss_fn, '__name__', loss_fn)}")
         p_train_step = jax.jit(
-            functools.partial(_train_step, scheduler=scheduler, config=config),
+            functools.partial(train_step_fn, scheduler=scheduler, config=config),
             in_shardings=(state_shardings, data_shardings, None),
             out_shardings=(state_shardings, None, None),
             donate_argnums=(0,),
