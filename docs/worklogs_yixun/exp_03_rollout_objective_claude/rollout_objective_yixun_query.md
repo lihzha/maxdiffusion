@@ -20,3 +20,11 @@ eval actually runs — rather than the loss floor, which the LR sweep is boundin
 **User's hypothesis (implicit).** Objective-side changes (scheduled sampling and/or rollout loss) reduce
 the compounding amplification and lift rollout SSIM at matched compute, where more one-step training
 provably plateaus.
+
+## Query 2 — 2026-08-02 (verbatim)
+
+> Keep the continue-from-10k A/B/C arms. Also add a from-scratch tier: same Wan init, retrain from step 0 with the new losses (A/B/C + a one-step control); you pick the budget in the plan. Update the plan for my approval first — no launch until I approve.
+
+**Summary.** Two-tier design: Tier 1 = continue-from-10k A/B/C (kept as planned); Tier 2 = from-scratch
+A0/B0/C0 + fresh one-step control (ctrl0) from the same Wan init. Budget is the Planner's choice, made in
+plan v3 (2,500 steps/arm). Plan returns for approval before any launch.
