@@ -121,3 +121,14 @@ The S1 NaN's proximate cause stands as the compiler-shape hypothesis (traced-bou
 corrected-draw replay through the self-generated branch, the hazard-class pass (σ_hi=1.0, k=2,
 self-generated), and two independent full-30 finite runs. Next: **S1.5** under the Query-4 grant.
 
+
+## Job 8 — v6e-8 S1.5 DUAL-STATE DISCRIMINATOR PROBE — launched 2026-08-03
+
+**Under Yixun's Query-4 grant** (S1.5 conditional on the re-smoke being clean — S1 CLOSED — and the probe
+passing review — APPROVE at `3ffb8f9`, reviewer GO with spec). One v6e-8 job: no-update diagnostics at BOTH
+states (exp_02 step-10,000 checkpoint, exact-step-pinned restore; pretrained init via the production
+empty-restore path), K=8 batches × M=4 salted support draws; per-objective losses/grads/cosines; A's label
+isolation; conditional fixed-support parity; forced-p_ss=1 diagnostics; support-variance decomposition
+(law of total variance, finite-M honesty note); per-state sigma traces; branch outcomes. Artifacts: two
+immutable state JSONs + two trace JSONs under `validation_probe_sampling/`.
+- **Job id:** (appended at submission)

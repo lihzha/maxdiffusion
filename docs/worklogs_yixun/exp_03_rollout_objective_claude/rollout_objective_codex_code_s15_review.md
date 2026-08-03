@@ -254,3 +254,9 @@ unexpected **additions** as well as omissions.
 * `black`, `ruff`, `bash -n`, staged-tree `git diff --check` clean.
 
 No push, no launch.
+
+## Final verdict (3ffb8f9): **APPROVE — S1.5 GO**
+
+All four BLOCKERs + MAJOR residuals closed and verified (real-path execution both states; scoped state
+lifetime; exact-step 10000 from {10000,12500}; genuine streaming; canonical per-state traces; branch
+outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 3218d5f → 3ffb8f9, three passes.
