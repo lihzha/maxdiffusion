@@ -192,3 +192,22 @@
   round-3's own mutants re-verified after the test rewrite.
 - **Next** — focused re-review; then the S1 smoke package (explicit ramp origins + the A/B/C overhead
   STOP budgets).
+
+## 2026-08-02T10:40:00Z — Round-3 residuals: bf16 parameter fixture, comment corrections
+
+- **Trigger** — re-review of `371816c` (new reviewer account, 63 tests independently rerun): the
+  bf16 >50x substitution ACCEPTED (measured 171x), two residuals left.
+- **Closed** — (1) the bf16 case is now end-to-end: a bfloat16 PARAMETER, with dtype assertions on
+  parameters and all three gradient trees, and the expectation derived from the config through
+  production's `_dtype` converter (the first attempt, keyed to the fixture's own variable, let a
+  revert-to-fp32 mutant survive); (2) the two stale comments corrected — epsilon comes from the
+  shared stream, and only A's final supervised forward uses training mode.
+- **Measured** — with bf16 parameters the eval-reference gradient gap is 0.0 (bf16 rounds the
+  scan-vs-unroll accumulation difference away) against 0.0562 for the training convention.
+- **Result** — suite 1399 passed / 2 skipped (unchanged). Three bf16/D3 mutants killed.
+- **S1 inputs** — trace-time forward counts and graph sizes recorded in the review doc as overhead
+  EXPECTATIONS (control 1 fwd / 80 eqns; A 2 traced fwd / 1.79x; B 1 traced fwd / 1.38x; C 3 / 3.24x),
+  with the caveat that loop bodies trace once and that CPU wall-clock on a one-tanh stub predicts
+  nothing. Real budgets (A 1.6x, B 2.5x, C 3.2x; exceeding = STOP) get measured in S1.
+- **Next** — closing micro-review, then the S1 package (ramp origins Tier 1 = 10000 / Tier 2 = 0,
+  STOP budgets, D2's support-variance requirement for S1.5) for Yixun's approval.
