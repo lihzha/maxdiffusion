@@ -313,7 +313,7 @@ def _advance_with_sampler(ctx, z, start, k, *, velocity_fn, k_max):
     """Advance the EXTRACTED sampler step ``k`` times from grid index ``start`` (one-sampler rule).
 
     FIXED LENGTH, not ``fori_loop(start, end)``: ``k`` is a traced draw, so the loop had a dynamic
-    trip count. ``k_max`` is 2, so the advance is unrolled to ``k_max`` steps and the state after
+    trip COUNT (not a per-draw compiled graph shape -- that earlier wording was wrong). ``k_max`` is 2, so the advance is unrolled to ``k_max`` steps and the state after
     ``k`` of them is SELECTED -- selection-equivalent for every ``k in 1..k_max``, pinned exactly by
     a test against an explicit unroll.
 

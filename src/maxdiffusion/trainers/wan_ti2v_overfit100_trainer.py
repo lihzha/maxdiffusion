@@ -46,6 +46,7 @@ import ast
 import base64
 import datetime
 import functools
+import io
 import math
 import hashlib
 import json
@@ -277,17 +278,45 @@ def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, schedul
     return _make_train_step(_denoising_loss)(state, data, rng, scheduler, config, global_step=global_step)
 
 
+def save_pre_step_snapshot(directory: str, *, step: int, rng, batch: dict, save_state=None) -> dict:
+    """Write everything a frozen-state replay needs, BEFORE the step that is expected to fail.
+
+    Detection necessarily happens AFTER ``apply_gradients``, so by the time a step is known to be
+    non-finite the parameters it produced are already poisoned; and a checkpoint carries no rng and
+    no batch. So the state is preserved PROACTIVELY: with ``exp03_snapshot_before_step=N`` the run
+    writes params/opt_state (through the production checkpoint path) plus the rng key and the exact
+    batch, immediately before step ``N`` executes. One known step, so the cost is one extra save.
+    """
+    tf.io.gfile.makedirs(directory)
+    buffer = io.BytesIO()
+    arrays = {f"batch__{name}": np.asarray(value) for name, value in batch.items()}
+    arrays["rng_key_data"] = np.asarray(jax.random.key_data(rng))
+    arrays["global_step"] = np.asarray(int(step))
+    np.savez(buffer, **arrays)
+    with tf.io.gfile.GFile(_join(directory, "pre_step_snapshot.npz"), "wb") as handle:
+        handle.write(buffer.getvalue())
+    manifest = {
+        "global_step": int(step),
+        "displayed_step": int(step) + 1,
+        "arrays": sorted(arrays),
+        "state_saved": save_state is not None,
+    }
+    with tf.io.gfile.GFile(_join(directory, "pre_step_snapshot.json"), "w") as handle:
+        handle.write(json.dumps(manifest, indent=2, sort_keys=True))
+    if save_state is not None:
+        save_state(int(step))
+    return manifest
+
+
 class NonFiniteStepError(RuntimeError):
     """A training step reported a non-finite term. Raised BEFORE the next step consumes it."""
 
 
-def assert_step_finite(step: int, scalars: dict) -> None:
-    """Fail fast on the first non-finite named term of a step.
+def step_finite_failures(scalars: dict) -> tuple[list[str], list[str]]:
+    """``(failing named terms, non-finite scalars)`` — the check, without the raise.
 
-    An objective reports ``<term>_finite`` flags (1.0/0.0) computed inside the compiled step, plus
-    the usual scalars. Both are checked: the flags name WHICH term went wrong, and the raw scalars
-    catch anything that has no flag. Raising here means the poisoned parameters never reach the next
-    iteration, and the log's last line is the failure rather than 22 lines of ``nan``.
+    Separated so the loop can EMIT the diagnostic line first and raise second: a failure that aborts
+    before printing the fields that name it is exactly the S1 experience being fixed.
     """
     failed = [
         key.split("/", 1)[-1]
@@ -299,6 +328,71 @@ def assert_step_finite(step: int, scalars: dict) -> None:
         for key, value in sorted(scalars.items())
         if not key.endswith("_finite") and not math.isfinite(float(value))
     ]
+    return failed, non_finite
+
+
+def report_step(
+    *,
+    step: int,
+    max_train_steps: int,
+    metrics: dict,
+    avg_loss: float,
+    avg_grad: float,
+    lr: float,
+    steps_per_sec: float,
+    log_period: int,
+    log_fn=None,
+    wandb_run=None,
+) -> tuple[list[str], list[str]]:
+    """Emit the step line (and the W&B entry), THEN raise if the step was non-finite.
+
+    THE ordering that matters: a non-finite step forces the line to be emitted regardless of
+    ``log_period``, and only afterwards does :class:`NonFiniteStepError` stop the run. Raising first
+    would abort before printing the very fields that name the failing term -- which is exactly what
+    made the S1 combined arm's ``nan`` uninformative. The loop delegates here so the ordering is one
+    tested seam rather than a comment about a loop body.
+    """
+    log = log_fn or max_logging.log
+    failed, non_finite = step_finite_failures(metrics["scalar"])
+    if failed or non_finite or (step + 1) % max(int(log_period), 1) == 0:
+        detail = format_step_details(metrics["scalar"])
+        prefix = "NON-FINITE " if (failed or non_finite) else ""
+        log(
+            f"{prefix}step {step + 1}/{max_train_steps} (global_step={step}) "
+            f"loss={avg_loss:.6f} grad_norm={avg_grad:.3f} "
+            f"lr={lr:.2e} steps/s={steps_per_sec:.3f}{detail}"
+        )
+        if wandb_run is not None:
+            wandb_run.log(
+                {
+                    "train/loss": avg_loss,
+                    "train/grad_norm": avg_grad,
+                    "train/lr": lr,
+                    "train/steps_per_sec": steps_per_sec,
+                    "train/global_step": step,
+                    **{f"train/{key.split('/', 1)[1]}": float(value) for key, value in metrics["scalar"].items()},
+                },
+                step=step + 1,
+            )
+    if failed or non_finite:
+        raise NonFiniteStepError(
+            f"non-finite training step at global_step={step} (displayed as step {step + 1}): "
+            f"failing terms {failed or '[]'}, non-finite scalars {non_finite or '[]'}. "
+            f"The diagnostic line above names them. State/optimizer/rng/batch are NOT updated past "
+            f"this point -- replay from the pre-step snapshot."
+        )
+    return failed, non_finite
+
+
+def assert_step_finite(step: int, scalars: dict) -> None:
+    """Fail fast on the first non-finite named term of a step.
+
+    An objective reports ``<term>_finite`` flags (1.0/0.0) computed inside the compiled step, plus
+    the usual scalars. Both are checked: the flags name WHICH term went wrong, and the raw scalars
+    catch anything that has no flag. Raising here means the poisoned parameters never reach the next
+    iteration, and the log's last line is the failure rather than 22 lines of ``nan``.
+    """
+    failed, non_finite = step_finite_failures(scalars)
     if failed or non_finite:
         raise NonFiniteStepError(
             f"non-finite training step at global_step={step} (displayed as step {step + 1}): "
@@ -1353,7 +1447,21 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
         batch = load_next_batch(train_iter, None, config)
 
         with ThreadPoolExecutor(max_workers=1) as executor:
+            snapshot_before_step = int(getattr(config, "exp03_snapshot_before_step", -1))
             for step in range(start_step, config.max_train_steps):
+                if snapshot_before_step >= 0 and step == snapshot_before_step and jax.process_index() == 0:
+                    # PROACTIVE preservation: detection happens after apply_gradients, so the state a
+                    # failing step produces is already poisoned, and a checkpoint carries no rng or
+                    # batch. One known step, saved just before it runs.
+                    directory = os.path.join(config.output_dir, config.run_name, f"snapshot_pre_step{step}")
+                    manifest = save_pre_step_snapshot(
+                        directory,
+                        step=step,
+                        rng=rng,
+                        batch=batch,
+                        save_state=lambda saved_step: self._save_checkpoint(ckpt_mgr, saved_step, state),
+                    )
+                    max_logging.log(f"[wan_overfit100] pre-step snapshot written to {directory}: {manifest}")
                 next_batch_future = executor.submit(load_next_batch, train_iter, batch, config)
                 with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
                     state, metrics, rng = p_train_step(state, batch, rng, jnp.asarray(step, dtype=jnp.int32))
@@ -1361,42 +1469,24 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
 
                 recent_loss.append(float(metrics["scalar"]["learning/loss"]))
                 recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
-                # FAIL FAST, before the next iteration can consume poisoned parameters: an objective
-                # reports named ``*_finite`` flags, and the first one that is false names the term.
-                # Cheaper than an extra reverse pass and it stops the run where the evidence is.
-                assert_step_finite(step, metrics["scalar"])
 
-                if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
-                    now = datetime.datetime.now()
-                    avg_loss = sum(recent_loss) / len(recent_loss)
-                    avg_grad = sum(recent_grad) / len(recent_grad)
-                    sps = len(recent_loss) / max(1e-6, (now - last_log_time).total_seconds())
-                    lr = float(lr_schedule(step))
-                    # DISPLAY convention: the label is ``global_step + 1``, so "step 8/30" is
-                    # global_step 7 -- the step whose lr_schedule(7) is printed on the same line.
-                    # Every objective-reported metric is printed with it, so a failure names its own
-                    # term and support in the log instead of needing a rerun.
-                    detail = format_step_details(metrics["scalar"])
-                    max_logging.log(
-                        f"step {step + 1}/{config.max_train_steps} (global_step={step}) "
-                        f"loss={avg_loss:.6f} grad_norm={avg_grad:.3f} "
-                        f"lr={lr:.2e} steps/s={sps:.3f}{detail}"
-                    )
-                    if wandb_run is not None:
-                        wandb_run.log(
-                            {
-                                "train/loss": avg_loss,
-                                "train/grad_norm": avg_grad,
-                                "train/lr": lr,
-                                "train/steps_per_sec": sps,
-                                "train/global_step": step,
-                                **{
-                                    f"train/{key.split('/', 1)[1]}": float(value)
-                                    for key, value in metrics["scalar"].items()
-                                },
-                            },
-                            step=step + 1,
-                        )
+                # EMIT then RAISE: report_step forces the diagnostic line when the step is
+                # non-finite (whatever log_period says) and only then stops the run, so the log's
+                # last line names the failing term instead of the run dying before printing it.
+                now = datetime.datetime.now()
+                due = (step + 1) % config.log_period == 0
+                report_step(
+                    step=step,
+                    max_train_steps=config.max_train_steps,
+                    metrics=metrics,
+                    avg_loss=sum(recent_loss) / len(recent_loss),
+                    avg_grad=sum(recent_grad) / len(recent_grad),
+                    lr=float(lr_schedule(step)),
+                    steps_per_sec=len(recent_loss) / max(1e-6, (now - last_log_time).total_seconds()),
+                    log_period=config.log_period if jax.process_index() == 0 else 0,
+                    wandb_run=wandb_run,
+                )
+                if due and jax.process_index() == 0:
                     recent_loss.clear()
                     recent_grad.clear()
                     last_log_time = now

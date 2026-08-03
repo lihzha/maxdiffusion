@@ -445,3 +445,9 @@ exp03_p_ss_ramp_steps: 500  # trial A: linear 0 -> p_ss_max over this many SEGME
 # 0. One expression covers both if the origin is configuration: 0 for Tier 2 (the default), 10000
 # for the Tier-1 arms. Keyed to the GLOBAL step, so the ramp survives a resume.
 exp03_ramp_origin: 0
+# Proactive frozen-state preservation for a replay: when >= 0, the run writes params/opt_state (via
+# the production checkpoint path) plus the rng key and the exact batch immediately BEFORE this
+# zero-based global step executes. -1 disables it. Detection of a non-finite step necessarily
+# happens after apply_gradients, so the state that step produced is already poisoned -- the only way
+# to replay the failing step is to have saved the state that preceded it.
+exp03_snapshot_before_step: -1

@@ -23,6 +23,7 @@ The claims that have to hold before any of this is worth TPU time:
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -822,12 +823,11 @@ def test_the_control_path_is_untouched_by_the_trial_code():
 # loss=nan from step 8 onward with the learning rate still in warmup (2.8e-7), so a gradient-driven
 # divergence is arithmetically impossible -- the step-8 computation itself produced the nan.
 #
-# THE FIRST QUESTION, settled here by construction: C's support purposes are the SAME purposes the
-# standalone arms use, so at global step 8 C drew exactly what A's arm and B's arm drew at their own
-# step 8 -- and both were finite there. The nan is therefore an INTERACTION of the two terms in one
-# trace, not an unlucky draw. What is special about step 8 is that it is the only step in the run
-# whose A-support starts at grid index 0 (sigma_hi = 1.0, the top of the grid) with the branch
-# teacher-forced.
+# What IS established: C's support purposes are the same purposes the standalone arms use, so given
+# the SAME state the draws are the same. What is NOT established -- and is deliberately not claimed
+# anywhere here -- is that the failure is an interaction rather than a draw: the arms reach the
+# failing step with different parameter and optimizer histories, so their standalone finiteness does
+# not transfer. The mechanism is decided by the frozen-state replay, not by these tests.
 # =============================================================================================
 
 _S1_SMOKE = {"seed": 0, "ramp_origin": 0, "ramp_steps": 10, "p_ss_max": 0.5}
@@ -843,9 +843,9 @@ _S1_WARMUP_LR_PER_STEP = 1e-5 / 250
 def test_the_display_label_is_one_more_than_the_global_step():
     # Pinned in the production source, because a mislabelled step sent the first diagnosis to the
     # wrong draw entirely.
-    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
-    assert 'f"step {step + 1}/{config.max_train_steps} (global_step={step}) "' in source
-    assert "lr = float(lr_schedule(step))" in source  # the SAME zero-based step
+    emitter = inspect.getsource(parent.report_step)
+    assert "{prefix}step {step + 1}/{max_train_steps} (global_step={step}) " in emitter
+    assert "lr=float(lr_schedule(step))" in inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
     assert abs(_S1_FAILING_GLOBAL_STEP * _S1_WARMUP_LR_PER_STEP - 2.8e-07) < 1e-12
     assert abs(_S1_FAILING_DISPLAY_STEP * _S1_WARMUP_LR_PER_STEP - 2.8e-07) > 1e-9  # rules out step 8
 
@@ -955,32 +955,34 @@ def test_the_fixed_length_advance_matches_the_old_loop_to_rounding(k_a):
         assert np.allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6), (k_a, start)
 
 
-def test_every_legal_support_combination_gives_a_finite_forward_loss():
-    """All 47 x 23 x 2 = 2,162 legal (A-support, B-support, branch) combinations.
+def test_the_full_cross_product_of_supports_gives_a_finite_combined_loss():
+    """L_C evaluated over ALL 47 x 23 x 2 = 2,162 legal (A-support, B-support, branch) triples.
 
     47 A supports (k_A=1: starts 0..23; k_A=2: starts 0..22), 23 B supports, both coin branches.
-    Evaluated by driving the loss internals directly rather than through the keyed draws, so the
-    enumeration is exhaustive rather than a sample of what the keys happen to produce.
+    C's loss IS ``lambda*L_A + (1-lambda)*L_B`` on the same batch (that identity is pinned exactly by
+    the gradient and asymmetric-lambda tests), so every triple is evaluated as the weighted sum of
+    the term losses computed here -- 94 A evaluations and 23 B evaluations feeding 2,162 combined
+    values, each asserted finite.
 
     SCOPE, stated: forward only, a toy transformer, one untrained state. It proves no legal support
-    is structurally singular in the primal. It does NOT cover reverse mode, remat recomputation,
-    optimizer poisoning, or the real 5B numerics -- the frozen-state replay is what covers those.
+    triple is structurally singular in the primal. It does NOT cover reverse mode, remat
+    recomputation, optimizer poisoning, or the real 5B numerics -- the frozen-state replay covers
+    those, and nothing here concludes anything about the S1 failure's mechanism.
     """
     state, data, config, scheduler = _fixture(
         objective="combined", weights_dtype="bfloat16", activations_dtype="bfloat16", param_dtype=jnp.bfloat16
     )
     ctx = exp03._exp03_prologue(state.params, state, data, jax.random.key(3), config, scheduler)
     velocity_eval = exp03._sampling_velocity_fn(ctx)
+    lam = float(config.exp03_lambda)
     a_supports = [(k, s) for k in (1, 2) for s in range(_STEPS - k)]
     b_supports = list(range(_STEPS - 2))
     assert len(a_supports) == 47 and len(b_supports) == 23
 
-    # A's term at every support, both branches.
-    checked = 0
+    a_losses = {}
     for k_a, start in a_supports:
         end = start + k_a
         sigma_lo = ctx.sigmas[end].astype(jnp.float32)
-        teacher = exp03._interpolant_at(ctx, end)
         advanced = exp03._advance_with_sampler(
             ctx,
             exp03._interpolant_at(ctx, start).astype(ctx.weights_dtype),
@@ -989,15 +991,14 @@ def test_every_legal_support_combination_gives_a_finite_forward_loss():
             velocity_fn=velocity_eval,
             k_max=2,
         ).astype(jnp.float32)
-        for branch in (teacher, advanced):
+        for branch_name, branch in (("teacher", exp03._interpolant_at(ctx, end)), ("self_gen", advanced)):
             z_lo = apply_first_frame_pin(branch, ctx.z_i0)
             v_pred = exp03._forward_velocity(ctx, z_lo, end)
-            loss = masked_velocity_mse(v_pred, (z_lo - ctx.z_video) / sigma_lo, ctx.b)
-            assert np.isfinite(float(loss)), (k_a, start, float(sigma_lo))
-            checked += 1
-    assert checked == 94
+            value = float(masked_velocity_mse(v_pred, (z_lo - ctx.z_video) / sigma_lo, ctx.b))
+            assert np.isfinite(value), (k_a, start, branch_name)
+            a_losses[(k_a, start, branch_name)] = value
 
-    # B's term at every support.
+    b_losses = {}
     for start in b_supports:
         end = start + 2
         z = exp03._interpolant_at(ctx, start).astype(ctx.weights_dtype)
@@ -1012,10 +1013,17 @@ def test_every_legal_support_combination_gives_a_finite_forward_loss():
                 z_i0=ctx.z_i0.astype(ctx.weights_dtype),
             )
         horizon = (ctx.sigmas[start].astype(jnp.float32) - ctx.sigmas[end].astype(jnp.float32)) ** 2
-        loss_b = masked_velocity_mse(z.astype(jnp.float32), exp03._interpolant_at(ctx, end), ctx.b) / horizon
-        assert np.isfinite(float(loss_b)), start
-    # ...and every combination of the two is finite because each term is (lambda-weighted sum).
-    assert 47 * 23 * 2 == 2162
+        value = float(masked_velocity_mse(z.astype(jnp.float32), exp03._interpolant_at(ctx, end), ctx.b) / horizon)
+        assert np.isfinite(value), start
+        b_losses[start] = value
+
+    values = [lam * loss_a + (1.0 - lam) * loss_b for loss_a in a_losses.values() for loss_b in b_losses.values()]
+    # The count comes from the DATA, so an evaluation that never happened cannot be asserted away
+    # with arithmetic: 94 A-term values x 23 B-term values = 2,162 combined values, all finite and
+    # genuinely varying (a constant would mean the sweep swept nothing).
+    assert len(values) == 47 * 23 * 2 == 2162, len(values)
+    assert all(np.isfinite(value) for value in values)
+    assert len({round(value, 9) for value in values}) > 100
 
 
 def test_the_keyed_draws_cover_the_b_supports_they_claim_to():
@@ -1086,33 +1094,107 @@ def test_every_promised_per_term_metric_reaches_the_printed_line(monkeypatch):
     assert "for name, value in aux.items() if name not in _mapped" in source
 
 
-def test_the_step_line_carries_the_zero_based_global_step(monkeypatch):
+def test_the_step_line_carries_the_zero_based_global_step():
     # The label convention, in the production log line rather than only in a comment.
+    emitter = inspect.getsource(parent.report_step)
+    assert "(global_step={step})" in emitter
+    assert 'format_step_details(metrics["scalar"])' in emitter
+
+
+class _FakeLogger:
+    """Captures what production would have printed."""
+
+    def __init__(self):
+        self.lines: list[str] = []
+
+    def __call__(self, line):
+        self.lines.append(str(line))
+
+
+class _FakeWandb:
+    def __init__(self):
+        self.entries: list[dict] = []
+
+    def log(self, payload, step=None):
+        self.entries.append({"step": step, **payload})
+
+
+def _metrics_from_a_real_step(objective="combined", global_step=7):
+    state, data, config, scheduler = _fixture(objective=objective)
+    trainer = exp03.Exp03Trainer.__new__(exp03.Exp03Trainer)
+    trainer.config = config
+    _, step_fn = trainer._loss_and_step_fns()
+    _, metrics, _ = jax.jit(lambda s, d, r, g: step_fn(s, d, r, scheduler, config, global_step=g))(
+        state, data, jax.random.key(3), jnp.asarray(global_step, jnp.int32)
+    )
+    return metrics
+
+
+def test_a_non_finite_step_is_REPORTED_before_it_raises():
+    # THE ordering the S1 log lacked: the sixteen-field diagnostic line is emitted FIRST, naming the
+    # failing term, and only then does the run stop. Driven through the production seam the loop
+    # calls, with a fake logger and a fake W&B run.
+    metrics = _metrics_from_a_real_step()
+    poisoned = {"scalar": dict(metrics["scalar"])}
+    poisoned["scalar"]["learning/loss_b_finite"] = jnp.asarray(0.0)
+    poisoned["scalar"]["learning/loss"] = jnp.asarray(float("nan"))
+    logger, wandb_run = _FakeLogger(), _FakeWandb()
+
+    with pytest.raises(parent.NonFiniteStepError) as excinfo:
+        parent.report_step(
+            step=7,
+            max_train_steps=30,
+            metrics=poisoned,
+            avg_loss=float("nan"),
+            avg_grad=1.0,
+            lr=2.8e-07,
+            steps_per_sec=0.4,
+            log_period=1000,  # NOT a logging step: the failure must force the line anyway
+            log_fn=logger,
+            wandb_run=wandb_run,
+        )
+    assert logger.lines, "the run aborted before printing the line that names the failure"
+    line = logger.lines[-1]
+    assert line.startswith("NON-FINITE ")
+    assert "(global_step=7)" in line and "step 8/30" in line
+    for name in _PROMISED_METRICS:
+        assert f"{name}=" in line, name
+    assert wandb_run.entries and wandb_run.entries[-1]["step"] == 8
+    assert "loss_b_finite" in str(excinfo.value)
+
+
+def test_a_finite_step_reports_only_when_due():
+    metrics = _metrics_from_a_real_step()
+    logger = _FakeLogger()
+    for log_period, expected in ((1000, 0), (8, 1)):
+        logger.lines.clear()
+        parent.report_step(
+            step=7,
+            max_train_steps=30,
+            metrics=metrics,
+            avg_loss=1.0,
+            avg_grad=1.0,
+            lr=2.8e-07,
+            steps_per_sec=0.4,
+            log_period=log_period,
+            log_fn=logger,
+        )
+        assert len(logger.lines) == expected, (log_period, logger.lines)
+
+
+def test_the_loop_delegates_to_the_reporting_seam():
     source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
-    assert "(global_step={step})" in source
-    assert 'format_step_details(metrics["scalar"])' in source
+    assert "report_step(" in source
+    assert "assert_step_finite(step" not in source  # the raise-first call is gone
+    # ...and the report happens before the next batch is taken.
+    assert source.index("report_step(") < source.index("batch = next_batch_future.result()")
 
 
-def test_a_non_finite_term_stops_the_run_and_names_itself():
-    # FAIL FAST: the flags name the term, and the raw scalars catch anything unflagged.
+def test_the_standalone_checker_still_names_terms():
     parent.assert_step_finite(3, {"learning/loss": 1.0, "learning/loss_a_finite": 1.0})
     with pytest.raises(parent.NonFiniteStepError) as excinfo:
-        parent.assert_step_finite(
-            7, {"learning/loss": float("nan"), "learning/loss_b_finite": 0.0, "learning/loss_a_finite": 1.0}
-        )
-    message = str(excinfo.value)
-    assert "global_step=7" in message and "step 8" in message
-    assert "loss_b_finite" in message and "loss" in message
-    # An objective with no flags is still covered by the raw-scalar check.
-    with pytest.raises(parent.NonFiniteStepError):
-        parent.assert_step_finite(0, {"learning/loss": float("inf")})
-
-
-def test_the_training_loop_checks_finiteness_before_the_next_step():
-    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
-    assert 'assert_step_finite(step, metrics["scalar"])' in source
-    # ...before the batch for the next iteration is consumed.
-    assert source.index("assert_step_finite") < source.index("batch = next_batch_future.result()")
+        parent.assert_step_finite(7, {"learning/loss": float("nan"), "learning/loss_b_finite": 0.0})
+    assert "global_step=7" in str(excinfo.value) and "loss_b_finite" in str(excinfo.value)
 
 
 def test_the_objectives_report_finiteness_flags():
@@ -1165,3 +1247,36 @@ def test_the_frozen_replay_is_not_in_the_training_step():
     assert "exp03_frozen_replay" not in inspect.getsource(parent._make_train_step)
     for loss_fn in exp03.EXP03_LOSSES.values():
         assert "exp03_frozen_replay" not in inspect.getsource(loss_fn)
+
+
+def test_the_pre_step_snapshot_writes_state_rng_and_batch(tmp_path):
+    # Proactive preservation: detection happens AFTER apply_gradients, so the state a failing step
+    # produces is already poisoned, and a checkpoint carries no rng and no batch. The flag saves the
+    # state that PRECEDES the known failing step.
+    state, data, config, scheduler = _fixture()
+    saved: list[int] = []
+    directory = str(tmp_path / "snapshot_pre_step7")
+    rng = jax.random.key(11)
+    manifest = parent.save_pre_step_snapshot(directory, step=7, rng=rng, batch=data, save_state=saved.append)
+    assert saved == [7]
+    assert manifest["global_step"] == 7 and manifest["displayed_step"] == 8
+    payload = np.load(Path(directory) / "pre_step_snapshot.npz")
+    assert int(payload["global_step"]) == 7
+    assert np.array_equal(payload["rng_key_data"], np.asarray(jax.random.key_data(rng)))
+    for name, value in data.items():
+        assert np.array_equal(payload[f"batch__{name}"], np.asarray(value)), name
+    written = json.loads((Path(directory) / "pre_step_snapshot.json").read_text())
+    assert written["state_saved"] is True and written["displayed_step"] == 8
+
+
+def test_the_loop_arms_the_snapshot_from_the_config_flag():
+    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert 'getattr(config, "exp03_snapshot_before_step", -1)' in source
+    assert "save_pre_step_snapshot(" in source
+    # BEFORE the step runs, not after: the whole point is the pre-update state.
+    assert source.index("save_pre_step_snapshot(") < source.index("p_train_step(state, batch, rng,")
+    config_text = (Path(parent.__file__).parents[1] / "configs" / "base_wan_5b_exp03.yml").read_text()
+    assert "exp03_snapshot_before_step: -1" in config_text
+    launcher = (Path(parent.__file__).parents[3] / "bash_scripts" / "train_wan_exp03.sh").read_text()
+    assert 'EXP03_SNAPSHOT_BEFORE_STEP="${EXP03_SNAPSHOT_BEFORE_STEP:--1}"' in launcher
+    assert 'exp03_snapshot_before_step="${EXP03_SNAPSHOT_BEFORE_STEP}"' in launcher

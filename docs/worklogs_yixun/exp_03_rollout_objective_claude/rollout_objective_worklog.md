@@ -262,3 +262,19 @@
   wording replaced by the tolerance actually asserted.
 - **Result** — suite 1416 passed / 2 skipped (+9); five mutants killed.
 - **Next** — re-review, then the re-smoke package under Yixun's standing grant.
+
+## 2026-08-03T04:00:00Z — S1-fix CLOSING round (Codex: 2 residuals + 1 conditional on a73cd53)
+
+- **Emit before raise** — the finiteness check ran before the log block, so a NaN aborted before
+  printing the line naming it. Split into `step_finite_failures` + a single `report_step` seam the
+  loop delegates to: a non-finite step forces the full diagnostic line (prefixed `NON-FINITE `,
+  ignoring `log_period`) and the W&B entry, THEN raises. Tested with a fake logger + fake W&B.
+- **True cross-product** — L_C evaluated over all 2,162 legal triples, count derived from the
+  collected values (an arithmetic-only assertion let the skip mutant survive first time round). The
+  INTERACTION conclusion is deleted from the test.
+- **Pre-step snapshot** — `exp03_snapshot_before_step` (default -1) writes params/opt_state + rng +
+  batch + manifest immediately before the named zero-based step; config key and launcher passthrough
+  added and pinned.
+- **Result** — suite 1420 passed / 2 skipped (+4); five mutants killed.
+- **Next** — re-review; on APPROVE, ONE contemporaneous v6e-8 cohort (control + A timing companion +
+  faithful C replay, LOG_PERIOD=1, strict 1.6x/3.2x gates, snapshot armed at step 7).

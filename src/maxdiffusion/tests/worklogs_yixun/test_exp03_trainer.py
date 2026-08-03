@@ -824,6 +824,7 @@ def test_the_config_is_the_overfit100_config_plus_the_exp03_keys():
         "exp03_p_ss_max",
         "exp03_p_ss_ramp_steps",
         "exp03_ramp_origin",
+        "exp03_snapshot_before_step",
     }
     assert not set(base_cfg) - set(exp03_cfg), "keys were dropped from the exp_02 config"
     assert exp03_cfg["model_type"] == "EXP03_TI2V"
@@ -861,6 +862,7 @@ def test_the_launcher_passes_every_exp03_knob_through():
         ("EXP03_P_SS_MAX", "exp03_p_ss_max"),
         ("EXP03_P_SS_RAMP_STEPS", "exp03_p_ss_ramp_steps"),
         ("EXP03_RAMP_ORIGIN", "exp03_ramp_origin"),
+        ("EXP03_SNAPSHOT_BEFORE_STEP", "exp03_snapshot_before_step"),
     ):
         assert f'{env}="${{{env}:-' in text, env  # env-overridable with a default
         assert f'{key}="${{{env}}}"' in text, key  # ...and actually forwarded
@@ -960,6 +962,7 @@ _ALLOWED_DEFAULT_DELTAS = {
     "EXP03_P_SS_MAX",
     "EXP03_P_SS_RAMP_STEPS",
     "EXP03_RAMP_ORIGIN",
+    "EXP03_SNAPSHOT_BEFORE_STEP",
 }
 _ALLOWED_OVERRIDE_DELTAS = {
     "exp03_objective",
@@ -969,6 +972,7 @@ _ALLOWED_OVERRIDE_DELTAS = {
     "exp03_p_ss_max",
     "exp03_p_ss_ramp_steps",
     "exp03_ramp_origin",
+    "exp03_snapshot_before_step",
 }
 
 
@@ -1003,6 +1007,7 @@ def test_the_launcher_defaults_do_not_drift_from_the_overfit100_launcher():
         "EXP03_P_SS_MAX",
         "EXP03_P_SS_RAMP_STEPS",
         "EXP03_RAMP_ORIGIN",
+        "EXP03_SNAPSHOT_BEFORE_STEP",
     }
     _assert_maps_agree(base, mine, _ALLOWED_DEFAULT_DELTAS, "launcher defaults")
 
