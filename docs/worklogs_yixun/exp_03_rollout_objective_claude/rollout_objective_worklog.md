@@ -323,3 +323,24 @@
 - **Result** — suite 1431 passed / 2 skipped (+4); three mutants killed (gate removed; gate always
   allowing; reason not logged).
 - **Next** — micro-review, then the re-smoke cohort per the confirmed spec.
+
+## 2026-08-03T09:00:00Z — S1.5 probe driver + launcher (dual-state, no-update)
+
+- **Built** — `src/maxdiffusion/probe_exp03_s1_5.py` + `bash_scripts/probe_exp03_s1_5.sh`. The probe
+  applies NO optimizer updates (bit-level fingerprint before/after, asserted per state) and runs at
+  BOTH states: the exp_02 step-10,000 checkpoint (restore path; refuses to fall back to init if the
+  directory is empty) and the pretrained init (empty-checkpoint path through the same code).
+- **Measures, per state over K=8 batches** — (1) per-objective losses / grad norms / max-abs /
+  finite-leaf counts / **cosine vs the plain objective**, via `exp03_frozen_replay` EXTENDED (control
+  arm + cosines added there) rather than duplicated; (2) A's label isolation, corrective vs same-ε on
+  identical states; (3) `p_ss=0` parity in loss AND gradient at 1e-5 relative; (4) support-gradient
+  variance by the law of total variance — each batch replayed under M=4 support draws, within-batch =
+  support term, between-batch = data term, plus a per-objective gradient-noise scale; (5) the
+  mechanism-B sigma traces at both states under their own canonical path rules.
+- **Pinned** — K, M and the two state labels are approval constants with hostile-override refusal;
+  output is one immutable JSON per state under `validation_probe_sampling/` with the `step_`-component
+  refusal; the launcher requires `CHECKPOINT_DIR`, defaults `EXP03_RAMP_ORIGIN=10000` (Tier 1 per D1),
+  keeps the manifest pin / prefetch / local-only resolution / COMMIT export, and carries no ffmpeg
+  block (it scores gradients, not pixels — loss-arm precedent).
+- **Result** — suite 1462 passed / 2 skipped (+31). Six mutants killed.
+- **Next** — focused review, then S1.5 launches under the standing grant.
