@@ -479,3 +479,10 @@ checkpoint); checkpoint 15,000 verified. Follow-on measurements per the Job-40 a
 - **Job 43 (SSIM @15000):** `20260803-052937-c63c0868-exp02-o100-ssim-l5x-yixun` — s3_intermediate,
   seed 0, correct, canonical-100 (takes no TRAIN_COMMIT; unaffected by the Job-41 error).
 
+### Jobs 41–43 corrections (2026-08-03T~06:20Z)
+
+- Job 42 (instrument) PUBLISHED: **12,500 anchor 0.06061 reproduced exactly; 15,000 = 0.03927** (n=1,629,
+  train_commit correct). Line-predicted SSIM at 15,000 ≈ **0.9413**.
+- Job 43's submission was killed by a local 2-min shell timeout mid-flight — only `code.tar.gz` uploaded,
+  no job record; it will never run. Relaunched as **Job 43b**: `20260803-063541-649d9e59-exp02-o100-ssim-l5x2-yixun` (same spec, same approval).
+
