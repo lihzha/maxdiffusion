@@ -66,6 +66,7 @@ import maxdiffusion.trainers.wan_ti2v_exp03_trainer as exp03
 from maxdiffusion import max_logging, pyconfig
 from maxdiffusion.diagnostics_exp03 import sigma_trajectory_trace as trace
 from maxdiffusion.models.wan.side_adapter_wan import apply_first_frame_pin, masked_velocity_mse
+from maxdiffusion.train_utils import load_next_batch
 from maxdiffusion.trainers.wan_ti2v_overfit100_trainer import (
     Overfit100TrainState,
     _denoising_loss,
@@ -747,7 +748,11 @@ def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
     state, _, checkpoint_step = build_probe_state(config, trainer, pipeline, mesh, state_label=state_label)
     before = params_fingerprint(state.params)
     iterator = trainer._load_dataset(mesh, is_training=True, seed=config.seed + checkpoint_step)
-    batches = [gen.load_next_batch(iterator, None, config) for _ in range(S1_5_NUM_BATCHES)]
+    # THE call the training loop makes, from the module that actually defines it
+    # (``train_utils.load_next_batch``, exactly as ``start_training`` imports and calls it). The
+    # first hardware attempt died here on ``gen.load_next_batch`` -- a name the eval module has
+    # never had -- because the batches in the tests were built rather than pulled.
+    batches = [load_next_batch(iterator, None, config) for _ in range(S1_5_NUM_BATCHES)]
     with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
         report = state_report(
             state,

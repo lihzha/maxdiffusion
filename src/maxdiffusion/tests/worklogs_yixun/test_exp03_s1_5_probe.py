@@ -840,3 +840,92 @@ def test_the_launcher_drift_test_rejects_unexpected_additions():
     }
     assert not sorted((set(base) - allowed) - set(mine)), "a shared default went missing"
     assert not sorted((set(mine) - allowed) - set(base)), "an unexpected default was added"
+
+
+# =============================================================================================
+# 8. The hardware failure: a module attribute that does not exist.
+#
+# The first S1.5 run died at startup on ``gen.load_next_batch`` -- a name the eval module has never
+# had. No test caught it because the batches were BUILT in the tests rather than PULLED through the
+# production call. Two guards, one cheap and total, one specific.
+# =============================================================================================
+
+
+def _module_attribute_references(module):
+    """Every ``alias.attr`` in a module's source, resolved back to the module the alias names."""
+    import ast
+
+    tree = ast.parse(Path(module.__file__).read_text())
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for entry in node.names:
+                aliases[entry.asname or entry.name.split(".")[0]] = entry.name
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            for entry in node.names:
+                aliases[entry.asname or entry.name] = f"{node.module}.{entry.name}"
+    references = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in aliases:
+            references.add((node.value.id, aliases[node.value.id], node.attr))
+    return references
+
+
+@pytest.mark.parametrize("module", [s1_5, exp03, parent])
+def test_every_module_attribute_reference_resolves(module):
+    # THE class of bug that killed the first hardware run, caught at test time without hardware: if
+    # a module reference names an attribute that does not exist, this fails here rather than 20
+    # minutes into a TPU job.
+    import importlib
+
+    unresolved = []
+    for alias, target, attribute in sorted(_module_attribute_references(module)):
+        try:
+            imported = importlib.import_module(target)
+        except ImportError:
+            continue  # a from-import of a name, not a module: covered by import time itself
+        if not hasattr(imported, attribute):
+            unresolved.append(f"{alias}({target}).{attribute}")
+    assert not unresolved, unresolved
+
+
+def test_the_probe_pulls_batches_the_way_the_training_loop_does():
+    # Same function, same call shape, same import site as start_training -- checked against the
+    # trainer's own source rather than against a memory of it.
+    probe_source = inspect.getsource(s1_5._run_one_state)
+    loop_source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert "load_next_batch(iterator, None, config)" in probe_source
+    assert "load_next_batch(train_iter, None, config)" in loop_source  # the loop's first pull
+    # Structural, so the comment recording what went wrong is not mistaken for the thing itself.
+    assert ("gen", "maxdiffusion.generate_wan_side_adapter", "load_next_batch") not in _module_attribute_references(
+        s1_5
+    )
+    # ...and it comes from the module that defines it.
+    from maxdiffusion import train_utils
+
+    assert s1_5.load_next_batch is train_utils.load_next_batch
+    assert not hasattr(s1_5.gen, "load_next_batch")  # the name the first run reached for
+    # The iterator is built exactly as the training loop builds it, at the production seed.
+    assert "trainer._load_dataset(mesh, is_training=True, seed=config.seed + checkpoint_step)" in probe_source
+    assert "self._load_dataset(mesh, is_training=True, seed=config.seed + start_step)" in loop_source
+
+
+def test_the_real_batch_pull_runs_against_a_real_iterator():
+    # EXECUTED, not simulated: the production function, against a real iterator, with the
+    # reuse_example_batch semantics the config carries.
+    from maxdiffusion import train_utils
+
+    batches = [
+        {"z_i0": jnp.zeros((2, 3, 1, 5, 6)), "z_video": jnp.ones((2, 3, 4, 5, 6)) * value} for value in (1.0, 2.0)
+    ]
+    iterator = iter(batches)
+    config = SimpleNamespace(reuse_example_batch=False)
+    first = train_utils.load_next_batch(iterator, None, config)
+    second = train_utils.load_next_batch(iterator, first, config)
+    assert float(first["z_video"][0, 0, 0, 0, 0]) == 1.0
+    assert float(second["z_video"][0, 0, 0, 0, 0]) == 2.0  # it really advanced
+    # ...and the probe asks for a FRESH batch each time (example_batch=None), so a config with
+    # reuse_example_batch=True cannot silently hand it the same batch K times.
+    reusing = SimpleNamespace(reuse_example_batch=True)
+    assert train_utils.load_next_batch(iter(batches), None, reusing)["z_video"][0, 0, 0, 0, 0] == 1.0
+    assert "load_next_batch(iterator, None, config)" in inspect.getsource(s1_5._run_one_state)
