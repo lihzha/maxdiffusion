@@ -612,7 +612,22 @@ def exp03_frozen_replay(
         out[f"loss_{name}_finite"] = float(math.isfinite(loss))
         # B's RAW endpoint MSE and its fp32 horizon travel with the normalized loss, so the
         # raw/normalized pair the plan promises is actually in the artifact.
-        for extra in ("raw_endpoint_mse", "horizon_sq", "sigma_hi_b", "sigma_lo_b", "s_b", "e_b", "p_ss", "k_a"):
+        for extra in (
+            "raw_endpoint_mse",
+            "horizon_sq",
+            "sigma_hi_b",
+            "sigma_lo_b",
+            "s_b",
+            "e_b",
+            "sigma_hi_a",
+            "sigma_lo_a",
+            "s_a",
+            "e_a",
+            "coin",
+            "take_self_generated",
+            "p_ss",
+            "k_a",
+        ):
             if extra in aux:
                 out[f"{extra}_{name}"] = float(aux[extra])
         if not with_gradients:

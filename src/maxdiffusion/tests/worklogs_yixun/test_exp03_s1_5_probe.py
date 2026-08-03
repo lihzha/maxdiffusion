@@ -93,7 +93,7 @@ def test_the_no_update_invariant_is_bit_level():
 
 
 def test_the_driver_asserts_no_update_around_the_measurement():
-    source = inspect.getsource(s1_5.run_s1_5)
+    source = inspect.getsource(s1_5._run_one_state)
     assert "before = params_fingerprint(state.params)" in source
     assert "assert_no_update(before, params_fingerprint(state.params))" in source
     assert source.index("before = params_fingerprint") < source.index("state_report(")
@@ -502,16 +502,19 @@ def test_the_state_plan_is_the_canonical_per_state_mapping():
     # The restore is PINNED to the required step, not to whatever is latest.
     source = inspect.getsource(s1_5.build_probe_state)
     assert 'required = plan["required_checkpoint_step"]' in source
-    assert "if int(start_step) != int(required):" in source
-    # ...and the pin is on the REQUIRED step, not on whatever happens to be latest.
+    assert "restore_exact_step(manager, state, required=required)" in source
+    assert "if int(start_step) != int(required):" in source  # a backstop, not the selector
     assert "manager.latest_step()" not in source
     # ...and init goes through the SAME checkpoint-manager path, on an empty directory.
     assert "_empty_checkpoint_dir(config)" in source
-    assert "trainer._maybe_restore(manager, state)" in source
+    restorer = inspect.getsource(s1_5.restore_exact_step)
+    assert "manager.restore(" in restorer
+    assert "manager.latest_step()" not in restorer  # the docstring may NAME it; the code must not call it
+    assert "manager.all_steps()" in restorer
 
 
 def test_the_iterator_seed_follows_production_continuation():
-    source = inspect.getsource(s1_5.run_s1_5)
+    source = inspect.getsource(s1_5._run_one_state)
     assert "seed=config.seed + checkpoint_step" in source
 
 
@@ -520,8 +523,10 @@ def test_the_sigma_trace_uses_the_state_already_in_memory():
     # checkpoint trace) and would hold two live 5B models at once.
     module = Path(s1_5.__file__).read_text()
     assert "trace.run_trace(" not in module
-    source = inspect.getsource(s1_5.run_s1_5)
+    source = inspect.getsource(s1_5._run_one_state)
     assert "trace_in_memory_state(" in source
+    # ...and the standalone per-state trace JSON is written under the trace module's own rules.
+    assert "trace.write_trace_artifact(trace.trace_output_path(config, checkpoint_step)" in source
     tracer = inspect.getsource(s1_5.trace_in_memory_state)
     assert "nnx.merge(state.graphdef, state.params, state.rest_of_state)" in tracer
     assert "_restore" not in tracer and "run_trace" not in tracer
@@ -563,3 +568,275 @@ def test_no_vacuous_assertions_survive_in_this_file():
     occurrences = [line for line in text.splitlines() if needle in line and "needle" not in line]
     assert not occurrences, occurrences
     assert "assert " + "True" not in text.replace("assert " + "True" + '"', "")
+
+
+# =============================================================================================
+# 7. Closing round: the control flow itself, executed.
+# =============================================================================================
+
+
+def _toy_state_and_batches(num_batches=2):
+    """A tiny real Overfit100TrainState and real batches — enough to EXECUTE the report path."""
+    import optax
+    from flax import nnx
+
+    class _Stub(nnx.Module):
+        def __init__(self):
+            self.gain = nnx.Param(jnp.asarray(0.25, dtype=jnp.float32))
+
+        def __call__(self, **kwargs):
+            hidden = kwargs["hidden_states"].astype(jnp.float32)
+            return (
+                self.gain[...] * jnp.tanh(hidden) + 0.01 * jnp.mean(kwargs["timestep"].astype(jnp.float32))
+            ).astype(kwargs["hidden_states"].dtype)
+
+    graphdef, params, rest = nnx.split(_Stub(), nnx.Param, ...)
+    state = parent.Overfit100TrainState.create(
+        apply_fn=graphdef.apply,
+        params=params,
+        tx=optax.sgd(0.1),
+        graphdef=graphdef,
+        rest_of_state=rest,
+        context_table=jax.random.normal(jax.random.key(41), (4, 4, 8), dtype=jnp.float32),
+    )
+    batches = []
+    for index in range(num_batches):
+        key = jax.random.key(100 + index)
+        k1, k2 = jax.random.split(key)
+        batches.append(
+            {
+                "z_i0": jax.random.normal(k1, (3, 3, 1, 5, 6), dtype=jnp.float32),
+                "z_video": jax.random.normal(k2, (3, 3, 4, 5, 6), dtype=jnp.float32),
+                "episode_index": jnp.asarray([0, 1, 2], dtype=jnp.int32),
+            }
+        )
+    config = SimpleNamespace(
+        weights_dtype="float32",
+        activations_dtype="float32",
+        global_batch_size_to_train_on=2,
+        side_adapter_sampling_steps=25,
+        flow_shift=5.0,
+        side_adapter_t_sampling="uniform",
+        side_adapter_noise_mode="fresh",
+        seed=0,
+        exp03_objective="combined",
+        exp03_k_a=2,
+        exp03_k_b=2,
+        exp03_lambda=0.5,
+        exp03_p_ss_max=0.5,
+        exp03_p_ss_ramp_steps=10,
+        exp03_ramp_origin=0,
+        exp03_support_salt=0,
+        run_name="s1_5-test",
+        checkpoint_dir="gs://x/ck",
+        train_data_dir="gs://x/train100",
+        model_manifest_path="gs://x/manifest.json",
+    )
+    from maxdiffusion.schedulers import FlaxFlowMatchScheduler
+
+    scheduler = FlaxFlowMatchScheduler(dtype=jnp.float32, shift=5.0, sigma_min=0.0, sigma_max=1.0)
+    return state, batches, config, scheduler
+
+
+@pytest.mark.parametrize("state_label", ["checkpoint", "init"])
+def test_both_states_run_the_full_report_and_log_path(state_label, tmp_path, monkeypatch):
+    # END TO END through the REAL control flow, for BOTH states -- the wiring bug class that has now
+    # bitten twice (an unreachable branch, then a KeyError on a renamed key that killed the init
+    # state) is only caught by executing it, never by inspecting it.
+    state, batches, config, scheduler = _toy_state_and_batches()
+    config.output_dir = str(tmp_path)
+    checkpoint_step = s1_5.S1_5_STATE_PLAN[state_label]["required_checkpoint_step"]
+    lines: list[str] = []
+    monkeypatch.setattr(s1_5.max_logging, "log", lambda line: lines.append(str(line)))
+
+    report = s1_5.state_report(
+        state,
+        batches,
+        jax.random.key(1),
+        config,
+        scheduler,
+        state_label=state_label,
+        checkpoint_step=checkpoint_step,
+        support_salts=(1, 2),
+    )
+    for key in (
+        "label_isolation",
+        "p_ss_zero_parity",
+        "forced_p_ss_one",
+        "per_batch",
+        "support_variance",
+        "branch_outcomes",
+    ):
+        assert key in report, key
+    assert report["first_global_step"] == s1_5.S1_5_STATE_PLAN[state_label]["first_global_step"]
+    assert set(report["support_variance"]) == set(s1_5.S1_5_OBJECTIVES)
+    assert "batch_shared_rng_variance" in report["support_variance"]["control"]
+    assert report["branch_outcomes"]["self_generated"] + report["branch_outcomes"]["teacher_forced"] == len(batches)
+
+    payload = s1_5.s1_5_artifact(config, state_label=state_label, checkpoint_step=checkpoint_step, report=report)
+    s1_5.log_summary(payload)  # the line that used to raise KeyError after the first state
+    assert any("state=" + state_label in line for line in lines)
+    assert any("support_var=" in line for line in lines)
+    assert any("label isolation" in line for line in lines)
+    assert any("p_ss=0 parity" in line for line in lines)
+    # ...and the artifact is writable (no non-finite values anywhere in a real report).
+    s1_5.write_s1_5_artifact(
+        s1_5.s1_5_output_path(config, state_label=state_label, checkpoint_step=checkpoint_step), payload
+    )
+
+
+def test_the_first_state_is_released_before_the_next_one_is_built():
+    import weakref
+
+    class _Holder:
+        pass
+
+    holder = _Holder()
+    reference = weakref.ref(holder)
+    s1_5.release(holder)
+    del holder
+    import gc
+
+    gc.collect()
+    assert reference() is None, "the released object is still reachable"
+
+    # The driver releases the per-state locals, and does so in a frame that returns before the next
+    # state's pipeline is built.
+    driver = inspect.getsource(s1_5.run_s1_5)
+    assert "_run_one_state(config, trainer, scheduler, state_label)" in driver
+    assert "release()" in driver
+    per_state = inspect.getsource(s1_5._run_one_state)
+    assert "release(state, batches, report, pipeline, iterator)" in per_state
+    assert per_state.index("trainer._load_wan_pipeline()") < per_state.index("release(state,")
+
+
+def test_the_required_step_is_selected_from_a_directory_that_holds_later_ones():
+    # The exp_02 run directory REALLY holds later checkpoints, so "latest, then reject" would grab
+    # 12500 and only complain afterwards.
+    requested = {}
+
+    class _Manager:
+        def all_steps(self):
+            return [10000, 12500]
+
+        def latest_step(self):
+            return 12500
+
+        def restore(self, step, args=None):
+            requested["step"] = step
+            return {"params": {"w": jnp.asarray([1.0])}, "opt_state": (), "step": {"step": step}}
+
+    state = SimpleNamespace(
+        params={"w": jnp.asarray([0.0])},
+        opt_state=(),
+        replace=lambda **kw: SimpleNamespace(params=kw["params"], opt_state=kw["opt_state"]),
+    )
+    restored, step = s1_5.restore_exact_step(_Manager(), state, required=10000)
+    assert requested["step"] == 10000 and step == 10000
+    assert float(restored.params["w"][0]) == 1.0
+
+    class _Missing(_Manager):
+        def all_steps(self):
+            return [12500]
+
+    with pytest.raises(ValueError) as excinfo:
+        s1_5.restore_exact_step(_Missing(), state, required=10000)
+    assert "SELECTED" in str(excinfo.value)
+
+    # init: nothing to restore, and a non-empty directory is refused.
+    class _Empty(_Manager):
+        def all_steps(self):
+            return []
+
+    unchanged, zero = s1_5.restore_exact_step(_Empty(), state, required=0)
+    assert zero == 0 and unchanged is state
+    with pytest.raises(ValueError):
+        s1_5.restore_exact_step(_Manager(), state, required=0)
+
+
+def test_the_variance_never_retains_more_than_a_couple_of_trees():
+    # PEAK retained count, not just the final reduction type: the generator is consumed one gradient
+    # at a time, so the K x M = 32 trees the first version held never coexist.
+    import weakref
+
+    live = {"count": 0, "peak": 0}
+
+    def make(value):
+        # A plain dict pytree; the weakref goes on the LEAF, which is what actually occupies memory.
+        leaf = jnp.asarray([float(value)], dtype=jnp.float32)
+        live["count"] += 1
+        live["peak"] = max(live["peak"], live["count"])
+        weakref.finalize(leaf, lambda: live.__setitem__("count", live["count"] - 1))
+        return {"w": leaf}
+
+    stats = s1_5.variance_decomposition((make(k * 4 + m) for m in range(4)) for k in range(8))
+    assert stats["num_batches"] == 8 and stats["support_draws"] == 4
+    assert live["peak"] <= 3, live  # one in flight, not 32
+    # ...and the CALLER really streams. Checked structurally, because a substring assertion is
+    # satisfied by `[list(_draws(...)) for ...]` -- which materializes all 32 trees again while
+    # still mentioning the generator function.
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(s1_5.state_report)))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "variance_decomposition"
+    ]
+    assert len(calls) == 1, calls
+    (argument,) = calls[0].args
+    assert isinstance(argument, ast.GeneratorExp), ast.dump(argument)  # not a list comprehension
+    element = argument.elt
+    assert isinstance(element, ast.Call), ast.dump(element)  # each row is a call...
+    assert not isinstance(element, (ast.ListComp, ast.List))
+    assert "list(" not in ast.unparse(argument), ast.unparse(argument)  # ...not list(call)
+    # ...and the row-producer is itself a generator function, so a row is lazy too.
+    draws = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_draws")
+    assert any(isinstance(node, (ast.Yield, ast.YieldFrom)) for node in ast.walk(draws))
+    consumer = inspect.getsource(s1_5.variance_decomposition)
+    assert "del grad" in consumer and "list(gradients)" not in consumer
+
+
+def test_an_unknown_commit_is_refused(monkeypatch):
+    monkeypatch.setattr(s1_5.gen, "_eval_code_commit", lambda: "unknown")
+    with pytest.raises(ValueError) as excinfo:
+        s1_5.assert_commit_is_pinned()
+    assert "40-hex" in str(excinfo.value)
+    monkeypatch.setattr(s1_5.gen, "_eval_code_commit", lambda: "0" * 39)
+    with pytest.raises(ValueError):
+        s1_5.assert_commit_is_pinned()
+    monkeypatch.setattr(s1_5.gen, "_eval_code_commit", lambda: "a" * 40)
+    s1_5.assert_commit_is_pinned()
+    assert "assert_commit_is_pinned()" in inspect.getsource(s1_5.run_s1_5)
+
+
+def test_the_launcher_drift_test_rejects_unexpected_additions():
+    # Bidirectional: a key the exp_02 probe launcher does not have, and that is not on the
+    # allowlist, is drift too.
+    assignment = re.compile(r"^(?:export\s+)?([A-Z][A-Z0-9_]*)=(.*)$", re.DOTALL)
+
+    def defaults(text):
+        joined, buffer = [], ""
+        for raw in text.splitlines():
+            buffer = raw if not buffer else buffer + "\n" + raw
+            if raw.endswith("\\"):
+                continue
+            joined.append(buffer)
+            buffer = ""
+        return {m.group(1): m.group(2) for m in (assignment.match(line.strip()) for line in joined) if m}
+
+    base = defaults(_PROBE_LAUNCHER.read_text())
+    mine = defaults(_LAUNCHER.read_text())
+    allowed = {
+        "RUN_NAME",
+        "OUTPUT_DIR",
+        "CHECKPOINT_STEP",
+        "CHECKPOINT_DIR",
+        "S1_5_NUM_BATCHES",
+        "S1_5_SUPPORT_DRAWS",
+        "PROBE_NUM_WINDOWS",
+        "PROBE_STEPS",
+    }
+    assert not sorted((set(base) - allowed) - set(mine)), "a shared default went missing"
+    assert not sorted((set(mine) - allowed) - set(base)), "an unexpected default was added"

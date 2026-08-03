@@ -44,7 +44,9 @@ video. It scores gradients, not pixels.
 
 from __future__ import annotations
 
+import gc
 import hashlib
+import re
 import math
 import statistics
 from types import SimpleNamespace
@@ -53,6 +55,7 @@ from typing import Sequence
 import jax
 import jax.numpy as jnp
 import numpy as np
+import orbax.checkpoint as ocp
 import tensorflow as tf
 from absl import app
 from flax import nnx
@@ -208,23 +211,29 @@ def variance_decomposition(gradients) -> dict:
     ``K-1``) estimates are reported; the unbiased pair is the honest one at ``M=4``, and the finite-M
     inflation of the between term is stated rather than corrected away.
     """
-    rows = list(gradients)
-    if not rows or not list(rows[0]):
-        raise ValueError("variance_decomposition needs at least one batch with at least one draw")
-    draws = {len(list(row)) for row in rows}
-    if len(draws) != 1:
-        raise ValueError(f"every batch must contribute the same number of support draws; got {sorted(draws)}")
-
     between = _TreeWelford()
-    within_population, within_sample = [], []
-    for row in rows:
+    within_population, within_sample, draws = [], [], set()
+    # STREAMING: ``gradients`` may be a generator of generators, and each gradient is consumed and
+    # released as it arrives. Nothing accumulates but one mean tree per accumulator, so the peak
+    # retained tree count is O(1) rather than K x M (32 trees, ~1.28 TB at 5B).
+    for row in gradients:
         accumulator = _TreeWelford()
         for grad in row:
             accumulator.update(grad)
+            del grad
+        if accumulator.count == 0:
+            raise ValueError("variance_decomposition needs at least one draw per batch")
+        draws.add(accumulator.count)
         within_population.append(accumulator.population_variance())
         within_sample.append(accumulator.sample_variance())
         between.update(accumulator.mean)
+        del accumulator
+    if not within_population:
+        raise ValueError("variance_decomposition needs at least one batch with at least one draw")
+    if len(draws) != 1:
+        raise ValueError(f"every batch must contribute the same number of support draws; got {sorted(draws)}")
 
+    rows_count = len(within_population)
     support = float(np.mean(within_population))
     support_unbiased = float(np.mean(within_sample))
     batch_variance = between.population_variance()
@@ -233,7 +242,7 @@ def variance_decomposition(gradients) -> dict:
     mean_sq = exp03.tree_sq_norm(between.mean)
     num_draws = draws.pop()
     return {
-        "num_batches": len(rows),
+        "num_batches": rows_count,
         "support_draws": num_draws,
         "support_variance": support,
         "support_variance_unbiased": support_unbiased,
@@ -414,8 +423,8 @@ def build_probe_state(config, trainer, pipeline, mesh, *, state_label: str):
 
     directory = config.checkpoint_dir if state_label == "checkpoint" else _empty_checkpoint_dir(config)
     manager = trainer._build_checkpoint_manager(directory)
-    state, start_step = trainer._maybe_restore(manager, state)
     required = plan["required_checkpoint_step"]
+    state, start_step = restore_exact_step(manager, state, required=required)
     if int(start_step) != int(required):
         raise ValueError(
             f"S1.5 state {state_label!r} restored step {int(start_step)}, but this state is pinned to "
@@ -423,6 +432,44 @@ def build_probe_state(config, trainer, pipeline, mesh, *, state_label: str):
             f"a state that is neither would answer a question nobody asked."
         )
     return state, state_shardings, int(start_step)
+
+
+def restore_exact_step(manager, state, *, required: int):
+    """Restore the REQUIRED step, selecting it — not "latest, then complain".
+
+    The exp_02 run directory really does hold later checkpoints (12500 among them), so a
+    ``latest_step()`` restore would silently hand S1.5 the wrong state and the required-step check
+    would only tell us afterwards. ``required == 0`` means "no checkpoint": the init state, which
+    must go through the same empty-restore path production uses.
+    """
+    steps = sorted(int(step) for step in (manager.all_steps() or []))
+    if int(required) == 0:
+        if steps:
+            raise ValueError(
+                f"the init state must restore nothing, but this directory holds checkpoints {steps}. "
+                f"Point it at an empty directory -- S1.5's init is the untouched pretrained snapshot."
+            )
+        return state, 0
+    if int(required) not in steps:
+        raise ValueError(
+            f"S1.5 needs checkpoint step {int(required)}, which is not in {steps or '[]'}. It is SELECTED, not "
+            f"taken as the latest -- this directory holds later steps and the latest one is not the Tier-1 state."
+        )
+    restored = manager.restore(
+        int(required),
+        args=ocp.args.Composite(
+            params=ocp.args.StandardRestore(state.params),
+            opt_state=ocp.args.StandardRestore(state.opt_state),
+            step=ocp.args.JsonRestore(),
+        ),
+    )
+    return state.replace(params=restored["params"], opt_state=restored["opt_state"]), int(restored["step"]["step"])
+
+
+def release(*objects) -> None:
+    """Drop references and collect, so the next 5B state is not built beside the previous one."""
+    del objects
+    gc.collect()
 
 
 def _empty_checkpoint_dir(config) -> str:
@@ -459,23 +506,19 @@ def state_report(
     variance = {}
     for objective in S1_5_OBJECTIVES:
         loss_fn = _denoising_loss if objective == "control" else exp03.EXP03_LOSSES[objective]
-        gradients = []
-        for index, batch in enumerate(batches):
+
+        def _draws(batch, index, fn=loss_fn, objective=objective):
             global_step = jnp.asarray(first_step + index, jnp.int32)
             batch_rng = jax.random.fold_in(rng, index)
-            row = []
             for salt in support_salts:
                 salted = state_view(config, state_label, exp03_objective=objective, exp03_support_salt=int(salt))
                 kwargs = {} if objective == "control" else {"global_step": global_step}
-                row.append(
-                    jax.grad(
-                        lambda params, fn=loss_fn, b=batch, cfg=salted, kw=kwargs: fn(
-                            params, state, b, batch_rng, cfg, scheduler, **kw
-                        )[0]
-                    )(state.params)
-                )
-            gradients.append(row)
-        variance[objective] = variance_decomposition(gradients)
+                yield jax.grad(
+                    lambda params, cfg=salted, kw=kwargs: fn(params, state, batch, batch_rng, cfg, scheduler, **kw)[0]
+                )(state.params)
+
+        # Generators, so a gradient exists only while Welford is consuming it.
+        variance[objective] = variance_decomposition(_draws(batch, index) for index, batch in enumerate(batches))
 
     # A's LABEL ISOLATION and the CONDITIONAL parity, on the first batch, forced to the branch each
     # one is about (p_ss=1 for the off-path label question, p_ss=0 for the identity).
@@ -560,9 +603,16 @@ def state_report(
             "grad_cosine_vs_production_control": exp03.grad_cosine(grad, production_grad),
         }
 
+    branch_counts = {
+        "self_generated": sum(1 for row in rows if float(row.get("take_self_generated_a", 0.0)) > 0.5),
+        "teacher_forced": sum(1 for row in rows if float(row.get("take_self_generated_a", 0.0)) <= 0.5),
+        "coin_values": [float(row.get("coin_a", float("nan"))) for row in rows],
+        "p_ss_values": [float(row.get("p_ss_a", float("nan"))) for row in rows],
+    }
     return {
         "state": state_label,
         "checkpoint_step": int(checkpoint_step),
+        "branch_outcomes": branch_counts,
         "first_global_step": first_step,
         "ramp_origin": plan["ramp_origin"],
         "num_batches": len(batches),
@@ -647,7 +697,7 @@ def log_summary(payload: dict) -> None:
     for objective, stats in report["support_variance"].items():
         max_logging.log(
             f"[exp03_s1_5]   {objective:<14} support_var={stats['support_variance']:.6g} "
-            f"data_var={stats['data_variance']:.6g} support_fraction={stats['support_fraction']:.3f}"
+            f"batch_var={stats['batch_shared_rng_variance']:.6g} support_fraction={stats['support_fraction']:.3f}"
         )
     if "label_isolation" in report:
         isolation = report["label_isolation"]
@@ -679,44 +729,70 @@ def run_s1_5(config) -> dict:
     trainer._preflight_dataset()
     scheduler, _ = trainer._create_scheduler()
 
+    assert_commit_is_pinned()
     payloads = {}
     for state_label in S1_5_STATES:
-        pipeline = trainer._load_wan_pipeline()
-        mesh = pipeline.mesh
-        state, _, checkpoint_step = build_probe_state(config, trainer, pipeline, mesh, state_label=state_label)
-        before = params_fingerprint(state.params)
-        # PRODUCTION continuation semantics: the checkpoint state's iterator is seeded exactly as a
-        # resumed run seeds it, so the batches are the ones training would have seen next.
-        iterator = trainer._load_dataset(mesh, is_training=True, seed=config.seed + checkpoint_step)
-        batches = [gen.load_next_batch(iterator, None, config) for _ in range(S1_5_NUM_BATCHES)]
-        with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-            report = state_report(
-                state,
-                batches,
-                jax.random.key(config.seed + 1),
-                config,
-                scheduler,
-                state_label=state_label,
-                checkpoint_step=checkpoint_step,
-                support_salts=S1_5_SUPPORT_SALTS,
-            )
-            # Mechanism-B baseline on the state ALREADY IN MEMORY: re-restoring here would trace the
-            # checkpoint twice (the init trace would silently be a second checkpoint trace) and would
-            # hold two live 5B models at once.
-            report["sigma_trace"] = trace_in_memory_state(
-                state, pipeline, config, scheduler, state_label=state_label, checkpoint_step=checkpoint_step
-            )
-        assert_no_update(before, params_fingerprint(state.params))
-        del pipeline
-        if jax.process_index() != 0:
-            continue
+        payloads[state_label] = _run_one_state(config, trainer, scheduler, state_label)
+        # The previous state's parameters, optimizer state and trace rows are released BEFORE the
+        # next pipeline is built: two live 5B states is an OOM, and holding the first one across the
+        # second load is exactly how that happens.
+        release()
+    return {label: payload for label, payload in payloads.items() if payload}
+
+
+def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
+    """One state, start to finish, in its own frame so its locals die when it returns."""
+    pipeline = trainer._load_wan_pipeline()
+    mesh = pipeline.mesh
+    state, _, checkpoint_step = build_probe_state(config, trainer, pipeline, mesh, state_label=state_label)
+    before = params_fingerprint(state.params)
+    iterator = trainer._load_dataset(mesh, is_training=True, seed=config.seed + checkpoint_step)
+    batches = [gen.load_next_batch(iterator, None, config) for _ in range(S1_5_NUM_BATCHES)]
+    with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+        report = state_report(
+            state,
+            batches,
+            jax.random.key(config.seed + 1),
+            config,
+            scheduler,
+            state_label=state_label,
+            checkpoint_step=checkpoint_step,
+            support_salts=S1_5_SUPPORT_SALTS,
+        )
+        trace_rows = trace_in_memory_state(
+            state, pipeline, config, scheduler, state_label=state_label, checkpoint_step=checkpoint_step
+        )
+    assert_no_update(before, params_fingerprint(state.params))
+    payload = {}
+    if jax.process_index() == 0:
+        # The sigma trace lands as its OWN artifact too, under the trace module's canonical rules,
+        # so mechanism B has the standalone per-state file its later comparisons expect.
+        trace_payload = trace.trace_artifact(
+            config, checkpoint_step=checkpoint_step, cohort=trace_rows["cohort_windows"], rows=trace_rows["rows"]
+        )
+        trace.write_trace_artifact(trace.trace_output_path(config, checkpoint_step), trace_payload)
+        report["sigma_trace"] = {key: value for key, value in trace_rows.items() if key != "cohort_windows"}
         payload = s1_5_artifact(config, state_label=state_label, checkpoint_step=checkpoint_step, report=report)
         path = s1_5_output_path(config, state_label=state_label, checkpoint_step=checkpoint_step)
         write_s1_5_artifact(path, payload)
         log_summary(payload)
         max_logging.log(f"[exp03_s1_5] wrote {path}")
-        payloads[state_label] = payload
-    return payloads
+    release(state, batches, report, pipeline, iterator)
+    return payload
+
+
+def assert_commit_is_pinned() -> None:
+    """Refuse to run without a real 40-hex COMMIT (the exp_02 resume precedent).
+
+    An artifact stamped ``unknown`` cannot be tied to the code that produced it, which is the one
+    thing a diagnostic must never lose.
+    """
+    commit = str(gen._eval_code_commit())
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError(
+            f"refusing to run S1.5 with COMMIT={commit!r}: a 40-hex commit is required so the artifacts can be "
+            f"tied to the code that produced them. Export COMMIT=$(git rev-parse HEAD) in the launcher."
+        )
 
 
 def trace_in_memory_state(state, pipeline, config, scheduler, *, state_label: str, checkpoint_step: int) -> dict:
@@ -769,6 +845,7 @@ def trace_in_memory_state(state, pipeline, config, scheduler, *, state_label: st
         "state": state_label,
         "checkpoint_step": int(checkpoint_step),
         "cohort": [str(window["name"]) for window in cohort],
+        "cohort_windows": cohort,
         "mean_trace": trace.mean_trace(rows),
         "rows": rows,
     }

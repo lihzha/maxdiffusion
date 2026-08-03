@@ -148,3 +148,109 @@ value, naming the key.
 * `black`, `ruff`, `bash -n`, staged-tree `git diff --check` clean.
 
 No push, no launch.
+
+## Re-review (3218d5f) — findings 1/6/7 CLOSED, four remain
+
+```
+APPROVE, so do not launch `3218d5f`/current `HEAD`.
+
+After strengthening, use v6e-8 with:
+
+```text
+RUN_NAME=exp03-s1_5-<fresh-UTC-stamp>-yixun
+CHECKPOINT_DIR=gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3-20260730/checkpoints
+CHECKPOINT_STEP=10000
+MANIFEST_PATH=docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json
+OUTPUT_DIR=gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100
+DATA_DIR=gs://v6_east1d/datasets/exp02_overfit100/train100
+EVAL_DATA_DIR=gs://v6_east1d/datasets/exp02_overfit100/train100
+EXPECTED_WINDOWS=1629
+NUM_TEXT_SLOTS=100
+S1_5_NUM_BATCHES=8
+S1_5_SUPPORT_DRAWS=4
+PROBE_NUM_WINDOWS=30
+PER_DEVICE_BATCH_SIZE=1.0
+SKIP_HF_PREFETCH=0
+COMMIT=<post-fix deployed 40-hex SHA>
+HF_HUB_DISABLE_XET=1
+HF_HUB_ENABLE_HF_TRANSFER=0
+```
+
+The deployed config must retain seed `0`, 25 sampling steps, `p_ss_max=0.5`, and a 500-step ramp. No `EXP03_RAMP_ORIGIN` environment variable: origins remain internally pinned to checkpoint `10000` and init `0`. The derived init checkpoint directory must be verified empty before submission.
+
+Expected immutable outputs:
+
+```text
+validation_probe_sampling/s1_5_checkpoint_ckpt10000.json
+validation_probe_sampling/s1_5_init_ckpt0.json
+validation_probe_sampling/sigma_trace_ckpt10000.json
+validation_probe_sampling/sigma_trace_ckpt0.json
+```
+
+As written, the current code would write the checkpoint S1.5 artifact, crash in `log_summary`, and produce neither the init artifact nor the standalone trace artifacts.
+```
+
+## Strengthening record — coder response (S1.5 closing)
+
+### BLOCKER 1 — the renamed key, and a test that EXECUTES both states
+
+`log_summary` still read `data_variance`, so it raised `KeyError` after the checkpoint artifact and
+**the init state never ran**. Renamed to `batch_shared_rng_variance`.
+
+The important part is the test. This wiring-bug class has now bitten three times (an unreachable
+branch, then a dead conditional, then a renamed key), and every time it was because a test
+*inspected* the control flow instead of *running* it. `test_both_states_run_the_full_report_and_log_path`
+is parameterized over both states and drives the real path — `state_report` -> `s1_5_artifact` ->
+`log_summary` -> `write_s1_5_artifact` — on a tiny real `Overfit100TrainState` with real batches,
+asserting the summary lines actually appear and the artifact actually writes.
+
+### BLOCKER 2 — the first state is freed before the next is built
+
+The per-state work moved into `_run_one_state`, whose locals die when it returns, and which ends
+with `release(state, batches, report, pipeline, iterator)`; the driver calls `release()` again
+between states. Collectability is asserted with a `weakref` rather than by inspection. The
+standalone per-state sigma-trace JSONs are now written too, through the trace module's own
+`trace_artifact` / `trace_output_path` / `write_trace_artifact`, so mechanism B has the files its
+later comparisons expect (`sigma_trace_ckpt10000.json` and `sigma_trace_ckpt0.json`).
+
+### BLOCKER 3 — the required step is SELECTED
+
+`restore_exact_step` calls `manager.restore(10000, ...)` after checking `all_steps()`; the
+required-step comparison downstream is now only a backstop. The test uses a manager holding
+`{10000, 12500}` — the real shape of the exp_02 run directory — and asserts 10000 is the step
+requested, that a missing required step is refused, and that `required=0` (init) both returns
+untouched state and refuses a non-empty directory.
+
+### BLOCKER 4 — true streaming, and a test that can see it
+
+`variance_decomposition` consumes a generator of generators, `del`s each gradient as it goes, and
+accumulates through `_TreeWelford`; the probe passes generator expressions. Peak retention is
+asserted with `weakref.finalize` on the leaf arrays (peak <= 3, not 32).
+
+Worth flagging: the first version of this check was a substring assertion, and the "materialize into
+lists" mutant **survived** it — `[list(_draws(...)) for ...]` still contains the generator
+function's name. The check is now structural (AST): the single argument must be a `GeneratorExp`
+whose element is a call, `list(` must not appear in it, and `_draws` must itself contain a `yield`.
+That kills both the list-of-lists mutant and the subtler list-of-generators one.
+
+### MAJOR residuals
+
+Artifacts record `branch_outcomes` (self-generated vs teacher-forced counts, plus the per-batch coin
+and `p_ss` values, surfaced from the replay's aux). `assert_commit_is_pinned` refuses anything but a
+40-hex COMMIT before either state loads, per the exp_02 resume precedent. The drift test now rejects
+unexpected **additions** as well as omissions.
+
+### Verification
+
+* Full worklogs suite: **1477 passed, 2 skipped** (+7).
+* Mutations — 6, all killed:
+  1. the rename half-reverted -> **2F**;
+  2. the first state retained across the next build -> **1F**;
+  3. the restore falling back to `latest_step()` -> **2F**;
+  4. the gradients materialized into lists -> **1F** (this SURVIVED the substring assertion, which
+     is why the check is now AST-based);
+  4b. a list comprehension of generators -> **1F**;
+  5. an unknown COMMIT accepted -> **1F**.
+* `black`, `ruff`, `bash -n`, staged-tree `git diff --check` clean.
+
+No push, no launch.
