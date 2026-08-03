@@ -28,9 +28,11 @@ call order, it survives a resume unchanged.
 from __future__ import annotations
 
 import hashlib
+import math
 from types import SimpleNamespace
 
 import jax
+import jaxopt
 import jax.numpy as jnp
 import numpy as np
 
@@ -310,12 +312,21 @@ def rollout_support(*, seed: int, global_step, num_steps: int, k_b: int):
 def _advance_with_sampler(ctx, z, start, k, *, velocity_fn, k_max):
     """Advance the EXTRACTED sampler step ``k`` times from grid index ``start`` (one-sampler rule).
 
-    FIXED LENGTH, not ``fori_loop(start, end)``: ``k`` is a traced draw, and a loop with traced
-    bounds lowers to a ``while_loop`` -- dynamic control flow inside a differentiated trace, with a
-    step count that varies per step and forces a different graph shape than the arms that do not
-    have it. ``k_max`` is 2, so the loop is unrolled to ``k_max`` steps and the state after ``k`` of
-    them is SELECTED. Mathematically identical for every ``k in 1..k_max`` (pinned by a test against
-    the previous implementation), while the traced program is now the same shape at every step.
+    FIXED LENGTH, not ``fori_loop(start, end)``: ``k`` is a traced draw, so the loop had a dynamic
+    trip count. ``k_max`` is 2, so the advance is unrolled to ``k_max`` steps and the state after
+    ``k`` of them is SELECTED -- selection-equivalent for every ``k in 1..k_max``, pinned exactly by
+    a test against an explicit unroll.
+
+    **Cost, stated plainly:** the unroll ALWAYS runs ``k_max`` forwards, so A's runtime advance
+    count rises from a mean of 1.5 to 2. A's S1 measurement of 1.47x was taken under the old
+    variable-trip loop; the new code will land higher and may reach the 1.6x STOP budget. That is a
+    real trade and the re-smoke must re-measure it.
+
+    **Status: a compiler-shape HYPOTHESIS, not a proven root cause.** The construct was shared by
+    standalone A, which was finite, so it is not C-unique; a dynamic trip count is not a different
+    compiled graph shape per draw. What decides is the frozen-state discriminator
+    (:func:`exp03_frozen_replay`) run from the snapshot, comparing old-loop and new-unroll
+    executables under identical diagnostics.
     """
     state = z
     result = z
@@ -390,9 +401,22 @@ def _corrective_ss_loss(params, state, data, rng, config, scheduler, *, global_s
         sigma=sigma_lo,
         timestep=sigma_lo * jnp.asarray(scheduler.config.num_train_timesteps, dtype=jnp.float32),
     )
-    aux["k_a"] = k_a.astype(jnp.float32)
-    aux["p_ss"] = exp03_p_ss(config, global_step)
-    aux["sigma_hi"] = sigma_hi
+    aux.update(
+        {
+            "k_a": k_a.astype(jnp.float32),
+            "s_a": start.astype(jnp.float32),
+            "e_a": end.astype(jnp.float32),
+            "sigma_hi_a": sigma_hi,
+            "sigma_lo_a": sigma_lo,
+            "coin": coin.astype(jnp.float32),
+            "p_ss": exp03_p_ss(config, global_step),
+            "take_self_generated": take_self_generated.astype(jnp.float32),
+            "advance_finite": jnp.all(jnp.isfinite(advanced)).astype(jnp.float32),
+            "z_lo_finite": jnp.all(jnp.isfinite(z_lo)).astype(jnp.float32),
+            "v_target_finite": jnp.all(jnp.isfinite(v_target)).astype(jnp.float32),
+            "loss_a_finite": jnp.isfinite(loss).astype(jnp.float32),
+        }
+    )
     return loss, aux
 
 
@@ -453,9 +477,18 @@ def _rollout_loss(params, state, data, rng, config, scheduler, *, global_step=No
         sigma=sigma_lo,
         timestep=sigma_lo * jnp.asarray(scheduler.config.num_train_timesteps, dtype=jnp.float32),
     )
-    aux["raw_endpoint_mse"] = raw
-    aux["horizon_sq"] = horizon
-    aux["sigma_hi"] = sigma_hi
+    aux.update(
+        {
+            "raw_endpoint_mse": raw,
+            "horizon_sq": horizon,
+            "s_b": start.astype(jnp.float32),
+            "e_b": end.astype(jnp.float32),
+            "sigma_hi_b": sigma_hi,
+            "sigma_lo_b": sigma_lo,
+            "z_end_finite": jnp.all(jnp.isfinite(z_end)).astype(jnp.float32),
+            "loss_b_finite": jnp.isfinite(loss).astype(jnp.float32),
+        }
+    )
     return loss, aux
 
 
@@ -472,13 +505,14 @@ def _combined_loss(params, state, data, rng, config, scheduler, *, global_step=N
     loss_b, aux_b = _rollout_loss(params, state, data, rng, config, scheduler, global_step=global_step)
     loss = lam * loss_a + (1.0 - lam) * loss_b
     aux = dict(aux_a)
+    # B's diagnostics travel alongside A's; the shared metric names (sigma_mean, v_pred_l2, ...)
+    # stay A's, and every B-specific key is already suffixed at its source.
+    aux.update({key: value for key, value in aux_b.items() if key not in aux})
     aux["velocity_mse"] = loss
     aux["loss_a"] = loss_a
     aux["loss_b"] = loss_b
     aux["lambda"] = lam
-    aux["z_target_std"] = aux_b["z_target_std"]
-    aux["sigma_hi_b"] = aux_b["sigma_hi"]
-    aux["horizon_sq_b"] = aux_b["horizon_sq"]
+    aux["loss_combined_finite"] = jnp.isfinite(loss).astype(jnp.float32)
     return loss, aux
 
 
@@ -504,6 +538,47 @@ EXP03_LOSSES = {
 
 # Derived from the dispatch table, never hand-maintained: what is implemented is what can be run.
 EXP03_IMPLEMENTED_OBJECTIVES = (EXP03_CONTROL_OBJECTIVE, *EXP03_LOSSES)
+
+
+def exp03_frozen_replay(state, data, rng, config, scheduler, *, global_step, with_gradients=True) -> dict:
+    """NO-UPDATE replay of A, B and C on a frozen state — the discriminator, off the timing path.
+
+    Deliberately NOT part of the training step: separate per-term gradients need extra reverse
+    passes, which would change both the cost being measured and the compilation being blamed. This
+    runs on a snapshot instead, and reports for each term the loss, whether it is finite, its
+    gradient norm, its max-abs gradient, its finite-leaf count, and (for A vs B) the gradient cosine
+    -- everything needed to say WHICH term and WHICH pass produced a non-finite value.
+    """
+    out: dict[str, float] = {"global_step": float(global_step)}
+    grads: dict[str, object] = {}
+    for name, loss_fn in (("a", _corrective_ss_loss), ("b", _rollout_loss), ("c", _combined_loss)):
+
+        def _loss(params, fn=loss_fn):
+            return fn(params, state, data, rng, config, scheduler, global_step=global_step)[0]
+
+        loss = float(_loss(state.params))
+        out[f"loss_{name}"] = loss
+        out[f"loss_{name}_finite"] = float(math.isfinite(loss))
+        if not with_gradients:
+            continue
+        grad = jax.grad(_loss)(state.params)
+        grads[name] = grad
+        leaves = jax.tree_util.tree_leaves(grad)
+        finite = [bool(jnp.all(jnp.isfinite(leaf))) for leaf in leaves]
+        out[f"grad_norm_{name}"] = float(jaxopt.tree_util.tree_l2_norm(grad))
+        out[f"grad_max_abs_{name}"] = float(
+            jax.tree_util.tree_reduce(lambda m, leaf: jnp.maximum(m, jnp.max(jnp.abs(leaf))), grad, -1.0)
+        )
+        out[f"grad_finite_leaves_{name}"] = float(sum(finite))
+        out[f"grad_total_leaves_{name}"] = float(len(finite))
+    if with_gradients and "a" in grads and "b" in grads:
+        dot = sum(
+            float(jnp.sum(x.astype(jnp.float32) * y.astype(jnp.float32)))
+            for x, y in zip(jax.tree_util.tree_leaves(grads["a"]), jax.tree_util.tree_leaves(grads["b"]))
+        )
+        norms = float(jaxopt.tree_util.tree_l2_norm(grads["a"])) * float(jaxopt.tree_util.tree_l2_norm(grads["b"]))
+        out["grad_cosine_ab"] = dot / norms if norms > 0 else float("nan")
+    return out
 
 
 class Exp03Trainer(WanTI2VOverfit100Trainer):

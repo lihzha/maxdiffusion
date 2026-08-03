@@ -46,6 +46,7 @@ import ast
 import base64
 import datetime
 import functools
+import math
 import hashlib
 import json
 import os
@@ -227,14 +228,21 @@ def _make_train_step(denoising_loss):
             lambda m, arr: jnp.maximum(m, jnp.max(jnp.abs(arr))), grads, initializer=-1.0
         )
         state = state.apply_gradients(grads=grads)
-        # Optional per-term diagnostics: an arm that reports a composite loss also reports its
-        # components, so a non-finite value localises itself in the log instead of requiring a
-        # rerun. Keys absent from an objective's aux are simply not logged.
-        extra = {
-            f"learning/{name}": aux[name]
-            for name in ("loss_a", "loss_b", "p_ss", "k_a", "sigma_hi", "horizon_sq")
-            if name in aux
+        # EVERY aux key an objective reports is logged -- no whitelist, because a whitelist is a
+        # list that falls behind the objectives it is supposed to describe (that is exactly how C's
+        # B-side supports went missing from the S1 log). The keys already mapped below are skipped
+        # so they are not duplicated; anything else an objective wants said, gets said.
+        _mapped = {
+            "velocity_mse",
+            "sigma_mean",
+            "timestep_mean",
+            "v_pred_l2",
+            "v_target_l2",
+            "z_noisy_std",
+            "z_target_std",
+            "z_init_anchor_mse",
         }
+        extra = {f"learning/{name}": value for name, value in aux.items() if name not in _mapped}
         metrics = {
             "scalar": {
                 "learning/loss": loss,
@@ -267,6 +275,45 @@ def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, schedul
     factory's, so there is still exactly one implementation of the step.
     """
     return _make_train_step(_denoising_loss)(state, data, rng, scheduler, config, global_step=global_step)
+
+
+class NonFiniteStepError(RuntimeError):
+    """A training step reported a non-finite term. Raised BEFORE the next step consumes it."""
+
+
+def assert_step_finite(step: int, scalars: dict) -> None:
+    """Fail fast on the first non-finite named term of a step.
+
+    An objective reports ``<term>_finite`` flags (1.0/0.0) computed inside the compiled step, plus
+    the usual scalars. Both are checked: the flags name WHICH term went wrong, and the raw scalars
+    catch anything that has no flag. Raising here means the poisoned parameters never reach the next
+    iteration, and the log's last line is the failure rather than 22 lines of ``nan``.
+    """
+    failed = [
+        key.split("/", 1)[-1]
+        for key, value in sorted(scalars.items())
+        if key.endswith("_finite") and float(value) < 0.5
+    ]
+    non_finite = [
+        key.split("/", 1)[-1]
+        for key, value in sorted(scalars.items())
+        if not key.endswith("_finite") and not math.isfinite(float(value))
+    ]
+    if failed or non_finite:
+        raise NonFiniteStepError(
+            f"non-finite training step at global_step={step} (displayed as step {step + 1}): "
+            f"failing terms {failed or '[]'}, non-finite scalars {non_finite or '[]'}. "
+            f"State/optimizer/rng/batch are NOT updated past this point -- snapshot and replay."
+        )
+
+
+def format_step_details(scalars: dict) -> str:
+    """The objective-reported metrics, rendered for the step line (empty for the plain objective)."""
+    skip = {"learning/loss", "learning/grad_norm"}
+    items = [(key.split("/", 1)[-1], float(value)) for key, value in sorted(scalars.items()) if key not in skip]
+    if not items:
+        return ""
+    return " | " + " ".join(f"{name}={value:.6g}" for name, value in items)
 
 
 def _eval_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config):
@@ -1314,6 +1361,10 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
 
                 recent_loss.append(float(metrics["scalar"]["learning/loss"]))
                 recent_grad.append(float(metrics["scalar"]["learning/grad_norm"]))
+                # FAIL FAST, before the next iteration can consume poisoned parameters: an objective
+                # reports named ``*_finite`` flags, and the first one that is false names the term.
+                # Cheaper than an extra reverse pass and it stops the run where the evidence is.
+                assert_step_finite(step, metrics["scalar"])
 
                 if (step + 1) % config.log_period == 0 and jax.process_index() == 0:
                     now = datetime.datetime.now()
@@ -1321,10 +1372,15 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
                     avg_grad = sum(recent_grad) / len(recent_grad)
                     sps = len(recent_loss) / max(1e-6, (now - last_log_time).total_seconds())
                     lr = float(lr_schedule(step))
+                    # DISPLAY convention: the label is ``global_step + 1``, so "step 8/30" is
+                    # global_step 7 -- the step whose lr_schedule(7) is printed on the same line.
+                    # Every objective-reported metric is printed with it, so a failure names its own
+                    # term and support in the log instead of needing a rerun.
+                    detail = format_step_details(metrics["scalar"])
                     max_logging.log(
-                        f"step {step + 1}/{config.max_train_steps} "
+                        f"step {step + 1}/{config.max_train_steps} (global_step={step}) "
                         f"loss={avg_loss:.6f} grad_norm={avg_grad:.3f} "
-                        f"lr={lr:.2e} steps/s={sps:.3f}"
+                        f"lr={lr:.2e} steps/s={sps:.3f}{detail}"
                     )
                     if wandb_run is not None:
                         wandb_run.log(
@@ -1333,6 +1389,11 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
                                 "train/grad_norm": avg_grad,
                                 "train/lr": lr,
                                 "train/steps_per_sec": sps,
+                                "train/global_step": step,
+                                **{
+                                    f"train/{key.split('/', 1)[1]}": float(value)
+                                    for key, value in metrics["scalar"].items()
+                                },
                             },
                             step=step + 1,
                         )

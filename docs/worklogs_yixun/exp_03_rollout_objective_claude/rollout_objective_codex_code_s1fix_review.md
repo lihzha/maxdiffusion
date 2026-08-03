@@ -1,0 +1,122 @@
+# Codex code review — exp_03 S1 fix, combined-objective NaN diagnosis (76ff476)
+
+- **Date:** 2026-08-03
+- **Reviewer:** Codex `gpt-5.6-sol`, xhigh, read-only sandbox
+- **Verdict:** REQUEST-REVISION — 2 BLOCKER (the failing draw was reconstructed at the wrong global
+  step; the promised per-term diagnostics never reach the log), 3 MAJOR ("interaction, not draw" not
+  established and the sweep not exhaustive; the unroll changes A's cost and is a hypothesis, not a
+  root cause; the "<=1 ULP" claim is not what the test asserts).
+- **Also supplied:** the recommended C re-smoke package, adopted here as the instrumentation spec.
+
+## Reviewer output (verbatim, final verdict block)
+
+```
+REQUEST-REVISION
+
+1. **BLOCKER — the reconstructed failing draw is likely off by one.** The loop passes zero-based `global_step=step`, but logs `step + 1` while evaluating `lr_schedule(step)` ([trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py:1312)). Thus logged `step 8/30` at `2.8e-7` corresponds to `global_step=7`; `global_step=8` would print step 9 and use `3.2e-7`. The new test pins `global_step=8` ([test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:807)). Reconcile against the raw log before treating `(k_A=2,s_A=0,s_B=16,coin=.4463)` as the failing support.
+
+2. **BLOCKER — the promised per-term diagnostics are not actually logged.** Creating the metrics causes no extra transformer forward; the values are reused. But production consumes and prints only aggregate loss and aggregate grad norm ([trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py:1315)). W&B, when enabled, also receives only those aggregates, LR, and speed. Moreover, C stores `sigma_hi_b`/`horizon_sq_b` ([exp03 trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py:474)), while the metric whitelist accepts only unsuffixed names ([trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py:230)). The test deliberately expects C to expose only `loss_a/loss_b/p_ss/k_a`, not either B support metric ([test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:738)). A recurrence would still produce the same aggregate-only log.
+
+3. **MAJOR — “interaction, not draw” is not established, and backward remains uncovered.** Identical purpose keys are established, but standalone A, standalone B, and C reach the failing step with different parameter and optimizer histories. Their finite standalone losses therefore do not prove the same terms are finite at C’s state. The CPU sweep is also not exhaustive: it samples 120 keyed tuples under two branches, rather than enumerating the `47 × 23 × 2 = 2,162` legal combinations its name/comment claim; it uses a toy transformer, a fixed untrained state, forward-only evaluation, and does not assert B-support coverage ([test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:911)).
+
+   A purely backward-only failure would normally yield a finite same-step primal loss plus nonfinite gradients, so the reported same-step loss NaN points toward the primal path. But the sweep does not exclude reverse-mode failure, remat recomputation failure, optimizer poisoning, or a subsequent-step consequence. The fix changes only A’s stopped forward advance; B’s rematerialized backward and C’s gradient addition are unchanged.
+
+4. **MAJOR — the unroll is selection-equivalent but not execution- or cost-equivalent.** For `k_A=1`, the code computes the second 5B forward and discards its state through `where` ([exp03 trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py:320)). The outer `stop_gradient` is airtight over both forwards under JAX’s pure semantics ([exp03 trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py:365)); no reverse path through either advance remains. But runtime A advances increase from mean 1.5 to always 2, likely worsening both A and already-STOP C throughput. Also, traced `fori_loop` bounds produce dynamic trip count, not a different compiled graph shape per draw, and the construct was shared by standalone A rather than C-unique. The replacement is a plausible compiler-shape experiment, not a root-cause fix.
+
+5. **MAJOR — the ≤1-ULP claim is not tested.** “Exact” refers to comparison against a same-primitive explicit unroll at toy fp32 shapes ([test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:839)). The old-loop reference is the right reference, but its assertion is `allclose(rtol=1e-6, atol=1e-6)`, which can admit many fp32 ULPs and is not exercised at the production JIT/bf16 boundary ([test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:880)). Narrow the statement to measured tolerance or add an actual max-ULP certificate. There is no conflict if wording stays precise: exact versus explicit-unroll semantics; bounded, non-exact parity versus the replaced loop.
+
+## Recommended C re-smoke package
+
+- First resolve displayed-step versus zero-based-global-step from the raw S1 log and pin both labels, LR, supports, coin, batch identity, and RNG.
+- Run the faithful 30-step C replay with the same seed, ramp, data order, hardware/compiler flags, and per-step logging. Add a contemporaneous control timing companion and an A timing companion because the changed helper increases A’s forward count. Do not relax C’s 3.2× or A’s 1.6× STOP budgets.
+- Actually emit, every step: `loss_a`, `loss_b`, combined loss; `s_a/e_a/k_a`, `s_b/e_b`; both sigma endpoints; `coin/p_ss/take_self_generated`; B raw endpoint MSE and fp32 horizon; aggregate gradient/state/optimizer finiteness.
+- Return named `isfinite` flags from the compiled step and have the host fail immediately before the next iteration with the first failing term. This avoids silent poisoning while being lighter than extra backward passes.
+- Snapshot the exact pre-failure C state, optimizer, RNG, and batch. On that frozen state, run no-update replays of A, B, and C separately under both forward-only and `value_and_grad`.
+- Put per-term grad norms, max-abs gradients, finite-leaf counts, and A/B gradient cosine in that frozen diagnostic replay—not the timing smoke, because separate term gradients require extra reverse passes and materially change cost/compilation.
+- For root-cause discrimination, compare old-loop and new-unroll C executables with identical diagnostics from the same frozen state. A passing new C replay alone shows non-recurrence; it does not prove the loop was causal.
+```
+
+## Strengthening record — coder response (S1-fix strengthening)
+
+### 1. BLOCKER — the failing step was off by one, and the draw is materially different
+
+The loop passes the **zero-based** `global_step` to the objective and to `lr_schedule`, but logs
+`step + 1`. The learning rate pins it: warmup is 250 steps to 1e-5, i.e. 4e-8 per step, and
+`7 x 4e-8 = 2.8e-7` — exactly the value printed on the "step 8/30" line. **The failing step is
+global_step 7, not 8.**
+
+Re-derived at global_step 7, and it changes the story:
+
+| | first (wrong) reconstruction | corrected |
+| --- | --- | --- |
+| k_A, s_A, e_A | 2, 0, 2 (sigma_hi = 1.0) | **2, 1, 3** (sigma_lo = 0.97345) |
+| s_B, e_B | 16, 18 | **10, 12** (1/gap^2 = 685.4) |
+| coin vs p_ss | 0.4463 >= 0.40 -> teacher-forced | **0.2878 < 0.35 -> SELF-GENERATED** |
+
+So the failing step **used A's advance**, rather than computing and discarding it. That is a much
+more plausible locus than the top-of-grid support the first pass fingered, and it is now pinned by
+`(seed, step, purpose)` forever. The display convention is documented at the log line itself
+(`step {step+1}/... (global_step={step})`) and pinned by a test that also checks the LR arithmetic.
+
+### 2. BLOCKER — the diagnostics now reach the log, end to end
+
+The whitelist is **gone**: every key an objective puts in `aux` is forwarded as `learning/<name>`
+(a whitelist is a list that falls behind the objectives it describes — which is exactly how C's
+B-side supports went missing). The step line prints all of them via `format_step_details`, and W&B
+receives them too. A test drives a production step through the real formatter and asserts all
+sixteen promised metrics appear in the printed line: `loss_a`, `loss_b`, `k_a`, `s_a`, `e_a`,
+`s_b`, `e_b`, both sigma endpoints for both terms, `coin`, `p_ss`, `take_self_generated`,
+`raw_endpoint_mse`, `horizon_sq`.
+
+**Fail-fast** (the reviewer's spec): objectives return named `*_finite` flags computed inside the
+compiled step; `assert_step_finite` raises `NonFiniteStepError` naming the first failing term
+*before* `batch = next_batch_future.result()`, so poisoned parameters never reach the next
+iteration and the log ends at the failure instead of 22 lines of `nan`.
+
+**Frozen-state replay** (`exp03_frozen_replay`) is implemented as a separate no-update entry point,
+deliberately **not** in the training step: per-term losses, grad norms, max-abs gradients,
+finite-leaf counts and the A/B gradient cosine, with a forward-only mode. A test pins that it is
+absent from the timing path.
+
+### 3. MAJOR — the claim is softened, the sweep made honest
+
+"Interaction, not draw" is **withdrawn as a conclusion**. The purposes are identical, but the arms
+reach the failing step with different parameter and optimizer histories, so their standalone
+finiteness does not transfer. What remains established: the draws are identical *given the same
+state*, and the failing step is global_step 7 with the self-generated branch.
+
+The sweep now enumerates all **47 x 23 x 2 = 2,162** legal combinations (47 A supports = k_A=1 with
+starts 0..23 plus k_A=2 with starts 0..22; 23 B supports; both branches) by driving the loss
+internals directly rather than sampling keyed draws, with B-support coverage of the keyed sequence
+asserted separately. **Scope is stated in the test itself:** forward only, toy transformer, one
+untrained state — it excludes reverse mode, remat recomputation, optimizer poisoning and the real
+5B numerics.
+
+### 4. MAJOR — the cost change is recorded
+
+The unroll **always** runs `k_max = 2` advances, so A's runtime advance count rises from a mean of
+1.5 to 2. A's S1 measurement of 1.47x was taken under the old variable-trip loop; the new code will
+land higher and **may reach the 1.6x STOP budget**. Recorded in the function's docstring beside the
+statement that this is a **compiler-shape hypothesis, not a proven root cause** — the construct was
+shared by standalone A, which was finite, and a dynamic trip count is not a per-draw graph shape.
+
+### 5. MAJOR — the tolerance claim now says what is asserted
+
+"<=1 ULP" is replaced by the truth: `rtol/atol = 1e-6` at toy fp32 shapes, which admits many fp32
+ULPs and is not exercised at the bf16/JIT boundary. The measured worst case on that fixture
+(~2.4e-7 absolute, ~8e-8 relative) is quoted as a measurement, not as the guarantee. The **exact**
+claim is reserved for what is exactly tested: the select picks the k-th state.
+
+### Verification
+
+* Full worklogs suite: **1416 passed, 2 skipped** (+9).
+* Mutations — 5, all killed:
+  1. metric forwarding replaced by a whitelist that drops promised terms -> **4F**;
+  2. the off-by-one label reintroduced -> **2F**;
+  3. fail-fast removed from the loop -> **1F**;
+  4. the objectives stop reporting finiteness flags -> **1F**;
+  5. the frozen replay loses its gradient diagnostics -> **1F**.
+* `black`, `ruff`, staged-tree `git diff --check` clean.
+
+No push, no launch. The re-smoke package (C replay + control/A timing companions + the frozen-state
+discriminator) is instrumented and waiting on approval.

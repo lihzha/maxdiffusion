@@ -738,9 +738,38 @@ def test_each_objective_is_reachable_through_the_hook_and_runs_under_jit(objecti
     # Per-term diagnostics, so a non-finite value localises itself in the log rather than needing a
     # rerun (the S1 combined arm reported only a composite nan).
     expected_extra = {
-        "corrective_ss": {"learning/p_ss", "learning/k_a", "learning/sigma_hi"},
-        "rollout_loss": {"learning/sigma_hi", "learning/horizon_sq"},
-        "combined": {"learning/loss_a", "learning/loss_b", "learning/p_ss", "learning/k_a"},
+        "corrective_ss": {
+            "learning/p_ss",
+            "learning/k_a",
+            "learning/s_a",
+            "learning/e_a",
+            "learning/sigma_hi_a",
+            "learning/sigma_lo_a",
+            "learning/coin",
+            "learning/take_self_generated",
+        },
+        "rollout_loss": {
+            "learning/s_b",
+            "learning/e_b",
+            "learning/sigma_hi_b",
+            "learning/sigma_lo_b",
+            "learning/raw_endpoint_mse",
+            "learning/horizon_sq",
+        },
+        "combined": {
+            "learning/loss_a",
+            "learning/loss_b",
+            "learning/p_ss",
+            "learning/k_a",
+            "learning/s_a",
+            "learning/e_a",
+            "learning/s_b",
+            "learning/e_b",
+            "learning/sigma_hi_a",
+            "learning/sigma_hi_b",
+            "learning/raw_endpoint_mse",
+            "learning/horizon_sq",
+        },
     }[objective]
     assert expected_extra <= set(metrics["scalar"]), set(metrics["scalar"])
     for key in expected_extra:
@@ -802,27 +831,43 @@ def test_the_control_path_is_untouched_by_the_trial_code():
 # =============================================================================================
 
 _S1_SMOKE = {"seed": 0, "ramp_origin": 0, "ramp_steps": 10, "p_ss_max": 0.5}
+# THE LABEL CONVENTION, which the first reconstruction got wrong: the loop passes the ZERO-BASED
+# global_step to the objective and to lr_schedule, but LOGS ``step + 1``. So the S1 line
+# "step 8/30 ... lr=2.80e-07" is global_step 7 -- the learning rate pins it, because warmup is
+# 250 steps to 1e-5, i.e. 4e-8 per step, and 7 * 4e-8 = 2.8e-7 exactly.
+_S1_FAILING_GLOBAL_STEP = 7
+_S1_FAILING_DISPLAY_STEP = 8
+_S1_WARMUP_LR_PER_STEP = 1e-5 / 250
 
 
-def test_the_s1_step_eight_draw_is_pinned_forever():
-    # The exact reproducing draw, keyed by (seed, step, purpose) so it is stable for good.
-    start, end, k_a = exp03.corrective_support(seed=0, global_step=8, num_steps=_STEPS, k_a_max=2)
-    assert (int(k_a), int(start), int(end)) == (2, 0, 2)
-    start_b, end_b = exp03.rollout_support(seed=0, global_step=8, num_steps=_STEPS, k_b=2)
-    assert (int(start_b), int(end_b)) == (16, 18)
-    coin = float(jax.random.uniform(exp03.exp03_aux_key(seed=0, global_step=8, purpose="p_ss_coin"), ()))
-    assert abs(coin - 0.4463) < 1e-3
+def test_the_display_label_is_one_more_than_the_global_step():
+    # Pinned in the production source, because a mislabelled step sent the first diagnosis to the
+    # wrong draw entirely.
+    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert 'f"step {step + 1}/{config.max_train_steps} (global_step={step}) "' in source
+    assert "lr = float(lr_schedule(step))" in source  # the SAME zero-based step
+    assert abs(_S1_FAILING_GLOBAL_STEP * _S1_WARMUP_LR_PER_STEP - 2.8e-07) < 1e-12
+    assert abs(_S1_FAILING_DISPLAY_STEP * _S1_WARMUP_LR_PER_STEP - 2.8e-07) > 1e-9  # rules out step 8
+
+
+def test_the_s1_failing_draw_is_pinned_at_the_corrected_global_step():
+    # Re-derived at global_step 7. Materially different from the first (wrong) reconstruction: the
+    # coin FALLS BELOW p_ss here, so the failing step took the SELF-GENERATED branch -- A's advance
+    # was actually used, not discarded.
+    step = _S1_FAILING_GLOBAL_STEP
+    start_a, end_a, k_a = exp03.corrective_support(seed=0, global_step=step, num_steps=_STEPS, k_a_max=2)
+    assert (int(k_a), int(start_a), int(end_a)) == (2, 1, 3)
+    start_b, end_b = exp03.rollout_support(seed=0, global_step=step, num_steps=_STEPS, k_b=2)
+    assert (int(start_b), int(end_b)) == (10, 12)
+    coin = float(jax.random.uniform(exp03.exp03_aux_key(seed=0, global_step=step, purpose="p_ss_coin"), ()))
     config = SimpleNamespace(exp03_p_ss_max=0.5, exp03_p_ss_ramp_steps=10, exp03_ramp_origin=0)
-    assert abs(float(exp03.exp03_p_ss(config, 8)) - 0.4) < 1e-6
-    assert coin >= float(exp03.exp03_p_ss(config, 8))  # teacher-forced at the failing step
-    # Step 8 is the FIRST of the smoke's 30 steps whose A-support starts at the top of the grid
-    # (sigma_hi = 1.0) -- and the run never got past it, so no later one was ever reached.
-    tops = [
-        step
-        for step in range(30)
-        if int(exp03.corrective_support(seed=0, global_step=step, num_steps=_STEPS, k_a_max=2)[0]) == 0
-    ]
-    assert tops and tops[0] == 8, tops
+    p_ss = float(exp03.exp03_p_ss(config, step))
+    assert abs(coin - 0.2878) < 1e-3 and abs(p_ss - 0.35) < 1e-6
+    assert coin < p_ss, "the failing step took the SELF-GENERATED branch"
+    _, _, config_full, scheduler = _fixture()
+    sigmas, _ = _grid(config_full, scheduler)
+    assert abs(float(sigmas[int(end_a)]) - 0.97345) < 1e-4  # sigma_lo of the corrective target
+    assert abs(1.0 / (float(sigmas[int(start_b)]) - float(sigmas[int(end_b)])) ** 2 - 685.39) < 1.0
 
 
 def test_c_uses_the_same_support_purposes_as_the_standalone_arms():
@@ -879,9 +924,11 @@ def test_the_fixed_length_advance_selects_exactly_the_k_th_state(k_a):
 
 @pytest.mark.parametrize("k_a", [1, 2])
 def test_the_fixed_length_advance_matches_the_old_loop_to_rounding(k_a):
-    # ...and it agrees with the REPLACED implementation to fp32 rounding. Not bit-exact, and stated:
-    # a while_loop carry and an unroll-then-select lower to different reduction orders, worth <=1
-    # ULP (measured ~1e-7 relative). The semantics are pinned exactly by the test above.
+    # ...and it agrees with the REPLACED implementation to the tolerance ACTUALLY asserted below:
+    # rtol/atol 1e-6, which admits many fp32 ULPs and is not a ULP certificate. The measured worst
+    # case on this fixture is ~2.4e-7 absolute (~8e-8 relative), but what the test guarantees is the
+    # stated 1e-6 bound at toy fp32 shapes -- nothing tighter, and nothing at the bf16/JIT boundary.
+    # The SEMANTIC claim (the select picks the k-th state) is exact, and lives in the test above.
     state, data, config, scheduler = _fixture()
     ctx = exp03._exp03_prologue(state.params, state, data, jax.random.key(5), config, scheduler)
     velocity_fn = exp03._sampling_velocity_fn(ctx)
@@ -908,29 +955,73 @@ def test_the_fixed_length_advance_matches_the_old_loop_to_rounding(k_a):
         assert np.allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6), (k_a, start)
 
 
-def test_every_valid_support_combination_gives_a_finite_combined_loss():
-    # The sweep the S1 failure demands: every A support (k_A in {1,2} x every legal start) and every
-    # B support (23 starts), at PRODUCTION dtypes, through the real loss code -- so no other draw is
-    # hiding the same edge. Both branches of A's coin are forced.
+def test_every_legal_support_combination_gives_a_finite_forward_loss():
+    """All 47 x 23 x 2 = 2,162 legal (A-support, B-support, branch) combinations.
+
+    47 A supports (k_A=1: starts 0..23; k_A=2: starts 0..22), 23 B supports, both coin branches.
+    Evaluated by driving the loss internals directly rather than through the keyed draws, so the
+    enumeration is exhaustive rather than a sample of what the keys happen to produce.
+
+    SCOPE, stated: forward only, a toy transformer, one untrained state. It proves no legal support
+    is structurally singular in the primal. It does NOT cover reverse mode, remat recomputation,
+    optimizer poisoning, or the real 5B numerics -- the frozen-state replay is what covers those.
+    """
     state, data, config, scheduler = _fixture(
         objective="combined", weights_dtype="bfloat16", activations_dtype="bfloat16", param_dtype=jnp.bfloat16
     )
-    sigmas, _ = _grid(config, scheduler)
+    ctx = exp03._exp03_prologue(state.params, state, data, jax.random.key(3), config, scheduler)
+    velocity_eval = exp03._sampling_velocity_fn(ctx)
+    a_supports = [(k, s) for k in (1, 2) for s in range(_STEPS - k)]
+    b_supports = list(range(_STEPS - 2))
+    assert len(a_supports) == 47 and len(b_supports) == 23
+
+    # A's term at every support, both branches.
     checked = 0
-    for p_ss_max in (0.0, 1.0):  # teacher-forced and self-generated branches
-        forced = SimpleNamespace(**{**vars(config), "exp03_p_ss_max": p_ss_max, "exp03_p_ss_ramp_steps": 0})
-        for step in range(120):  # 120 distinct (k_A, s_A, s_B, coin) draws
-            global_step = jnp.asarray(step, jnp.int32)
-            loss, aux = exp03._combined_loss(
-                state.params, state, data, jax.random.key(3), forced, scheduler, global_step=global_step
-            )
-            assert np.isfinite(float(loss)), (p_ss_max, step, float(aux["loss_a"]), float(aux["loss_b"]))
-            assert np.isfinite(float(aux["loss_a"])) and np.isfinite(float(aux["loss_b"]))
+    for k_a, start in a_supports:
+        end = start + k_a
+        sigma_lo = ctx.sigmas[end].astype(jnp.float32)
+        teacher = exp03._interpolant_at(ctx, end)
+        advanced = exp03._advance_with_sampler(
+            ctx,
+            exp03._interpolant_at(ctx, start).astype(ctx.weights_dtype),
+            jnp.asarray(start, jnp.int32),
+            jnp.asarray(k_a, jnp.int32),
+            velocity_fn=velocity_eval,
+            k_max=2,
+        ).astype(jnp.float32)
+        for branch in (teacher, advanced):
+            z_lo = apply_first_frame_pin(branch, ctx.z_i0)
+            v_pred = exp03._forward_velocity(ctx, z_lo, end)
+            loss = masked_velocity_mse(v_pred, (z_lo - ctx.z_video) / sigma_lo, ctx.b)
+            assert np.isfinite(float(loss)), (k_a, start, float(sigma_lo))
             checked += 1
-    assert checked == 240
-    # ...and the supports really were swept, including the top-of-grid start that step 8 drew.
-    starts = {int(exp03.corrective_support(seed=0, global_step=s, num_steps=_STEPS, k_a_max=2)[0]) for s in range(120)}
-    assert 0 in starts and len(starts) > 15, sorted(starts)
+    assert checked == 94
+
+    # B's term at every support.
+    for start in b_supports:
+        end = start + 2
+        z = exp03._interpolant_at(ctx, start).astype(ctx.weights_dtype)
+        for offset in range(2):
+            z = overfit100_sampler_step(
+                z,
+                start + offset,
+                velocity_fn=velocity_eval,
+                sigmas=ctx.sigmas,
+                timesteps=ctx.timesteps,
+                context=ctx.context,
+                z_i0=ctx.z_i0.astype(ctx.weights_dtype),
+            )
+        horizon = (ctx.sigmas[start].astype(jnp.float32) - ctx.sigmas[end].astype(jnp.float32)) ** 2
+        loss_b = masked_velocity_mse(z.astype(jnp.float32), exp03._interpolant_at(ctx, end), ctx.b) / horizon
+        assert np.isfinite(float(loss_b)), start
+    # ...and every combination of the two is finite because each term is (lambda-weighted sum).
+    assert 47 * 23 * 2 == 2162
+
+
+def test_the_keyed_draws_cover_the_b_supports_they_claim_to():
+    # Coverage of the actual keyed sequence, asserted rather than assumed.
+    drawn = {int(exp03.rollout_support(seed=0, global_step=s, num_steps=_STEPS, k_b=2)[0]) for s in range(400)}
+    assert drawn == set(range(23)), sorted(set(range(23)) - drawn)
 
 
 def test_the_b_normalizer_is_finite_and_computed_in_fp32_at_every_support():
@@ -949,3 +1040,128 @@ def test_the_b_normalizer_is_finite_and_computed_in_fp32_at_every_support():
     assert abs(min(values) - 18.42) < 0.1
     source = Path(exp03.__file__).read_text()
     assert "sigmas[start].astype(jnp.float32)" in source and "sigmas[end].astype(jnp.float32)" in source
+
+
+# =============================================================================================
+# 8. The diagnostics must reach the LOG, and stop the run before the next step.
+# =============================================================================================
+
+_PROMISED_METRICS = {
+    "loss_a",
+    "loss_b",
+    "k_a",
+    "s_a",
+    "e_a",
+    "s_b",
+    "e_b",
+    "sigma_hi_a",
+    "sigma_lo_a",
+    "sigma_hi_b",
+    "sigma_lo_b",
+    "coin",
+    "p_ss",
+    "take_self_generated",
+    "raw_endpoint_mse",
+    "horizon_sq",
+}
+
+
+def test_every_promised_per_term_metric_reaches_the_printed_line(monkeypatch):
+    # END TO END through the production formatter: the S1 failure logged only an aggregate nan, so
+    # what matters is not that the values exist but that they are PRINTED. A fake logger captures
+    # the line a production step would emit.
+    state, data, config, scheduler = _fixture(objective="combined")
+    trainer = exp03.Exp03Trainer.__new__(exp03.Exp03Trainer)
+    trainer.config = config
+    _, step_fn = trainer._loss_and_step_fns()
+    _, metrics, _ = jax.jit(lambda s, d, r, g: step_fn(s, d, r, scheduler, config, global_step=g))(
+        state, data, jax.random.key(3), jnp.asarray(7, jnp.int32)
+    )
+
+    line = parent.format_step_details(metrics["scalar"])
+    missing = [name for name in _PROMISED_METRICS if f"{name}=" not in line]
+    assert not missing, missing
+    # ...and the whitelist cannot fall behind: every aux key an objective reports is forwarded.
+    source = inspect.getsource(parent._make_train_step)
+    assert "for name, value in aux.items() if name not in _mapped" in source
+
+
+def test_the_step_line_carries_the_zero_based_global_step(monkeypatch):
+    # The label convention, in the production log line rather than only in a comment.
+    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert "(global_step={step})" in source
+    assert 'format_step_details(metrics["scalar"])' in source
+
+
+def test_a_non_finite_term_stops_the_run_and_names_itself():
+    # FAIL FAST: the flags name the term, and the raw scalars catch anything unflagged.
+    parent.assert_step_finite(3, {"learning/loss": 1.0, "learning/loss_a_finite": 1.0})
+    with pytest.raises(parent.NonFiniteStepError) as excinfo:
+        parent.assert_step_finite(
+            7, {"learning/loss": float("nan"), "learning/loss_b_finite": 0.0, "learning/loss_a_finite": 1.0}
+        )
+    message = str(excinfo.value)
+    assert "global_step=7" in message and "step 8" in message
+    assert "loss_b_finite" in message and "loss" in message
+    # An objective with no flags is still covered by the raw-scalar check.
+    with pytest.raises(parent.NonFiniteStepError):
+        parent.assert_step_finite(0, {"learning/loss": float("inf")})
+
+
+def test_the_training_loop_checks_finiteness_before_the_next_step():
+    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert 'assert_step_finite(step, metrics["scalar"])' in source
+    # ...before the batch for the next iteration is consumed.
+    assert source.index("assert_step_finite") < source.index("batch = next_batch_future.result()")
+
+
+def test_the_objectives_report_finiteness_flags():
+    state, data, config, scheduler = _fixture(objective="combined")
+    _, aux = exp03._combined_loss(
+        state.params, state, data, jax.random.key(3), config, scheduler, global_step=jnp.asarray(7, jnp.int32)
+    )
+    for flag in ("loss_a_finite", "loss_b_finite", "loss_combined_finite", "advance_finite", "z_end_finite"):
+        assert flag in aux and float(aux[flag]) == 1.0, flag
+
+
+def test_the_frozen_replay_reports_per_term_losses_and_gradients():
+    # The discriminator, off the timing path: per-term losses, grad norms, max-abs, finite-leaf
+    # counts and the A/B gradient cosine -- everything needed to say which term and which pass.
+    state, data, config, scheduler = _fixture(objective="combined")
+    report = exp03.exp03_frozen_replay(
+        state, data, jax.random.key(3), config, scheduler, global_step=jnp.asarray(7, jnp.int32)
+    )
+    for key in (
+        "loss_a",
+        "loss_b",
+        "loss_c",
+        "loss_a_finite",
+        "grad_norm_a",
+        "grad_norm_b",
+        "grad_norm_c",
+        "grad_max_abs_a",
+        "grad_finite_leaves_a",
+        "grad_total_leaves_b",
+        "grad_cosine_ab",
+    ):
+        assert key in report, key
+    assert report["loss_a_finite"] == 1.0
+    assert report["grad_finite_leaves_c"] == report["grad_total_leaves_c"]
+    assert -1.0001 <= report["grad_cosine_ab"] <= 1.0001
+    # C's loss really is the weighted sum of the two terms it reports.
+    lam = float(config.exp03_lambda)
+    assert abs(report["loss_c"] - (lam * report["loss_a"] + (1 - lam) * report["loss_b"])) < 1e-4
+
+    # Forward-only mode skips the extra reverse passes entirely.
+    forward_only = exp03.exp03_frozen_replay(
+        state, data, jax.random.key(3), config, scheduler, global_step=jnp.asarray(7, jnp.int32), with_gradients=False
+    )
+    assert "grad_norm_a" not in forward_only and forward_only["loss_a"] == report["loss_a"]
+
+
+def test_the_frozen_replay_is_not_in_the_training_step():
+    # It costs extra reverse passes; putting it in the timing path would change the thing being
+    # measured and the compilation being blamed.
+    assert "exp03_frozen_replay" not in inspect.getsource(parent._make_train_step)
+    for loss_fn in exp03.EXP03_LOSSES.values():
+        assert "exp03_frozen_replay" not in inspect.getsource(loss_fn)
