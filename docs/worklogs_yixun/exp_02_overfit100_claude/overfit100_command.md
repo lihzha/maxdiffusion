@@ -447,3 +447,11 @@ the 1e-5 trend; instrument decides.
 Same predeclared measurement as Jobs 35–36. lr5e5 SUCCEEDED attempt 3 (two maintenance kills; each restart
 from the 10k seed per the no-intermediate-saves design). Job id: `20260802-225142-dba871b9-exp02-o100-inst-lr5e5-yixun`.
 
+## Jobs 38–39 — v6e-8 SSIM EVALS at lr2e5-12500 + lr5e5-12500 — launched 2026-08-03
+
+**Approved by Yixun ("approve the SSIM evals").** Settled eval path (validate_wan_overfit100.sh,
+s3_intermediate, seed 0, correct, canonical-100; resume staging + ffmpeg live). Purpose: does the exp_02
+loss→SSIM line (SSIM ≈ 0.9885 − 1.201·loss, fit on the 1e-5 path) hold for checkpoints reached at higher
+LR? Predictions ON the line: lr2e5 (loss 0.09793) → 0.8709; lr5e5 (loss 0.06061) → **0.9157**.
+Line-break in either direction is decision-grade (see _results.md sweep section).
+
