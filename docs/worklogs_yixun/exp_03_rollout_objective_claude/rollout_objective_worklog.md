@@ -386,3 +386,24 @@
 - **Result** — suite 1477 passed / 2 skipped (+7); six mutants killed.
 - **Next** — re-review; on APPROVE, S1.5 launches with the reviewer's spec (fresh RUN_NAME,
   CHECKPOINT_DIR = the exp_02 s3 run's checkpoints, CHECKPOINT_STEP=10000).
+
+## 2026-08-03T16:00:00Z — S1.5 hardware fix: real batch-pull call + attribute-resolution guard
+
+- **Failure** — S1.5's first hardware run died at startup: `gen.load_next_batch` is a name the eval
+  module has never had. The tests BUILT batches instead of PULLING them, so nothing exercised the
+  module boundary.
+- **Fix** — the probe now imports `load_next_batch` from `maxdiffusion.train_utils` and calls it as
+  `load_next_batch(iterator, None, config)`, exactly as `start_training` does; the iterator is still
+  built with the trainer's `_load_dataset(mesh, is_training=True, seed=config.seed + start_step)`,
+  which a test now compares against the training loop's own source rather than against memory.
+- **Bug-class guard** — `test_every_module_attribute_reference_resolves` walks each module's AST for
+  every `alias.attr` reference on an imported module and asserts the attribute exists. Cheap, needs
+  no hardware, parameterized over the probe, the exp_03 trainer and the parent trainer — it catches
+  every wrong-attribute reference at test time.
+- **Executed, not simulated** — the real `train_utils.load_next_batch` is driven against a real
+  iterator, including the `reuse_example_batch` semantics, and the probe is pinned to ask for a fresh
+  batch each time.
+- **Result** — suite 1482 passed / 2 skipped (+5). Four mutants killed: the exact hardware failure
+  reintroduced (2F); a different bogus module attribute (1F); the pull reverted to bare `next()`
+  (2F); the iterator seed drifting from the training loop (2F).
+- **Next** — fast re-review, then relaunch under the standing grant.
