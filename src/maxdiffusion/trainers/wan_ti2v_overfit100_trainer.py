@@ -227,6 +227,14 @@ def _make_train_step(denoising_loss):
             lambda m, arr: jnp.maximum(m, jnp.max(jnp.abs(arr))), grads, initializer=-1.0
         )
         state = state.apply_gradients(grads=grads)
+        # Optional per-term diagnostics: an arm that reports a composite loss also reports its
+        # components, so a non-finite value localises itself in the log instead of requiring a
+        # rerun. Keys absent from an objective's aux are simply not logged.
+        extra = {
+            f"learning/{name}": aux[name]
+            for name in ("loss_a", "loss_b", "p_ss", "k_a", "sigma_hi", "horizon_sq")
+            if name in aux
+        }
         metrics = {
             "scalar": {
                 "learning/loss": loss,
@@ -240,6 +248,7 @@ def _make_train_step(denoising_loss):
                 "learning/z_noisy_std": aux["z_noisy_std"],
                 "learning/z_target_std": aux["z_target_std"],
                 "learning/z_init_anchor_mse": aux["z_init_anchor_mse"],
+                **extra,
             },
             "scalars": {},
         }

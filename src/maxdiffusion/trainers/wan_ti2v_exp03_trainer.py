@@ -307,21 +307,30 @@ def rollout_support(*, seed: int, global_step, num_steps: int, k_b: int):
     return start, start + int(k_b)
 
 
-def _advance_with_sampler(ctx, z, start, end, *, velocity_fn):
-    """Advance the EXTRACTED sampler step from grid index ``start`` to ``end`` (the one-sampler rule)."""
+def _advance_with_sampler(ctx, z, start, k, *, velocity_fn, k_max):
+    """Advance the EXTRACTED sampler step ``k`` times from grid index ``start`` (one-sampler rule).
 
-    def _body(index, current):
-        return overfit100_sampler_step(
-            current,
-            index,
+    FIXED LENGTH, not ``fori_loop(start, end)``: ``k`` is a traced draw, and a loop with traced
+    bounds lowers to a ``while_loop`` -- dynamic control flow inside a differentiated trace, with a
+    step count that varies per step and forces a different graph shape than the arms that do not
+    have it. ``k_max`` is 2, so the loop is unrolled to ``k_max`` steps and the state after ``k`` of
+    them is SELECTED. Mathematically identical for every ``k in 1..k_max`` (pinned by a test against
+    the previous implementation), while the traced program is now the same shape at every step.
+    """
+    state = z
+    result = z
+    for offset in range(int(k_max)):
+        state = overfit100_sampler_step(
+            state,
+            start + offset,
             velocity_fn=velocity_fn,
             sigmas=ctx.sigmas,
             timesteps=ctx.timesteps,
             context=ctx.context,
             z_i0=ctx.z_i0.astype(ctx.weights_dtype),
         )
-
-    return jax.lax.fori_loop(start, end, _body, z)
+        result = jnp.where(k == offset + 1, state, result)
+    return result
 
 
 def _corrective_ss_loss(params, state, data, rng, config, scheduler, *, global_step=None):
@@ -358,8 +367,9 @@ def _corrective_ss_loss(params, state, data, rng, config, scheduler, *, global_s
             ctx,
             jax.lax.stop_gradient(z_hi).astype(ctx.weights_dtype),
             start,
-            end,
+            k_a,
             velocity_fn=_sampling_velocity_fn(ctx),
+            k_max=int(getattr(config, "exp03_k_a", 2)),
         )
     ).astype(jnp.float32)
 
@@ -467,6 +477,8 @@ def _combined_loss(params, state, data, rng, config, scheduler, *, global_step=N
     aux["loss_b"] = loss_b
     aux["lambda"] = lam
     aux["z_target_std"] = aux_b["z_target_std"]
+    aux["sigma_hi_b"] = aux_b["sigma_hi"]
+    aux["horizon_sq_b"] = aux_b["horizon_sq"]
     return loss, aux
 
 

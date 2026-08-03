@@ -22,6 +22,8 @@ The claims that have to hold before any of this is worth TPU time:
 
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -392,7 +394,12 @@ def _reference_corrective(params, state, data, rng, config, scheduler, *, global
     z_hi = exp03._interpolant_at(ctx, start)
     teacher = exp03._interpolant_at(ctx, end)
     advanced = exp03._advance_with_sampler(
-        ctx, z_hi.astype(ctx.weights_dtype), start, end, velocity_fn=exp03._sampling_velocity_fn(ctx)
+        ctx,
+        z_hi.astype(ctx.weights_dtype),
+        start,
+        end - start,
+        velocity_fn=exp03._sampling_velocity_fn(ctx),
+        k_max=int(config.exp03_k_a),
     ).astype(jnp.float32)
     if detach_advance:
         advanced = jax.lax.stop_gradient(advanced)
@@ -714,7 +721,7 @@ def test_each_objective_is_reachable_through_the_hook_and_runs_under_jit(objecti
 
     jitted = jax.jit(compiled)
     new_state, metrics, rng = jitted(state, data, jax.random.key(3), jnp.asarray(5, jnp.int32))
-    assert set(metrics["scalar"]) == {
+    base_keys = {
         "learning/loss",
         "learning/velocity_mse",
         "learning/grad_norm",
@@ -727,6 +734,17 @@ def test_each_objective_is_reachable_through_the_hook_and_runs_under_jit(objecti
         "learning/z_target_std",
         "learning/z_init_anchor_mse",
     }
+    assert base_keys <= set(metrics["scalar"])
+    # Per-term diagnostics, so a non-finite value localises itself in the log rather than needing a
+    # rerun (the S1 combined arm reported only a composite nan).
+    expected_extra = {
+        "corrective_ss": {"learning/p_ss", "learning/k_a", "learning/sigma_hi"},
+        "rollout_loss": {"learning/sigma_hi", "learning/horizon_sq"},
+        "combined": {"learning/loss_a", "learning/loss_b", "learning/p_ss", "learning/k_a"},
+    }[objective]
+    assert expected_extra <= set(metrics["scalar"]), set(metrics["scalar"])
+    for key in expected_extra:
+        assert np.isfinite(float(metrics["scalar"][key])), key
     assert np.isfinite(float(metrics["scalar"]["learning/loss"]))
     assert float(metrics["scalar"]["learning/grad_norm"]) > 0.0
     updated = jax.tree_util.tree_leaves(new_state.params)[0]
@@ -766,3 +784,168 @@ def test_the_control_path_is_untouched_by_the_trial_code():
         assert np.array_equal(np.asarray(left), np.asarray(right))
     for key, value in theirs[1]["scalar"].items():
         assert np.array_equal(np.asarray(mine[1]["scalar"][key]), np.asarray(value)), key
+
+
+# =============================================================================================
+# 7. S1 fallout — the combined arm's step-8 NaN.
+#
+# The S1 smoke ran control/A/B/C for 30 steps from init. A and B were finite throughout; C reported
+# loss=nan from step 8 onward with the learning rate still in warmup (2.8e-7), so a gradient-driven
+# divergence is arithmetically impossible -- the step-8 computation itself produced the nan.
+#
+# THE FIRST QUESTION, settled here by construction: C's support purposes are the SAME purposes the
+# standalone arms use, so at global step 8 C drew exactly what A's arm and B's arm drew at their own
+# step 8 -- and both were finite there. The nan is therefore an INTERACTION of the two terms in one
+# trace, not an unlucky draw. What is special about step 8 is that it is the only step in the run
+# whose A-support starts at grid index 0 (sigma_hi = 1.0, the top of the grid) with the branch
+# teacher-forced.
+# =============================================================================================
+
+_S1_SMOKE = {"seed": 0, "ramp_origin": 0, "ramp_steps": 10, "p_ss_max": 0.5}
+
+
+def test_the_s1_step_eight_draw_is_pinned_forever():
+    # The exact reproducing draw, keyed by (seed, step, purpose) so it is stable for good.
+    start, end, k_a = exp03.corrective_support(seed=0, global_step=8, num_steps=_STEPS, k_a_max=2)
+    assert (int(k_a), int(start), int(end)) == (2, 0, 2)
+    start_b, end_b = exp03.rollout_support(seed=0, global_step=8, num_steps=_STEPS, k_b=2)
+    assert (int(start_b), int(end_b)) == (16, 18)
+    coin = float(jax.random.uniform(exp03.exp03_aux_key(seed=0, global_step=8, purpose="p_ss_coin"), ()))
+    assert abs(coin - 0.4463) < 1e-3
+    config = SimpleNamespace(exp03_p_ss_max=0.5, exp03_p_ss_ramp_steps=10, exp03_ramp_origin=0)
+    assert abs(float(exp03.exp03_p_ss(config, 8)) - 0.4) < 1e-6
+    assert coin >= float(exp03.exp03_p_ss(config, 8))  # teacher-forced at the failing step
+    # Step 8 is the FIRST of the smoke's 30 steps whose A-support starts at the top of the grid
+    # (sigma_hi = 1.0) -- and the run never got past it, so no later one was ever reached.
+    tops = [
+        step
+        for step in range(30)
+        if int(exp03.corrective_support(seed=0, global_step=step, num_steps=_STEPS, k_a_max=2)[0]) == 0
+    ]
+    assert tops and tops[0] == 8, tops
+
+
+def test_c_uses_the_same_support_purposes_as_the_standalone_arms():
+    # The finding that turns the diagnosis from "bad draw" into "interaction": identical purposes,
+    # identical seed, identical step => identical draws in C and in the A/B arms.
+    for step in (7, 8, 9):
+        assert exp03.corrective_support(seed=0, global_step=step, num_steps=_STEPS, k_a_max=2)[0] is not None
+    source = Path(exp03.__file__).read_text()
+    assert source.count('purpose="index_support"') == 1  # ONE draw site, shared by A and C's A-term
+    assert source.count('purpose="index_support_rollout"') == 1
+    assert source.count('purpose="k_a_draw"') == 1
+
+
+@pytest.mark.parametrize("k_a", [1, 2])
+def test_the_fixed_length_advance_selects_exactly_the_k_th_state(k_a):
+    # The structural change: A's advance no longer uses fori_loop with TRACED bounds (dynamic
+    # control flow inside the differentiated trace, and a graph whose shape depends on the step's
+    # draw). THE claim is that the unroll-then-select picks exactly the state k steps in -- checked
+    # EXACTLY against an explicit k-step unroll with the same traced start.
+    state, data, config, scheduler = _fixture()
+    ctx = exp03._exp03_prologue(state.params, state, data, jax.random.key(5), config, scheduler)
+    velocity_fn = exp03._sampling_velocity_fn(ctx)
+    for start in (0, 5, 22):
+        traced_start = jnp.asarray(start, jnp.int32)
+        z = exp03._interpolant_at(ctx, start).astype(ctx.weights_dtype)
+        got = exp03._advance_with_sampler(
+            ctx, z, traced_start, jnp.asarray(k_a, jnp.int32), velocity_fn=velocity_fn, k_max=2
+        )
+        want = z
+        for offset in range(k_a):
+            want = overfit100_sampler_step(
+                want,
+                traced_start + offset,
+                velocity_fn=velocity_fn,
+                sigmas=ctx.sigmas,
+                timesteps=ctx.timesteps,
+                context=ctx.context,
+                z_i0=ctx.z_i0.astype(ctx.weights_dtype),
+            )
+        assert np.array_equal(np.asarray(got), np.asarray(want)), (k_a, start)
+    # Structural, so the docstring explaining what was replaced is not mistaken for the thing:
+    # no dynamic-control-flow call survives in the advance.
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(exp03._advance_with_sampler)))
+    called = {
+        getattr(node.func, "attr", getattr(node.func, "id", ""))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    assert not called & {"fori_loop", "while_loop", "scan"}, called
+
+
+@pytest.mark.parametrize("k_a", [1, 2])
+def test_the_fixed_length_advance_matches_the_old_loop_to_rounding(k_a):
+    # ...and it agrees with the REPLACED implementation to fp32 rounding. Not bit-exact, and stated:
+    # a while_loop carry and an unroll-then-select lower to different reduction orders, worth <=1
+    # ULP (measured ~1e-7 relative). The semantics are pinned exactly by the test above.
+    state, data, config, scheduler = _fixture()
+    ctx = exp03._exp03_prologue(state.params, state, data, jax.random.key(5), config, scheduler)
+    velocity_fn = exp03._sampling_velocity_fn(ctx)
+    for start in (0, 5, 22):
+        traced_start = jnp.asarray(start, jnp.int32)
+        z = exp03._interpolant_at(ctx, start).astype(ctx.weights_dtype)
+        got = exp03._advance_with_sampler(
+            ctx, z, traced_start, jnp.asarray(k_a, jnp.int32), velocity_fn=velocity_fn, k_max=2
+        )
+        want = jax.lax.fori_loop(  # the previous implementation, verbatim
+            traced_start,
+            traced_start + k_a,
+            lambda index, current: overfit100_sampler_step(
+                current,
+                index,
+                velocity_fn=velocity_fn,
+                sigmas=ctx.sigmas,
+                timesteps=ctx.timesteps,
+                context=ctx.context,
+                z_i0=ctx.z_i0.astype(ctx.weights_dtype),
+            ),
+            z,
+        )
+        assert np.allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6), (k_a, start)
+
+
+def test_every_valid_support_combination_gives_a_finite_combined_loss():
+    # The sweep the S1 failure demands: every A support (k_A in {1,2} x every legal start) and every
+    # B support (23 starts), at PRODUCTION dtypes, through the real loss code -- so no other draw is
+    # hiding the same edge. Both branches of A's coin are forced.
+    state, data, config, scheduler = _fixture(
+        objective="combined", weights_dtype="bfloat16", activations_dtype="bfloat16", param_dtype=jnp.bfloat16
+    )
+    sigmas, _ = _grid(config, scheduler)
+    checked = 0
+    for p_ss_max in (0.0, 1.0):  # teacher-forced and self-generated branches
+        forced = SimpleNamespace(**{**vars(config), "exp03_p_ss_max": p_ss_max, "exp03_p_ss_ramp_steps": 0})
+        for step in range(120):  # 120 distinct (k_A, s_A, s_B, coin) draws
+            global_step = jnp.asarray(step, jnp.int32)
+            loss, aux = exp03._combined_loss(
+                state.params, state, data, jax.random.key(3), forced, scheduler, global_step=global_step
+            )
+            assert np.isfinite(float(loss)), (p_ss_max, step, float(aux["loss_a"]), float(aux["loss_b"]))
+            assert np.isfinite(float(aux["loss_a"])) and np.isfinite(float(aux["loss_b"]))
+            checked += 1
+    assert checked == 240
+    # ...and the supports really were swept, including the top-of-grid start that step 8 drew.
+    starts = {int(exp03.corrective_support(seed=0, global_step=s, num_steps=_STEPS, k_a_max=2)[0]) for s in range(120)}
+    assert 0 in starts and len(starts) > 15, sorted(starts)
+
+
+def test_the_b_normalizer_is_finite_and_computed_in_fp32_at_every_support():
+    # The enumeration behind the diagnosis: the tightest 2-step horizon is at the TOP of the grid
+    # (start 0), where the normalizer reaches ~3422x. It is finite everywhere and computed in fp32 --
+    # in bfloat16 the same subtraction would land on 0.015625 and inflate it to 4096x.
+    _, _, config, scheduler = _fixture(objective="rollout_loss")
+    sigmas, _ = _grid(config, scheduler)
+    values = []
+    for start in range(_STEPS - 2):
+        gap = float(sigmas[start]) - float(sigmas[start + 2])
+        assert gap > 0.0
+        values.append(1.0 / gap**2)
+        assert np.isfinite(values[-1])
+    assert abs(max(values) - 3422.23) < 1.0 and values.index(max(values)) == 0
+    assert abs(min(values) - 18.42) < 0.1
+    source = Path(exp03.__file__).read_text()
+    assert "sigmas[start].astype(jnp.float32)" in source and "sigmas[end].astype(jnp.float32)" in source
