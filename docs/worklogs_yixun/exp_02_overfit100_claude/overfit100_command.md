@@ -500,3 +500,11 @@ Job 44 FAILED attempt 2: worker-5 SIGABRT inside `maybe_initialize_jax_distribut
 barrier, pre-code) — same infra signature as exp_02 S3 attempt 1. Standing auto-resubmit policy (no
 code/config change): **Job 44b** `20260803-171525-545493a4-exp02-o100-lr5e5x2b-yixun`.
 
+## Jobs 45–46 — lr5e5@17,500 measurement pair — launched 2026-08-03T~20:10Z
+
+Job 44b SUCCEEDED (17,500 reached; two prior infra kills classified + resubmitted on record). Per the
+Job-44 approval: instrument `20260803-201009-74336dfa-…-inst-l17` ({15000 anchor = 0.03927 exact, 17500},
+fresh output dir `validation_loss_17500/`) + SSIM `20260803-201058-94fb61a2-exp02-o100-ssim-l17-yixun` (s3_intermediate, canonical, seed 0). Projection
+on the line: mean loss ~0.025–0.030 → mean SSIM ~0.953–0.959; the bar count (51/100 → ?) decides whether
+the formal 3-seed + full-set verdict proposal goes to Yixun.
+
