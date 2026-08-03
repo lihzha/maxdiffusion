@@ -1277,8 +1277,8 @@ def test_the_snapshot_touches_only_addressable_data(tmp_path):
 
 
 def test_a_non_primary_host_materializes_nothing(tmp_path):
-    # If the extras were built before the is_primary gate, this would raise on every worker -- and
-    # it would raise BEFORE the collective save those workers must reach.
+    # Within a single process_count==1 run there is only one host, but the primary/non-primary split
+    # is still the code's contract: the extras are process-0 work and the collective is everyone's.
     batch = {"z_i0": _UnaddressableArray(np.zeros((2, 3)))}
     monitored = SimpleNamespace(touched=False)
 
@@ -1306,10 +1306,35 @@ def test_a_non_primary_host_materializes_nothing(tmp_path):
     assert events == ["save", "wait"]  # the collective still ran
     assert monitored.touched is False  # ...and nothing was materialized
     assert not Path(tmp_path / "worker").exists()
-    # Structurally: the materialization lives INSIDE the primary-only branch.
     source = inspect.getsource(parent.save_pre_step_snapshot)
     assert source.index("if is_primary:") < source.index("_addressable_arrays(")
     assert source.index("_addressable_arrays(") < source.index("if save_state is not None:")
+
+
+@pytest.mark.parametrize("process_count,enabled", [(1, True), (2, False), (16, False)])
+def test_the_snapshot_is_gated_to_a_single_host(process_count, enabled):
+    # The eval-resume precedent: on one host the primary's addressable shards ARE the whole batch,
+    # so the snapshot is complete; on many hosts each process owns a slice, and a file holding a
+    # fraction of a batch is worse than no file. Multi-host capture is predeclared as its own round.
+    reason = parent.snapshot_gate_reason(process_count)
+    assert (reason is None) is enabled
+    if not enabled:
+        assert f"process_count={process_count}" in reason
+        assert "DISABLED" in reason and "predeclared" in reason
+
+
+def test_the_loop_honours_the_snapshot_gate_and_keeps_running():
+    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert "snapshot_disabled = snapshot_gate_reason(jax.process_count())" in source
+    assert "and not snapshot_disabled:" in source
+    # The reason is LOGGED (once, on process 0) rather than silently swallowed...
+    assert 'max_logging.log(f"[wan_overfit100] {snapshot_disabled}")' in source
+    # ...and a disabled snapshot does not stop the run: no raise near the gate.
+    armed = source[source.index("snapshot_disabled = snapshot_gate_reason") :]
+    assert "raise" not in armed.split("next_batch_future")[0]
+    # The docstring predeclares the multi-host round rather than pretending it exists.
+    doc = parent.snapshot_gate_reason.__doc__ or ""
+    assert "reassembler" in doc and "its own reviewed round" in doc
 
 
 def test_the_loop_passes_the_host_role_rather_than_a_zero_period():
@@ -1471,8 +1496,14 @@ def test_the_collective_save_runs_on_every_host_and_only_extras_are_host_scoped(
     assert "if is_primary:" in source
     assert source.index("if is_primary:") < source.index("if save_state is not None:")
     loop = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
-    armed = loop[loop.index("snapshot_before_step >= 0") :]
-    assert "jax.process_index() == 0" not in armed.split("save_pre_step_snapshot")[0]
+    armed_condition = next(line for line in loop.splitlines() if "step == snapshot_before_step" in line)
+    # The ARMED CONDITION must not be host-gated -- every process has to reach the collective.
+    assert "process_index" not in armed_condition, armed_condition
+    # The only process-index guards before the call are logging ones.
+    prefix = loop[loop.index("snapshot_before_step = ") : loop.index("save_pre_step_snapshot(")]
+    for line in prefix.splitlines():
+        if "process_index" in line:
+            assert "max_logging.log" in line or "if snapshot_before_step >= 0 and snapshot_disabled" in line, line
 
 
 def test_the_loop_arms_the_snapshot_from_the_config_flag():

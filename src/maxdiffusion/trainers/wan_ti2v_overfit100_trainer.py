@@ -299,6 +299,27 @@ def _addressable_arrays(values: dict) -> tuple[dict, dict]:
     return arrays, shard_index
 
 
+def snapshot_gate_reason(process_count: int) -> str | None:
+    """Why the pre-step snapshot is disabled, or ``None`` if it may run.
+
+    SINGLE-HOST ONLY, by the eval-resume precedent. On one host the primary's addressable shards ARE
+    the whole batch, so what is written is complete and a replay is exact. On many hosts each
+    process owns a different slice: a complete snapshot would need every host to write its own
+    shards and a tested reassembler to put them back together. That is real work in service of a
+    hypothetical -- an S2-scale non-finite step -- and it belongs in its own reviewed round if that
+    ever happens, rather than shipping half of it now and discovering at 3am that the file on disk
+    is a quarter of a batch. Disabled runs say so, naming ``process_count``.
+    """
+    if int(process_count) > 1:
+        return (
+            f"pre-step snapshot DISABLED: process_count={int(process_count)} > 1. The snapshot writes only "
+            f"the primary host's addressable shards, which is the whole batch on one host and a fraction of "
+            f"it on many; multi-host capture (every host writing its shards + a tested reassembler) is "
+            f"predeclared as its own round and is not implemented."
+        )
+    return None
+
+
 def save_pre_step_snapshot(
     directory: str, *, step: int, rng, batch: dict, save_state=None, wait=None, is_primary: bool = True
 ) -> dict:
@@ -1504,8 +1525,11 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             snapshot_before_step = int(getattr(config, "exp03_snapshot_before_step", -1))
+            snapshot_disabled = snapshot_gate_reason(jax.process_count())
+            if snapshot_before_step >= 0 and snapshot_disabled and jax.process_index() == 0:
+                max_logging.log(f"[wan_overfit100] {snapshot_disabled}")
             for step in range(start_step, config.max_train_steps):
-                if snapshot_before_step >= 0 and step == snapshot_before_step:
+                if snapshot_before_step >= 0 and step == snapshot_before_step and not snapshot_disabled:
                     # PROACTIVE preservation: detection happens after apply_gradients, so the state a
                     # failing step produces is already poisoned, and a checkpoint carries no rng or
                     # batch. One known step, saved just before it runs.

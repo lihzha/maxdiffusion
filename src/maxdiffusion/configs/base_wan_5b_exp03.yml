@@ -450,4 +450,8 @@ exp03_ramp_origin: 0
 # zero-based global step executes. -1 disables it. Detection of a non-finite step necessarily
 # happens after apply_gradients, so the state that step produced is already poisoned -- the only way
 # to replay the failing step is to have saved the state that preceded it.
+# SINGLE-HOST ONLY (eval-resume precedent): on one host the primary's addressable shards are the
+# whole batch; on many hosts each process owns a slice, and complete multi-host capture (every host
+# writing its shards plus a tested reassembler) is predeclared as its own round. A multi-host run
+# logs the reason and continues without snapshotting.
 exp03_snapshot_before_step: -1

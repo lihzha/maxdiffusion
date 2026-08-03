@@ -309,3 +309,17 @@
   this runs one step before an expected failure.
 - **Result** — suite 1427 passed / 2 skipped (+3); four mutants killed.
 - **Next** — re-review; then the re-smoke cohort per the confirmed spec.
+
+## 2026-08-03T07:30:00Z — Snapshot gated to single-host (eval-resume precedent)
+
+- **Finding** — primary-only shards make multi-host reconstruction impossible (other hosts' shards
+  never saved, no reassembler, no multi-device round-trip test).
+- **Resolution (Planner's call, precedented)** — the snapshot is active only when
+  `jax.process_count() == 1`; a multi-host run logs a reason naming `process_count`, skips the
+  snapshot and CONTINUES. Rationale predeclared in the module docstring: on one host the primary's
+  addressable shards are the whole batch; on many hosts a file holding a fraction of a batch is
+  worse than no file. Complete multi-host capture is its own reviewed round if an S2-scale NaN ever
+  makes it necessary. The v6e-8 C re-smoke is single-host, so the gate costs the diagnosis nothing.
+- **Result** — suite 1431 passed / 2 skipped (+4); three mutants killed (gate removed; gate always
+  allowing; reason not logged).
+- **Next** — micro-review, then the re-smoke cohort per the confirmed spec.
