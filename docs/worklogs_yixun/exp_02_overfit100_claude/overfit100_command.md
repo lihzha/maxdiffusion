@@ -385,7 +385,7 @@ tpu create v6 -n 8 --worker0-only --name exp02-o100-d2-valloss-yixun \
 - **Acceptance:** 8 checkpoint rows; per-window count 1,629 each; loss finite and monotone-ish; the value at
   2500/10000 should sit in the neighbourhood of the training logs (~0.145 / ~0.12) but is the *authoritative*
   number since it is fixed-RNG.
-- **Job id:** (appended at submission)
+- **Job id:** `20260803-025332-62de7eb5-exp02-o100-lr5e5ext-yixun` (submitted; COMMIT=bf912a574ae0a5f1ec4d70e72285c5741abbed9a).
 
 ## Jobs 32–34 — v6e-64 LR SWEEP: 3 arms × +2,500 steps from ckpt 10000 — launched 2026-08-02
 
@@ -454,4 +454,13 @@ s3_intermediate, seed 0, correct, canonical-100; resume staging + ffmpeg live). 
 loss→SSIM line (SSIM ≈ 0.9885 − 1.201·loss, fit on the 1e-5 path) hold for checkpoints reached at higher
 LR? Predictions ON the line: lr2e5 (loss 0.09793) → 0.8709; lr5e5 (loss 0.06061) → **0.9157**.
 Line-break in either direction is decision-grade (see _results.md sweep section).
+
+## Job 40 — v6e-64 lr5e5 EXTENSION 12,500 → 15,000 — launched 2026-08-03
+
+**Approved by Yixun ("approve lr5e5 extension").** Same run (`wan-overfit100-s3ext-lr5e5-20260802`)
+resumes from its own step-12,500 checkpoint; LEARNING_RATE=5e-5; checkpoint 15,000 added. Purpose: measure
+the 5e-5 segment's own deceleration and chase the D11 bar (11/100 ≥ 0.95 at 12,500; the line puts
+90%-at-0.95 near mean loss ≈0.03–0.04). Follow-on under the same approval (established pattern):
+instrument job at {12500 anchor = 0.06061 exact, 15000} + SSIM eval at 15,000 when training lands.
+- **Job id:** `20260803-025332-62de7eb5-exp02-o100-lr5e5ext-yixun` (submitted; COMMIT=bf912a574ae0a5f1ec4d70e72285c5741abbed9a).
 
