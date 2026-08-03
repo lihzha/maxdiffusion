@@ -486,3 +486,11 @@ checkpoint); checkpoint 15,000 verified. Follow-on measurements per the Job-40 a
 - Job 43's submission was killed by a local 2-min shell timeout mid-flight — only `code.tar.gz` uploaded,
   no job record; it will never run. Relaunched as **Job 43b**: `20260803-063541-649d9e59-exp02-o100-ssim-l5x2-yixun` (same spec, same approval).
 
+## Job 44 — v6e-64 lr5e5 CONTINUATION 15,000 → 17,500 — launched 2026-08-03
+
+**Approved by Yixun ("continue le5e5 to 17500").** Same run resumes from its own 15,000 checkpoint; LR
+5e-5; checkpoint 17,500 added. Projection on the line: mean loss ≈0.025–0.030 → mean SSIM ≈0.953–0.959;
+if seed-0 shows ≳90/100 ≥ 0.95, the formal 3-seed + full-set verdict passes get proposed. Follow-on under
+this approval: instrument {15000 anchor = 0.03927, 17500} + SSIM at 17,500 on landing.
+- **Job id:** `20260803-152023-05ca5770-exp02-o100-lr5e5x2-yixun` (COMMIT=0bb4dba37972efab37aed91312f4d98e56a8044c).
+
