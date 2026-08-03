@@ -49,7 +49,7 @@ Last updated: 2026-07-31
 - **Symptom:** 2026-08-02 ~23:45Z — every `codex exec` returns "You've hit your usage limit … try again at Aug 7th, 2026 11:35 PM". Account-wide (verified with a minimal call), not model- or effort-specific. ~30 xhigh review passes across exp_02/exp_03 this week consumed the quota.
 - **Impact:** the SOP's Reviewer role (Codex `gpt-5.6-sol` xhigh) is unavailable; per the SOP, no silent substitution. exp_03 round-3 strengthening (`371816c`) is committed but NOT re-reviewed; S1 cannot be packaged per the SOP until review capacity returns or Yixun explicitly directs a substitute/waiver.
 - **Options (Yixun's call):** (a) purchase credits at chatgpt.com/codex/settings/usage; (b) wait for the Aug 7 reset; (c) explicitly approve a substitute reviewer for the interim (would be recorded in every affected review file per the SOP's no-silent-substitution rule).
-- **Status:** OPEN — blocking exp_03 review cycles; non-review work (TPU measurement jobs on already-reviewed code, doc syntheses) continues.
+- **Status:** RESOLVED 2026-08-03 — Yixun switched the CLI login to the yh4742@princeton.edu account (`codex logout && codex login`; the yixunhu21@gmail.com account is out of credits). Verified working; the blocked round-3 re-review dispatched immediately. Note for the record: reviewer account rotated mid-cycle, same model + effort; noted in the affected review file.
 
 ## RESOLVED (kept for the record)
 
