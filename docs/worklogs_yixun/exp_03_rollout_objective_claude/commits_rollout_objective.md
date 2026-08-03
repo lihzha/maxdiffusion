@@ -15,3 +15,4 @@
 | `2a8502f` | S1-fix last residuals — `is_log_due` zero-period guard shared by loop and emitter; snapshot extras materialized only on primary and only from addressable shards, with the global index recorded. Suite 1427/2 skipped. |
 | `fdadb5f` | snapshot gated to single-host (eval-resume precedent) with the reason logged and multi-host capture predeclared as its own round. Suite 1431/2 skipped. |
 | `210e7b1` | S1.5 probe driver + launcher — no-update dual-state diagnostics (checkpoint + init), per-objective cosines vs control, A label isolation, p_ss=0 parity, support-gradient variance (K=8/M=4), sigma traces. Suite 1462/2 skipped. |
+| `3218d5f` | S1.5 strengthening (Codex 5 BLOCKER + 3 MAJOR) — diagnostics wired + conditional parity, support salt isolating the variance, in-memory sigma traces, pinned per-state restore/ramp, streaming O(1)-tree reductions, sha256 fingerprint. Suite 1470/2 skipped. |
