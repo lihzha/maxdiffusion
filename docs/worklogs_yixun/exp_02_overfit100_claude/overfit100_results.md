@@ -374,3 +374,20 @@ fail-closed verdict CLI, at that checkpoint — a positive D11 claim deserves th
 got.
 
 **Proposed next (needs approval): continue lr5e5 to 17,500** (one more 39-min segment + instrument + SSIM).
+
+## lr5e5 @ 17,500 instrument (Job 45) — the 5e-5 trajectory is itself flattening — 2026-08-03T~22:20Z
+
+| segment | Δloss | pace vs prior |
+| --- | --- | --- |
+| 10,000 → 12,500 | −0.0617 | — |
+| 12,500 → 15,000 | −0.0213 | ÷2.9 |
+| **15,000 → 17,500** | **−0.0045** | **÷4.7** |
+
+Loss 0.03927 → **0.03476** (anchor exact, n=1,629). Line-predicted SSIM at 17,500: **0.9467** (vs 0.9451
+measured at 15,000 — a predicted gain of only +0.0016). The 5e-5 trajectory is approaching its own floor
+near loss ≈0.03 / SSIM ≈0.945–0.947 — an echo of the original pattern one level down. Unless the SSIM
+measurement (pending, capacity-bound) surprises, the bar count should move only modestly from 51/100, and
+**the formal 90%-at-0.95 tier is likely NOT reachable by continuing 5e-5**. The decision space after the
+SSIM lands: (a) a higher-LR probe (1e-4 = Wan's own pretraining LR) as one more cheap segment; (b) accept
+the characterization (memorization deepened enormously via LR; the last gap to 90% is the recipe's
+residual, exactly what exp_03's objectives target); (c) more 5e-5 segments at steeply diminishing returns.
