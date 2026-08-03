@@ -2,7 +2,7 @@
 
 Open issues, recurring failures, and standing workarounds. Each entry: symptom, infra-vs-bug classification, workaround/fix, status. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`.
 
-Last updated: 2026-07-31
+Last updated: 2026-08-03
 
 ## OPEN / STANDING
 
@@ -43,7 +43,7 @@ Last updated: 2026-07-31
 ### 8. Eval launcher lacked ffmpeg-ensure → aux/ceiling rows silently degraded (real bug, fix committed, review pending)
 - **Symptom:** exp_02 S3 intermediate evals (2026-07-31): all aux rows failed with `FileNotFoundError: 'ffmpeg'` — the ffmpeg-ensure block existed only in `build_overfit100_dataset.sh`, never in `validate_wan_overfit100.sh`; TPU images ship without ffmpeg. Primary SSIM metrics unaffected (latent path); only VAE-ceiling/aux columns degraded.
 - **Fix:** commit `9c26070` on the exp_02 branch — ffmpeg-ensure block byte-identical across both launchers (enforced by test), executed-under-bash tests with PATH shims, loud one-line aux-degradation startup warning (names ffmpeg/gsutil), FATAL exit if install fails; +14 tests (suite 1,021). Focused Codex review pending as of this update.
-- **Status:** fix committed, unreviewed; ceilings for already-run S3 intermediates recoverable via a cheap checkpoint-independent backfill job.
+- **Status:** CLOSED as a code issue — the focused review ran (`overfit100_codex_code_eval-ffmpeg_review.md`: REQUEST-REVISION, 1 MAJOR + 2 MINOR, all test-strength; production code verified on every focus point) and the strengthening record closed all three with 6/6 mutation catches, suite 1,028 green. No closing re-review was run (the Codex quota crunch, issue #9, hit in that window) — recorded, not hidden. Ceilings for already-run S3 intermediates remain recoverable via a cheap checkpoint-independent backfill job (unrequested).
 
 ### 9. Codex reviewer account hit its usage limit (infra, BLOCKING the review discipline)
 - **Symptom:** 2026-08-02 ~23:45Z — every `codex exec` returns "You've hit your usage limit … try again at Aug 7th, 2026 11:35 PM". Account-wide (verified with a minimal call), not model- or effort-specific. ~30 xhigh review passes across exp_02/exp_03 this week consumed the quota.
