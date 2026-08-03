@@ -257,3 +257,9 @@ one-`tanh` stub** and must not be read as an overhead prediction — the real bu
 B ≤ 2.5x, C ≤ 3.2x, exceeding = STOP) are measured on hardware in S1 itself.
 
 No push, no launch.
+
+## Closing micro-review (3e3882d): **APPROVE — round 3 CLOSED**
+
+MAJOR (bf16 parameter cotangents, config-derived assertions) CLOSED; LOW (comments) CLOSED. "Round 3
+CLOSED; S1-package readiness confirmed with explicit tier ramp origins, A/B/C STOP budgets, and S1.5
+support-variance requirements."
