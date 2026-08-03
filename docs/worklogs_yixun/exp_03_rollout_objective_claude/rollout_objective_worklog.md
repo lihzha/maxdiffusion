@@ -366,3 +366,23 @@
   genuinely required, non-finite JSON refused.
 - **Result** — suite 1470 passed / 2 skipped (+8); seven mutants killed.
 - **Next** — re-review, then S1.5 under the standing grant.
+
+## 2026-08-03T14:30:00Z — S1.5 CLOSING (4 BLOCKER + MAJOR residuals on 3218d5f)
+
+- **Renamed key + both-states e2e** — `log_summary` read the removed `data_variance`, so the init
+  state never ran. Fixed, and the new test DRIVES both states through
+  `state_report -> s1_5_artifact -> log_summary -> write` on a toy real state, because three
+  wiring bugs in a row were all missed by tests that inspected instead of executing.
+- **Freed first state** — per-state work in `_run_one_state` with an explicit `release(...)`, plus
+  `release()` between states; collectability asserted by weakref. Standalone per-state sigma-trace
+  JSONs are now written through the trace module's canonical path.
+- **Exact-step restore** — `restore_exact_step` selects step 10000 via `manager.restore(step=...)`;
+  tested against a `{10000, 12500}` directory (the real exp_02 shape) where latest would take 12500.
+- **True streaming** — generators end to end, `del` per gradient, peak retention asserted by weakref
+  (<=3 trees, not 32). The substring form of this check let the list-materialization mutant survive;
+  it is now an AST assertion that the argument is a GeneratorExp and `_draws` yields.
+- **MAJOR residuals** — `branch_outcomes` in the artifact, 40-hex COMMIT required before either state
+  loads, drift test rejects unexpected additions.
+- **Result** — suite 1477 passed / 2 skipped (+7); six mutants killed.
+- **Next** — re-review; on APPROVE, S1.5 launches with the reviewer's spec (fresh RUN_NAME,
+  CHECKPOINT_DIR = the exp_02 s3 run's checkpoints, CHECKPOINT_STEP=10000).
