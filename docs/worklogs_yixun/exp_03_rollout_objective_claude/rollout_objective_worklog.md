@@ -244,3 +244,21 @@
 - **Result** — suite 1407 passed / 2 skipped (+8). Three mutants killed (dynamic-bound loop restored;
   per-term metrics dropped; support formula shifted).
 - **Next** — focused review; the C re-smoke needs a fresh launch approval.
+
+## 2026-08-03T02:10:00Z — S1-fix STRENGTHENING (Codex 2 BLOCKER + 3 MAJOR on 76ff476)
+
+- **BLOCKER 1, off-by-one** — the loop logs `step + 1` while passing the zero-based `global_step`;
+  the LR pins it (7 x 4e-8 = 2.8e-7 on the "step 8/30" line). The failing step is **global_step 7**.
+  Re-derived: `k_A=2, s_A=1, e_A=3` (sigma_lo 0.97345), `s_B=10, e_B=12`, coin **0.2878 < p_ss 0.35**
+  ⇒ the failing step took the **SELF-GENERATED** branch. The first reconstruction (step 8,
+  teacher-forced, top-of-grid) was wrong.
+- **BLOCKER 2, logging** — whitelist removed (every aux key is forwarded), all sixteen promised
+  metrics printed and sent to W&B, fail-fast `NonFiniteStepError` before the next batch, and a
+  separate no-update `exp03_frozen_replay` with per-term grad norms / max-abs / finite-leaf counts /
+  A-B gradient cosine.
+- **MAJORs** — "interaction, not draw" withdrawn as a conclusion (different histories at the same
+  step); sweep now enumerates all 2,162 legal combinations with scope stated (forward-only, toy
+  model); A's cost rise from mean 1.5 to 2 advances recorded (may reach the 1.6x STOP); the ULP
+  wording replaced by the tolerance actually asserted.
+- **Result** — suite 1416 passed / 2 skipped (+9); five mutants killed.
+- **Next** — re-review, then the re-smoke package under Yixun's standing grant.
