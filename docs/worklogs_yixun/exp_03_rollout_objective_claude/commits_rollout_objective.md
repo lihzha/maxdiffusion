@@ -14,3 +14,4 @@
 | `d3b33ae` | S1-fix final — host-scoped logging (process 0 logs, every host raises), collective snapshot save on all hosts, awaited before the armed step. Suite 1424/2 skipped. |
 | `2a8502f` | S1-fix last residuals — `is_log_due` zero-period guard shared by loop and emitter; snapshot extras materialized only on primary and only from addressable shards, with the global index recorded. Suite 1427/2 skipped. |
 | `fdadb5f` | snapshot gated to single-host (eval-resume precedent) with the reason logged and multi-host capture predeclared as its own round. Suite 1431/2 skipped. |
+| `210e7b1` | S1.5 probe driver + launcher — no-update dual-state diagnostics (checkpoint + init), per-objective cosines vs control, A label isolation, p_ss=0 parity, support-gradient variance (K=8/M=4), sigma traces. Suite 1462/2 skipped. |
