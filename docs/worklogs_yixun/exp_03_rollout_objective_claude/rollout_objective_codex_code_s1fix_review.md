@@ -363,3 +363,8 @@ even where only one host exists.
 * `black`, `ruff`, staged-tree `git diff --check` clean.
 
 No push, no launch.
+
+## Final verdict (fdadb5f): **APPROVE — re-smoke cohort GO**
+
+S1-fix series closed: 76ff476 → a73cd53 → efb18a7 → d3b33ae → 2a8502f → fdadb5f across six review passes;
+every finding fixed or precedent-resolved on record. Suite 1,431 + 2.
