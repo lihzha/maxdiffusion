@@ -140,3 +140,22 @@ batch pull — the inspect-vs-execute class, 4th instance). Fix `e2249e1` (APPRO
 own `train_utils.load_next_batch` with matching iterator seeding; a new AST attribute-resolution guard
 closes the wrong-attribute class for probe + both trainers. Relaunch **Job 8b**: `20260803-230447-b14dcde5-exp03-s15-probe2-yixun` (COMMIT=7dcc1f82b78eec9a6bda1e404cc056c36286c3ed).
 
+### Job 8b outcome (2026-08-03T23:31Z) — FAILED, new defect, further along
+
+The fix held: 5B restore from step 10000 completed on hardware (40.7s, 28.5 GiB) and the dataset pin
+verified (1629 windows, _SUCCESS). Then `state_report` -> `exp03_frozen_replay` -> `_denoising_loss`
+raised `AttributeError: 'types.SimpleNamespace' object has no attribute 'weights_dtype'`.
+
+**Root cause:** `state_view()`/`_objective_config()` build per-state config views as
+`SimpleNamespace(**vars(config), ...)` — but production `config` is the pyconfig `HyperParameters`
+proxy whose keys live in `_config.keys` behind `__getattr__`; `vars(proxy)` is EMPTY. Every view
+carried ONLY the overrides; `getattr(view, k, default)` reads silently returned defaults, and the
+first hard read (`config.weights_dtype`) raised. The docstring's pedigree ("the exp_02 probe's
+arm-view pattern") is false — exp_02's probe never built views; the pattern is new and was only ever
+executed against SimpleNamespace test configs. 5th instance of the inspect-vs-execute class, now in
+config-object shape: the AST guard resolves module attributes, not config-key flow.
+
+Fix round dispatched (view builder from `config.get_keys()`, fail-loud emptiness guard, closure test
+that EXECUTES `pyconfig.initialize` with the real exp03 YAML). Relaunch after review per the Job 8→8b
+protocol under the Query-4 grant.
+
