@@ -322,3 +322,44 @@ property that records access) while still reaching the collective save.
 * `black`, `ruff`, staged-tree `git diff --check` clean.
 
 No push, no launch.
+
+## Final micro-pass (2a8502f) — is_log_due APPROVED; snapshot multi-host reconstruction impossible
+
+```
+REQUEST-REVISION: only primary-host shards are saved, so multi-host reconstruction is impossible; no reassembler or multi-device round-trip test exists.
+
+Re-smoke cohort — NO-GO.
+```
+
+## Strengthening record — coder response (snapshot gated single-host)
+
+**Planner's resolution, implemented:** the snapshot feature is gated to `jax.process_count() == 1`,
+exactly like the eval-resume gate the reviewer approved in exp_02. A multi-host run logs a reason
+naming `process_count`, does not snapshot, and **continues** — it is a diagnostic, not a
+prerequisite.
+
+The reasoning, recorded in `snapshot_gate_reason`'s docstring so it travels with the code: on one
+host the primary's addressable shards ARE the whole batch, so what lands on disk is complete and a
+replay is exact. On many hosts each process owns a different slice, and a file holding a quarter of
+a batch is worse than no file — it looks like evidence. Complete multi-host capture (every host
+writing its own shards plus a tested reassembler, with a multi-device round-trip test) is **real
+work in service of a hypothetical** — an S2-scale non-finite step — and is **predeclared as its own
+reviewed round** if that ever happens.
+
+Scope note: the snapshot exists for the v6e-8 C re-smoke, which is single-host, so the gate costs
+the diagnosis nothing.
+
+The primary/non-primary split inside `save_pre_step_snapshot` is unchanged and still tested (extras
+are process-0 work; the collective save is everyone's), because it remains the function's contract
+even where only one host exists.
+
+### Verification
+
+* Full worklogs suite: **1431 passed, 2 skipped** (+4).
+* Mutations — 3, all killed:
+  1. the gate removed from the loop -> **1F**;
+  2. `snapshot_gate_reason` always allowing -> **2F**;
+  3. the disabled reason not logged -> **1F**.
+* `black`, `ruff`, staged-tree `git diff --check` clean.
+
+No push, no launch.
