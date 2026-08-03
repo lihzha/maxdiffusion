@@ -350,3 +350,27 @@ framing is dead. **Obvious next probe: extend lr5e5** (+2,500–5,000 steps; the
 the ≥0.95 count to go 11 → 90; at the current exchange rate that means mean loss ≈ 0.03–0.04, i.e. roughly
 one to two more 5e-5 segments IF the pace holds — it may not; the segment's own deceleration is unmeasured).
 Needs approval; proposed.
+
+## lr5e5 @ 15,000 (Jobs 42–43b) — HALF THE COHORT OVER THE BAR — 2026-08-03T~07:15Z
+
+| measure | 1e-5 @10k | 5e-5 @12.5k | **5e-5 @15k** |
+| --- | --- | --- | --- |
+| one-step loss | 0.12227 | 0.06061 | **0.03927** |
+| canonical seed-0 mean SSIM | 0.8416 | 0.9159 | **0.9451** |
+| windows ≥ 0.95 | 0/100 | 11/100 | **51/100** |
+| windows ≥ 0.90 | 17/100 | 72/100 | **97/100** |
+| max window | 0.9484 | 0.9663 | **0.9745** |
+
+Line prediction 0.9413, measured 0.9451 (+0.0038) — **the loss→SSIM law has now held at FOUR points across
+three learning rates**, spanning 0.84→0.95 SSIM. Anchors bit-exact throughout; role validation ok.
+
+**Where this leaves the original exp_02 question.** In under two hours of v6e-64 compute at the right LR,
+the model went from "no window has ever reached 0.95" to **51/100 over the bar** (single-seed proxy; the
+formal D11 statistic is 3-seed m_corr). The 5e-5 segment pace is decelerating (−0.0617 → −0.0213 loss per
+2,500) but the trajectory puts the formal 90/100 territory plausibly **1–2 more segments away** (next
+segment projects mean loss ≈0.025–0.030 → mean SSIM ≈0.953–0.959 on the line). If a seed-0 pass ever shows
+≳90/100, the right move is the FULL formal apparatus again: 3-seed segment-final + full-set passes and the
+fail-closed verdict CLI, at that checkpoint — a positive D11 claim deserves the same rigor the negative one
+got.
+
+**Proposed next (needs approval): continue lr5e5 to 17,500** (one more 39-min segment + instrument + SSIM).
