@@ -89,7 +89,7 @@ def _purpose_id(purpose: str) -> int:
     return int.from_bytes(hashlib.sha256(purpose.encode("utf-8")).digest()[:4], "big")
 
 
-def exp03_aux_key(*, seed: int, global_step, purpose: str) -> jax.Array:
+def exp03_aux_key(*, seed: int, global_step, purpose: str, salt: int = 0) -> jax.Array:
     """An auxiliary key for a NEW-objective draw, derived without touching the shared stream.
 
     ``fold_in(fold_in(key(seed + offset), global_step), purpose_id)``. Four properties matter and
@@ -114,7 +114,14 @@ def exp03_aux_key(*, seed: int, global_step, purpose: str) -> jax.Array:
         raise ValueError(f"global_step must be non-negative; got {global_step}")
     key = jax.random.key(int(seed) + EXP03_AUX_SEED_OFFSET)
     key = jax.random.fold_in(key, jnp.asarray(global_step, dtype=jnp.uint32))
-    return jax.random.fold_in(key, _purpose_id(purpose))
+    key = jax.random.fold_in(key, _purpose_id(purpose))
+    # ``salt`` re-draws THIS purpose while everything else about the step stays put. It is folded
+    # only when non-zero, so every existing draw is bit-identical to what it was before the salt
+    # existed. S1.5 uses it to vary the sigma SUPPORT alone: moving the global step instead would
+    # also move A's p_ss coin and the ramp, and the resulting variance would mix three things.
+    if int(salt) != 0:
+        key = jax.random.fold_in(key, int(salt))
+    return key
 
 
 def validate_exp03_config(config) -> str:
@@ -276,7 +283,7 @@ def _forward_velocity(ctx, z, index) -> jax.Array:
     )
 
 
-def corrective_support(*, seed: int, global_step, num_steps: int, k_a_max: int):
+def corrective_support(*, seed: int, global_step, num_steps: int, k_a_max: int, support_salt: int = 0):
     """Trial A's support: ``k_A ~ U{1..k_a_max}`` FIRST, then ``s ~ U{0 .. num_steps-1-k_A}``.
 
     Drawn in that order because the start's range depends on the length (plan v2.2). ``e = s + k_A``
@@ -284,13 +291,13 @@ def corrective_support(*, seed: int, global_step, num_steps: int, k_a_max: int):
     construction rather than by a clamp.
     """
     k_a = jax.random.randint(
-        exp03_aux_key(seed=seed, global_step=global_step, purpose="k_a_draw"),
+        exp03_aux_key(seed=seed, global_step=global_step, purpose="k_a_draw", salt=support_salt),
         (),
         1,
         int(k_a_max) + 1,
     )
     start = jax.random.randint(
-        exp03_aux_key(seed=seed, global_step=global_step, purpose="index_support"),
+        exp03_aux_key(seed=seed, global_step=global_step, purpose="index_support", salt=support_salt),
         (),
         0,
         num_steps - k_a,
@@ -298,10 +305,10 @@ def corrective_support(*, seed: int, global_step, num_steps: int, k_a_max: int):
     return start, start + k_a, k_a
 
 
-def rollout_support(*, seed: int, global_step, num_steps: int, k_b: int):
+def rollout_support(*, seed: int, global_step, num_steps: int, k_b: int, support_salt: int = 0):
     """Trial B's support: ``s ~ U{0 .. num_steps-1-k_B}``, path ``s -> s+1 -> ... -> s+k_B``."""
     start = jax.random.randint(
-        exp03_aux_key(seed=seed, global_step=global_step, purpose="index_support_rollout"),
+        exp03_aux_key(seed=seed, global_step=global_step, purpose="index_support_rollout", salt=support_salt),
         (),
         0,
         num_steps - int(k_b),
@@ -367,6 +374,7 @@ def _corrective_ss_loss(params, state, data, rng, config, scheduler, *, global_s
         global_step=global_step,
         num_steps=ctx.num_steps,
         k_a_max=int(getattr(config, "exp03_k_a", 2)),
+        support_salt=int(getattr(config, "exp03_support_salt", 0)),
     )
     sigma_lo = ctx.sigmas[end].astype(jnp.float32)
     sigma_hi = ctx.sigmas[start].astype(jnp.float32)
@@ -435,7 +443,13 @@ def _rollout_loss(params, state, data, rng, config, scheduler, *, global_step=No
     ctx = _exp03_prologue(params, state, data, rng, config, scheduler)
     seed = int(getattr(config, "seed", 0))
     k_b = int(getattr(config, "exp03_k_b", 2))
-    start, end = rollout_support(seed=seed, global_step=global_step, num_steps=ctx.num_steps, k_b=k_b)
+    start, end = rollout_support(
+        seed=seed,
+        global_step=global_step,
+        num_steps=ctx.num_steps,
+        k_b=k_b,
+        support_salt=int(getattr(config, "exp03_support_salt", 0)),
+    )
     sigma_hi = ctx.sigmas[start].astype(jnp.float32)
     sigma_lo = ctx.sigmas[end].astype(jnp.float32)
 
@@ -540,21 +554,33 @@ EXP03_LOSSES = {
 EXP03_IMPLEMENTED_OBJECTIVES = (EXP03_CONTROL_OBJECTIVE, *EXP03_LOSSES)
 
 
-def _flat_gradient(grad) -> "np.ndarray":
-    """One float64 vector from a gradient pytree (for norms, cosines and variances)."""
-    leaves = jax.tree_util.tree_leaves(grad)
-    return np.concatenate([np.asarray(leaf, dtype=np.float64).ravel() for leaf in leaves])
+def tree_dot(left, right) -> float:
+    """Leafwise float32 dot product — O(1) host memory, whatever the model's size."""
+    return float(
+        sum(
+            jnp.sum(x.astype(jnp.float32) * y.astype(jnp.float32))
+            for x, y in zip(jax.tree_util.tree_leaves(left), jax.tree_util.tree_leaves(right))
+        )
+    )
+
+
+def tree_sq_norm(tree) -> float:
+    """Leafwise squared L2 norm, on device."""
+    return float(sum(jnp.sum(leaf.astype(jnp.float32) ** 2) for leaf in jax.tree_util.tree_leaves(tree)))
 
 
 def grad_cosine(left, right) -> float:
-    """Cosine between two gradient pytrees; ``nan`` if either is degenerate."""
-    a, b = _flat_gradient(left), _flat_gradient(right)
-    denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
-    return float(np.dot(a, b) / denominator) if denominator > 0 else float("nan")
+    """Cosine between two gradient pytrees; ``nan`` if either is degenerate.
+
+    The float32 TREE reduction the parent commit used -- not a host float64 flatten, which at 5B
+    parameters would be a 40 GB copy per gradient.
+    """
+    norms = float(jaxopt.tree_util.tree_l2_norm(left)) * float(jaxopt.tree_util.tree_l2_norm(right))
+    return tree_dot(left, right) / norms if norms > 0 else float("nan")
 
 
 def exp03_frozen_replay(
-    state, data, rng, config, scheduler, *, global_step, with_gradients=True, include_control=True
+    state, data, rng, config, scheduler, *, global_step, with_gradients=True, include_control=False
 ) -> dict:
     """NO-UPDATE replay of A, B and C on a frozen state — the discriminator, off the timing path.
 
@@ -573,12 +599,22 @@ def exp03_frozen_replay(
         objectives.insert(0, ("control", _denoising_loss))
     for name, loss_fn in objectives:
 
-        def _loss(params, fn=loss_fn):
-            return fn(params, state, data, rng, config, scheduler, global_step=global_step)[0]
+        def fn_with_aux(params, fn=loss_fn, name=name):
+            kwargs = {} if name == "control" else {"global_step": global_step}
+            return fn(params, state, data, rng, config, scheduler, **kwargs)
 
-        loss = float(_loss(state.params))
+        def _loss(params, fn=fn_with_aux):
+            return fn(params)[0]
+
+        value, aux = fn_with_aux(state.params)
+        loss = float(value)
         out[f"loss_{name}"] = loss
         out[f"loss_{name}_finite"] = float(math.isfinite(loss))
+        # B's RAW endpoint MSE and its fp32 horizon travel with the normalized loss, so the
+        # raw/normalized pair the plan promises is actually in the artifact.
+        for extra in ("raw_endpoint_mse", "horizon_sq", "sigma_hi_b", "sigma_lo_b", "s_b", "e_b", "p_ss", "k_a"):
+            if extra in aux:
+                out[f"{extra}_{name}"] = float(aux[extra])
         if not with_gradients:
             continue
         grad = jax.grad(_loss)(state.params)
@@ -586,6 +622,7 @@ def exp03_frozen_replay(
         leaves = jax.tree_util.tree_leaves(grad)
         finite = [bool(jnp.all(jnp.isfinite(leaf))) for leaf in leaves]
         out[f"grad_norm_{name}"] = float(jaxopt.tree_util.tree_l2_norm(grad))
+        out[f"grad_sq_norm_{name}"] = tree_sq_norm(grad)
         out[f"grad_max_abs_{name}"] = float(
             jax.tree_util.tree_reduce(lambda m, leaf: jnp.maximum(m, jnp.max(jnp.abs(leaf))), grad, -1.0)
         )

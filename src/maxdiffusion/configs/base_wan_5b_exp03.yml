@@ -457,5 +457,8 @@ exp03_ramp_origin: 0
 exp03_snapshot_before_step: -1
 # S1.5 (probe_exp03_s1_5.py): K batches and M support draws per batch. Approval-pinned -- the probe
 # refuses anything else, because a different K/M is a different measurement of gradient noise.
+# The support-draw salt. 0 in every training run (the draws are then exactly what they always were);
+# S1.5 varies it to re-draw the sigma support while holding the step, the coin and the ramp fixed.
+exp03_support_salt: 0
 s1_5_num_batches: 8
 s1_5_support_draws: 4

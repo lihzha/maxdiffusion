@@ -44,12 +44,16 @@ video. It scores gradients, not pixels.
 
 from __future__ import annotations
 
+import hashlib
+import math
 import statistics
+from types import SimpleNamespace
 from typing import Sequence
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import tensorflow as tf
 from absl import app
 from flax import nnx
 from flax.linen import partitioning as nn_partitioning
@@ -58,6 +62,7 @@ import maxdiffusion.generate_wan_side_adapter as gen
 import maxdiffusion.trainers.wan_ti2v_exp03_trainer as exp03
 from maxdiffusion import max_logging, pyconfig
 from maxdiffusion.diagnostics_exp03 import sigma_trajectory_trace as trace
+from maxdiffusion.models.wan.side_adapter_wan import apply_first_frame_pin, masked_velocity_mse
 from maxdiffusion.trainers.wan_ti2v_overfit100_trainer import (
     Overfit100TrainState,
     _denoising_loss,
@@ -71,6 +76,7 @@ S1_5_OUTPUT_DIR = "validation_probe_sampling"  # the same non-role diagnostic ro
 # gave: constants in a module do not constrain a run whose config supplies the values.
 S1_5_NUM_BATCHES = 8  # K
 S1_5_SUPPORT_DRAWS = 4  # M
+S1_5_SUPPORT_SALTS = (1, 2, 3, 4)  # the M salts; ONLY the support purposes consume them
 S1_5_STATES = ("checkpoint", "init")
 S1_5_OBJECTIVES = ("control", "corrective_ss", "rollout_loss", "combined")
 S1_5_PARITY_TOLERANCE = 1e-5  # relative, for the p_ss=0 identity
@@ -120,21 +126,31 @@ def s1_5_output_path(config, *, state_label: str, checkpoint_step: int) -> str:
 # ------------------------------------------------------------------------------- the no-update pin
 
 
-def params_fingerprint(params) -> list[float]:
-    """A cheap bit-level fingerprint of a parameter tree (sum of the raw bits per leaf)."""
-    out = []
+def params_fingerprint(params) -> list[str]:
+    """A sha256 digest per parameter leaf.
+
+    A digest, not a byte SUM: a sum collides on any permutation -- swap two parameter values and it
+    does not move -- so it could certify "unchanged" for a state that had in fact been rewritten.
+    The digest is over the raw bytes, so it is bit identity, and it is O(1) memory per leaf rather
+    than a retained copy of a 5B-parameter tree.
+    """
+    digests = []
     for leaf in jax.tree_util.tree_leaves(params):
         array = np.asarray(leaf)
-        out.append(float(np.sum(array.view(np.uint8).astype(np.float64))))
-    return out
+        digest = hashlib.sha256()
+        digest.update(str(array.dtype).encode())
+        digest.update(str(array.shape).encode())
+        digest.update(array.tobytes())
+        digests.append(digest.hexdigest())
+    return digests
 
 
-def assert_no_update(before: Sequence[float], after: Sequence[float]) -> None:
-    """The probe's defining property: it changed nothing.
+def assert_no_update(before: Sequence[str], after: Sequence[str]) -> None:
+    """The probe's defining property: it changed nothing, bit for bit.
 
-    Bit-level, not ``allclose``: a probe that nudged the parameters would report the objectives'
-    behaviour at a state that no longer exists, and a tolerance would hide exactly the small update
-    an accidental ``apply_gradients`` produces.
+    Digest equality, with no tolerance anywhere: a probe that nudged the parameters would report the
+    objectives' behaviour at a state that no longer exists, and a tolerance would hide exactly the
+    small update an accidental ``apply_gradients`` produces.
     """
     if list(before) != list(after):
         differing = [index for index, (x, y) in enumerate(zip(before, after)) if x != y]
@@ -147,57 +163,100 @@ def assert_no_update(before: Sequence[float], after: Sequence[float]) -> None:
 # ------------------------------------------------------------------------ support-variance (D2)
 
 
-def variance_decomposition(gradients) -> dict:
-    """Split gradient variance into its SUPPORT and DATA parts.
+class _TreeWelford:
+    """Streaming mean/variance over gradient TREES, retaining O(1) trees.
 
-    ``gradients[k][m]`` is the gradient on batch ``k`` under support draw ``m``. By the law of total
-    variance, the mean within-batch spread (over the ``M`` draws) is the part the support draw is
-    responsible for, and the spread of the per-batch means is the part the data is responsible for.
-    Reported as squared-L2 quantities, plus a noise scale relative to the mean gradient -- the number
-    that says whether a null result could be the support estimator rather than the objective.
+    Welford's algorithm applied leafwise on device: the running mean is one tree, and the sum of
+    squared deviations is a scalar accumulated with ``tree_dot``. At 5B parameters the alternative --
+    retaining K x M gradient trees and flattening each to host float64 -- is about 1.28 TB, i.e. the
+    difference between a probe that runs and one that kills the host.
     """
-    rows = [
-        [
-            np.concatenate([np.asarray(leaf, np.float64).ravel() for leaf in jax.tree_util.tree_leaves(grad)])
-            for grad in row
-        ]
-        for row in gradients
-    ]
-    if not rows or not rows[0]:
+
+    def __init__(self):
+        self.count = 0
+        self.mean = None
+        self.m2 = 0.0
+
+    def update(self, tree) -> None:
+        self.count += 1
+        if self.mean is None:
+            self.mean = jax.tree_util.tree_map(lambda leaf: leaf.astype(jnp.float32), tree)
+            return
+        delta = jax.tree_util.tree_map(lambda g, m: g.astype(jnp.float32) - m, tree, self.mean)
+        self.mean = jax.tree_util.tree_map(lambda m, d: m + d / self.count, self.mean, delta)
+        delta2 = jax.tree_util.tree_map(lambda g, m: g.astype(jnp.float32) - m, tree, self.mean)
+        self.m2 += exp03.tree_dot(delta, delta2)
+
+    def population_variance(self) -> float:
+        return self.m2 / self.count if self.count else 0.0
+
+    def sample_variance(self) -> float:
+        return self.m2 / (self.count - 1) if self.count > 1 else 0.0
+
+
+def variance_decomposition(gradients) -> dict:
+    """Split gradient variance into its SUPPORT and BATCH+SHARED-RNG parts.
+
+    ``gradients[k][m]`` is the gradient on batch ``k`` under support draw ``m`` -- where only the
+    support SALT differs across ``m``, so the batch, the shared-stream epsilon and dropout key, the
+    logical global step, ``p_ss`` and A's branch coin are all held fixed. The within-batch spread is
+    therefore attributable to the sigma support alone.
+
+    The between-batch term is named **batch+shared-RNG variance**, not "data variance": at finite
+    ``M`` each batch mean still carries support Monte-Carlo error, and the batches differ in their
+    shared-stream draws as well as in their examples. Both the population and the unbiased (``M-1``,
+    ``K-1``) estimates are reported; the unbiased pair is the honest one at ``M=4``, and the finite-M
+    inflation of the between term is stated rather than corrected away.
+    """
+    rows = list(gradients)
+    if not rows or not list(rows[0]):
         raise ValueError("variance_decomposition needs at least one batch with at least one draw")
-    draws = {len(row) for row in rows}
+    draws = {len(list(row)) for row in rows}
     if len(draws) != 1:
         raise ValueError(f"every batch must contribute the same number of support draws; got {sorted(draws)}")
-    per_batch_mean = [np.mean(np.stack(row), axis=0) for row in rows]
-    grand_mean = np.mean(np.stack(per_batch_mean), axis=0)
-    support = (
-        float(
-            np.mean(
-                [
-                    np.mean([float(np.sum((grad - mean) ** 2)) for grad in row])
-                    for row, mean in zip(rows, per_batch_mean)
-                ]
-            )
-        )
-        if len(rows[0]) > 1
-        else 0.0
-    )
-    data = float(np.mean([float(np.sum((mean - grand_mean) ** 2)) for mean in per_batch_mean]))
-    total = support + data
-    mean_sq = float(np.sum(grand_mean**2))
+
+    between = _TreeWelford()
+    within_population, within_sample = [], []
+    for row in rows:
+        accumulator = _TreeWelford()
+        for grad in row:
+            accumulator.update(grad)
+        within_population.append(accumulator.population_variance())
+        within_sample.append(accumulator.sample_variance())
+        between.update(accumulator.mean)
+
+    support = float(np.mean(within_population))
+    support_unbiased = float(np.mean(within_sample))
+    batch_variance = between.population_variance()
+    batch_variance_unbiased = between.sample_variance()
+    total = support + batch_variance
+    mean_sq = exp03.tree_sq_norm(between.mean)
+    num_draws = draws.pop()
     return {
         "num_batches": len(rows),
-        "support_draws": len(rows[0]),
+        "support_draws": num_draws,
         "support_variance": support,
-        "data_variance": data,
+        "support_variance_unbiased": support_unbiased,
+        "batch_shared_rng_variance": batch_variance,
+        "batch_shared_rng_variance_unbiased": batch_variance_unbiased,
         "total_variance": total,
         "support_fraction": (support / total) if total > 0 else 0.0,
         "mean_grad_sq_norm": mean_sq,
         "gradient_noise_scale": (total / mean_sq) if mean_sq > 0 else float("nan"),
+        "finite_m_note": (
+            f"the between term still contains support Monte-Carlo error at M={num_draws} "
+            f"(order support_variance/M); it is reported as measured, not corrected"
+        ),
     }
 
 
 # ---------------------------------------------------------------------------- A's label isolation
+
+
+def _relative_gradient_gap(left, right) -> float:
+    """``||left - right|| / ||right||`` — leafwise, so no gradient is ever flattened on the host."""
+    difference = jax.tree_util.tree_map(lambda a, b: a.astype(jnp.float32) - b.astype(jnp.float32), left, right)
+    return float(np.sqrt(exp03.tree_sq_norm(difference)) / max(np.sqrt(exp03.tree_sq_norm(right)), 1e-12))
 
 
 def same_eps_label(z_lo, z_gt, eps):
@@ -221,13 +280,10 @@ def label_isolation(*, corrective_loss, same_eps_loss, corrective_grad, same_eps
         "loss_corrective": float(corrective_loss),
         "loss_same_eps": float(same_eps_loss),
         "loss_delta": float(corrective_loss) - float(same_eps_loss),
-        "grad_norm_corrective": float(np.linalg.norm(exp03._flat_gradient(corrective_grad))),
-        "grad_norm_same_eps": float(np.linalg.norm(exp03._flat_gradient(same_eps_grad))),
+        "grad_norm_corrective": float(np.sqrt(exp03.tree_sq_norm(corrective_grad))),
+        "grad_norm_same_eps": float(np.sqrt(exp03.tree_sq_norm(same_eps_grad))),
         "grad_cosine": exp03.grad_cosine(corrective_grad, same_eps_grad),
-        "grad_relative_delta": float(
-            np.linalg.norm(exp03._flat_gradient(corrective_grad) - exp03._flat_gradient(same_eps_grad))
-            / max(float(np.linalg.norm(exp03._flat_gradient(same_eps_grad))), 1e-12)
-        ),
+        "grad_relative_delta": _relative_gradient_gap(corrective_grad, same_eps_grad),
     }
 
 
@@ -236,9 +292,8 @@ def label_isolation(*, corrective_loss, same_eps_loss, corrective_grad, same_eps
 
 def parity_report(*, trial_loss, plain_loss, trial_grad, plain_grad, tolerance: float = S1_5_PARITY_TOLERANCE) -> dict:
     """A at ``p_ss=0`` against the plain objective — loss AND gradient, relative tolerance."""
-    trial_vector, plain_vector = exp03._flat_gradient(trial_grad), exp03._flat_gradient(plain_grad)
     loss_gap = abs(float(trial_loss) - float(plain_loss)) / max(abs(float(plain_loss)), 1e-12)
-    grad_gap = float(np.linalg.norm(trial_vector - plain_vector)) / max(float(np.linalg.norm(plain_vector)), 1e-12)
+    grad_gap = _relative_gradient_gap(trial_grad, plain_grad)
     return {
         "loss_relative_gap": loss_gap,
         "grad_relative_gap": grad_gap,
@@ -250,13 +305,94 @@ def parity_report(*, trial_loss, plain_loss, trial_grad, plain_grad, tolerance: 
 # -------------------------------------------------------------------------------------- driver
 
 
+# The canonical per-state mapping (review V3/V5): the checkpoint state is Tier 1 continuing at
+# global steps 10000.., with the ramp origin there; the init state is Tier 2 at 0.., origin 0. The
+# probe applies no updates, but the ramp still decides A/C's branch, so the mapping changes what is
+# measured and must be per-state rather than one launcher env.
+S1_5_STATE_PLAN = {
+    "checkpoint": {"first_global_step": 10000, "ramp_origin": 10000, "required_checkpoint_step": 10000},
+    "init": {"first_global_step": 0, "ramp_origin": 0, "required_checkpoint_step": 0},
+}
+
+
+def state_view(config, state_label: str, **overrides):
+    """A read-only config view carrying THIS state's ramp origin (and any forced knobs)."""
+    plan = S1_5_STATE_PLAN[state_label]
+    return SimpleNamespace(**{**vars(config), "exp03_ramp_origin": plan["ramp_origin"], **overrides})
+
+
 def _objective_config(config, objective: str, **overrides):
     """A read-only config view selecting one objective (the exp_02 probe's arm-view pattern)."""
-    return exp03.SimpleNamespace(**{**vars(config), "exp03_objective": objective, **overrides})
+    return SimpleNamespace(**{**vars(config), "exp03_objective": objective, **overrides})
 
 
-def build_probe_state(config, trainer, pipeline, mesh, *, restore: bool):
-    """The training state, built exactly as ``start_training`` builds it; restored only if asked."""
+def plain_fixed_support_loss(params, state, data, rng, config, scheduler, *, global_step):
+    """The plain objective at A's SINGLE end support — the conditional-parity comparator.
+
+    Production A at ``p_ss=0`` is not the production control: A scores one scalar sigma per batch
+    while the control samples a timestep per example from the shared stream, so their gradients are
+    not the same quantity and demanding equality would be demanding the wrong thing. This comparator
+    holds the sigma, epsilon, dropout key, batch and state identical to A's and differs only in the
+    label, which is what makes the comparison an identity rather than a coincidence.
+    """
+    ctx = exp03._exp03_prologue(params, state, data, rng, config, scheduler)
+    _, end, _ = exp03.corrective_support(
+        seed=int(getattr(config, "seed", 0)),
+        global_step=global_step,
+        num_steps=ctx.num_steps,
+        k_a_max=int(getattr(config, "exp03_k_a", 2)),
+        support_salt=int(getattr(config, "exp03_support_salt", 0)),
+    )
+    z_lo = exp03._interpolant_at(ctx, end)
+    v_pred = exp03._forward_velocity(ctx, z_lo, end)
+    v_target = ctx.eps - ctx.z_video  # the PLAIN label, at A's support
+    return masked_velocity_mse(v_pred, v_target, ctx.b), {"sigma_lo": ctx.sigmas[end]}
+
+
+def corrective_at_support(params, state, data, rng, config, scheduler, *, global_step, same_eps_label_flag):
+    """A's supervised forward on the SELF-GENERATED state, under either label.
+
+    ``p_ss`` is forced to 1 by the caller, so the state scored here is the off-path one -- which is
+    the only place the two labels differ, and therefore the only place the isolation is meaningful.
+    """
+    ctx = exp03._exp03_prologue(params, state, data, rng, config, scheduler)
+    start, end, k_a = exp03.corrective_support(
+        seed=int(getattr(config, "seed", 0)),
+        global_step=global_step,
+        num_steps=ctx.num_steps,
+        k_a_max=int(getattr(config, "exp03_k_a", 2)),
+        support_salt=int(getattr(config, "exp03_support_salt", 0)),
+    )
+    sigma_lo = ctx.sigmas[end].astype(jnp.float32)
+    advanced = jax.lax.stop_gradient(
+        exp03._advance_with_sampler(
+            ctx,
+            jax.lax.stop_gradient(exp03._interpolant_at(ctx, start)).astype(ctx.weights_dtype),
+            start,
+            k_a,
+            velocity_fn=exp03._sampling_velocity_fn(ctx),
+            k_max=int(getattr(config, "exp03_k_a", 2)),
+        )
+    ).astype(jnp.float32)
+    z_lo = apply_first_frame_pin(advanced, ctx.z_i0)
+    v_pred = exp03._forward_velocity(ctx, z_lo, end)
+    v_target = (
+        same_eps_label(z_lo, ctx.z_video, ctx.eps)
+        if same_eps_label_flag
+        else corrective_label(z_lo, ctx.z_video, sigma_lo)
+    )
+    return masked_velocity_mse(v_pred, v_target, ctx.b), {"sigma_lo": sigma_lo}
+
+
+def build_probe_state(config, trainer, pipeline, mesh, *, state_label: str):
+    """The training state, built as ``start_training`` builds it, restored through the SAME path.
+
+    Both states go through the checkpoint manager: the checkpoint state must come back at the
+    REQUIRED step (``latest_step()`` is not a pin -- a stray later checkpoint would silently become
+    the probe's subject), and the init state goes through the empty-restore path production uses,
+    so "from init" is the production behaviour rather than a special case.
+    """
+    plan = S1_5_STATE_PLAN[state_label]
     context_table = trainer._build_context_table(pipeline, mesh)
     for attr in ("vae", "vae_cache", "text_encoder", "tokenizer"):
         if hasattr(pipeline, attr):
@@ -275,65 +411,169 @@ def build_probe_state(config, trainer, pipeline, mesh, *, restore: bool):
     if jax.process_index() == 0:
         max_logging.log(f"[exp03_s1_5] trainable params: {adapter_param_count(params) / 1e9:.2f}B")
     state, state_shardings = trainer._shard_state(mesh, state)
-    start_step = 0
-    if restore:
-        ckpt_dir = config.checkpoint_dir
-        manager = trainer._build_checkpoint_manager(ckpt_dir)
-        state, start_step = trainer._maybe_restore(manager, state)
-        if start_step == 0:
-            raise ValueError(
-                f"S1.5's checkpoint state found nothing to restore in {ckpt_dir!r}; the Tier-1 half of this probe is "
-                f"about the step-10,000 checkpoint, and silently probing the init instead would answer the wrong "
-                f"question twice."
-            )
-    return state, state_shardings, start_step
 
-
-def state_report(state, batches, rng, config, scheduler, *, state_label: str, checkpoint_step: int) -> dict:
-    """Every S1.5 measurement at ONE state (no updates; the caller pins that)."""
-    reports = []
-    for index, batch in enumerate(batches):
-        step_rng = jax.random.fold_in(rng, index)
-        reports.append(
-            exp03.exp03_frozen_replay(
-                state, batch, step_rng, config, scheduler, global_step=jnp.asarray(index, jnp.int32)
-            )
+    directory = config.checkpoint_dir if state_label == "checkpoint" else _empty_checkpoint_dir(config)
+    manager = trainer._build_checkpoint_manager(directory)
+    state, start_step = trainer._maybe_restore(manager, state)
+    required = plan["required_checkpoint_step"]
+    if int(start_step) != int(required):
+        raise ValueError(
+            f"S1.5 state {state_label!r} restored step {int(start_step)}, but this state is pinned to "
+            f"{int(required)}. Tier 1 is about the step-10,000 checkpoint and Tier 2 about the untouched init; "
+            f"a state that is neither would answer a question nobody asked."
         )
+    return state, state_shardings, int(start_step)
+
+
+def _empty_checkpoint_dir(config) -> str:
+    """A guaranteed-empty directory, so the init state takes production's empty-restore path."""
+    directory = f"{str(config.output_dir).rstrip('/')}/{config.run_name}/s1_5_init_empty_ckpt"
+    tf.io.gfile.makedirs(directory)
+    return directory
+
+
+def state_report(
+    state, batches, rng, config, scheduler, *, state_label: str, checkpoint_step: int, support_salts
+) -> dict:
+    """Every S1.5 measurement at ONE state (no updates; the caller pins that)."""
+    plan = S1_5_STATE_PLAN[state_label]
+    first_step = plan["first_global_step"]
+    view = state_view(config, state_label)
+    rows = []
+    for index, batch in enumerate(batches):
+        global_step = jnp.asarray(first_step + index, jnp.int32)
+        step_rng = jax.random.fold_in(rng, index)
+        row = exp03.exp03_frozen_replay(
+            state, batch, step_rng, view, scheduler, global_step=global_step, include_control=True
+        )
+        row["batch_index"] = float(index)
+        row["global_step"] = float(first_step + index)
+        rows.append(row)
     per_objective = {}
-    for key in sorted({name for report in reports for name in report}):
-        values = [report[key] for report in reports if key in report]
+    for key in sorted({name for row in rows for name in row}):
+        values = [row[key] for row in rows if key in row]
         per_objective[key] = {"mean": statistics.fmean(values), "min": min(values), "max": max(values)}
 
-    # Support-gradient variance: the SAME batch under M different support draws is the support term.
+    # SUPPORT variance: only the salt moves, so the batch, epsilon, dropout key, logical step,
+    # p_ss and A's coin are identical across the M draws.
     variance = {}
     for objective in S1_5_OBJECTIVES:
-        view = _objective_config(config, objective)
         loss_fn = _denoising_loss if objective == "control" else exp03.EXP03_LOSSES[objective]
         gradients = []
         for index, batch in enumerate(batches):
+            global_step = jnp.asarray(first_step + index, jnp.int32)
+            batch_rng = jax.random.fold_in(rng, index)
             row = []
-            for draw in range(S1_5_SUPPORT_DRAWS):
-                # A DIFFERENT global step per draw is what changes the support: the aux keys are
-                # folded on it, so the batch is held fixed while the draw varies.
-                global_step = jnp.asarray(index * S1_5_SUPPORT_DRAWS + draw, jnp.int32)
+            for salt in support_salts:
+                salted = state_view(config, state_label, exp03_objective=objective, exp03_support_salt=int(salt))
                 kwargs = {} if objective == "control" else {"global_step": global_step}
                 row.append(
                     jax.grad(
-                        lambda params, fn=loss_fn, b=batch, kw=kwargs: fn(
-                            params, state, b, jax.random.fold_in(rng, index), view, scheduler, **kw
+                        lambda params, fn=loss_fn, b=batch, cfg=salted, kw=kwargs: fn(
+                            params, state, b, batch_rng, cfg, scheduler, **kw
                         )[0]
                     )(state.params)
                 )
             gradients.append(row)
         variance[objective] = variance_decomposition(gradients)
 
+    # A's LABEL ISOLATION and the CONDITIONAL parity, on the first batch, forced to the branch each
+    # one is about (p_ss=1 for the off-path label question, p_ss=0 for the identity).
+    batch, batch_rng = batches[0], jax.random.fold_in(rng, 0)
+    global_step = jnp.asarray(first_step, jnp.int32)
+    forced_on = state_view(config, state_label, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0)
+    isolation_values = {}
+    for flag, label in ((False, "corrective"), (True, "same_eps")):
+        loss, _ = corrective_at_support(
+            state.params,
+            state,
+            batch,
+            batch_rng,
+            forced_on,
+            scheduler,
+            global_step=global_step,
+            same_eps_label_flag=flag,
+        )
+        grad = jax.grad(
+            lambda params, f=flag: corrective_at_support(
+                params, state, batch, batch_rng, forced_on, scheduler, global_step=global_step, same_eps_label_flag=f
+            )[0]
+        )(state.params)
+        isolation_values[label] = (float(loss), grad)
+    isolation = label_isolation(
+        corrective_loss=isolation_values["corrective"][0],
+        same_eps_loss=isolation_values["same_eps"][0],
+        corrective_grad=isolation_values["corrective"][1],
+        same_eps_grad=isolation_values["same_eps"][1],
+    )
+
+    forced_off = state_view(config, state_label, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0)
+    trial_loss, _ = exp03._corrective_ss_loss(
+        state.params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
+    )
+    trial_grad = jax.grad(
+        lambda params: exp03._corrective_ss_loss(
+            params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
+        )[0]
+    )(state.params)
+    comparator_loss, _ = plain_fixed_support_loss(
+        state.params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
+    )
+    comparator_grad = jax.grad(
+        lambda params: plain_fixed_support_loss(
+            params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
+        )[0]
+    )(state.params)
+    parity = parity_report(
+        trial_loss=trial_loss, plain_loss=comparator_loss, trial_grad=trial_grad, plain_grad=comparator_grad
+    )
+    production_loss, _ = _denoising_loss(state.params, state, batch, batch_rng, view, scheduler)
+    production_grad = jax.grad(lambda params: _denoising_loss(params, state, batch, batch_rng, view, scheduler)[0])(
+        state.params
+    )
+    parity["production_control_difference"] = {
+        "note": (
+            "A at p_ss=0 vs the PRODUCTION control: not an identity -- A scores one scalar sigma per "
+            "batch while the control samples a timestep per example -- so this is reported, not gated."
+        ),
+        "loss_relative_gap": abs(float(trial_loss) - float(production_loss)) / max(abs(float(production_loss)), 1e-12),
+        "grad_relative_gap": _relative_gradient_gap(trial_grad, production_grad),
+        "grad_cosine": exp03.grad_cosine(trial_grad, production_grad),
+    }
+
+    forced_diagnostics = {}
+    for objective in ("corrective_ss", "combined"):
+        forced_view = state_view(
+            config, state_label, exp03_objective=objective, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0
+        )
+        loss, _ = exp03.EXP03_LOSSES[objective](
+            state.params, state, batch, batch_rng, forced_view, scheduler, global_step=global_step
+        )
+        grad = jax.grad(
+            lambda params, fn=exp03.EXP03_LOSSES[objective], cfg=forced_view: fn(
+                params, state, batch, batch_rng, cfg, scheduler, global_step=global_step
+            )[0]
+        )(state.params)
+        forced_diagnostics[objective] = {
+            "loss": float(loss),
+            "grad_norm": float(np.sqrt(exp03.tree_sq_norm(grad))),
+            "grad_cosine_vs_production_control": exp03.grad_cosine(grad, production_grad),
+        }
+
     return {
         "state": state_label,
         "checkpoint_step": int(checkpoint_step),
+        "first_global_step": first_step,
+        "ramp_origin": plan["ramp_origin"],
         "num_batches": len(batches),
-        "support_draws": S1_5_SUPPORT_DRAWS,
+        "support_draws": len(list(support_salts)),
+        "support_salts": [int(salt) for salt in support_salts],
         "per_objective": per_objective,
+        "per_batch": rows,
         "support_variance": variance,
+        "label_isolation": isolation,
+        "p_ss_zero_parity": parity,
+        "forced_p_ss_one": forced_diagnostics,
     }
 
 
@@ -355,14 +595,38 @@ def s1_5_artifact(config, *, state_label: str, checkpoint_step: int, report: dic
         "model_manifest_path": str(getattr(config, "model_manifest_path", "")),
         "num_batches": S1_5_NUM_BATCHES,
         "support_draws": S1_5_SUPPORT_DRAWS,
+        "support_salts": S1_5_SUPPORT_SALTS,
         "objectives": list(S1_5_OBJECTIVES),
         "parity_tolerance": S1_5_PARITY_TOLERANCE,
+        "first_global_step": S1_5_STATE_PLAN[state_label]["first_global_step"],
+        "ramp_origin": S1_5_STATE_PLAN[state_label]["ramp_origin"],
+        "required_checkpoint_step": S1_5_STATE_PLAN[state_label]["required_checkpoint_step"],
+        "restored_step": int(checkpoint_step),
+        "iterator_seed": int(getattr(config, "seed", 0)) + int(checkpoint_step),
         "report": report,
     }
 
 
+def assert_finite_payload(payload, trail: str = "") -> None:
+    """Refuse to write a JSON that carries a non-finite number.
+
+    A ``NaN`` in a diagnostic is not a datum, it is a bug that has learned to look like one -- and
+    ``json`` writes it as the invalid literal ``NaN``, which every strict reader then rejects. Better
+    to fail here, where the failing key can be named.
+    """
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            assert_finite_payload(value, f"{trail}.{key}" if trail else str(key))
+    elif isinstance(payload, (list, tuple)):
+        for index, value in enumerate(payload):
+            assert_finite_payload(value, f"{trail}[{index}]")
+    elif isinstance(payload, float) and not math.isfinite(payload):
+        raise ValueError(f"refusing to write a non-finite value at {trail!r}: {payload!r}")
+
+
 def write_s1_5_artifact(path: str, payload: dict) -> None:
     """Immutable write, reusing the eval path's compare-or-refuse writer."""
+    assert_finite_payload(payload)
     gen._write_json_immutable(path, payload)
 
 
@@ -419,11 +683,11 @@ def run_s1_5(config) -> dict:
     for state_label in S1_5_STATES:
         pipeline = trainer._load_wan_pipeline()
         mesh = pipeline.mesh
-        state, _, checkpoint_step = build_probe_state(
-            config, trainer, pipeline, mesh, restore=state_label == "checkpoint"
-        )
+        state, _, checkpoint_step = build_probe_state(config, trainer, pipeline, mesh, state_label=state_label)
         before = params_fingerprint(state.params)
-        iterator = trainer._load_dataset(mesh, is_training=True, seed=config.seed)
+        # PRODUCTION continuation semantics: the checkpoint state's iterator is seeded exactly as a
+        # resumed run seeds it, so the batches are the ones training would have seen next.
+        iterator = trainer._load_dataset(mesh, is_training=True, seed=config.seed + checkpoint_step)
         batches = [gen.load_next_batch(iterator, None, config) for _ in range(S1_5_NUM_BATCHES)]
         with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
             report = state_report(
@@ -434,8 +698,16 @@ def run_s1_5(config) -> dict:
                 scheduler,
                 state_label=state_label,
                 checkpoint_step=checkpoint_step,
+                support_salts=S1_5_SUPPORT_SALTS,
+            )
+            # Mechanism-B baseline on the state ALREADY IN MEMORY: re-restoring here would trace the
+            # checkpoint twice (the init trace would silently be a second checkpoint trace) and would
+            # hold two live 5B models at once.
+            report["sigma_trace"] = trace_in_memory_state(
+                state, pipeline, config, scheduler, state_label=state_label, checkpoint_step=checkpoint_step
             )
         assert_no_update(before, params_fingerprint(state.params))
+        del pipeline
         if jax.process_index() != 0:
             continue
         payload = s1_5_artifact(config, state_label=state_label, checkpoint_step=checkpoint_step, report=report)
@@ -444,9 +716,62 @@ def run_s1_5(config) -> dict:
         log_summary(payload)
         max_logging.log(f"[exp03_s1_5] wrote {path}")
         payloads[state_label] = payload
-        # Mechanism-B baseline at this state, under its own canonical path rules.
-        trace.run_trace(config)
     return payloads
+
+
+def trace_in_memory_state(state, pipeline, config, scheduler, *, state_label: str, checkpoint_step: int) -> dict:
+    """Mechanism-B sigma trace of the state in memory (no second restore, no second 5B load)."""
+    cohort = trace.trace_cohort(
+        str(getattr(config, "model_manifest_path", "")), seed=trace.TRACE_SEED, num_windows=trace.TRACE_NUM_WINDOWS
+    )
+    sigmas, timesteps = trace.overfit100_sampler_grid(
+        num_inference_steps=trace.TRACE_SAMPLING_STEPS,
+        flow_shift=config.flow_shift,
+        sigma_min=scheduler.config.sigma_min,
+        sigma_max=scheduler.config.sigma_max,
+        num_train_timesteps=scheduler.config.num_train_timesteps,
+    )
+    weights_dtype = gen._dtype(config.weights_dtype)
+    transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
+
+    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+        return transformer(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            deterministic=True,
+        )
+
+    samples = gen.read_overfit100_samples(config, cohort)
+    rows = []
+    for sample in samples:
+        z_i0 = jnp.asarray(sample.z_i0[None]).astype(weights_dtype)
+        z_gt = jnp.asarray(sample.z_video[None]).astype(weights_dtype)
+        context = jnp.broadcast_to(
+            state.context_table[sample.episode_index][None].astype(weights_dtype),
+            (1, state.context_table.shape[1], state.context_table.shape[2]),
+        )
+        eps = trace.trace_noise(
+            episode_id=sample.episode_id, window_start=sample.window_start, shape=z_gt.shape, dtype=z_gt.dtype
+        )
+        rows.append(
+            {
+                "name": sample.name,
+                "episode_id": int(sample.episode_id),
+                "episode_index": int(sample.episode_index),
+                "window_start": int(sample.window_start),
+                "trace": trace.trace_rows(
+                    velocity_fn, z_gt=z_gt, z_i0=z_i0, eps=eps, context=context, sigmas=sigmas, timesteps=timesteps
+                ),
+            }
+        )
+    return {
+        "state": state_label,
+        "checkpoint_step": int(checkpoint_step),
+        "cohort": [str(window["name"]) for window in cohort],
+        "mean_trace": trace.mean_trace(rows),
+        "rows": rows,
+    }
 
 
 def run(argv: Sequence[str]):

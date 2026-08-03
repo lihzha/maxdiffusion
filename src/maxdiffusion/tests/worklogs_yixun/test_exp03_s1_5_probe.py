@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -66,11 +67,11 @@ def test_a_hostile_design_override_is_refused(num_batches, support_draws, states
 
 
 def test_the_no_update_invariant_is_bit_level():
-    # A ONE-ULP change in one element of a large tensor: the smallest update that can exist. It must
-    # be caught, and the test proves the check is EXACT rather than merely tight -- the fingerprint
-    # moves by less than 1e-3 relative, so any tolerant comparison would wave it through.
+    # A sha256 digest per leaf, so the check is BIT identity: a one-ULP change is caught, and so is
+    # a permutation -- which a byte SUM would have missed entirely.
     values = np.linspace(1.0, 2.0, 1024, dtype=np.float32)
     params = {"gain": jnp.asarray(values)}
+    assert all(isinstance(digest, str) and len(digest) == 64 for digest in s1_5.params_fingerprint(params))
     before = s1_5.params_fingerprint(params)
     s1_5.assert_no_update(before, s1_5.params_fingerprint(params))  # unchanged: fine
 
@@ -78,12 +79,17 @@ def test_the_no_update_invariant_is_bit_level():
     nudged_values[7] = np.nextafter(nudged_values[7], np.float32(2.0))
     assert nudged_values[7] != values[7]
     after = s1_5.params_fingerprint({"gain": jnp.asarray(nudged_values)})
-    relative = abs(after[0] - before[0]) / max(abs(before[0]), 1e-12)
-    assert 0.0 < relative < 1e-3, relative  # a tolerant check would MISS this
+    assert after != before
 
     with pytest.raises(RuntimeError) as excinfo:
         s1_5.assert_no_update(before, after)
     assert "applies no updates" in str(excinfo.value)
+
+    # A PERMUTATION: same bytes, different tensor. A sum-based fingerprint would call this unchanged.
+    swapped = values.copy()
+    swapped[0], swapped[1] = values[1], values[0]
+    with pytest.raises(RuntimeError):
+        s1_5.assert_no_update(before, s1_5.params_fingerprint({"gain": jnp.asarray(swapped)}))
 
 
 def test_the_driver_asserts_no_update_around_the_measurement():
@@ -102,7 +108,8 @@ def test_the_driver_asserts_no_update_around_the_measurement():
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
     }
-    assert not called & {"apply_gradients", "update", "value_and_grad"}, called
+    assert not called & {"apply_gradients", "value_and_grad"}, called
+    assert "tx.update" not in Path(s1_5.__file__).read_text()
 
 
 # =============================================================================================
@@ -124,7 +131,7 @@ def test_the_variance_decomposition_is_the_law_of_total_variance():
     stats = s1_5.variance_decomposition(gradients)
     assert stats["num_batches"] == 2 and stats["support_draws"] == 2
     assert stats["support_variance"] == pytest.approx(0.25)  # mean of (0.5^2)
-    assert stats["data_variance"] == pytest.approx(1.0)  # mean of (1^2)
+    assert stats["batch_shared_rng_variance"] == pytest.approx(1.0)  # mean of (1^2)
     assert stats["total_variance"] == pytest.approx(1.25)
     assert stats["support_fraction"] == pytest.approx(0.2)
     assert stats["mean_grad_sq_norm"] == pytest.approx(0.0, abs=1e-12)  # grand mean is 0 here
@@ -136,7 +143,7 @@ def test_identical_draws_report_no_support_variance():
     gradients = [[_grad([1.0]), _grad([1.0])], [_grad([3.0]), _grad([3.0])]]
     stats = s1_5.variance_decomposition(gradients)
     assert stats["support_variance"] == 0.0
-    assert stats["data_variance"] == pytest.approx(1.0)
+    assert stats["batch_shared_rng_variance"] == pytest.approx(1.0)
     assert stats["support_fraction"] == 0.0
     assert stats["gradient_noise_scale"] == pytest.approx(1.0 / 4.0)  # total 1.0, mean grad 2.0
 
@@ -144,7 +151,7 @@ def test_identical_draws_report_no_support_variance():
 def test_a_single_draw_cannot_report_a_support_term():
     stats = s1_5.variance_decomposition([[_grad([1.0])], [_grad([3.0])]])
     assert stats["support_draws"] == 1 and stats["support_variance"] == 0.0
-    assert stats["data_variance"] == pytest.approx(1.0)
+    assert stats["batch_shared_rng_variance"] == pytest.approx(1.0)
 
 
 def test_ragged_draw_counts_are_refused():
@@ -158,17 +165,29 @@ def test_the_driver_varies_the_support_not_the_batch_across_draws():
     # THE thing that makes the within-batch term a SUPPORT term: the batch is held fixed while the
     # draw index moves the global step the aux keys fold on.
     source = inspect.getsource(s1_5.state_report)
-    assert "for draw in range(S1_5_SUPPORT_DRAWS)" in source
-    assert "index * S1_5_SUPPORT_DRAWS + draw" in source  # a distinct step per draw
-    # ...and the batch and the shared-stream key do NOT move with the draw.
-    inner = source[source.index("for draw in range(S1_5_SUPPORT_DRAWS)") :]
-    assert "jax.random.fold_in(rng, index)" in inner and "fold_in(rng, draw)" not in inner
-    # Distinct steps really give distinct supports.
+    assert "for salt in support_salts" in source
+    assert "exp03_support_salt=int(salt)" in source
+    # The global step, the batch and the shared-stream key are FIXED across the M draws: only the
+    # salt moves, so the within-batch spread is the sigma support and nothing else.
+    inner = source[source.index("for salt in support_salts") : source.index("# A's LABEL ISOLATION")]
+    assert "global_step = jnp.asarray(first_step + index" not in inner  # fixed before the loop
+    assert "jax.random.fold_in(rng, index)" not in inner  # the shared key is fixed too
+
+    # The salt re-draws the SUPPORT...
     supports = {
-        tuple(int(v) for v in exp03.corrective_support(seed=0, global_step=step, num_steps=25, k_a_max=2))
-        for step in range(4)
+        tuple(int(v) for v in exp03.corrective_support(seed=0, global_step=7, num_steps=25, k_a_max=2, support_salt=s))
+        for s in s1_5.S1_5_SUPPORT_SALTS
     }
     assert len(supports) > 1
+    # ...and leaves the coin and the ramp exactly where they were.
+    coin = jax.random.uniform(exp03.exp03_aux_key(seed=0, global_step=7, purpose="p_ss_coin"), ())
+    for salt in s1_5.S1_5_SUPPORT_SALTS:
+        salted = jax.random.uniform(exp03.exp03_aux_key(seed=0, global_step=7, purpose="p_ss_coin"), ())
+        assert float(salted) == float(coin)
+    # A zero salt is exactly the pre-salt draw, so no existing run's randomness moved.
+    assert tuple(int(v) for v in exp03.corrective_support(seed=0, global_step=7, num_steps=25, k_a_max=2)) == tuple(
+        int(v) for v in exp03.corrective_support(seed=0, global_step=7, num_steps=25, k_a_max=2, support_salt=0)
+    )
 
 
 # =============================================================================================
@@ -318,15 +337,17 @@ def test_the_probe_touches_no_verdict_machinery():
 def test_the_probe_reuses_the_trainers_replay_rather_than_duplicating_it():
     source = inspect.getsource(s1_5.state_report)
     assert "exp03.exp03_frozen_replay(" in source
+    # The per-objective sweep delegates; the probe's OWN losses exist only for the two questions the
+    # replay cannot answer (label isolation needs two labels on one state, conditional parity needs a
+    # fixed-support comparator), and both are built from the trainer's helpers.
     module = Path(s1_5.__file__).read_text()
-    # No private re-implementation of the per-objective loop.
-    assert "_corrective_ss_loss(" not in module and "_rollout_loss(" not in module
+    assert "exp03._exp03_prologue(" in module and "exp03._forward_velocity(" in module
+    assert "def _denoising_loss" not in module and "def _corrective_ss_loss" not in module
 
 
 def test_the_extended_replay_reports_cosines_against_the_control():
     source = inspect.getsource(exp03.exp03_frozen_replay)
     assert '"control"' in source and "grad_cosine_{name}_vs_control" in source
-    assert "include_control=True" in inspect.signature(exp03.exp03_frozen_replay).__str__() or True
     assert "include_control" in source
 
 
@@ -351,14 +372,18 @@ def test_the_launcher_forwards_the_probe_knobs():
         ("CHECKPOINT_DIR", "checkpoint_dir"),
         ("S1_5_NUM_BATCHES", "s1_5_num_batches"),
         ("S1_5_SUPPORT_DRAWS", "s1_5_support_draws"),
-        ("EXP03_RAMP_ORIGIN", "exp03_ramp_origin"),
     ):
         assert f'{key}="${{{env}}}"' in text, key
         assert f'echo "{env}=' in text, env
-    # The Tier-1 checkpoint is REQUIRED: probing the init twice would answer the wrong question.
-    assert 'CHECKPOINT_DIR="${CHECKPOINT_DIR:?' in text
-    # Tier-1's ramp origin, per the D1 requirement.
-    assert 'EXP03_RAMP_ORIGIN="${EXP03_RAMP_ORIGIN:-10000}"' in text
+    # The Tier-1 checkpoint is GENUINELY required: the :? check fires because nothing defaults it
+    # first (a default assigned above would make the check unreachable).
+    assert ': "${CHECKPOINT_DIR:?' in text
+    assert 'CHECKPOINT_DIR="${CHECKPOINT_DIR:-' not in text
+    # The ramp origin is PER STATE and decided in the probe (checkpoint 10000, init 0), so the
+    # launcher must NOT carry one -- a single env would give both states the same ramp.
+    assert "EXP03_RAMP_ORIGIN" not in text
+    assert s1_5.S1_5_STATE_PLAN["checkpoint"]["ramp_origin"] == 10000
+    assert s1_5.S1_5_STATE_PLAN["init"]["ramp_origin"] == 0
 
 
 def test_the_launcher_keeps_the_pinned_apparatus_and_needs_no_ffmpeg():
@@ -399,7 +424,6 @@ def test_the_launcher_does_not_drift_from_the_probe_launcher_it_was_cloned_from(
         "CHECKPOINT_DIR",
         "S1_5_NUM_BATCHES",
         "S1_5_SUPPORT_DRAWS",
-        "EXP03_RAMP_ORIGIN",
         "PROBE_NUM_WINDOWS",
         "PROBE_STEPS",  # the exp_02 probe's arms; S1.5 has no sampler arms
     }
@@ -412,3 +436,130 @@ def test_the_launcher_does_not_drift_from_the_probe_launcher_it_was_cloned_from(
 def test_the_config_carries_the_s1_5_keys():
     text = _CONFIG.read_text()
     assert "s1_5_num_batches: 8" in text and "s1_5_support_draws: 4" in text
+
+
+# =============================================================================================
+# 6. The wiring the first version lacked: the diagnostics must REACH the artifact.
+# =============================================================================================
+
+
+def test_the_report_wires_label_isolation_and_parity_and_forced_diagnostics():
+    # The first version defined both and called neither, so the logger's branches were unreachable
+    # and no artifact could ever contain them. Pinned structurally at the seam that builds the report.
+    source = inspect.getsource(s1_5.state_report)
+    for required in (
+        "label_isolation(",
+        "parity_report(",
+        "plain_fixed_support_loss(",
+        "corrective_at_support(",
+        '"forced_p_ss_one"',
+        '"per_batch"',
+    ):
+        assert required in source, required
+    returned = source[source.index("return {") :]
+    for key in ('"label_isolation"', '"p_ss_zero_parity"', '"forced_p_ss_one"', '"per_batch"', '"support_salts"'):
+        assert key in returned, key
+
+
+def test_the_artifact_records_the_state_identity_and_rejects_non_finite_values(tmp_path):
+    config = SimpleNamespace(
+        output_dir=str(tmp_path),
+        run_name="r",
+        checkpoint_dir="gs://x/ck",
+        train_data_dir="gs://x/train100",
+        model_manifest_path="gs://x/manifest.json",
+        seed=0,
+    )
+    payload = s1_5.s1_5_artifact(
+        config, state_label="checkpoint", checkpoint_step=10000, report={"state": "checkpoint"}
+    )
+    assert payload["first_global_step"] == 10000 and payload["ramp_origin"] == 10000
+    assert payload["required_checkpoint_step"] == 10000 and payload["restored_step"] == 10000
+    assert payload["iterator_seed"] == 10000  # production continuation semantics: seed + start_step
+    assert tuple(payload["support_salts"]) == tuple(s1_5.S1_5_SUPPORT_SALTS)
+    init_payload = s1_5.s1_5_artifact(config, state_label="init", checkpoint_step=0, report={"state": "init"})
+    assert init_payload["first_global_step"] == 0 and init_payload["ramp_origin"] == 0
+
+    # A NaN anywhere is refused, with the failing key named.
+    with pytest.raises(ValueError) as excinfo:
+        s1_5.write_s1_5_artifact(str(tmp_path / "bad.json"), {**payload, "report": {"grad_norm_a": float("nan")}})
+    assert "report.grad_norm_a" in str(excinfo.value)
+    with pytest.raises(ValueError):
+        s1_5.assert_finite_payload({"rows": [{"x": 1.0}, {"x": float("inf")}]})
+
+
+def test_the_state_plan_is_the_canonical_per_state_mapping():
+    assert s1_5.S1_5_STATE_PLAN["checkpoint"] == {
+        "first_global_step": 10000,
+        "ramp_origin": 10000,
+        "required_checkpoint_step": 10000,
+    }
+    assert s1_5.S1_5_STATE_PLAN["init"] == {
+        "first_global_step": 0,
+        "ramp_origin": 0,
+        "required_checkpoint_step": 0,
+    }
+    # The restore is PINNED to the required step, not to whatever is latest.
+    source = inspect.getsource(s1_5.build_probe_state)
+    assert 'required = plan["required_checkpoint_step"]' in source
+    assert "if int(start_step) != int(required):" in source
+    # ...and the pin is on the REQUIRED step, not on whatever happens to be latest.
+    assert "manager.latest_step()" not in source
+    # ...and init goes through the SAME checkpoint-manager path, on an empty directory.
+    assert "_empty_checkpoint_dir(config)" in source
+    assert "trainer._maybe_restore(manager, state)" in source
+
+
+def test_the_iterator_seed_follows_production_continuation():
+    source = inspect.getsource(s1_5.run_s1_5)
+    assert "seed=config.seed + checkpoint_step" in source
+
+
+def test_the_sigma_trace_uses_the_state_already_in_memory():
+    # Re-restoring would have traced the checkpoint twice (the init trace was silently a second
+    # checkpoint trace) and would hold two live 5B models at once.
+    module = Path(s1_5.__file__).read_text()
+    assert "trace.run_trace(" not in module
+    source = inspect.getsource(s1_5.run_s1_5)
+    assert "trace_in_memory_state(" in source
+    tracer = inspect.getsource(s1_5.trace_in_memory_state)
+    assert "nnx.merge(state.graphdef, state.params, state.rest_of_state)" in tracer
+    assert "_restore" not in tracer and "run_trace" not in tracer
+
+
+def test_the_reductions_never_flatten_a_gradient_on_the_host():
+    # At 5B parameters a float64 flatten is ~40 GB per gradient; the first version retained 32 of
+    # them. Everything is leafwise/on-device now, and the Welford accumulator keeps O(1) trees.
+    for module_text in (Path(s1_5.__file__).read_text(), Path(exp03.__file__).read_text()):
+        assert "np.float64" not in module_text and "dtype=jnp.float64" not in module_text
+        assert "np.concatenate" not in module_text
+        assert "_flat_gradient" not in module_text
+    welford = s1_5._TreeWelford()
+    for value in ([1.0], [3.0], [5.0]):
+        welford.update({"w": jnp.asarray(value, dtype=jnp.float32)})
+    assert welford.count == 3
+    assert float(welford.mean["w"][0]) == pytest.approx(3.0)
+    assert welford.population_variance() == pytest.approx(8.0 / 3.0)  # ((-2)^2+0+2^2)/3
+    assert welford.sample_variance() == pytest.approx(4.0)
+    # The accumulator holds ONE tree, whatever it has consumed.
+    assert len(jax.tree_util.tree_leaves(welford.mean)) == 1
+
+
+def test_the_frozen_replay_default_is_unchanged_from_the_parent_commit():
+    # MAJOR 6: the default must not have grown an extra control forward/backward.
+    signature = inspect.signature(exp03.exp03_frozen_replay)
+    assert signature.parameters["include_control"].default is False
+    assert signature.parameters["with_gradients"].default is True
+    # ...and grad_cosine is the float32 TREE reduction, not a host flatten.
+    cosine_source = inspect.getsource(exp03.grad_cosine)
+    assert "tree_l2_norm" in cosine_source and "tree_dot" in cosine_source
+
+
+def test_no_vacuous_assertions_survive_in_this_file():
+    # The `or True` that made a signature assertion unconditional is the exact failure mode this
+    # whole SOP exists to prevent; a test that asserts nothing is worse than no test.
+    text = Path(__file__).read_text()
+    needle = " or " + "True"
+    occurrences = [line for line in text.splitlines() if needle in line and "needle" not in line]
+    assert not occurrences, occurrences
+    assert "assert " + "True" not in text.replace("assert " + "True" + '"', "")

@@ -87,12 +87,11 @@ DATA_DIR="${DATA_DIR:-gs://v6_east1d/datasets/exp02_overfit100/train100}"
 EVAL_DATA_DIR="${EVAL_DATA_DIR:-$DATA_DIR}"
 EXPECTED_WINDOWS="${EXPECTED_WINDOWS:-1629}"
 NUM_TEXT_SLOTS="${NUM_TEXT_SLOTS:-100}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-${OUTPUT_DIR%/}/${RUN_NAME}/checkpoints}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-10000}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:?CHECKPOINT_DIR must name the exp_02 step-10,000 checkpoint (Tier-1 state)}"
+# GENUINELY required: no default is assigned anywhere above, so :? fires on an unset value.
+: "${CHECKPOINT_DIR:?CHECKPOINT_DIR must name the exp_02 step-10,000 checkpoint (Tier-1 state)}"
 S1_5_NUM_BATCHES="${S1_5_NUM_BATCHES:-8}"
 S1_5_SUPPORT_DRAWS="${S1_5_SUPPORT_DRAWS:-4}"
-EXP03_RAMP_ORIGIN="${EXP03_RAMP_ORIGIN:-10000}"
 PROBE_NUM_WINDOWS="${PROBE_NUM_WINDOWS:-30}"
 PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-1.0}"
 SKIP_HF_PREFETCH="${SKIP_HF_PREFETCH:-0}"
@@ -119,10 +118,8 @@ echo "EXPECTED_WINDOWS=${EXPECTED_WINDOWS}"
 echo "NUM_TEXT_SLOTS=${NUM_TEXT_SLOTS}"
 echo "CHECKPOINT_DIR=${CHECKPOINT_DIR}"
 echo "CHECKPOINT_STEP=${CHECKPOINT_STEP}"
-echo "CHECKPOINT_DIR=${CHECKPOINT_DIR}"
 echo "S1_5_NUM_BATCHES=${S1_5_NUM_BATCHES}"
 echo "S1_5_SUPPORT_DRAWS=${S1_5_SUPPORT_DRAWS}"
-echo "EXP03_RAMP_ORIGIN=${EXP03_RAMP_ORIGIN}"
 echo "PROBE_NUM_WINDOWS=${PROBE_NUM_WINDOWS}"
 echo "PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE}"
 echo "SKIP_HF_PREFETCH=${SKIP_HF_PREFETCH}"
@@ -181,10 +178,8 @@ python src/maxdiffusion/probe_exp03_s1_5.py \
   base_output_directory="${OUTPUT_DIR}" \
   checkpoint_dir="${CHECKPOINT_DIR}" \
   checkpoint_step="${CHECKPOINT_STEP}" \
-  checkpoint_dir="${CHECKPOINT_DIR}" \
   s1_5_num_batches="${S1_5_NUM_BATCHES}" \
   s1_5_support_draws="${S1_5_SUPPORT_DRAWS}" \
-  exp03_ramp_origin="${EXP03_RAMP_ORIGIN}" \
   probe_num_windows="${PROBE_NUM_WINDOWS}" \
   per_device_batch_size="${PER_DEVICE_BATCH_SIZE}" \
   hardware=tpu
