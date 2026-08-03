@@ -28,3 +28,14 @@ provably plateaus.
 **Summary.** Two-tier design: Tier 1 = continue-from-10k A/B/C (kept as planned); Tier 2 = from-scratch
 A0/B0/C0 + fresh one-step control (ctrl0) from the same Wan init. Budget is the Planner's choice, made in
 plan v3 (2,500 steps/arm). Plan returns for approval before any launch.
+
+## Query 3 — 2026-08-03 (verbatim)
+
+> approve S1 smoke when the package is ready
+
+**Summary.** Conditional pre-approval: the S1 smoke launch (v6e-8) is approved contingent on (a) round 3
+closing with the reviewer's APPROVE, and (b) the package being assembled per plan v3.2 — explicit
+`EXP03_RAMP_ORIGIN` per tier, the declared A/B/C step-time STOP budgets (≤1.6× / ≤2.5× / ≤3.2× baseline;
+exceeding one is a STOP, not a silent accept), and the standard `_command.md` entry at launch time. No
+further ask before the S1 launch once both conditions hold. (Mirrors exp_02's recorded
+conditional-approval pattern.)
