@@ -11,3 +11,4 @@
 | `371816c` | round-3 strengthening (Codex 2 MAJOR + 1 MINOR + 1 LOW) — B/C differentiate the deterministic eval sampler; independent, convention-detecting, fp32+bf16 B tests; exact keyed support certificates; dead/stale declarations removed. Suite 1399/2 skipped. |
 | `3e3882d` | round-3 residuals — end-to-end bf16 certificate (bfloat16 PARAMETER, dtype assertions derived from the config), two stale comments corrected. Suite 1399/2 skipped. |
 | `efb18a7` | S1-fix closing — emit-before-raise reporting seam, true 2,162-triple cross-product sweep, `exp03_snapshot_before_step` pre-step state/rng/batch snapshot. Suite 1420/2 skipped. |
+| `d3b33ae` | S1-fix final — host-scoped logging (process 0 logs, every host raises), collective snapshot save on all hosts, awaited before the armed step. Suite 1424/2 skipped. |
