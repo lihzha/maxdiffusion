@@ -48,3 +48,24 @@ train100 (unchanged pins).
 - **Job ids (submitted 2026-08-03T02:45–02:46Z):** control → `20260803-024504-7175ecdb-exp03-s1-control-yixun`;
   corrective_ss → `20260803-024531-b4f93a1a-exp03-s1-correcti-yixun`; rollout_loss →
   `20260803-024558-3534905b-exp03-s1-rolloutl-yixun`; combined → `20260803-024622-0206cf9b-exp03-s1-combined-yixun`.
+
+## S1 outcome (Jobs 1–4) — 2026-08-03T~04:30Z
+
+All four SUCCEEDED as queue jobs (after one v6e-8 maintenance sweep + suspensions; attempts 1–2 each).
+Gates evaluated from step logs (steady-state steps/s = mean over steps 10–29):
+
+| arm | finiteness | steps/s | ratio | budget | gate |
+| --- | --- | --- | --- | --- | --- |
+| control | all finite | 1.786 | 1.00× | — | PASS |
+| corrective_ss | all finite | 1.219 | 1.47× | ≤1.6× | **PASS** |
+| rollout_loss | all finite | 0.698 | 2.56× | ≤2.5× | **STOP** (marginal, +2.4%) |
+| combined | **NaN from step 8** | 0.422 | 4.23× | ≤3.2× | **STOP** (×2) |
+
+- Gate 2 (hook parity on hardware) is NOT evaluable against exp_02's history at smoke scale (different
+  batch/hardware); it is carried by the suite's exact JIT-parity certificate now and by ctrl0's AND-gate at
+  S2b. Recorded as deferred-by-design, not passed.
+- B's overrun is small and plausibly small-batch/remat overhead; decision deferred to S1.6's at-scale
+  measurement (no code change).
+- C's NaN at LR≈1e-6 is a numerical edge in the loss computation for a specific draw — deterministically
+  reproducible from (seed, step 8, purposes). Diagnosis round dispatched; C re-smoke will need a fresh
+  launch approval after the fix + review.
