@@ -80,4 +80,4 @@ this re-measures its real cost; C ≤ 3.2×). C additionally arms `EXP03_SNAPSHO
 gate open): pre-failure params/opt/rng/batch land in the run dir before global_step 7 executes. If C goes
 non-finite: the forced NON-FINITE line names the term, every host raises, and the frozen-state A/B/C
 discriminator (`exp03_frozen_replay`) runs from the snapshot as a follow-up job.
-- **Job ids:** (appended at submission)
+- **Job ids (submitted 2026-08-03T16:45–16:46Z):** control → `20260803-164526-06c4fa27-exp03-rs-control2-yixun`; A → `20260803-164552-452e8a59-exp03-rs-corrss2-yixun`; C replay (snapshot armed) → `20260803-164618-cf2ca830-exp03-rs-combined2-yixun`. COMMIT=86c7408.
