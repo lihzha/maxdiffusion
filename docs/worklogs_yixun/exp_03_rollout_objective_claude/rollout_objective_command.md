@@ -81,3 +81,12 @@ gate open): pre-failure params/opt/rng/batch land in the run dir before global_s
 non-finite: the forced NON-FINITE line names the term, every host raises, and the frozen-state A/B/C
 discriminator (`exp03_frozen_replay`) runs from the snapshot as a follow-up job.
 - **Job ids (submitted 2026-08-03T16:45–16:46Z):** control → `20260803-164526-06c4fa27-exp03-rs-control2-yixun`; A → `20260803-164552-452e8a59-exp03-rs-corrss2-yixun`; C replay (snapshot armed) → `20260803-164618-cf2ca830-exp03-rs-combined2-yixun`. COMMIT=86c7408.
+
+### Job 7 correction (2026-08-03T~17:15Z)
+
+Job 7 (combined2) FAILED at launch-plumbing, not in training: an unquoted $extra in the zsh launch loop
+passed `--env EXP03_SNAPSHOT_BEFORE_STEP=7` as ONE malformed argument, scrambling the CLI's arg order so
+the worker ran `bash -- …` (invalid option, exit 2). No trainer code executed; no NaN evidence either way.
+Relaunched as **Job 7b** `20260803-171003-8ce1d02c-exp03-rs-combined3-yixun` with the env inline. (Second zsh word-splitting incident this session —
+noted: always inline or array-expand extra args.)
+
