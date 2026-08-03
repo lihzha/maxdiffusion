@@ -132,3 +132,11 @@ isolation; conditional fixed-support parity; forced-p_ss=1 diagnostics; support-
 (law of total variance, finite-M honesty note); per-state sigma traces; branch outcomes. Artifacts: two
 immutable state JSONs + two trace JSONs under `validation_probe_sampling/`.
 - **Job id:** `20260803-220241-064d6ea5-exp03-s15-probe-yixun` (COMMIT=e933b48).
+
+### Job 8 outcome + Job 8b (2026-08-04T~00:20Z)
+
+Job 8 FAILED at startup on hardware: `gen.load_next_batch` never existed (the e2e test had stubbed the
+batch pull — the inspect-vs-execute class, 4th instance). Fix `e2249e1` (APPROVE): probe uses the trainer's
+own `train_utils.load_next_batch` with matching iterator seeding; a new AST attribute-resolution guard
+closes the wrong-attribute class for probe + both trainers. Relaunch **Job 8b**: `20260803-230447-b14dcde5-exp03-s15-probe2-yixun` (COMMIT=7dcc1f82b78eec9a6bda1e404cc056c36286c3ed).
+
