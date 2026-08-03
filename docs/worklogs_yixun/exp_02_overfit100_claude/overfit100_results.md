@@ -391,3 +391,17 @@ measurement (pending, capacity-bound) surprises, the bar count should move only 
 SSIM lands: (a) a higher-LR probe (1e-4 = Wan's own pretraining LR) as one more cheap segment; (b) accept
 the characterization (memorization deepened enormously via LR; the last gap to 90% is the recipe's
 residual, exactly what exp_03's objectives target); (c) more 5e-5 segments at steeply diminishing returns.
+
+## lr5e5 @ 17,500 SSIM (Job 46, attempt 5) — MEAN CROSSES 0.95 — 2026-08-04T~00:10Z
+
+**Mean 0.9508** (line predicted 0.9467, +0.0041 — five holds across three LRs), **62/100 ≥ 0.95**, 97/100
+≥ 0.90, max 0.9771, min 0.8720. Role ok. Full arc of the bar count: **0 → 11 → 51 → 62**.
+
+**The tension:** the mean itself now clears the per-window bar, but the marginal segment bought only +11
+windows (51→62) against the loss pace collapsing 4.7×. Extrapolating, 90/100 needs several more segments
+with each buying less — OR the pattern that broke the last plateau repeats: a higher LR. Decision menu
+presented to Yixun: (a) ONE 1e-4 probe segment from 17,500 (Wan's own pretraining LR; the same move that
+worked at 2e-5 and 5e-5; 39 min + measurements); (b) accept the characterization and run the formal
+verdict machinery at the best checkpoint for the record; (c) more 5e-5 segments at diminishing returns.
+Planner recommends (a): highest information per chip-hour, and a failure would itself sharpen exp_03's
+motivation (the residual as the compounding term).
