@@ -407,3 +407,33 @@
   reintroduced (2F); a different bogus module attribute (1F); the pull reverted to bare `next()`
   (2F); the iterator seed drifting from the training loop (2F).
 - **Next** — fast re-review, then relaunch under the standing grant.
+
+## 2026-08-03T18:00:00Z — Job 8b fix: vars() on the pyconfig proxy is empty (5th inspect-vs-execute)
+
+- **Defect** — `state_view` / `_objective_config` built views as `SimpleNamespace(**{**vars(config), ...})`.
+  Production `config` is pyconfig's `HyperParameters` proxy: keys live behind `__getattr__` and the
+  instance `__dict__` is EMPTY, so every view carried only its overrides. Every
+  `getattr(view, k, default)` in the replay path silently returned its default, and the first hard
+  read (`config.weights_dtype`) raised — after the 5B restore and the dataset pin had passed.
+- **Fix** — `_config_key_dict(config)`: `get_keys()` when the config offers it (the proxy does),
+  `vars()` otherwise (test and view-of-view namespaces, where it is correct). Fails loud at view
+  construction if the result is empty or lacks the sentinel `weights_dtype` — the key that crashed.
+  Both builders route through it.
+- **Closure** — tests now initialize pyconfig FOR REAL against `base_wan_5b_exp03.yml`: a canary
+  asserting `vars(pyconfig.config) == {}` (so if pyconfig's shape ever changes, the helper is
+  re-examined rather than quietly outliving its reason), views built from the real config and
+  hard-read (`weights_dtype`, `seed`, per-state `exp03_ramp_origin`, `exp03_objective`), key-set
+  superset checks including a view-of-view, and refusal tests for the empty and sentinel-less cases.
+  The e2e config is now built on the REAL 225-key production key set with only shapes shrunk.
+- **Audit beyond the two known sites** — no other `vars(config)` in production code. Two findings
+  worth recording: (a) the docstring's pedigree claim was false and is corrected — exp_02's probe DOES
+  have a config view, but `arm_config` is a read-only PROXY forwarding `__getattr__`, which is
+  exactly why it never met this failure; (b) on the pyconfig proxy `getattr(config, "missing", default)`
+  RAISES `ValueError` rather than returning the default, so any future default-valued read against a
+  raw production config is a latent trap (the probe's own such reads are all of keys the yml defines).
+- **Result** — suite 1487 passed / 2 skipped (+5). Four mutants killed: the exact defect reintroduced
+  (2F); the empty-keys guard removed (1F); the sentinel guard removed (1F); `vars()` preferred over
+  `get_keys()` (1F, after the precedence test was given a proxy whose `__dict__` disagrees with
+  `get_keys()` — the first version let it survive).
+- **Note** — `make fixup` cannot run in this fork (`utils/get_modified_files.py` and
+  `utils/custom_init_isort.py` are absent upstream-only tooling); black + ruff were run directly.
