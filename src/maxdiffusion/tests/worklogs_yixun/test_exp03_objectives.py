@@ -871,8 +871,10 @@ def test_the_s1_failing_draw_is_pinned_at_the_corrected_global_step():
 
 
 def test_c_uses_the_same_support_purposes_as_the_standalone_arms():
-    # The finding that turns the diagnosis from "bad draw" into "interaction": identical purposes,
-    # identical seed, identical step => identical draws in C and in the A/B arms.
+    # One draw site per purpose, so identical seed and identical step give identical draws in C and
+    # in the A/B arms GIVEN THE SAME STATE. Nothing about the S1 mechanism follows from that -- the
+    # arms reached the failing step with different parameter and optimizer histories, and only the
+    # frozen-state replay can say which term failed and in which pass.
     for step in (7, 8, 9):
         assert exp03.corrective_support(seed=0, global_step=step, num_steps=_STEPS, k_a_max=2)[0] is not None
     source = Path(exp03.__file__).read_text()
@@ -1163,6 +1165,58 @@ def test_a_non_finite_step_is_REPORTED_before_it_raises():
     assert "loss_b_finite" in str(excinfo.value)
 
 
+@pytest.mark.parametrize("is_primary", [True, False])
+def test_only_process_zero_writes_step_lines(is_primary):
+    # A non-primary host must stay SILENT -- periodic AND forced. It previously received
+    # log_period=0, which the emitter turned into "every step", i.e. N interleaved copies per step.
+    metrics = _metrics_from_a_real_step()
+    poisoned = {"scalar": dict(metrics["scalar"])}
+    poisoned["scalar"]["learning/loss_a_finite"] = jnp.asarray(0.0)
+    logger = _FakeLogger()
+
+    # Periodic line.
+    parent.report_step(
+        step=7,
+        max_train_steps=30,
+        metrics=metrics,
+        avg_loss=1.0,
+        avg_grad=1.0,
+        lr=2.8e-07,
+        steps_per_sec=0.4,
+        log_period=1,
+        log_fn=logger,
+        is_primary=is_primary,
+    )
+    assert len(logger.lines) == (1 if is_primary else 0)
+
+    # Forced (non-finite) line -- and EVERY host still raises, or the mesh would hang.
+    logger.lines.clear()
+    with pytest.raises(parent.NonFiniteStepError):
+        parent.report_step(
+            step=7,
+            max_train_steps=30,
+            metrics=poisoned,
+            avg_loss=float("nan"),
+            avg_grad=1.0,
+            lr=2.8e-07,
+            steps_per_sec=0.4,
+            log_period=1000,
+            log_fn=logger,
+            is_primary=is_primary,
+        )
+    assert len(logger.lines) == (1 if is_primary else 0)
+
+
+def test_the_loop_passes_the_host_role_rather_than_a_zero_period():
+    source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert "is_primary=jax.process_index() == 0" in source
+    assert "log_period=config.log_period if jax.process_index() == 0 else 0" not in source
+    # A zero period must not mean "every step" in the emitter either.
+    emitter = inspect.getsource(parent.report_step)
+    assert "max(int(log_period), 1)" not in emitter
+    assert "int(log_period) > 0" in emitter
+
+
 def test_a_finite_step_reports_only_when_due():
     metrics = _metrics_from_a_real_step()
     logger = _FakeLogger()
@@ -1249,24 +1303,71 @@ def test_the_frozen_replay_is_not_in_the_training_step():
         assert "exp03_frozen_replay" not in inspect.getsource(loss_fn)
 
 
-def test_the_pre_step_snapshot_writes_state_rng_and_batch(tmp_path):
-    # Proactive preservation: detection happens AFTER apply_gradients, so the state a failing step
-    # produces is already poisoned, and a checkpoint carries no rng and no batch. The flag saves the
-    # state that PRECEDES the known failing step.
+def test_the_pre_step_snapshot_saves_through_the_real_checkpoint_path(tmp_path):
+    # The REAL Orbax path, not a stub: the manager the production loop uses, awaited, with the
+    # ordering asserted -- save, then wait, then (only then) the step that is expected to fail.
     state, data, config, scheduler = _fixture()
-    saved: list[int] = []
+    trainer = exp03.Exp03Trainer.__new__(exp03.Exp03Trainer)
+    trainer.config = SimpleNamespace(**{**vars(config), "checkpoint_max_to_keep": None, "save_final_checkpoint": True})
+    manager = trainer._build_checkpoint_manager(str(tmp_path / "ckpt"))
+    events: list[str] = []
     directory = str(tmp_path / "snapshot_pre_step7")
     rng = jax.random.key(11)
-    manifest = parent.save_pre_step_snapshot(directory, step=7, rng=rng, batch=data, save_state=saved.append)
-    assert saved == [7]
-    assert manifest["global_step"] == 7 and manifest["displayed_step"] == 8
+
+    def save_state(step):
+        events.append("save")
+        trainer._save_checkpoint(manager, step, state)
+
+    def wait():
+        events.append("wait")
+        manager.wait_until_finished()
+
+    manifest = parent.save_pre_step_snapshot(directory, step=7, rng=rng, batch=data, save_state=save_state, wait=wait)
+    events.append("step")  # the armed step would run HERE, after the call returned
+
+    assert events == ["save", "wait", "step"], events
+    assert manifest["state_saved"] is True and manifest["awaited"] is True
+    # The checkpoint is on disk BEFORE the step: that is what the await buys.
+    assert manager.latest_step() == 7
+    restored, start_step = trainer._maybe_restore(manager, state)
+    assert start_step == 7
+    for left, right in zip(jax.tree_util.tree_leaves(restored.params), jax.tree_util.tree_leaves(state.params)):
+        assert np.array_equal(np.asarray(left), np.asarray(right))
+    # ...and the host-side extras the checkpoint cannot carry.
     payload = np.load(Path(directory) / "pre_step_snapshot.npz")
     assert int(payload["global_step"]) == 7
     assert np.array_equal(payload["rng_key_data"], np.asarray(jax.random.key_data(rng)))
     for name, value in data.items():
         assert np.array_equal(payload[f"batch__{name}"], np.asarray(value)), name
     written = json.loads((Path(directory) / "pre_step_snapshot.json").read_text())
-    assert written["state_saved"] is True and written["displayed_step"] == 8
+    assert written["displayed_step"] == 8 and written["awaited"] is True
+
+
+def test_the_collective_save_runs_on_every_host_and_only_extras_are_host_scoped(tmp_path):
+    # The Orbax save is COLLECTIVE: a non-primary host must still call it, or the hosts that did
+    # will wait forever. Only the rng/batch/manifest writes are process-0 work.
+    state, data, config, scheduler = _fixture()
+    events: list[str] = []
+    directory = str(tmp_path / "worker_snapshot")
+    manifest = parent.save_pre_step_snapshot(
+        directory,
+        step=7,
+        rng=jax.random.key(11),
+        batch=data,
+        save_state=lambda step: events.append(f"save{step}"),
+        wait=lambda: events.append("wait"),
+        is_primary=False,
+    )
+    assert events == ["save7", "wait"]  # the collective ran on the non-primary host
+    assert not Path(directory).exists()  # ...and it wrote no host-side files
+    assert manifest["state_saved"] is True and manifest["awaited"] is True
+    # The production source gates only the extras, never the collective.
+    source = inspect.getsource(parent.save_pre_step_snapshot)
+    assert "if is_primary:" in source
+    assert source.index("if is_primary:") < source.index("if save_state is not None:")
+    loop = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    armed = loop[loop.index("snapshot_before_step >= 0") :]
+    assert "jax.process_index() == 0" not in armed.split("save_pre_step_snapshot")[0]
 
 
 def test_the_loop_arms_the_snapshot_from_the_config_flag():
@@ -1279,4 +1380,6 @@ def test_the_loop_arms_the_snapshot_from_the_config_flag():
     assert "exp03_snapshot_before_step: -1" in config_text
     launcher = (Path(parent.__file__).parents[3] / "bash_scripts" / "train_wan_exp03.sh").read_text()
     assert 'EXP03_SNAPSHOT_BEFORE_STEP="${EXP03_SNAPSHOT_BEFORE_STEP:--1}"' in launcher
+    # ...and the loop awaits the save before the armed step runs.
+    assert "wait=ckpt_mgr.wait_until_finished" in source
     assert 'exp03_snapshot_before_step="${EXP03_SNAPSHOT_BEFORE_STEP}"' in launcher

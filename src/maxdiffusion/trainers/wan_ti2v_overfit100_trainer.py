@@ -278,7 +278,9 @@ def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, schedul
     return _make_train_step(_denoising_loss)(state, data, rng, scheduler, config, global_step=global_step)
 
 
-def save_pre_step_snapshot(directory: str, *, step: int, rng, batch: dict, save_state=None) -> dict:
+def save_pre_step_snapshot(
+    directory: str, *, step: int, rng, batch: dict, save_state=None, wait=None, is_primary: bool = True
+) -> dict:
     """Write everything a frozen-state replay needs, BEFORE the step that is expected to fail.
 
     Detection necessarily happens AFTER ``apply_gradients``, so by the time a step is known to be
@@ -287,24 +289,34 @@ def save_pre_step_snapshot(directory: str, *, step: int, rng, batch: dict, save_
     writes params/opt_state (through the production checkpoint path) plus the rng key and the exact
     batch, immediately before step ``N`` executes. One known step, so the cost is one extra save.
     """
-    tf.io.gfile.makedirs(directory)
-    buffer = io.BytesIO()
     arrays = {f"batch__{name}": np.asarray(value) for name, value in batch.items()}
     arrays["rng_key_data"] = np.asarray(jax.random.key_data(rng))
     arrays["global_step"] = np.asarray(int(step))
-    np.savez(buffer, **arrays)
-    with tf.io.gfile.GFile(_join(directory, "pre_step_snapshot.npz"), "wb") as handle:
-        handle.write(buffer.getvalue())
     manifest = {
         "global_step": int(step),
         "displayed_step": int(step) + 1,
         "arrays": sorted(arrays),
         "state_saved": save_state is not None,
+        "awaited": wait is not None,
     }
-    with tf.io.gfile.GFile(_join(directory, "pre_step_snapshot.json"), "w") as handle:
-        handle.write(json.dumps(manifest, indent=2, sort_keys=True))
+    # HOST-SIDE extras (rng, batch, manifest) belong to process 0 only...
+    if is_primary:
+        tf.io.gfile.makedirs(directory)
+        buffer = io.BytesIO()
+        np.savez(buffer, **arrays)
+        with tf.io.gfile.GFile(_join(directory, "pre_step_snapshot.npz"), "wb") as handle:
+            handle.write(buffer.getvalue())
+        with tf.io.gfile.GFile(_join(directory, "pre_step_snapshot.json"), "w") as handle:
+            handle.write(json.dumps(manifest, indent=2, sort_keys=True))
+    # ...but the checkpoint save is COLLECTIVE: every process must participate, or the ones that do
+    # will wait forever for the ones that did not.
     if save_state is not None:
         save_state(int(step))
+    # AWAIT it here, before returning: Orbax saves asynchronously, and the whole point of this
+    # snapshot is the step that comes next -- if that step dies with the write still in flight there
+    # is nothing to replay from.
+    if wait is not None:
+        wait()
     return manifest
 
 
@@ -343,6 +355,7 @@ def report_step(
     log_period: int,
     log_fn=None,
     wandb_run=None,
+    is_primary: bool = True,
 ) -> tuple[list[str], list[str]]:
     """Emit the step line (and the W&B entry), THEN raise if the step was non-finite.
 
@@ -354,7 +367,12 @@ def report_step(
     """
     log = log_fn or max_logging.log
     failed, non_finite = step_finite_failures(metrics["scalar"])
-    if failed or non_finite or (step + 1) % max(int(log_period), 1) == 0:
+    # ONLY process 0 writes lines -- periodic or forced. The finiteness flags are replicated, so
+    # process 0 sees the same failure every host sees, and one legible line beats N interleaved
+    # copies. (A non-primary host with log_period 0 must stay SILENT; it must not fall through to
+    # "every step".)
+    due = int(log_period) > 0 and (step + 1) % int(log_period) == 0
+    if is_primary and (failed or non_finite or due):
         detail = format_step_details(metrics["scalar"])
         prefix = "NON-FINITE " if (failed or non_finite) else ""
         log(
@@ -374,6 +392,8 @@ def report_step(
                 },
                 step=step + 1,
             )
+    # ...but EVERY host raises: the flags are replicated, so a failure is a failure everywhere, and
+    # a run where only process 0 stopped would hang the rest of the mesh.
     if failed or non_finite:
         raise NonFiniteStepError(
             f"non-finite training step at global_step={step} (displayed as step {step + 1}): "
@@ -1449,7 +1469,7 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
         with ThreadPoolExecutor(max_workers=1) as executor:
             snapshot_before_step = int(getattr(config, "exp03_snapshot_before_step", -1))
             for step in range(start_step, config.max_train_steps):
-                if snapshot_before_step >= 0 and step == snapshot_before_step and jax.process_index() == 0:
+                if snapshot_before_step >= 0 and step == snapshot_before_step:
                     # PROACTIVE preservation: detection happens after apply_gradients, so the state a
                     # failing step produces is already poisoned, and a checkpoint carries no rng or
                     # batch. One known step, saved just before it runs.
@@ -1460,8 +1480,11 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
                         rng=rng,
                         batch=batch,
                         save_state=lambda saved_step: self._save_checkpoint(ckpt_mgr, saved_step, state),
+                        wait=ckpt_mgr.wait_until_finished,
+                        is_primary=jax.process_index() == 0,
                     )
-                    max_logging.log(f"[wan_overfit100] pre-step snapshot written to {directory}: {manifest}")
+                    if jax.process_index() == 0:
+                        max_logging.log(f"[wan_overfit100] pre-step snapshot written to {directory}: {manifest}")
                 next_batch_future = executor.submit(load_next_batch, train_iter, batch, config)
                 with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
                     state, metrics, rng = p_train_step(state, batch, rng, jnp.asarray(step, dtype=jnp.int32))
@@ -1483,8 +1506,9 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
                     avg_grad=sum(recent_grad) / len(recent_grad),
                     lr=float(lr_schedule(step)),
                     steps_per_sec=len(recent_loss) / max(1e-6, (now - last_log_time).total_seconds()),
-                    log_period=config.log_period if jax.process_index() == 0 else 0,
-                    wandb_run=wandb_run,
+                    log_period=config.log_period,
+                    wandb_run=wandb_run if jax.process_index() == 0 else None,
+                    is_primary=jax.process_index() == 0,
                 )
                 if due and jax.process_index() == 0:
                     recent_loss.clear()
