@@ -325,15 +325,59 @@ S1_5_STATE_PLAN = {
 }
 
 
+# The key that must be present in any real run config. It is the sentinel because it is the one the
+# hardware crashed on: ``_denoising_loss`` reads ``config.weights_dtype`` as a hard attribute, so a
+# view missing it fails deep inside a 5B replay rather than at construction.
+CONFIG_SENTINEL_KEY = "weights_dtype"
+
+
+def _config_key_dict(config) -> dict:
+    """Every key of ``config``, whatever kind of config it is — and never silently empty.
+
+    ``vars()`` is WRONG for a production config. ``pyconfig.config`` is the ``HyperParameters``
+    proxy: its keys live in ``_config.keys`` behind ``__getattr__`` and its instance ``__dict__`` is
+    empty, so ``vars(config)`` returns ``{}`` and a view built from it carries only its overrides.
+    Job 8b died exactly that way -- every ``getattr(view, k, default)`` in the replay path quietly
+    returned its default, and the first hard read (``config.weights_dtype``) raised, 5B restore and
+    dataset pin already behind it.
+
+    So: ``get_keys()`` when the config offers it (the proxy does), ``vars()`` otherwise (test and
+    view-of-view namespaces, where it is correct and lossless). Either way the result is checked --
+    an empty dict, or one without the sentinel, is a construction-time failure with a message that
+    says which shape of config it was handed.
+    """
+    getter = getattr(type(config), "get_keys", None)
+    keys = dict(config.get_keys()) if callable(getter) else dict(vars(config))
+    if not keys:
+        raise ValueError(
+            f"refusing to build a config view from {type(config).__name__}: it exposes no keys. A pyconfig proxy "
+            f"keeps its keys behind __getattr__ (vars() is empty), so a view built from vars() would carry only "
+            f"its overrides and every default-valued read downstream would be a lie."
+        )
+    if CONFIG_SENTINEL_KEY not in keys:
+        raise ValueError(
+            f"refusing to build a config view without {CONFIG_SENTINEL_KEY!r}: got {len(keys)} keys "
+            f"({sorted(keys)[:5]}...). That key is read as a hard attribute inside the replay, so its absence "
+            f"surfaces as an AttributeError deep in a 5B forward instead of here."
+        )
+    return keys
+
+
 def state_view(config, state_label: str, **overrides):
     """A read-only config view carrying THIS state's ramp origin (and any forced knobs)."""
     plan = S1_5_STATE_PLAN[state_label]
-    return SimpleNamespace(**{**vars(config), "exp03_ramp_origin": plan["ramp_origin"], **overrides})
+    return SimpleNamespace(**{**_config_key_dict(config), "exp03_ramp_origin": plan["ramp_origin"], **overrides})
 
 
 def _objective_config(config, objective: str, **overrides):
-    """A read-only config view selecting one objective (the exp_02 probe's arm-view pattern)."""
-    return SimpleNamespace(**{**vars(config), "exp03_objective": objective, **overrides})
+    """A read-only config view selecting one objective.
+
+    NOT the exp_02 probe's pattern -- that claim was false and is removed. exp_02's ``arm_config``
+    is a read-only PROXY that forwards ``__getattr__`` to the base config, which is why it never met
+    this failure; these views are flat namespaces, which is what makes a view-of-view work, and the
+    price of that is having to enumerate the base's keys correctly.
+    """
+    return SimpleNamespace(**{**_config_key_dict(config), "exp03_objective": objective, **overrides})
 
 
 def plain_fixed_support_loss(params, state, data, rng, config, scheduler, *, global_step):

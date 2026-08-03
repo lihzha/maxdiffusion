@@ -575,6 +575,23 @@ def test_no_vacuous_assertions_survive_in_this_file():
 # =============================================================================================
 
 
+def _production_config_keys():
+    """The real exp_03 config's key set, so a test config has the shape production has.
+
+    Without this, a test config is a bare namespace whose ``vars()`` happens to work -- which is
+    precisely why the empty-``vars()`` defect reached hardware. Here the e2e runs against every key
+    a real run carries, with only the shapes shrunk.
+    """
+    from maxdiffusion import pyconfig
+
+    saved = (getattr(pyconfig, "_config", None), getattr(pyconfig, "config", None))
+    try:
+        pyconfig.initialize([None, str(_CONFIG), "run_name=s1_5-e2e-test"], unittest=True)
+        return dict(pyconfig.config.get_keys())
+    finally:
+        pyconfig._config, pyconfig.config = saved
+
+
 def _toy_state_and_batches(num_batches=2):
     """A tiny real Overfit100TrainState and real batches — enough to EXECUTE the report path."""
     import optax
@@ -610,7 +627,11 @@ def _toy_state_and_batches(num_batches=2):
                 "episode_index": jnp.asarray([0, 1, 2], dtype=jnp.int32),
             }
         )
-    config = SimpleNamespace(
+    # PRODUCTION-SHAPED: every key a real run has, with the tensor shapes and dtypes shrunk. If the
+    # view builders were reverted to vars(), the pyconfig closure tests would catch it -- and this
+    # one keeps the e2e honest by giving it the same key surface rather than a five-field stub.
+    settings = dict(_production_config_keys())
+    settings.update(
         weights_dtype="float32",
         activations_dtype="float32",
         global_batch_size_to_train_on=2,
@@ -632,6 +653,8 @@ def _toy_state_and_batches(num_batches=2):
         train_data_dir="gs://x/train100",
         model_manifest_path="gs://x/manifest.json",
     )
+    config = SimpleNamespace(**settings)
+    assert s1_5.CONFIG_SENTINEL_KEY in vars(config)  # the guard is genuinely exercised below
     from maxdiffusion.schedulers import FlaxFlowMatchScheduler
 
     scheduler = FlaxFlowMatchScheduler(dtype=jnp.float32, shift=5.0, sigma_min=0.0, sigma_max=1.0)
@@ -929,3 +952,120 @@ def test_the_real_batch_pull_runs_against_a_real_iterator():
     reusing = SimpleNamespace(reuse_example_batch=True)
     assert train_utils.load_next_batch(iter(batches), None, reusing)["z_video"][0, 0, 0, 0, 0] == 1.0
     assert "load_next_batch(iterator, None, config)" in inspect.getsource(s1_5._run_one_state)
+
+
+# =============================================================================================
+# 9. The config-view shape: vars() on the pyconfig proxy is EMPTY.
+#
+# Job 8b got past the 5B restore and the dataset pin and then died in _denoising_loss on
+# config.weights_dtype, because every view was built from vars(pyconfig.config) -- which is {}.
+# The fifth instance of the inspect-vs-execute class, in a shape the AST attribute guard cannot
+# see: it is config-KEY flow, not module attributes. So these tests initialize pyconfig FOR REAL.
+# =============================================================================================
+
+
+@pytest.fixture(scope="module")
+def real_pyconfig():
+    """A genuine ``pyconfig.initialize`` against the exp_03 YAML — no TPU, no model build.
+
+    pyconfig keeps module-level globals, so they are snapshotted and restored: this fixture must not
+    change what any other test sees.
+    """
+    from maxdiffusion import pyconfig
+
+    saved = (getattr(pyconfig, "_config", None), getattr(pyconfig, "config", None))
+    pyconfig.initialize(
+        [None, str(_CONFIG), "run_name=s1_5-config-view-test"],
+        unittest=True,
+    )
+    try:
+        yield pyconfig.config
+    finally:
+        pyconfig._config, pyconfig.config = saved
+
+
+def test_the_pyconfig_proxy_hides_its_keys_from_vars(real_pyconfig):
+    # THE canary, and the reason _config_key_dict exists. If pyconfig ever changes shape so that
+    # vars() works, this fails and the helper gets re-examined rather than quietly outliving its
+    # reason.
+    assert vars(real_pyconfig) == {}
+    keys = real_pyconfig.get_keys()
+    assert len(keys) > 100
+    assert keys["weights_dtype"] == "bfloat16"
+    assert real_pyconfig.weights_dtype == "bfloat16"  # the attribute path works; vars() does not
+
+
+def test_the_views_carry_every_production_key(real_pyconfig):
+    # Built from the REAL config, then hard-read exactly as the replay path reads them.
+    checkpoint = s1_5.state_view(real_pyconfig, "checkpoint")
+    assert checkpoint.weights_dtype == "bfloat16"  # the read that crashed on hardware
+    assert checkpoint.seed == real_pyconfig.seed
+    assert checkpoint.exp03_ramp_origin == 10000  # the per-state override
+    init = s1_5.state_view(real_pyconfig, "init")
+    assert init.exp03_ramp_origin == 0
+
+    objective = s1_5._objective_config(real_pyconfig, "corrective_ss")
+    assert objective.exp03_objective == "corrective_ss"
+    assert objective.weights_dtype == "bfloat16"
+    assert objective.activations_dtype == real_pyconfig.activations_dtype
+
+    # Nothing is lost: the view's keys are a superset of the config's.
+    production_keys = set(real_pyconfig.get_keys())
+    for view in (checkpoint, init, objective):
+        assert production_keys <= set(vars(view)), sorted(production_keys - set(vars(view)))[:5]
+
+    # A view of a view stays lossless (vars() on a namespace IS correct, and must keep working).
+    nested = s1_5._objective_config(checkpoint, "rollout_loss")
+    assert nested.exp03_objective == "rollout_loss"
+    assert nested.exp03_ramp_origin == 10000  # the state override survived the second wrap
+    assert production_keys <= set(vars(nested))
+
+
+def test_a_config_that_exposes_no_keys_is_refused():
+    # An empty view is the failure Job 8b actually had; it must be impossible to construct.
+    with pytest.raises(ValueError) as excinfo:
+        s1_5._config_key_dict(SimpleNamespace())
+    assert "exposes no keys" in str(excinfo.value)
+
+    class _EmptyProxy:
+        def get_keys(self):
+            return {}
+
+    with pytest.raises(ValueError):
+        s1_5._config_key_dict(_EmptyProxy())
+
+
+def test_a_config_without_the_sentinel_key_is_refused():
+    # Not merely non-empty: the key the replay hard-reads must be there, or the failure moves back
+    # into the middle of a 5B forward.
+    bare = SimpleNamespace(seed=0, exp03_objective="control")
+    with pytest.raises(ValueError) as excinfo:
+        s1_5._config_key_dict(bare)
+    assert s1_5.CONFIG_SENTINEL_KEY in str(excinfo.value)
+    assert s1_5.CONFIG_SENTINEL_KEY == "weights_dtype"
+    # ...and both view builders go through the guard.
+    for builder in (lambda c: s1_5.state_view(c, "init"), lambda c: s1_5._objective_config(c, "control")):
+        with pytest.raises(ValueError):
+            builder(bare)
+
+
+def test_the_helper_prefers_get_keys_over_vars():
+    # The ordering that matters: a config offering BOTH must be read through get_keys(), because on
+    # the production proxy vars() is the empty one.
+    class _Proxy:
+        """A config that offers BOTH: bookkeeping in ``__dict__``, the real keys behind get_keys()."""
+
+        def __init__(self):
+            self._bookkeeping = "not a config key"
+            self.weights_dtype = "float32"  # a STALE shadow of the real key
+
+        def get_keys(self):
+            return {"weights_dtype": "bfloat16", "seed": 7}
+
+    keys = s1_5._config_key_dict(_Proxy())
+    # get_keys() wins outright -- not "vars() if non-empty", which would take the stale shadow and
+    # the bookkeeping field along with it.
+    assert keys == {"weights_dtype": "bfloat16", "seed": 7}
+    assert "_bookkeeping" not in keys and keys["weights_dtype"] == "bfloat16"
+    source = inspect.getsource(s1_5._config_key_dict)
+    assert "config.get_keys()" in source and "callable(getter)" in source
