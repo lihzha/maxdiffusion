@@ -294,3 +294,18 @@
 - **Result** — suite 1424 passed / 2 skipped (+4); four mutants killed (await dropped; nonzero-host
   logging; collective gated to p0; armed block gated to p0).
 - **Next** — final re-review; on APPROVE the re-smoke cohort launches per the confirmed spec.
+
+## 2026-08-03T06:40:00Z — S1-fix LAST residuals (zero-period loop guard, addressable-only extras)
+
+- **Zero period, end to end** — the loop computed `% config.log_period` before the emitter saw it,
+  so a non-primary host's period of 0 raised ZeroDivisionError. One `is_log_due` helper now answers
+  it in both places; 0 means never. Tested on the helper, on the loop source, and behaviourally at
+  `log_period=0` for both host roles.
+- **Addressable-only snapshot extras** — a production batch is a GLOBAL array of per-host shards, so
+  `np.asarray` raises; it was also running before the `is_primary` gate, which would have crashed
+  every host before the collective save. Materialization is now inside the primary branch and reads
+  only `addressable_shards`, saving `<name>__shard<i>` with each shard's global index in the
+  manifest. Chose shard+manifest over `process_allgather` deliberately: a gather is a collective, and
+  this runs one step before an expected failure.
+- **Result** — suite 1427 passed / 2 skipped (+3); four mutants killed.
+- **Next** — re-review; then the re-smoke cohort per the confirmed spec.

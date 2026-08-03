@@ -1207,6 +1207,111 @@ def test_only_process_zero_writes_step_lines(is_primary):
     assert len(logger.lines) == (1 if is_primary else 0)
 
 
+def test_a_zero_log_period_never_logs_and_never_divides_by_zero():
+    # END TO END: the LOOP computed its own modulo before the emitter's semantics applied, so a
+    # period of 0 raised ZeroDivisionError there. One helper now answers the question in both
+    # places, and 0 means NEVER.
+    assert parent.is_log_due(0, 0) is False and parent.is_log_due(999, 0) is False
+    assert parent.is_log_due(7, -1) is False
+    assert parent.is_log_due(0, 1) is True and parent.is_log_due(7, 8) is True
+    assert parent.is_log_due(6, 8) is False
+
+    loop = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
+    assert "due = is_log_due(step, config.log_period)" in loop
+    assert "% config.log_period" not in loop  # no unguarded modulo survives in the loop
+    assert "is_log_due(step, log_period)" in inspect.getsource(parent.report_step)
+
+    # ...and a zero period really is silent through the emitter, on either host role.
+    metrics = _metrics_from_a_real_step()
+    for is_primary in (True, False):
+        logger = _FakeLogger()
+        parent.report_step(
+            step=7,
+            max_train_steps=30,
+            metrics=metrics,
+            avg_loss=1.0,
+            avg_grad=1.0,
+            lr=2.8e-07,
+            steps_per_sec=0.4,
+            log_period=0,
+            log_fn=logger,
+            is_primary=is_primary,
+        )
+        assert logger.lines == []
+
+
+class _UnaddressableArray:
+    """Stands in for a GLOBAL jax.Array: readable only through its addressable shards."""
+
+    def __init__(self, data, index="(slice(0, 2, None),)"):
+        self._data = np.asarray(data)
+        self.addressable_shards = [SimpleNamespace(data=self._data, index=index)]
+
+    def __array__(self, dtype=None, copy=None):
+        raise RuntimeError("a non-fully-addressable array cannot be converted -- use its shards")
+
+
+def test_the_snapshot_touches_only_addressable_data(tmp_path):
+    # A production batch is a global array assembled from per-host shards; np.asarray on it raises.
+    # The extras must be built from addressable shards ONLY, and only on the primary host.
+    batch = {
+        "z_i0": _UnaddressableArray(np.arange(6.0).reshape(2, 3)),
+        "z_video": _UnaddressableArray(np.arange(8.0).reshape(2, 4), index="(slice(2, 4, None),)"),
+    }
+    directory = str(tmp_path / "snapshot")
+    events: list[str] = []
+    manifest = parent.save_pre_step_snapshot(
+        directory,
+        step=7,
+        rng=jax.random.key(11),
+        batch=batch,
+        save_state=lambda step: events.append(f"save{step}"),
+        wait=lambda: events.append("wait"),
+    )
+    assert events == ["save7", "wait"]
+    payload = np.load(Path(directory) / "pre_step_snapshot.npz")
+    assert np.array_equal(payload["z_i0__shard0"], np.arange(6.0).reshape(2, 3))
+    assert np.array_equal(payload["z_video__shard0"], np.arange(8.0).reshape(2, 4))
+    assert manifest["shard_index"]["z_video__shard0"] == "(slice(2, 4, None),)"  # the mapping is recorded
+    assert int(payload["global_step"]) == 7
+
+
+def test_a_non_primary_host_materializes_nothing(tmp_path):
+    # If the extras were built before the is_primary gate, this would raise on every worker -- and
+    # it would raise BEFORE the collective save those workers must reach.
+    batch = {"z_i0": _UnaddressableArray(np.zeros((2, 3)))}
+    monitored = SimpleNamespace(touched=False)
+
+    class _Exploding(_UnaddressableArray):
+        @property
+        def addressable_shards(self):  # type: ignore[override]
+            monitored.touched = True
+            return self._shards
+
+        @addressable_shards.setter
+        def addressable_shards(self, value):
+            self._shards = value
+
+    batch["z_video"] = _Exploding(np.zeros((2, 4)))
+    events: list[str] = []
+    parent.save_pre_step_snapshot(
+        str(tmp_path / "worker"),
+        step=7,
+        rng=jax.random.key(11),
+        batch=batch,
+        save_state=lambda step: events.append("save"),
+        wait=lambda: events.append("wait"),
+        is_primary=False,
+    )
+    assert events == ["save", "wait"]  # the collective still ran
+    assert monitored.touched is False  # ...and nothing was materialized
+    assert not Path(tmp_path / "worker").exists()
+    # Structurally: the materialization lives INSIDE the primary-only branch.
+    source = inspect.getsource(parent.save_pre_step_snapshot)
+    assert source.index("if is_primary:") < source.index("_addressable_arrays(")
+    assert source.index("_addressable_arrays(") < source.index("if save_state is not None:")
+
+
 def test_the_loop_passes_the_host_role_rather_than_a_zero_period():
     source = inspect.getsource(parent.WanTI2VOverfit100Trainer.start_training)
     assert "is_primary=jax.process_index() == 0" in source
@@ -1214,7 +1319,7 @@ def test_the_loop_passes_the_host_role_rather_than_a_zero_period():
     # A zero period must not mean "every step" in the emitter either.
     emitter = inspect.getsource(parent.report_step)
     assert "max(int(log_period), 1)" not in emitter
-    assert "int(log_period) > 0" in emitter
+    assert "is_log_due(step, log_period)" in emitter  # 0 means never, in ONE place
 
 
 def test_a_finite_step_reports_only_when_due():
@@ -1336,9 +1441,9 @@ def test_the_pre_step_snapshot_saves_through_the_real_checkpoint_path(tmp_path):
     # ...and the host-side extras the checkpoint cannot carry.
     payload = np.load(Path(directory) / "pre_step_snapshot.npz")
     assert int(payload["global_step"]) == 7
-    assert np.array_equal(payload["rng_key_data"], np.asarray(jax.random.key_data(rng)))
+    assert np.array_equal(payload["rng_key_data__shard0"], np.asarray(jax.random.key_data(rng)))
     for name, value in data.items():
-        assert np.array_equal(payload[f"batch__{name}"], np.asarray(value)), name
+        assert np.array_equal(payload[f"{name}__shard0"], np.asarray(value)), name
     written = json.loads((Path(directory) / "pre_step_snapshot.json").read_text())
     assert written["displayed_step"] == 8 and written["awaited"] is True
 

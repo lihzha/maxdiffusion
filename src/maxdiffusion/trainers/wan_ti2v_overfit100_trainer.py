@@ -278,6 +278,27 @@ def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, schedul
     return _make_train_step(_denoising_loss)(state, data, rng, scheduler, config, global_step=global_step)
 
 
+def _addressable_arrays(values: dict) -> tuple[dict, dict]:
+    """``{name: ndarray}`` from THIS host's addressable shards, plus each shard's global index.
+
+    A ``jax.Array`` that spans processes cannot be converted with ``np.asarray`` -- only the shards
+    this process owns are readable. Every shard is saved under ``<name>__shard<i>`` with its index
+    string in the returned map, so a replay knows exactly which slice of the global batch it holds.
+    """
+    arrays: dict = {}
+    shard_index: dict = {}
+    for name, value in values.items():
+        shards = getattr(value, "addressable_shards", None)
+        if shards:
+            for position, shard in enumerate(shards):
+                key = f"{name}__shard{position}"
+                arrays[key] = np.asarray(shard.data)
+                shard_index[key] = str(getattr(shard, "index", ""))
+        else:
+            arrays[name] = np.asarray(value)
+    return arrays, shard_index
+
+
 def save_pre_step_snapshot(
     directory: str, *, step: int, rng, batch: dict, save_state=None, wait=None, is_primary: bool = True
 ) -> dict:
@@ -289,18 +310,23 @@ def save_pre_step_snapshot(
     writes params/opt_state (through the production checkpoint path) plus the rng key and the exact
     batch, immediately before step ``N`` executes. One known step, so the cost is one extra save.
     """
-    arrays = {f"batch__{name}": np.asarray(value) for name, value in batch.items()}
-    arrays["rng_key_data"] = np.asarray(jax.random.key_data(rng))
-    arrays["global_step"] = np.asarray(int(step))
     manifest = {
         "global_step": int(step),
         "displayed_step": int(step) + 1,
-        "arrays": sorted(arrays),
         "state_saved": save_state is not None,
         "awaited": wait is not None,
     }
-    # HOST-SIDE extras (rng, batch, manifest) belong to process 0 only...
+    # HOST-SIDE extras (rng, batch, manifest) belong to process 0 only, and are materialized ONLY
+    # from data this host can address. A production batch is a GLOBAL array assembled from per-host
+    # shards; ``np.asarray`` on a non-fully-addressable array raises, which would have crashed every
+    # host before the collective save it is supposed to accompany. Each addressable shard is saved
+    # with its index recorded, rather than gathering the global array: a gather is a collective, and
+    # putting one in a failure-adjacent path is how a diagnostic becomes the thing that hangs.
     if is_primary:
+        arrays, shard_index = _addressable_arrays({**batch, "rng_key_data": jax.random.key_data(rng)})
+        arrays["global_step"] = np.asarray(int(step))
+        manifest["arrays"] = sorted(arrays)
+        manifest["shard_index"] = shard_index
         tf.io.gfile.makedirs(directory)
         buffer = io.BytesIO()
         np.savez(buffer, **arrays)
@@ -322,6 +348,17 @@ def save_pre_step_snapshot(
 
 class NonFiniteStepError(RuntimeError):
     """A training step reported a non-finite term. Raised BEFORE the next step consumes it."""
+
+
+def is_log_due(step: int, log_period) -> bool:
+    """Is this step a periodic logging step? A period of 0 (or less) means NEVER.
+
+    One helper, used by the loop and by :func:`report_step`, because the loop computed its own
+    modulo and a non-primary host's period of 0 made that a ``ZeroDivisionError`` before the
+    emitter's semantics ever applied.
+    """
+    period = int(log_period)
+    return period > 0 and (int(step) + 1) % period == 0
 
 
 def step_finite_failures(scalars: dict) -> tuple[list[str], list[str]]:
@@ -371,8 +408,7 @@ def report_step(
     # process 0 sees the same failure every host sees, and one legible line beats N interleaved
     # copies. (A non-primary host with log_period 0 must stay SILENT; it must not fall through to
     # "every step".)
-    due = int(log_period) > 0 and (step + 1) % int(log_period) == 0
-    if is_primary and (failed or non_finite or due):
+    if is_primary and (failed or non_finite or is_log_due(step, log_period)):
         detail = format_step_details(metrics["scalar"])
         prefix = "NON-FINITE " if (failed or non_finite) else ""
         log(
@@ -1497,7 +1533,7 @@ class WanTI2VOverfit100Trainer(WanTI2VFullFTTrainer):
                 # non-finite (whatever log_period says) and only then stops the run, so the log's
                 # last line names the failing term instead of the run dying before printing it.
                 now = datetime.datetime.now()
-                due = (step + 1) % config.log_period == 0
+                due = is_log_due(step, config.log_period)
                 report_step(
                     step=step,
                     max_train_steps=config.max_train_steps,
