@@ -344,3 +344,25 @@
   block (it scores gradients, not pixels — loss-arm precedent).
 - **Result** — suite 1462 passed / 2 skipped (+31). Six mutants killed.
 - **Next** — focused review, then S1.5 launches under the standing grant.
+
+## 2026-08-03T12:00:00Z — S1.5 STRENGTHENING (Codex 5 BLOCKER + 3 MAJOR on 210e7b1)
+
+- **Wired** — label isolation, conditional parity (against a fixed-support comparator, with the
+  production-control difference reported not gated), forced p_ss=1 A/C diagnostics, per-batch rows,
+  and B's raw endpoint MSE + fp32 horizon now all reach the artifact.
+- **Salted variance** — `exp03_aux_key(salt=...)` consumed only by the support purposes and folded
+  only when non-zero (existing draws bit-identical); the M draws vary the salt alone, so the
+  within-batch term is the sigma support and nothing else. Between term renamed
+  `batch_shared_rng_variance`, population + unbiased estimates both reported with a finite-M note.
+- **In-memory traces** — `trace.run_trace` is gone; the already-built state is traced, so the init
+  trace is the init and only one 5B model is ever live.
+- **State pins** — required step 10000 (not `latest_step()`), init through the production
+  empty-restore path, iterator seed `seed + start_step`, per-state ramp origins (checkpoint 10000 /
+  init 0) in a `S1_5_STATE_PLAN` rather than one launcher env.
+- **5B-executable** — leafwise on-device dots/norms and a streaming `_TreeWelford` (one tree +
+  scalar); the ~1.28 TB retained-and-flattened shape is gone and forbidden by test.
+- **Also** — `include_control` default restored to False, fp32 tree cosine restored, `or True`
+  deleted (with a meta-test), sha256-per-leaf fingerprint (permutation now detected), CHECKPOINT_DIR
+  genuinely required, non-finite JSON refused.
+- **Result** — suite 1470 passed / 2 skipped (+8); seven mutants killed.
+- **Next** — re-review, then S1.5 under the standing grant.
