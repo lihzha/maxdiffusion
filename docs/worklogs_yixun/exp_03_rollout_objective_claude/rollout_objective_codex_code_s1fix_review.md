@@ -268,3 +268,57 @@ can say which term failed and in which pass.
 * `black`, `ruff`, staged-tree `git diff --check` clean.
 
 No push, no launch. The re-smoke cohort is instrumented per the confirmed spec.
+
+## Final re-review (d3b33ae) — finding 2 approved, two residuals
+
+```
+REQUEST-REVISION.**
+
+**Re-smoke cohort: NO-GO** until zero-period handling and collective reconstruction/materialization of the snapshot batch are corrected and tested.
+
+The reported 1424/2 and mutation results were not independently rerunnable because this shell lacks pytest and JAX; static checks passed and no files were modified.
+```
+
+## Strengthening record — coder response (S1-fix last residuals)
+
+### 1. The zero period is now end to end
+
+The emitter's semantics were right, but the LOOP computed its own modulo first, so a period of 0
+raised `ZeroDivisionError` before those semantics could apply. There is now ONE helper,
+`is_log_due(step, log_period)` — a period of 0 (or less) means **never** — and both the loop and
+`report_step` call it. Tested on the helper's whole truth table, on the absence of any unguarded
+modulo in the loop source, and behaviourally through the emitter at `log_period=0` for **both** host
+roles (silent in both).
+
+### 2. Host-side extras are materialized only on primary, and only from addressable data
+
+A production batch is a **global** array assembled from per-host shards; `np.asarray` on a
+non-fully-addressable array raises — and it was being called *before* the `is_primary` gate, so it
+would have crashed every host, before the collective save those hosts must reach.
+
+Both halves are fixed: the materialization now happens **inside** the primary branch, and it reads
+only what this process can address. `_addressable_arrays` walks `addressable_shards`, saving each
+shard as `<name>__shard<i>` and recording its global `index` string in the manifest, so a replay
+knows exactly which slice of the global batch it holds.
+
+**Choice, argued:** shard-plus-manifest over `process_allgather`, per the reviewer's lean. A gather
+is a collective, and this code runs one step before an expected failure — putting an extra
+collective in a failure-adjacent path is how a diagnostic becomes the thing that hangs. The cost is
+that a multi-host replay reassembles from shards using the recorded indices, which is bookkeeping
+rather than risk.
+
+Tested with a stub whose `__array__` raises unless the addressable shards are used: the primary
+writes the shards and the index map, and a non-primary host **touches nothing** (asserted via a
+property that records access) while still reaching the collective save.
+
+### Verification
+
+* Full worklogs suite: **1427 passed, 2 skipped** (+3).
+* Mutations — 4, all killed:
+  1. the loop's modulo unguarded again -> **1F**;
+  2. `is_log_due` treating 0 as "every step" -> **1F**;
+  3. materialization moved before the `is_primary` gate -> **1F**;
+  4. extras built with `np.asarray` instead of the addressable shards -> **2F**.
+* `black`, `ruff`, staged-tree `git diff --check` clean.
+
+No push, no launch.
