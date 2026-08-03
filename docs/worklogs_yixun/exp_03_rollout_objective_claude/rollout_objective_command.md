@@ -69,3 +69,15 @@ Gates evaluated from step logs (steady-state steps/s = mean over steps 10–29):
 - C's NaN at LR≈1e-6 is a numerical edge in the loss computation for a specific draw — deterministically
   reproducible from (seed, step 8, purposes). Diagnosis round dispatched; C re-smoke will need a fresh
   launch approval after the fix + review.
+
+## Jobs 5–7 — v6e-8 RE-SMOKE COHORT (control timing / A timing / C replay) — launched 2026-08-03
+
+**Under Yixun's Query-4 grant** (C re-smoke conditional on the S1-fix review passing — passed at `fdadb5f`,
+reviewer GO with the cohort spec confirmed). One contemporaneous cohort, identical seed/data/ramp/compiler
+to S1: 30 steps, `EXP03_RAMP_ORIGIN=0`, `EXP03_P_SS_RAMP_STEPS=10`, `LOG_PERIOD=1` (full 16-field line every
+step), strict STOP gates control-relative (A ≤ 1.6× — note A now always runs 2 advances, was mean 1.5, so
+this re-measures its real cost; C ≤ 3.2×). C additionally arms `EXP03_SNAPSHOT_BEFORE_STEP=7` (single host —
+gate open): pre-failure params/opt/rng/batch land in the run dir before global_step 7 executes. If C goes
+non-finite: the forced NON-FINITE line names the term, every host raises, and the frozen-state A/B/C
+discriminator (`exp03_frozen_replay`) runs from the snapshot as a follow-up job.
+- **Job ids:** (appended at submission)
