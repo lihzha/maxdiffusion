@@ -825,6 +825,8 @@ def test_the_config_is_the_overfit100_config_plus_the_exp03_keys():
         "exp03_p_ss_ramp_steps",
         "exp03_ramp_origin",
         "exp03_snapshot_before_step",
+        "s1_5_num_batches",
+        "s1_5_support_draws",
     }
     assert not set(base_cfg) - set(exp03_cfg), "keys were dropped from the exp_02 config"
     assert exp03_cfg["model_type"] == "EXP03_TI2V"

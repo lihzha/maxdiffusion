@@ -455,3 +455,7 @@ exp03_ramp_origin: 0
 # writing its shards plus a tested reassembler) is predeclared as its own round. A multi-host run
 # logs the reason and continues without snapshotting.
 exp03_snapshot_before_step: -1
+# S1.5 (probe_exp03_s1_5.py): K batches and M support draws per batch. Approval-pinned -- the probe
+# refuses anything else, because a different K/M is a different measurement of gradient noise.
+s1_5_num_batches: 8
+s1_5_support_draws: 4

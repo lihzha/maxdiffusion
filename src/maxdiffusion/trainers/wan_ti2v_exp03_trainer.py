@@ -540,7 +540,22 @@ EXP03_LOSSES = {
 EXP03_IMPLEMENTED_OBJECTIVES = (EXP03_CONTROL_OBJECTIVE, *EXP03_LOSSES)
 
 
-def exp03_frozen_replay(state, data, rng, config, scheduler, *, global_step, with_gradients=True) -> dict:
+def _flat_gradient(grad) -> "np.ndarray":
+    """One float64 vector from a gradient pytree (for norms, cosines and variances)."""
+    leaves = jax.tree_util.tree_leaves(grad)
+    return np.concatenate([np.asarray(leaf, dtype=np.float64).ravel() for leaf in leaves])
+
+
+def grad_cosine(left, right) -> float:
+    """Cosine between two gradient pytrees; ``nan`` if either is degenerate."""
+    a, b = _flat_gradient(left), _flat_gradient(right)
+    denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.dot(a, b) / denominator) if denominator > 0 else float("nan")
+
+
+def exp03_frozen_replay(
+    state, data, rng, config, scheduler, *, global_step, with_gradients=True, include_control=True
+) -> dict:
     """NO-UPDATE replay of A, B and C on a frozen state — the discriminator, off the timing path.
 
     Deliberately NOT part of the training step: separate per-term gradients need extra reverse
@@ -551,7 +566,12 @@ def exp03_frozen_replay(state, data, rng, config, scheduler, *, global_step, wit
     """
     out: dict[str, float] = {"global_step": float(global_step)}
     grads: dict[str, object] = {}
-    for name, loss_fn in (("a", _corrective_ss_loss), ("b", _rollout_loss), ("c", _combined_loss)):
+    objectives = [("a", _corrective_ss_loss), ("b", _rollout_loss), ("c", _combined_loss)]
+    if include_control:
+        # The plain objective is the reference every cosine is taken against, so it is replayed here
+        # rather than in a second pass that could drift from this one.
+        objectives.insert(0, ("control", _denoising_loss))
+    for name, loss_fn in objectives:
 
         def _loss(params, fn=loss_fn):
             return fn(params, state, data, rng, config, scheduler, global_step=global_step)[0]
@@ -571,13 +591,13 @@ def exp03_frozen_replay(state, data, rng, config, scheduler, *, global_step, wit
         )
         out[f"grad_finite_leaves_{name}"] = float(sum(finite))
         out[f"grad_total_leaves_{name}"] = float(len(finite))
+    if with_gradients and "control" in grads:
+        # Cosine vs the PLAIN objective: how much of each trial's gradient is the control's.
+        for name in ("a", "b", "c"):
+            if name in grads:
+                out[f"grad_cosine_{name}_vs_control"] = grad_cosine(grads[name], grads["control"])
     if with_gradients and "a" in grads and "b" in grads:
-        dot = sum(
-            float(jnp.sum(x.astype(jnp.float32) * y.astype(jnp.float32)))
-            for x, y in zip(jax.tree_util.tree_leaves(grads["a"]), jax.tree_util.tree_leaves(grads["b"]))
-        )
-        norms = float(jaxopt.tree_util.tree_l2_norm(grads["a"])) * float(jaxopt.tree_util.tree_l2_norm(grads["b"]))
-        out["grad_cosine_ab"] = dot / norms if norms > 0 else float("nan")
+        out["grad_cosine_ab"] = grad_cosine(grads["a"], grads["b"])
     return out
 
 
