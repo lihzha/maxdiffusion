@@ -39,3 +39,14 @@ closing with the reviewer's APPROVE, and (b) the package being assembled per pla
 exceeding one is a STOP, not a silent accept), and the standard `_command.md` entry at launch time. No
 further ask before the S1 launch once both conditions hold. (Mirrors exp_02's recorded
 conditional-approval pattern.)
+
+## Query 4 — 2026-08-03 (verbatim)
+
+> What is your status for exp_03, please do the lr exp_02 and exp_03 parallelly
+
+Plus the AskUserQuestion grant: **"Yes, grant all three"** — pre-approval for the exp_03 S1 follow-up
+launches, each conditional on its preceding gate: (1) **C re-smoke** when the S1-fix review of `76ff476`
+passes (incl. any strengthening the reviewer requires first); (2) **S1.5** no-update discriminator probe
+(v6e-8) when the re-smoke is clean; (3) **S1.6** one-step mesh-fit at GBS 256 (v6e-64, ~minutes) after
+S1.5. S2a/S2b training arms remain separately approval-gated. exp_02's lr thread and exp_03 proceed in
+parallel.
