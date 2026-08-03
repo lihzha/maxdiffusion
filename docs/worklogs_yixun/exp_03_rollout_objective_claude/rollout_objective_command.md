@@ -90,3 +90,16 @@ the worker ran `bash -- …` (invalid option, exit 2). No trainer code executed;
 Relaunched as **Job 7b** `20260803-171003-8ce1d02c-exp03-rs-combined3-yixun` with the env inline. (Second zsh word-splitting incident this session —
 noted: always inline or array-expand extra args.)
 
+### Re-smoke cohort outcome so far (2026-08-03T~19:40Z)
+
+- **Timing pair complete:** control2 1.801 steps/s; corrss2 1.533 → **A ratio 1.17× (PASS, was 1.47×)** —
+  the unroll compiles better than the dynamic loop it replaced. Both fully finite.
+- **C replay (combined3): the NaN did NOT recur.** Attempt 1 ran 19 finite steps before preemption —
+  past the original failing step AND through the hardest draw class (global_step 15: s_a=0, σ_hi=1.0,
+  k_a=2, self-generated) with every *_finite flag green and all 16 diagnostic fields flowing. C cost
+  3.96× vs 3.2× budget (better than 4.23×, still over — S1.6 item).
+- **combined3 terminal:** attempt 4 hit borderline HBM OOM at program load (26.47G vs 23.70G free) — the
+  same binary ran on attempt 1, so allocator-layout flakiness at the memory edge; exit 1 stopped queue
+  retries. **C now carries TWO S1.6 flags: step-time (3.96×) and HBM headroom.** One resubmit under the
+  infra-flake reading: **Job 7c** `20260803-193617-1214ad57-exp03-rs-combined4-yixun` for the formal 30/30; the substantive verdict stands either way.
+
