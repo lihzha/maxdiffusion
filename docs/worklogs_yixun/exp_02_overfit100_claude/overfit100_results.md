@@ -323,3 +323,30 @@ exp_03 interaction: the Tier-1 arms currently resume from the 1e-5 step-10,000 c
 per plan, judged against the matched lr1e5c control, so their internal validity is intact. But if 5e-5's
 SSIM confirms, the interesting frontier moves (e.g. A/B/C at 5e-5, or from the lr5e5 checkpoint) — a plan
 question for after the SSIM evals land.
+
+## SSIM line test (Jobs 38–39) — the law holds off-path; first bar-crossings — 2026-08-03T~03:15Z
+
+| arm | loss @12500 | line-predicted SSIM | **measured** | deviation | ≥0.95 | ≥0.90 | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| lr2e5 | 0.09793 | 0.8709 | **0.8686** | −0.0023 | **1**/100 | 23/100 | 0.9545 |
+| lr5e5 | 0.06061 | 0.9157 | **0.9159** | **+0.0002** | **11**/100 | 72/100 | 0.9663 |
+
+Both role-validated, seed-0 correct, canonical-100.
+
+**Finding 1 — the loss→SSIM law is a property of the recipe, not the optimization path.** Fitted on the
+1e-5 trajectory, it predicts checkpoints reached at 2e-5 and 5e-5 to within 0.002. Rollout quality is
+purchasable by one-step loss, and the exchange rate (slope ≈1.2) is stable across LRs.
+
+**Finding 2 — the 0.95 bar is falling.** lr5e5 produced the experiment's FIRST canonical windows above
+0.95 — eleven of them (max 0.9663) — after a single 39-minute segment at the right LR. 72/100 clear 0.90.
+For scale: the entire 10,000-step 1e-5 program never produced one (max 0.9484).
+
+**Reframing (for the analysis + exp_03):** exp_02's original question ("can it memorize to near-perfect
+reconstruction?") now looks like **plausibly yes — by LR, not by objective surgery**. The compounding slope
+is real and measured, but the intercept (0.9885) was reachable all along by pushing loss down; nothing about
+the one-step recipe blocks it at these scales. exp_03's trials remain valuable as *efficiency* comparisons
+(objective vs LR at matched budget) and the D2-blessed caveat stands, but the "recipe is the ceiling"
+framing is dead. **Obvious next probe: extend lr5e5** (+2,500–5,000 steps; the D11 90%-at-0.95 rule needs
+the ≥0.95 count to go 11 → 90; at the current exchange rate that means mean loss ≈ 0.03–0.04, i.e. roughly
+one to two more 5e-5 segments IF the pace holds — it may not; the segment's own deceleration is unmeasured).
+Needs approval; proposed.
