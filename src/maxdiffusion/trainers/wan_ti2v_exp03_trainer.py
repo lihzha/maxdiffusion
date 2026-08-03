@@ -16,9 +16,11 @@ at startup rather than quietly training the control under another arm's run name
 **RNG discipline (plan v3.1 §1b, delta-review 2).** The *shared stream* is exp_02's: a single
 ``jax.random.key(seed + 1)`` advanced by exactly one ``split`` per step inside the train step, whose
 per-step key then splits into (noise, timestep, dropout). ctrl0 and the shared draws of every arm
-must reproduce it exactly, so the new objectives' own randomness — the ``p_ss`` coins, the sigma
-index supports, the self-generation noise — comes from :func:`exp03_aux_key`, an *auxiliary* key
-derived from ``(seed, global_step, purpose)``. It is derived, never split off the stream, so
+must reproduce it exactly, so the new objectives' own randomness — the ``p_ss`` coins and the sigma
+index supports — comes from :func:`exp03_aux_key`, an *auxiliary* key derived from
+``(seed, global_step, purpose)``. The epsilon is NOT among them: every arm takes it from the shared
+stream exactly where the control does, which is what makes an arm's noise at a given step the
+control's noise, and what lets A's off-path state be compared with its teacher-forced twin. It is derived, never split off the stream, so
 consuming it cannot advance the stream; and because it is keyed on the global step rather than on
 call order, it survives a resume unchanged.
 """
@@ -153,10 +155,13 @@ def validate_exp03_config(config) -> str:
 # the extracted sampler step's Euler broadcast -- its ``(sigma[i+1] - sigma[i])`` scale is a scalar
 # against ``[B, C, F, H, W]``. Keeping the one-sampler rule intact therefore also fixes this choice.
 #
-# FORWARD CONVENTIONS: every forward that is DIFFERENTIATED uses exp_02's training convention
-# (``deterministic=False`` with the dropout rng from the shared stream); every forward that merely
-# produces a state under stop-gradient uses the EVAL convention (``deterministic=True``), because
-# there it is imitating the sampler the evaluation runs. Both are flagged in the round record.
+# FORWARD CONVENTIONS (round-3 review D3). A's final SUPERVISED forward uses exp_02's training
+# convention (``deterministic=False`` with the dropout rng from the shared stream) -- it is the
+# one-step objective's forward, just at a different state. Every forward that is part of a
+# TRAJECTORY uses the EVAL convention (``deterministic=True``): A's detached advance, and B's two
+# DIFFERENTIATED rollout steps (and C's B-term). Differentiability does not require training mode,
+# and B is defined as a rollout loss through the operator the evaluation runs, so training mode
+# there would differentiate a different trajectory the moment dropout is nonzero.
 # =================================================================================================
 
 

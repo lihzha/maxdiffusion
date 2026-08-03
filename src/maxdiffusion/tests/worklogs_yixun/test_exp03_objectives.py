@@ -34,7 +34,11 @@ from flax import nnx
 import maxdiffusion.trainers.wan_ti2v_exp03_trainer as exp03
 import maxdiffusion.trainers.wan_ti2v_overfit100_trainer as parent
 from maxdiffusion.models.wan.overfit100_sampling import overfit100_sampler_grid, overfit100_sampler_step
-from maxdiffusion.models.wan.side_adapter_wan import apply_first_frame_pin, masked_velocity_mse
+from maxdiffusion.models.wan.side_adapter_wan import (
+    _dtype as _config_dtype,
+    apply_first_frame_pin,
+    masked_velocity_mse,
+)
 from maxdiffusion.schedulers import FlaxFlowMatchScheduler
 
 _DATA_B, _BSZ, _C, _F, _H, _W = 3, 2, 3, 4, 5, 6
@@ -43,10 +47,16 @@ _STEPS = 25
 
 
 class _StubTransformer(nnx.Module):
-    """A real ``Param`` so gradients are genuine, and a velocity that reads every input."""
+    """A real ``Param`` so gradients are genuine, and a velocity that reads every input.
 
-    def __init__(self, gain: float = 0.25):
-        self.gain = nnx.Param(jnp.asarray(gain, dtype=jnp.float32))
+    ``param_dtype`` exists so the production case can be certified end to end: with a bfloat16
+    parameter the cotangent JAX hands back is bfloat16 too, which is what a bf16 certificate has to
+    exercise. The internals stay float32 (a mixed-precision model's arithmetic) and the output is
+    cast back to the latent's dtype, exactly as the real transformer behaves.
+    """
+
+    def __init__(self, gain: float = 0.25, param_dtype=jnp.float32):
+        self.gain = nnx.Param(jnp.asarray(gain, dtype=param_dtype))
 
     def __call__(self, **kwargs):
         hidden = kwargs["hidden_states"].astype(jnp.float32)
@@ -71,8 +81,8 @@ class _OracleTransformer(nnx.Module):
         return (self.target + self.gain[...]).astype(kwargs["hidden_states"].dtype)
 
 
-def _fixture(*, objective="corrective_ss", transformer=None, **overrides):
-    transformer = transformer or _StubTransformer()
+def _fixture(*, objective="corrective_ss", transformer=None, param_dtype=jnp.float32, **overrides):
+    transformer = transformer or _StubTransformer(param_dtype=param_dtype)
     graphdef, params, rest = nnx.split(transformer, nnx.Param, ...)
     context_table = jax.random.normal(jax.random.key(41), (_SLOTS, _LEN, _DIM), dtype=jnp.float32)
     state = parent.Overfit100TrainState.create(
@@ -493,9 +503,20 @@ def test_trial_b_is_the_deterministic_eval_sampler_rollout(weights_dtype):
     # THE convention claim, in fp32 and in the production bf16: B's loss and its gradient must equal
     # an independently written DETERMINISTIC two-step unroll, and must NOT equal the training-mode
     # one (the stub distinguishes them, so the training-convention mutant fails here).
+    param_dtype = jnp.float32 if weights_dtype == "float32" else jnp.bfloat16
     state, data, config, scheduler = _fixture(
-        objective="rollout_loss", weights_dtype=weights_dtype, activations_dtype=weights_dtype
+        objective="rollout_loss",
+        weights_dtype=weights_dtype,
+        activations_dtype=weights_dtype,
+        param_dtype=param_dtype,
     )
+    # END TO END in the production dtype: the PARAMETER is bf16, so the cotangent under test is a
+    # bf16 parameter cotangent -- not merely bf16 rollout-state rounding with an fp32 parameter.
+    # The expectation is derived from the CONFIG through production's own dtype converter, so a
+    # fixture that quietly reverted to fp32 parameters would fail here rather than move the target.
+    expected_param_dtype = _config_dtype(weights_dtype)
+    for leaf in jax.tree_util.tree_leaves(state.params):
+        assert leaf.dtype == expected_param_dtype, (leaf.dtype, expected_param_dtype)
     rng = jax.random.key(19)
     global_step = jnp.asarray(23, jnp.int32)
 
@@ -522,11 +543,17 @@ def test_trial_b_is_the_deterministic_eval_sampler_rollout(weights_dtype):
     want = jax.grad(eval_convention)(state.params)
     wrong = jax.grad(training_convention)(state.params)
     got_leaves = jax.tree_util.tree_leaves(got)
-    assert got_leaves and all(float(np.abs(np.asarray(leaf)).max()) > 0 for leaf in got_leaves)
+    assert got_leaves and all(float(np.abs(np.asarray(leaf, dtype=np.float32)).max()) > 0 for leaf in got_leaves)
+    # ...and the gradients really are in that dtype, on both sides of the comparison.
+    for leaf in got_leaves + jax.tree_util.tree_leaves(want) + jax.tree_util.tree_leaves(wrong):
+        assert leaf.dtype == expected_param_dtype, (leaf.dtype, expected_param_dtype)
 
     def _relative_gap(left_tree, right_tree) -> float:
         gaps = [
-            float(np.max(np.abs(np.asarray(a) - np.asarray(b))) / max(float(np.max(np.abs(np.asarray(b)))), 1e-12))
+            float(
+                np.max(np.abs(np.asarray(a, dtype=np.float32) - np.asarray(b, dtype=np.float32)))
+                / max(float(np.max(np.abs(np.asarray(b, dtype=np.float32)))), 1e-12)
+            )
             for a, b in zip(jax.tree_util.tree_leaves(left_tree), jax.tree_util.tree_leaves(right_tree))
         ]
         return max(gaps)
@@ -539,11 +566,13 @@ def test_trial_b_is_the_deterministic_eval_sampler_rollout(weights_dtype):
         for left, right in zip(got_leaves, jax.tree_util.tree_leaves(want)):
             assert np.array_equal(np.asarray(left), np.asarray(right))
     else:
-        # NOT exact, and stated: in bfloat16 the reverse pass of lax.scan accumulates the parameter
-        # cotangent in a different ORDER than an unrolled Python loop, which is visible at ~1e-4
-        # relative in bf16 (it is exactly 0 in fp32, asserted above). The claim being certified is
-        # the OPERATOR, so what must hold here is that the eval-convention reference is orders of
-        # magnitude closer than the training-convention one.
+        # bfloat16, with a bfloat16 PARAMETER: the reverse pass of lax.scan accumulates the
+        # parameter cotangent in a different ORDER than an unrolled Python loop, worth ~3e-4
+        # relative when the cotangent is fp32. With a bf16 cotangent that difference currently
+        # rounds away entirely (measured gap: 0.0), but the bound rather than exact equality is
+        # what is asserted, because the claim being certified is the OPERATOR and rounding
+        # coincidences are not a property to depend on. The separation below is the real assertion:
+        # the training-convention reference sits ~170x further away (reviewer-measured 0.0563).
         assert reference_gap < 5e-3, reference_gap
     assert wrong_gap > 50 * max(reference_gap, 1e-12), (wrong_gap, reference_gap)
 

@@ -158,3 +158,102 @@ resuming from step 10,000 with origin 0 would start at full ``p_ss`` instead of 
   ``git diff --check`` clean.
 
 No push, no launch.
+
+## Re-review (371816c) — new reviewer account, 63 tests independently rerun
+
+**Verdict: REQUEST-REVISION**, narrow residuals. The bf16 **>50x substitution is ACCEPTED** — the
+reviewer measured a 0.000329 eval-reference gap against a 0.05630 training-reference gap, ~171x.
+Deterministic B/C operator: complete. Dispatch, refusal path, launcher header, RNG-purpose removal
+and the ramp counterfactual: correct.
+
+```
+REQUEST-REVISION
+
+- MAJOR — The claimed production-bf16 certificate is not end-to-end bf16: `_StubTransformer.gain`, its internal computation, and the resulting gradient remain float32 even when `weights_dtype="bfloat16"`; the test currently certifies bf16 rollout-state/output rounding, not bf16 parameter cotangents. [test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:48)
+- LOW — Two module comments contradict `371816c`: the prologue still says self-generation noise comes from the auxiliary key, and the convention block still says every differentiated forward uses training mode although B/C now use deterministic eval mode. [module prologue](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py:16), [convention block](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py:156)
+
+The bf16 >50× substitution itself is accepted. I measured a 0.000329 eval-reference gap versus 0.05630 training-reference gap—about 171× closer. That is a valid operator assertion for scan-versus-unroll accumulation-order differences; exact bf16 gradient equality is unnecessary.
+
+Pass-1 item status:
+
+1. Deterministic B/C operator: complete.
+2. Detection-grade tests/support certificates: partial only because the committed bf16 case lacks bf16 parameters; all other elements are complete.
+3. Dead/stale cleanup: partial due the two comments above; dispatch, refusal path, launcher header, RNG-purpose removal, and ramp counterfactual are correct.
+4. Suite/mutations: coder’s `1399 passed / 2 skipped` and mutations are recorded; I independently reran 56 objective tests plus 7 focused trainer tests successfully. Focused re-review remains open.
+5. S1 package: pending.
+
+Exactly remaining before presenting S1 to Yixun:
+
+- Add a real bf16 or mixed bf16/fp32 parameter fixture with explicit parameter/gradient dtype assertions.
+- Correct the two stale comments.
+- Rerun the full suite and D3/bf16 mutations, then obtain the closing micro-review.
+- Package explicit ramp origins—Tier 1 `10000`, Tier 2 `0`—and STOP budgets A `1.6×`, B `2.5×`, C `3.2×`.
+- Preserve D2’s requirement that S1.5 quantify support-gradient variance, and obtain Yixun’s approval before any TPU launch.
+
+### Status
+
+- No subprocesses or remote jobs are running; review is complete.
+- Earliest steer: now—safe to redirect before strengthening or S1 packaging.
+```
+
+## Strengthening record — coder response (round-3 residuals)
+
+### 1. MAJOR — the bf16 certificate is now end-to-end
+
+`_StubTransformer` takes a `param_dtype`, and the bf16 parametrization builds it with a **bfloat16
+parameter**, so the cotangent under test is a bf16 *parameter cotangent* rather than bf16
+rollout-state rounding with an fp32 parameter. Dtypes are asserted explicitly on the parameters and
+on all three gradient trees (production, eval-convention reference, training-convention reference).
+
+**The expectation is derived from the config**, via production's own `_dtype(weights_dtype)`
+converter — not from the fixture's local variable. That mattered: with the local variable, a mutant
+that reverted the bf16 case to an fp32 parameter **survived**, because the assertions followed the
+mutated target. It fails now.
+
+*Measured with bf16 parameters:* the eval-reference gradient gap is **0.0** — the bf16 cotangent
+rounds the scan-vs-unroll accumulation-order difference away entirely — against a
+training-reference gap of **0.0562**. The test still asserts the bound (`< 5e-3`) plus the >50x
+separation rather than exact equality, because the claim being certified is the OPERATOR and a
+rounding coincidence is not a property to depend on.
+
+### 2. LOW — the two stale comments
+
+The module prologue said the self-generation noise comes from an auxiliary key; it now states that
+every arm takes epsilon from the **shared stream** exactly where the control does, which is what
+makes an arm's noise at a step the control's noise and lets A's off-path state be compared with its
+teacher-forced twin. The convention block said every differentiated forward uses training mode; it
+now states the actual rule — A's final *supervised* forward uses the training convention, while
+every forward that is part of a **trajectory** (A's detached advance, B's two differentiated rollout
+steps, C's B-term) uses the eval convention.
+
+### Verification
+
+* Full worklogs suite: **1399 passed, 2 skipped** (unchanged — these residuals strengthened an
+  existing case rather than adding one).
+* Mutations, against the new bf16-parameter fixture:
+  1. B back on the training convention -> **3F**;
+  2. the bf16 case reverting to an fp32 parameter -> **1F** (this is the mutant that survived the
+     first attempt and drove the config-derived expectation);
+  3. the gradient dtype assertions removed while B is on the training convention -> **3F**.
+* `black`, `ruff`, `bash -n`, staged-tree `git diff --check` all clean.
+
+### Overhead expectations for the S1 package (synthetic driver — NOT a hardware budget)
+
+Trace-time forward counts and graph sizes, which are hardware-independent, plus the observed
+convention split (an independent confirmation of the D3 fix *in the graph*):
+
+| objective | fwd calls traced | of which deterministic | `value_and_grad` eqns |
+| --- | --- | --- | --- |
+| control | 1 | 0 | 80 (1.00x) |
+| corrective_ss | 2 | 1 | 143 (1.79x) |
+| rollout_loss | 1 | 1 | 110 (1.38x) |
+| combined | 3 | 2 | 259 (3.24x) |
+
+Read carefully: `fori_loop`/`scan` bodies trace ONCE, so the runtime forward counts are higher —
+A runs `k_A ∈ {1,2}` detached forwards (mean 1.5) plus one differentiated forward; B runs 2
+differentiated forwards plus ~2 remat recomputes; C pays both. Wall-clock on the synthetic CPU
+driver (control 0.00011 s/step; A 0.94x, B 1.03x, C 1.40x) is **dominated by dispatch overhead on a
+one-`tanh` stub** and must not be read as an overhead prediction — the real budgets (A ≤ 1.6x,
+B ≤ 2.5x, C ≤ 3.2x, exceeding = STOP) are measured on hardware in S1 itself.
+
+No push, no launch.
