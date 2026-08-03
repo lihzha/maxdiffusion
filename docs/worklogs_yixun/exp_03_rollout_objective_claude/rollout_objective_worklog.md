@@ -278,3 +278,19 @@
 - **Result** — suite 1420 passed / 2 skipped (+4); five mutants killed.
 - **Next** — re-review; on APPROVE, ONE contemporaneous v6e-8 cohort (control + A timing companion +
   faithful C replay, LOG_PERIOD=1, strict 1.6x/3.2x gates, snapshot armed at step 7).
+
+## 2026-08-03T05:30:00Z — S1-fix FINAL micro-round (closing re-review residuals)
+
+- **Host-scoped logging** — non-primary hosts received `log_period=0`, which the emitter turned into
+  every step. `report_step` now takes `is_primary`: process 0 alone writes lines (periodic or
+  forced) and a zero period means never; every host still RAISES, because the flags are replicated
+  and a mesh where only process 0 stopped would hang.
+- **Stale sentence** deleted (the "interaction" wording); frozen-replay-only phrasing stands.
+- **Snapshot correctness** — the Orbax save is collective and now runs on every host (only the
+  rng/batch/manifest extras are process-0 work), and it is AWAITED via
+  `wait=ckpt_mgr.wait_until_finished` before the armed step executes. The test drives the real
+  checkpoint path on a local tmp dir and asserts the order save -> wait -> step, plus a genuine
+  restore of the saved params.
+- **Result** — suite 1424 passed / 2 skipped (+4); four mutants killed (await dropped; nonzero-host
+  logging; collective gated to p0; armed block gated to p0).
+- **Next** — final re-review; on APPROVE the re-smoke cohort launches per the confirmed spec.

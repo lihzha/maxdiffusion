@@ -207,3 +207,64 @@ Also scrubbed: the stale claim that a traced trip count implies a per-draw compi
 No push, no launch. The re-smoke cohort (30-step control + A timing companion + faithful C replay,
 identical seed/data/ramp/compiler, `LOG_PERIOD=1`, strict 1.6x/3.2x gates, snapshot armed at
 `EXP03_SNAPSHOT_BEFORE_STEP=7`) is instrumented and waiting on the re-review.
+
+## Closing re-review (efb18a7) — ordering/cross-product/plumbing verified, three narrow residuals
+
+```
+REQUEST-REVISION** — Snapshot timing/config plumbing exists, but only process 0 converts the globally sharded batch and invokes collective Orbax saving; moreover the asynchronous checkpoint is not awaited before the failing step and the test substitutes `saved.append`, so this is not an end-to-end production-path certificate. [snapshot guard](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py:1452) [test](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:1260)
+
+Re-smoke cohort spec: **CONFIRMED, but not ready to launch** — one contemporaneous v6e-8 cohort comprising 30-step control, A timing companion, and faithful C replay; identical seed/data/ramp/compiler; `LOG_PERIOD=1`; `EXP03_SNAPSHOT_BEFORE_STEP=7` on C only; strict A ≤1.6× and C ≤3.2× gates; frozen-state A/B/C discriminator only if C recurs.
+
+Static checks passed (`git diff --check`, `bash -n`, AST parsing). The reported 1420/2 suite and five mutations could not be rerun because pytest/JAX/TensorFlow are absent. Read-only respected; no file was modified.
+```
+
+## Strengthening record — coder response (S1-fix final)
+
+### 1. Host-scoped logging
+
+Non-primary hosts were handed `log_period=0`, and the emitter's `max(int(log_period), 1)` turned
+that into **every step** — N interleaved copies of every line. `report_step` now takes an explicit
+`is_primary` flag: only process 0 writes lines, periodic **or** forced, and a zero period means
+"never" rather than "always". W&B is likewise process-0 only.
+
+**Every host still raises.** The finiteness flags are replicated, so a failure is a failure
+everywhere, and a run in which only process 0 stopped would hang the rest of the mesh. Both
+behaviours are tested with `is_primary` parameterized over both values: silence on the worker, one
+line on process 0, and `NonFiniteStepError` from both.
+
+### 2. The stale sentence is gone
+
+The comment claiming identical draws turn the diagnosis into "interaction" is replaced by the
+frozen-replay-only wording that the record already carries: identical draws hold *given the same
+state*, the arms reached the failing step with different histories, and only the frozen-state replay
+can say which term failed and in which pass.
+
+### 3. Snapshot correctness
+
+* **(a) The collective runs on every host.** The `jax.process_index() == 0` guard around the whole
+  armed block is gone. Inside `save_pre_step_snapshot`, `is_primary` gates only the host-side extras
+  (rng, batch, manifest); `save_state` — the Orbax save, which is collective — is called
+  unconditionally, because the hosts that participate would otherwise wait forever for the ones that
+  did not. Pinned by a test that drives the function with `is_primary=False` and asserts the save
+  ran while no host-side file was written, plus a source-order assertion.
+* **(b) The save is awaited.** `wait=ckpt_mgr.wait_until_finished` is passed from the loop and
+  called before `save_pre_step_snapshot` returns, so the write cannot still be in flight when the
+  armed step dies (this bites on single-host v6e-8 too, since Orbax saves asynchronously there as
+  well).
+* **(c) The test drives the real path.** Not `saved.append`: the production
+  `_build_checkpoint_manager` / `_save_checkpoint` / `_maybe_restore` on a local tmp Orbax
+  directory, asserting the event order is **save -> wait -> step**, that `latest_step() == 7` and
+  the params restore bit-identically *after the call returned*, and that the rng/batch/manifest
+  extras the checkpoint cannot carry are on disk.
+
+### Verification
+
+* Full worklogs suite: **1424 passed, 2 skipped** (+4).
+* Mutations — 4, all killed:
+  1. the await dropped -> **2F** (the ordering test and the on-disk assertion);
+  2. nonzero-host logging reintroduced (zero period -> every step) -> **2F**;
+  3. the collective save gated to process 0 -> **1F**;
+  4. the loop's armed block gated to process 0 again -> **1F**.
+* `black`, `ruff`, staged-tree `git diff --check` clean.
+
+No push, no launch. The re-smoke cohort is instrumented per the confirmed spec.
