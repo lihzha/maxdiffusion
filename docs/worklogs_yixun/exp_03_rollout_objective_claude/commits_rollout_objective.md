@@ -10,3 +10,4 @@
 | `01c6362` | round 3 — the three objectives: A corrective scheduled sampling (k_A-first supports, stop-grad advance on the extracted sampler, corrective target), B horizon-normalized 2-step rollout loss (scan + remat, gradients through both forwards), C literal λ·L_A+(1−λ)·L_B; new `exp03_ramp_origin` key. Suite 1371/2 skipped. |
 | `371816c` | round-3 strengthening (Codex 2 MAJOR + 1 MINOR + 1 LOW) — B/C differentiate the deterministic eval sampler; independent, convention-detecting, fp32+bf16 B tests; exact keyed support certificates; dead/stale declarations removed. Suite 1399/2 skipped. |
 | `3e3882d` | round-3 residuals — end-to-end bf16 certificate (bfloat16 PARAMETER, dtype assertions derived from the config), two stale comments corrected. Suite 1399/2 skipped. |
+| `efb18a7` | S1-fix closing — emit-before-raise reporting seam, true 2,162-triple cross-product sweep, `exp03_snapshot_before_step` pre-step state/rng/batch snapshot. Suite 1420/2 skipped. |
