@@ -20,6 +20,7 @@ from __future__ import annotations
 import functools
 import math
 import os
+import time
 from typing import Sequence
 
 from maxdiffusion.utils import export_to_video
@@ -70,7 +71,7 @@ def _denoise_step(
     [uncond | cond] stacked along the batch axis, then blends:
         pred = uncond + guidance_scale * (cond - uncond)
 
-    Returns (updated_latents, pred_std).
+    Returns the updated latents (clean history re-attached).
     """
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
     b, _, F_lat, H_lat, W_lat = latents.shape
@@ -124,7 +125,7 @@ def _denoise_step(
     future_pred = model_pred[:, :, n_hist:]
     future_latents = latents[:, :, n_hist:]
     output = scheduler.step(scheduler_state, future_pred, timestep, future_latents)
-    return jnp.concatenate([clean_hist, output.prev_sample], axis=2), jnp.std(future_pred)
+    return jnp.concatenate([clean_hist, output.prev_sample], axis=2)
 
 
 # ── Action token encoding ─────────────────────────────────────────────────────
@@ -188,10 +189,9 @@ def run_ar_denoising(
     current_hist = initial_hist
     generated_chunks = []
 
+    global _FIRST_CHUNK
     for chunk_i in range(ar_num_chunks):
-        max_logging.log(
-            f"[wan_ctrl_world_infer] AR chunk {chunk_i + 1}/{ar_num_chunks}"
-        )
+        t_chunk = time.perf_counter()
         # Slice the actions that correspond to the current window.
         # Window covers latent frames [chunk_i*ar_chunk_size,
         #                              chunk_i*ar_chunk_size + window_F_lat).
@@ -221,7 +221,82 @@ def run_ar_denoising(
         full_window = jnp.concatenate([current_hist, gen_chunk], axis=2)
         current_hist = full_window[:, :, -n_hist:, :, :]
 
+        # Timed after the history roll so the number covers the whole chunk, and
+        # block first — the denoise loop is async, so without this we would be
+        # timing dispatch rather than execution.
+        current_hist.block_until_ready()
+        frame_lo = chunk_i * ar_chunk_size + 1
+        max_logging.log(
+            f"[wan_ctrl_world_infer]   AR chunk {chunk_i + 1}/{ar_num_chunks}: "
+            f"latent frames {frame_lo}-{frame_lo + ar_chunk_size - 1} "
+            f"({num_inference_steps} denoise steps) in "
+            f"{time.perf_counter() - t_chunk:.1f}s"
+            + ("  [includes one-time compile]" if _FIRST_CHUNK else "")
+        )
+        _FIRST_CHUNK = False
+
     return jnp.concatenate(generated_chunks, axis=2)  # (B, C, total_fut, H, W)
+
+
+_DENOISE_STEP_CACHE: dict = {}
+
+# Flipped after the first AR chunk finishes, so exactly one log line is marked as
+# carrying the one-time XLA compile. Everything after it is steady state — the
+# gap between the two is what tells you the sampler cache is working.
+_FIRST_CHUNK = True
+
+
+def _get_denoise_step(
+    *,
+    graphdef,
+    rest_of_state,
+    n_hist: int,
+    guidance_scale: float,
+    scheduler,
+    cond_tokens_per_frame: int,
+    action_cond_mode: str,
+):
+    """``jax.jit(_denoise_step)`` memoised on its static signature.
+
+    This used to be built inside ``run_denoising``, which ``run_ar_denoising``
+    calls once per AR chunk — so every chunk got a fresh ``jax.jit`` object with
+    an empty compilation cache, and the whole transformer recompiled per chunk.
+    The per-chunk arrays (``clean_hist``, ``action_tokens``, ``frame_positions``,
+    ``scheduler_state``) were also bound into the partial, making them
+    compile-time constants, so even a reused jit object would have recompiled
+    whenever their values changed.
+
+    Bound here: only values that must be Python-static (``guidance_scale`` gates
+    a branch, ``n_hist`` drives slicing, ``graphdef``/``scheduler`` are objects)
+    plus ``rest_of_state``, which is one fixed tree for the whole run. Keyed by
+    ``id()`` for the unhashable objects — they outlive the process's use of this
+    cache, so identity is a safe key.
+    """
+    key = (
+        id(graphdef),
+        id(rest_of_state),
+        id(scheduler),
+        int(n_hist),
+        float(guidance_scale),
+        int(cond_tokens_per_frame),
+        action_cond_mode,
+    )
+    fn = _DENOISE_STEP_CACHE.get(key)
+    if fn is None:
+        fn = jax.jit(
+            functools.partial(
+                _denoise_step,
+                graphdef=graphdef,
+                rest_of_state=rest_of_state,
+                n_hist=n_hist,
+                guidance_scale=guidance_scale,
+                scheduler=scheduler,
+                cond_tokens_per_frame=cond_tokens_per_frame,
+                action_cond_mode=action_cond_mode,
+            )
+        )
+        _DENOISE_STEP_CACHE[key] = fn
+    return fn
 
 
 def run_denoising(
@@ -266,37 +341,35 @@ def run_denoising(
 
     uncond_action_tokens = jnp.zeros_like(action_tokens)
 
-    p_step = jax.jit(
-        functools.partial(
-            _denoise_step,
-            graphdef=graphdef,
-            rest_of_state=rest_of_state,
-            clean_hist=clean_hist,
-            action_tokens=action_tokens,
-            uncond_action_tokens=uncond_action_tokens,
-            frame_positions=frame_positions,
-            n_hist=n_hist,
-            guidance_scale=guidance_scale,
-            scheduler=scheduler,
-            scheduler_state=sched_state,
-            cond_tokens_per_frame=cond_tokens_per_frame,
-            action_cond_mode=action_cond_mode,
-        ),
+    # Only the genuinely static arguments are bound here; every per-chunk array
+    # (clean_hist / action_tokens / frame_positions / scheduler_state) is passed
+    # as a traced argument below. See _get_denoise_step for why.
+    p_step = _get_denoise_step(
+        graphdef=graphdef,
+        rest_of_state=rest_of_state,
+        n_hist=n_hist,
+        guidance_scale=guidance_scale,
+        scheduler=scheduler,
+        cond_tokens_per_frame=cond_tokens_per_frame,
+        action_cond_mode=action_cond_mode,
     )
 
     timesteps_np = np.array(sched_state.timesteps)
     with mesh, nn_partitioning.axis_rules(logical_axis_rules):
       for step_i, t in enumerate(timesteps_np):
-          latents, pred_std = p_step(params, latents=latents, timestep=jnp.array(t))
+          latents = p_step(
+              params,
+              latents=latents,
+              timestep=jnp.array(t),
+              clean_hist=clean_hist,
+              action_tokens=action_tokens,
+              uncond_action_tokens=uncond_action_tokens,
+              frame_positions=frame_positions,
+              scheduler_state=sched_state,
+          )
           if step_i == 0 or step_i == len(timesteps_np) - 1 or (step_i + 1) % 10 == 0:
-              fut = latents[:, :, n_hist:]
-              # std across the time axis → how much frames differ from each other
-              temporal_std = float(jnp.std(fut, axis=2).mean())
               max_logging.log(
-                  f"  denoise step {step_i + 1}/{len(timesteps_np)} "
-                  f"t={t:.1f}  future_pred_std={float(pred_std):.4f}  "
-                  f"future_lat_std={float(jnp.std(fut)):.4f}  "
-                  f"temporal_std={temporal_std:.4f}"
+                  f"  denoise step {step_i + 1}/{len(timesteps_np)} t={t:.1f}"
               )
 
     return latents[:, :, n_hist:]   # (B, C, n_fut, H, W)
@@ -305,43 +378,76 @@ def run_denoising(
 # ── Video helpers ─────────────────────────────────────────────────────────────
 
 
-def _decode_latents(pipeline: WanPipelineTI2V_2_2, latents: jnp.ndarray) -> np.ndarray:
-    """Decode (B, C, F, H*3, W) latents → (B, F, H*3, W, 3).
+def _decode_latents(
+    pipeline: WanPipelineTI2V_2_2, latents: jnp.ndarray, num_views: int = 3
+) -> list:
+    """Decode (B, C, F, H*num_views, W) latents → list of (B, F, H, W, 3) per cam.
 
-    The 3 cameras were encoded separately and stacked along H, so we split,
-    decode each independently, then concatenate along H.
+    The cameras were encoded separately and stacked along H, so we split and
+    decode each independently. Returned per view rather than re-stacked: the
+    callers want them apart (one MP4 per camera) and the tiled comparison is a
+    cheap ``_tile_views`` away, whereas stacking here only to re-split downstream
+    forced every consumer to know the packing.
 
     Latents are stored normalized ((raw - mean) / std) by the data preprocessing
     script, so we denormalize before passing to the VAE decoder.
     """
-    B, C, F, H3, W = latents.shape
-    H = H3 // 3
+    H = latents.shape[3] // num_views
     cam_videos = []
-    for i in range(3):
+    for i in range(num_views):
         cam = latents[:, :, :, i * H:(i + 1) * H, :]        # (B, C, F, H, W)
         cam = pipeline._denormalize_latents(cam)
         cam_videos.append(pipeline._decode_latents_to_video(cam))     # (B, F, H, W, 3)
-    return np.concatenate(cam_videos, axis=2)                 # (B, F, H*3, W, 3)
+    return cam_videos
+
+
+def _tile_views(views: list) -> np.ndarray:
+    """Per-view ``(B, F, H, W, 3)`` (B=1) → ``(F, H, num_views*W, 3)`` side by side."""
+    return np.concatenate([np.clip(v[0], 0.0, 1.0) for v in views], axis=2)
 
 
 def _save_comparison_video(
-    gt_frames: np.ndarray,
-    pred_frames: np.ndarray,
+    gt_tile: np.ndarray,
+    pred_tile: np.ndarray,
     path: str,
     fps: int = 8,
 ) -> None:
-    """Write GT (top half) / predicted (bottom half) stacked MP4."""
-    gt = np.clip(gt_frames[0], 0.0, 1.0)    # (F, H, W, 3) float32 in [0, 1]
-    pred = np.clip(pred_frames[0], 0.0, 1.0)
-    F, H, W, _ = gt.shape
-    h = H // 3
-    # Split 3 camera views stacked in H, then arrange them width-wise.
-    gt_wide   = np.concatenate(np.split(gt,   3, axis=1), axis=2)  # (F, h, W*3, 3)
-    pred_wide = np.concatenate(np.split(pred, 3, axis=1), axis=2)  # (F, h, W*3, 3)
-    combined  = np.concatenate([gt_wide, pred_wide], axis=1)        # (F, h*2, W*3, 3)
+    """Write GT (top half) / predicted (bottom half) stacked MP4.
 
+    Both inputs are already-tiled ``(F, H, num_views*W, 3)`` frames in [0, 1] —
+    see ``_tile_views``.
+    """
+    combined = np.concatenate([gt_tile, pred_tile], axis=1)  # (F, H*2, num_views*W, 3)
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     export_to_video(list(combined), path, fps=fps)
+
+
+def _save_per_view_videos(
+    pred_views: list,
+    output_dir: str,
+    name: str,
+    fps: int = 8,
+) -> list[str]:
+    """Write the *predicted* video once per camera, into ``output_dir/cam{i}/``.
+
+    ``pred_views`` is the per-camera list ``_decode_latents`` returns, already
+    trimmed by the caller so these match the prediction half of the tiled
+    comparison frame for frame. GT is deliberately not split out: it is already
+    visible in the tiled video, and per-view copies of it would triple the file
+    count for no extra information.
+
+    One directory per camera (rather than a ``_cam{i}`` filename suffix) so a
+    single camera's whole sweep is one glob, and ``name`` stays identical across
+    directories for easy pairing.
+    """
+    paths = []
+    for i, view in enumerate(pred_views):
+        cam_dir = os.path.join(output_dir, f"cam{i}")
+        os.makedirs(cam_dir, exist_ok=True)
+        p = os.path.join(cam_dir, f"{name}.mp4")
+        export_to_video(list(np.clip(view[0], 0.0, 1.0)), p, fps=fps)
+        paths.append(p)
+    return paths
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -497,9 +603,11 @@ def run(argv: Sequence[str]) -> None:
     # ── Inference loop ────────────────────────────────────────────────────────
     output_dir = os.path.join(config.output_dir, "inference_videos")
     rng = jax.random.key(config.seed + 42)
+    t_sweep = time.perf_counter()
 
     for vid_idx, batch in enumerate(dataset):
-        max_logging.log(f"[wan_ctrl_world_infer] generating sample {vid_idx + 1}...")
+        max_logging.log(f"[wan_ctrl_world_infer] ── sample {vid_idx + 1}...")
+        t_vid = time.perf_counter()
 
         latent = jnp.array(batch["latent"]).astype(weights_dtype)       # (1, C, W, H, Wl)
         actions = jnp.array(batch["action"]).astype(weights_dtype)      # (1, 4*W, 7)
@@ -547,45 +655,72 @@ def run(argv: Sequence[str]) -> None:
                 action_cond_mode=action_cond_mode,
             )
 
+        rollout_s = time.perf_counter() - t_vid
+
         # Decode GT and predicted full sequences.
         gt_full = jnp.concatenate([clean_hist, gt_future], axis=2)
         pred_full = jnp.concatenate([clean_hist, pred_future], axis=2)
 
-        # With padding on, the tail of gt_future is the last real latent repeated,
-        # which would drag the GT temporal_std toward 0 and make the GT look
-        # artificially static next to the prediction. Measure it on the real span.
+        # With padding on, the tail of the window is the last real latent/action
+        # repeated — GT is frozen there and the prediction is rolling on filler.
+        # n_real_fut is how many future latents are backed by real episode frames.
         n_real_fut = n_fut
         if "n_real_frames" in batch:
             n_real_fut = max(1, int(np.asarray(batch["n_real_frames"]).reshape(-1)[0]) - n_hist)
             n_real_fut = min(n_real_fut, n_fut)
-        gt_temporal_std = float(jnp.std(gt_future[:, :, :n_real_fut], axis=2).mean())
-        pred_temporal_std = float(jnp.std(pred_future, axis=2).mean())
-        pad_note = ""
         if n_real_fut < n_fut:
-            pad_note = (
-                f"  [GT covers {n_real_fut}/{n_fut} future latents; the last "
-                f"{n_fut - n_real_fut} repeat the final action, GT frozen]"
+            max_logging.log(
+                f"[wan_ctrl_world_infer] vid {vid_idx}: episode ends early — "
+                f"keeping {n_real_fut}/{n_fut} future latents, trimming the "
+                f"{n_fut - n_real_fut} padded ones from the video"
             )
-        max_logging.log(
-            f"[wan_ctrl_world_infer] vid {vid_idx}: "
-            f"GT future temporal_std={gt_temporal_std:.4f}  "
-            f"pred future temporal_std={pred_temporal_std:.4f}{pad_note}"
-        )
 
-        gt_video = _decode_latents(pipeline, gt_full.astype(jnp.float32))
-        pred_video = _decode_latents(pipeline, pred_full.astype(jnp.float32))
+        t_dec = time.perf_counter()
+        # Per-camera lists of (B, F, H, W, 3); frames live on axis 1.
+        gt_views = _decode_latents(pipeline, gt_full.astype(jnp.float32))
+        pred_views = _decode_latents(pipeline, pred_full.astype(jnp.float32))
+        decode_s = time.perf_counter() - t_dec
 
         # Drop the decoded history context: the n_hist history latents decode to
         # 1 + 4*(n_hist - 1) leading frames (causal VAE: latent 0 → 1 frame,
         # each later latent → 4 frames). They were only prepended so the first
         # future latent decodes as a continuation rather than a first chunk.
         n_ctx_frames = 1 + 4 * (n_hist - 1)
-        gt_video = gt_video[:, n_ctx_frames:]
-        pred_video = pred_video[:, n_ctx_frames:]
+        gt_views = [v[:, n_ctx_frames:] for v in gt_views]
+        pred_views = [v[:, n_ctx_frames:] for v in pred_views]
 
-        path = os.path.join(output_dir, f"video_{vid_idx:04d}.mp4")
+        # Trim padding back off: every future latent sits past latent 0, so each
+        # decodes to 4 frames and the real span is the first 4*n_real_fut frames.
+        # Without this a 2-frame episode padded out to the full window would be
+        # written as a mostly-frozen GT against a prediction that keeps rolling.
+        if n_real_fut < n_fut:
+            keep_frames = min(4 * n_real_fut, gt_views[0].shape[1])
+            gt_views = [v[:, :keep_frames] for v in gt_views]
+            pred_views = [v[:, :keep_frames] for v in pred_views]
+
+        gt_video = _tile_views(gt_views)
+        pred_video = _tile_views(pred_views)
+
+        # tiled/ holds the GT-vs-pred comparison; cam{i}/ holds the predicted
+        # rollout for one camera. Same basename in every directory.
+        name = f"video_{vid_idx:04d}"
+        path = os.path.join(output_dir, "tiled", f"{name}.mp4")
         _save_comparison_video(gt_video, pred_video, path, fps=fps)
-        max_logging.log(f"[wan_ctrl_world_infer] saved {path}")
+        view_paths = _save_per_view_videos(pred_views, output_dir, name, fps=fps)
+        n_done = vid_idx + 1
+        elapsed = time.perf_counter() - t_sweep
+        max_logging.log(
+            f"[wan_ctrl_world_infer]   saved {name}.mp4 -> tiled/ + "
+            f"{'/'.join(os.path.basename(os.path.dirname(p)) for p in view_paths)}  "
+            f"{pred_video.shape[0]} frames @ {fps}fps, "
+            f"tile {pred_video.shape[2]}x{pred_video.shape[1] * 2}"
+        )
+        max_logging.log(
+            f"[wan_ctrl_world_infer]   sample {vid_idx + 1} done in "
+            f"{rollout_s + decode_s:.1f}s (rollout {rollout_s:.1f}s, "
+            f"decode {decode_s:.1f}s)  |  {n_done} samples, "
+            f"{elapsed / 60:.1f}min elapsed, {elapsed / n_done:.1f}s/sample avg"
+        )
 
     max_logging.log("[wan_ctrl_world_infer] done.")
 

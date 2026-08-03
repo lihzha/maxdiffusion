@@ -233,6 +233,13 @@ class CtrlWorldTrainer:
         # Set up in start_training; stays None on non-zero hosts and when
         # wandb_project is empty, so every log site must guard on it.
         self._wandb_run = None
+        # Lazily built by _log_wandb_videos, and only when video logging is on:
+        # the rollout needs a VAE decoder, which training otherwise never loads
+        # (latents are pre-encoded on disk).
+        self._video_pipeline = None
+        self._video_vae_params = None
+        self._video_eval_iter = None
+        self._video_modules = None
 
     # ── Setup ──────────────────────────────────────────────────────────────────
 
@@ -470,6 +477,9 @@ class CtrlWorldTrainer:
         apply_fns = {"unet": unet.apply, "action_encoder": action_encoder.apply}
         if adaln_proj is not None:
             apply_fns["action_adaln_proj"] = adaln_proj.apply
+        # Kept for the W&B video rollout, which needs the module objects (not just
+        # their apply_fns) to build an inference pipeline.
+        self._video_modules = (unet, action_encoder, adaln_proj)
         tx, lr_schedule = self._build_optimizer(config.max_train_steps)
 
         state, state_shardings = self._build_sharded_state(
@@ -623,6 +633,16 @@ class CtrlWorldTrainer:
             ):
                 self._run_eval(eval_step_fn, state, mesh, step + 1, rng)
 
+            # Gated on the config, not on wandb_run: the rollout and VAE decode
+            # are collective, so every host must enter. Only process 0 logs.
+            if (
+                int(max_utils.config_get(config, "wandb_video_every", 0)) > 0
+                and getattr(config, "wandb_project", "")
+                and (step + 1) % int(config.wandb_video_every) == 0
+            ):
+                rng, video_rng = jax.random.split(rng)
+                self._log_wandb_videos(state, mesh, step + 1, video_rng)
+
             if (
                 config.checkpoint_every > 0
                 and (step + 1) % config.checkpoint_every == 0
@@ -679,6 +699,195 @@ class CtrlWorldTrainer:
                 self._wandb_run.log(
                     {"eval/loss": mean, "eval/batches": len(losses)}, step=step
                 )
+
+    # ── W&B video rollout ──────────────────────────────────────────────────────
+
+    def _build_video_pipeline(self, mesh):
+        """Lazily build the inference pipeline used for W&B video rollouts.
+
+        Training never touches the VAE (latents are pre-encoded on disk), so the
+        decoder is loaded here and only here — costing ~2.7 GB of extra weights
+        for the duration of the run. That is why video logging is opt-in.
+        """
+        from maxdiffusion.models.svd.video_autoencoder_flax import FlaxSVDAutoencoderKL
+        from maxdiffusion.pipelines.svd.pipeline_flax_ctrl_world import (
+            FlaxCtrlWorldPipeline,
+        )
+        from maxdiffusion.schedulers.scheduling_edm_euler_flax import (
+            FlaxEDMEulerScheduler,
+        )
+
+        config = self.config
+        max_logging.log(
+            f"[ctrl_world] wandb video logging: loading VAE decoder from "
+            f"{config.pretrained_model_name_or_path}/vae"
+        )
+        with mesh:
+            vae, vae_params = FlaxSVDAutoencoderKL.from_pretrained(
+                config.pretrained_model_name_or_path,
+                subfolder="vae",
+                dtype=self.dtype,
+                weights_dtype=self.weights_dtype,
+                from_pt=config.from_pt,
+                use_safetensors=True,
+            )
+        sched = config.diffusion_scheduler_config
+        unet, action_encoder, adaln_proj = self._video_modules
+        self._video_pipeline = FlaxCtrlWorldPipeline(
+            vae=vae,
+            unet=unet,
+            action_encoder=action_encoder,
+            action_adaln_proj=adaln_proj,
+            scheduler=FlaxEDMEulerScheduler(
+                sigma_min=sched["sigma_min"],
+                sigma_max=sched["sigma_max"],
+                rho=sched["rho"],
+                prediction_type=sched["prediction_type"],
+                dtype=self.weights_dtype,
+            ),
+            image_encoder=None,
+            feature_extractor=None,
+            dtype=self.dtype,
+        )
+        self._video_vae_params = vae_params
+
+    def _decode_views_for_log(self, latents):
+        """``(B, T, 4, num_views*h, w)`` scaled latents → ``(B, num_views, T, H, W, 3)``.
+
+        Cameras were encoded separately and stacked on the latent height axis, so
+        they must be split before decoding — decoding the stack as one image would
+        blend across camera seams.
+        """
+        pipeline = self._video_pipeline
+        scale = pipeline.vae.config.scaling_factor
+        num_views = int(self.config.num_views)
+        b, t = latents.shape[:2]
+        flat = latents.reshape((b * t,) + latents.shape[2:])   # (B*T, 4, H, W)
+        out = []
+        for view in jnp.split(flat, num_views, axis=-2):
+            frames = pipeline.vae.apply(
+                {"params": self._video_vae_params},
+                view / scale,
+                num_frames=view.shape[0],
+                deterministic=True,
+                method=pipeline.vae.decode,
+            ).sample                                           # (B*T, 3, h, w)
+            frames = (frames / 2.0 + 0.5).clip(0.0, 1.0)
+            frames = jnp.transpose(frames, (0, 2, 3, 1))       # (B*T, h, w, 3)
+            out.append(np.asarray(frames).reshape((b, t) + frames.shape[1:]))
+        return np.stack(out, axis=1)                            # (B, V, T, h, w, 3)
+
+    def _log_wandb_videos(self, state, mesh, step: int, rng):
+        """Roll out one eval window, decode prediction vs GT, log to W&B.
+
+        Single-chunk rollout: history and the conditioning frame come from the
+        eval window exactly as in training, and the ``num_frames`` future slots
+        are generated from noise. That keeps this directly comparable to the
+        training objective (and one pipeline call) rather than compounding error
+        over an auto-regressive sequence like the inference script does.
+
+        The rollout and decode run on every host (they are collective); only
+        process 0 writes to W&B.
+        """
+        config = self.config
+        if not config.eval_data_dir:
+            max_logging.log(
+                "[ctrl_world] wandb_video_every>0 but eval_data_dir is empty; skipping"
+            )
+            return
+        if self._video_pipeline is None:
+            self._build_video_pipeline(mesh)
+        if self._video_eval_iter is None:
+            self._video_eval_iter = make_data_iterator(
+                config, jax.process_index(), jax.process_count(), mesh,
+                self._global_batch_size_to_load(), is_training=False,
+                seed=config.seed,
+            )
+        try:
+            batch = next(self._video_eval_iter)
+        except StopIteration:
+            self._video_eval_iter = None
+            max_logging.log("[ctrl_world] eval split exhausted; skipping video log")
+            return
+
+        n = max(1, int(max_utils.config_get(config, "wandb_video_samples", 1)))
+        n = min(n, batch["latent"].shape[0])
+        t_hist = config.num_history
+        latent = batch["latent"][:n].astype(self.weights_dtype)
+        action = batch["action"][:n].astype(self.weights_dtype)
+        text_embeds = (
+            batch["text_embeds"][:n].astype(self.weights_dtype)
+            if config.text_embed_dim else None
+        )
+
+        params = {
+            "unet": state.params["unet"],
+            "action_encoder": state.params["action_encoder"],
+            "vae": self._video_vae_params,
+        }
+        if "action_adaln_proj" in state.params:
+            params["action_adaln_proj"] = state.params["action_adaln_proj"]
+
+        t_start = datetime.datetime.now()
+        guidance = float(max_utils.config_get(config, "wandb_video_guidance_scale", 1.0))
+        with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+            pred_future = self._video_pipeline(
+                params=params,
+                prng_seed=rng,
+                action=action,
+                # Conditioning frame is the first future slot, matching
+                # action_world_train_step's `latents[:, num_history]`.
+                image_latent=latent[:, t_hist],
+                history=latent[:, :t_hist],
+                text_embeds=text_embeds,
+                num_frames=config.num_frames,
+                num_history=t_hist,
+                num_inference_steps=int(
+                    max_utils.config_get(config, "wandb_video_inference_steps", 25)
+                ),
+                min_guidance_scale=1.0,
+                max_guidance_scale=guidance,
+                fps_id=config.ctrl_fps_id,
+                motion_bucket_id=config.ctrl_motion_bucket_id,
+                cond_aug=config.ctrl_noise_aug_strength,
+                frame_level_cond=True,
+                his_cond_zero=config.ctrl_his_cond_zero,
+                action_cond_mode=config.action_cond_mode,
+                output_type="latent",
+            )
+            pred_future.block_until_ready()
+
+        gt_future = latent[:, t_hist:]
+        latent_mse = float(jnp.mean((pred_future.astype(jnp.float32)
+                                     - gt_future.astype(jnp.float32)) ** 2))
+        # Prepend the history so the clip shows the context it was conditioned on.
+        pred_np = self._decode_views_for_log(
+            jnp.concatenate([latent[:, :t_hist], pred_future], axis=1)
+        )
+        gt_np = self._decode_views_for_log(latent)
+
+        if jax.process_index() != 0 or self._wandb_run is None:
+            return
+
+        import wandb
+
+        logs = {"eval/video_rollout_latent_mse": latent_mse}
+        for i in range(pred_np.shape[0]):
+            pred_grid = np.concatenate(list(pred_np[i]), axis=1)   # cams on H
+            gt_grid = np.concatenate(list(gt_np[i]), axis=1)
+            side_by_side = np.concatenate([gt_grid, pred_grid], axis=2)  # GT | pred on W
+            frames = (side_by_side * 255).clip(0, 255).astype(np.uint8).transpose(0, 3, 1, 2)
+            logs[f"eval/video/sample_{i}"] = wandb.Video(
+                frames,
+                fps=int(max_utils.config_get(config, "output_video_fps", 5)),
+                format="mp4",
+            )
+        self._wandb_run.log(logs, step=step)
+        elapsed = (datetime.datetime.now() - t_start).total_seconds()
+        max_logging.log(
+            f"[ctrl_world] logged {pred_np.shape[0]} rollout video(s) to W&B at "
+            f"step {step} (latent_mse={latent_mse:.4f}, {elapsed:.1f}s)"
+        )
 
     # ── Checkpoints ────────────────────────────────────────────────────────────
 

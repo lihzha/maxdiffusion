@@ -35,6 +35,7 @@ fori_loop is replaced with a tight Python loop (``B=1``) that concatenates
 history + future on the frame axis before the UNet.
 """
 
+import functools
 from typing import Any, Optional, Union
 
 import jax
@@ -94,6 +95,8 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         # Non-None only for action_cond_mode='adaln' checkpoints, which carry an
         # extra "action_adaln_proj" params subtree.
         self.action_adaln_proj = action_adaln_proj
+        # jitted samplers keyed by their static signature; see _get_sampler.
+        self._sampler_cache: dict = {}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -150,6 +153,142 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
             zero_slice = jnp.zeros_like(tiled[:, :num_history])
             tiled = jnp.concatenate([zero_slice, tiled[:, num_history:]], axis=1)
         return tiled
+
+    # ------------------------------------------------------------------
+    # Sampler (jitted once, reused for every call)
+    # ------------------------------------------------------------------
+
+    def _sample(
+        self,
+        unet_params,
+        latents,
+        history,
+        concat_stream_all,
+        action_hidden_all,
+        action_hidden_states_all,
+        adm_vec_all,
+        sigmas,
+        *,
+        t_total: int,
+        t_history: int,
+        t_future: int,
+        do_cfg: bool,
+        adaln: bool,
+        frame_level_cond: bool,
+        num_inference_steps: int,
+        min_guidance_scale: float,
+        max_guidance_scale: float,
+    ):
+        """EDM Euler denoising loop. Everything varying is an argument.
+
+        This exists as a separate function purely so it can be ``jax.jit``-ed
+        once and reused. When the loop lived inside ``__call__`` it closed over
+        ``history`` / ``concat_stream_all`` / ``action_hidden_all``, which are
+        fresh arrays on every call: ``lax.fori_loop`` then re-traced the body per
+        call and ``while_p``'s executable cache — keyed on the traced jaxpr —
+        missed every time, so the whole UNet recompiled once per AR chunk.
+        Profiling a single 24s chunk showed 15s inside ``PJRT_Client_Compile``
+        and 11% GPU utilisation. Passing these in as arguments makes the cache
+        key (shape, dtype), so the sweep compiles exactly once.
+        """
+        guider = LinearPredictionGuider(
+            num_frames=t_future,
+            min_scale=min_guidance_scale,
+            max_scale=max_guidance_scale,
+        )
+        b_all = concat_stream_all.shape[0]
+        # dtype follows the UNet input, matching action_world_train_step (which
+        # builds it as ``input_flat.dtype``). Forcing f32 here would promote the
+        # AlphaBlender mix differently than training did.
+        image_only_indicator = jnp.zeros((b_all, t_total), dtype=concat_stream_all.dtype)
+
+        def loop_body(i, latents_future):
+            sigma = sigmas[i]
+            next_sigma = sigmas[i + 1]
+
+            c_skip, c_out, c_in, _ = v_scaling_edm(sigma)
+            scaled_future = latents_future * c_in  # (B, F, 4, H, W)
+
+            # Prepend history slots (noisy history IS used as-is in Ctrl-World
+            # inference; the torch pipeline cats `history` at full scale).
+            if t_history > 0:
+                # (B, H, 4, h, w) + (B, F, 4, h, w) -> (B, T, 4, h, w)
+                full_noisy = jnp.concatenate([history, scaled_future], axis=1)
+            else:
+                full_noisy = scaled_future
+            if do_cfg:
+                full_noisy_all = jnp.concatenate([full_noisy] * 2, axis=0)
+            else:
+                full_noisy_all = full_noisy
+
+            # Channel-concat with conditioning stream -> 8-channel input.
+            unet_in = jnp.concatenate([full_noisy_all, concat_stream_all], axis=2)
+            # Flatten batch+frame for the UNet.
+            unet_flat = unet_in.reshape((b_all * t_total,) + unet_in.shape[2:])
+
+            c_noise = 0.25 * jnp.log(sigma)
+            timesteps = jnp.broadcast_to(c_noise, (b_all * t_total,))
+
+            v_pred = self.unet.apply(
+                {"params": unet_params},
+                unet_flat,
+                timesteps,
+                encoder_hidden_states=action_hidden_all,
+                added_cond_kwargs={"adm_vector": adm_vec_all},
+                image_only_indicator=image_only_indicator,
+                num_frames=t_total,
+                frame_level_cond=(False if adaln else frame_level_cond),
+                action_hidden_states=action_hidden_states_all,
+            ).sample  # (b_all*T, 4, H, W)
+            v_pred = v_pred.reshape((b_all, t_total) + v_pred.shape[1:])
+
+            # Drop history slots from the prediction — only future gets updated.
+            if t_history > 0:
+                v_pred = v_pred[:, t_history:]  # (b_all, F, 4, H, W)
+
+            # EDM -> x0. Both cond and uncond branches start from the same
+            # `latents_future`, so replicate it for the EDM x_in term.
+            if do_cfg:
+                latents_expanded = jnp.concatenate([latents_future] * 2, axis=0)
+            else:
+                latents_expanded = latents_future
+            pred_x0_all = c_skip * latents_expanded + c_out * v_pred
+
+            if do_cfg:
+                pred_x0_uncond, pred_x0_cond = jnp.split(pred_x0_all, 2, axis=0)
+                # Guider expects leading dim B*F; flatten then reshape back.
+                bb = pred_x0_cond.shape[0]
+                flat_shape = (bb * t_future,) + pred_x0_cond.shape[2:]
+                pred_x0 = guider(
+                    pred_x0_cond.reshape(flat_shape),
+                    pred_x0_uncond.reshape(flat_shape),
+                ).reshape(pred_x0_cond.shape)
+            else:
+                pred_x0 = pred_x0_all
+
+            derivative = (latents_future - pred_x0) / sigma
+            dt = next_sigma - sigma
+            return latents_future + derivative * dt
+
+        if DEBUG:
+            for i in range(num_inference_steps):
+                latents = loop_body(i, latents)
+            return latents
+        return jax.lax.fori_loop(0, num_inference_steps, loop_body, latents)
+
+    def _get_sampler(self, **statics):
+        """``jax.jit(_sample)`` memoised on the static signature.
+
+        Cached on the instance rather than rebuilt per call: a fresh ``jax.jit``
+        object each time would carry a fresh compilation cache and defeat the
+        whole point.
+        """
+        key = tuple(sorted((k, v) for k, v in statics.items()))
+        fn = self._sampler_cache.get(key)
+        if fn is None:
+            fn = jax.jit(functools.partial(self._sample, **statics))
+            self._sampler_cache[key] = fn
+        return fn
 
     # ------------------------------------------------------------------
     # Main inference
@@ -317,12 +456,6 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         else:
             adm_vec_all = adm_cond
 
-        # 4. History latents (already VAE-encoded; cfg-duplicated).
-        if t_history > 0:
-            history_all = jnp.concatenate([history] * 2, axis=0) if do_cfg else history
-        else:
-            history_all = None
-
         # 5. Initial noise for the FUTURE slots only.
         h_lat = concat_stream.shape[-2]
         w_lat = concat_stream.shape[-1]
@@ -336,97 +469,31 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         )
         latents = latents * scheduler_state.init_noise_sigma
 
-        guider = LinearPredictionGuider(
-            num_frames=t_future,
-            min_scale=min_guidance_scale,
-            max_scale=max_guidance_scale,
+        # 7. Denoising loop — EDM Euler sampler, jitted once and memoised on the
+        # instance. Everything the loop needs is passed in as an argument rather
+        # than closed over; see _sample's docstring for why that matters (it is
+        # the difference between compiling once and compiling per call).
+        sampler = self._get_sampler(
+            t_total=t_total,
+            t_history=t_history,
+            t_future=t_future,
+            do_cfg=do_cfg,
+            adaln=adaln,
+            frame_level_cond=frame_level_cond,
+            num_inference_steps=num_inference_steps,
+            min_guidance_scale=float(min_guidance_scale),
+            max_guidance_scale=float(max_guidance_scale),
         )
-
-        image_only_indicator = jnp.zeros(
-            (b * (2 if do_cfg else 1), t_total), dtype=jnp.float32
+        latents = sampler(
+            params["unet"],
+            latents,
+            history,
+            concat_stream_all,
+            action_hidden_all,
+            action_hidden_states_all,
+            adm_vec_all,
+            scheduler_state.sigmas,
         )
-
-        # 7. Denoising loop — EDM Euler sampler. The loop body is pure JAX;
-        # ``lax.fori_loop`` wraps it into a single XLA scan so first-call
-        # compile stays small and the step body is compiled exactly once.
-        # All branches inside depend on Python-static values (``t_history``,
-        # ``do_cfg``, ``frame_level_cond``) so they resolve at trace time.
-        sigmas = scheduler_state.sigmas
-
-        def loop_body(i, latents_future):
-            sigma = sigmas[i]
-            next_sigma = sigmas[i + 1]
-
-            c_skip, c_out, c_in, _ = v_scaling_edm(sigma)
-            scaled_future = latents_future * c_in  # (B, F, 4, H, W)
-
-            # Prepend history slots (noisy history IS used as-is in Ctrl-World
-            # inference; the torch pipeline cats `history` at full scale).
-            if t_history > 0:
-                # (B, H, 4, h, w) + (B, F, 4, h, w) -> (B, T, 4, h, w)
-                full_noisy = jnp.concatenate([history, scaled_future], axis=1)
-            else:
-                full_noisy = scaled_future
-            if do_cfg:
-                full_noisy_all = jnp.concatenate([full_noisy] * 2, axis=0)
-            else:
-                full_noisy_all = full_noisy
-
-            # Channel-concat with conditioning stream -> 8-channel input.
-            unet_in = jnp.concatenate([full_noisy_all, concat_stream_all], axis=2)
-            # Flatten batch+frame for the UNet.
-            b_all = unet_in.shape[0]
-            unet_flat = unet_in.reshape((b_all * t_total,) + unet_in.shape[2:])
-
-            c_noise = 0.25 * jnp.log(sigma)
-            timesteps = jnp.broadcast_to(c_noise, (b_all * t_total,))
-
-            v_pred = self.unet.apply(
-                {"params": params["unet"]},
-                unet_flat,
-                timesteps,
-                encoder_hidden_states=action_hidden_all,
-                added_cond_kwargs={"adm_vector": adm_vec_all},
-                image_only_indicator=image_only_indicator,
-                num_frames=t_total,
-                frame_level_cond=(False if adaln else frame_level_cond),
-                action_hidden_states=action_hidden_states_all,
-            ).sample  # (b_all*T, 4, H, W)
-            v_pred = v_pred.reshape((b_all, t_total) + v_pred.shape[1:])
-
-            # Drop history slots from the prediction — only future gets updated.
-            if t_history > 0:
-                v_pred = v_pred[:, t_history:]  # (b_all, F, 4, H, W)
-
-            # EDM -> x0. Both cond and uncond branches start from the same
-            # `latents_future`, so replicate it for the EDM x_in term.
-            if do_cfg:
-                latents_expanded = jnp.concatenate([latents_future] * 2, axis=0)
-            else:
-                latents_expanded = latents_future
-            pred_x0_all = c_skip * latents_expanded + c_out * v_pred
-
-            if do_cfg:
-                pred_x0_uncond, pred_x0_cond = jnp.split(pred_x0_all, 2, axis=0)
-                # Guider expects leading dim B*F; flatten then reshape back.
-                bb = pred_x0_cond.shape[0]
-                flat_shape = (bb * t_future,) + pred_x0_cond.shape[2:]
-                pred_x0 = guider(
-                    pred_x0_cond.reshape(flat_shape),
-                    pred_x0_uncond.reshape(flat_shape),
-                ).reshape(pred_x0_cond.shape)
-            else:
-                pred_x0 = pred_x0_all
-
-            derivative = (latents_future - pred_x0) / sigma
-            dt = next_sigma - sigma
-            return latents_future + derivative * dt
-
-        if DEBUG:
-            for i in range(num_inference_steps):
-                latents = loop_body(i, latents)
-        else:
-            latents = jax.lax.fori_loop(0, num_inference_steps, loop_body, latents)
 
         if output_type == "latent":
             return latents

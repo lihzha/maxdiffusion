@@ -19,6 +19,15 @@ save_config_to_gcs: False
 log_period: 100
 wandb_project: ''   # set to enable W&B logging (e.g. 'svd-ctrl-world')
 wandb_entity: ''    # W&B team/user; empty = personal account
+# Log a GT-vs-prediction rollout video every N steps (0 = off). Requires
+# wandb_project and eval_data_dir. Opt-in because it loads the VAE decoder
+# (~2.7 GB) that training otherwise never needs — latents are pre-encoded.
+# Single-chunk rollout: history and the conditioning frame come from the eval
+# window, the num_frames future slots are generated from noise.
+wandb_video_every: 0
+wandb_video_samples: 1            # eval samples to decode and log per video step
+wandb_video_inference_steps: 25   # EDM Euler steps for the rollout
+wandb_video_guidance_scale: 1.0   # >1.0 enables action CFG (doubles rollout compute)
 
 # UNet + VAE come from base SVD by default. Point this at the directory produced
 # by scripts/convert_ctrl_world_ckpt.py to warm-start from a Ctrl-World ckpt.
@@ -33,7 +42,15 @@ action_encoder_init_path: ''
 
 unet_checkpoint: ''
 revision: ''
-weights_dtype: 'bfloat16'
+# float32 master weights with bfloat16 activations — upstream Ctrl-World's
+# mixed_precision='fp16' setup, and a correctness requirement at this LR: bf16
+# has 7 mantissa bits, so near a 0.01-magnitude weight the representable spacing
+# is ~6.1e-5 and a learning_rate=1e-5 Adam step (or the 1e-7 weight-decay term)
+# rounds away to nothing. Params AND the Adam moments follow this dtype, so bf16
+# here silently stalls most of the UNet; only the f32-pinned leaves keep
+# training. Costs 2x param + 2x optimizer HBM, which FSDP shards.
+# Inference is unaffected and can stay bf16.
+weights_dtype: 'float32'
 activations_dtype: 'bfloat16'
 
 precision: "DEFAULT"
@@ -189,7 +206,11 @@ save_optimizer: True
 adam_b1: 0.9
 adam_b2: 0.999
 adam_eps: 1.e-8
-adam_weight_decay: 0.0
+# Matches upstream Ctrl-World, which builds `torch.optim.AdamW(params, lr=...)`
+# and so inherits torch's default weight_decay=0.01 (scripts/train_wm.py). optax's
+# adamw decay is decoupled and lr-scaled exactly like torch's, so the value
+# transfers directly.
+adam_weight_decay: 0.01
 opt_enable_grad_clipping: False
 max_grad_value: 1.0
 opt_enable_grad_global_norm_clipping: True
@@ -258,6 +279,25 @@ num_views: 3
 # VAE scaling factor used to unscale the channel-concat conditioning stream.
 # Must match the value applied at pre-encode time.
 vae_scaling_factor: 0.18215
+
+# ── Rollout inference (generate_ctrl_world.py) ────────────────────────────────
+# Auto-regressive chunks per episode. Each chunk contributes num_frames - 1 new
+# latent frames (slot 0 of the future is the current observation, which the
+# previous chunk already produced), so the rollout horizon is
+#   1 + ar_num_chunks * (num_frames - 1)
+# = 1 + 12*4 = 49 frames ~ 10s at 5 Hz with the defaults here.
+ar_num_chunks: 12
+# Step to restore from checkpoint_dir; <= 0 means "latest".
+checkpoint_step: -1
+# Playback rate of the written MP4s. The data is 5 Hz latents (down_sample=3 from
+# the 15 Hz state stream) and the SVD VAE is per-frame, so 1 latent = 1 frame.
+output_video_fps: 5
+# Stop after this many val episodes; -1 evaluates the whole split.
+eval_max_episodes: -1
+# Skip val episodes shorter than this many latent frames. Shorter-than-horizon
+# episodes are still rolled out and simply trimmed back to their real length, so
+# this only exists to drop degenerate 2-3 frame episodes.
+eval_min_latent_frames: 2
 
 # Below kept for pyconfig compatibility but unused by the ctrl_world trainer.
 height: 192

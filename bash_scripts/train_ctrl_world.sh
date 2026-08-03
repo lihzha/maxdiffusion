@@ -149,7 +149,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     eval_data_dir=$EVAL_DATA_DIR \
     stats_path=$STATS_PATH \
     attention=flash \
-    weights_dtype=bfloat16 \
+    weights_dtype=float32 \
     activations_dtype=bfloat16 \
     remat_policy=MATMUL_WITHOUT_BATCH \
     ici_fsdp_parallelism=-1 \
@@ -170,7 +170,11 @@ python src/maxdiffusion/train_ctrl_world.py \
     save_optimizer=True \
     checkpoint_max_to_keep=3 \
     reshuffle_data_on_restart=True \
-    wandb_project='svd-ac-ctrl-world'
+    wandb_project='svd-ac-ctrl-world' \
+    wandb_video_every=1000 \
+    wandb_video_samples=1 \
+    wandb_video_inference_steps=25 \
+    wandb_video_guidance_scale=2.5
 
 # --- 7. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"

@@ -285,3 +285,116 @@ class CtrlWorldDroidLatentDataset:
 
     def __iter__(self):
         return self.dataset.as_numpy_iterator()
+
+
+class CtrlWorldDroidRolloutDataset(CtrlWorldDroidLatentDataset):
+    """Val-split iterator for rollout inference: one flat window per episode.
+
+    Training slices every episode into many ``(num_history + num_frames)``
+    windows anchored at an arbitrary ``frame_now`` (see
+    :meth:`CtrlWorldDroidLatentDataset._build_window`). Rollout evaluation wants
+    the opposite: **one** window per episode, anchored at episode frame 0, long
+    enough to cover the whole auto-regressive horizon, with history left to the
+    driver — at frame 0 every history slot clips onto frame 0 anyway, which is
+    the "single initial observation" condition the rollout starts from.
+
+    So this yields the raw prefix of each episode rather than a pre-assembled
+    window; ``generate_ctrl_world.py`` builds the per-chunk history/action slices
+    itself as the rollout advances.
+
+    Deliberately does not call ``super().__init__``: the parent constructor
+    builds the whole shuffled/repeating training pipeline. Only
+    :meth:`_parse` is reused (it depends on ``self.text_embed_dim`` alone), so
+    the training path is untouched.
+
+    Yielded sample (batched along axis 0):
+        latent:        [window_frames, 4, H_lat_stacked, W_lat]  float32, scaled
+        action:        [window_frames, action_dim]               float32 in [-1, 1]
+        text_embeds:   [text_embed_dim]                          float32
+        n_real_frames: []                                        int32
+
+    ``n_real_frames`` is ``min(traj_len_5hz, window_frames)``: episodes shorter
+    than the horizon are kept, with their last latent and last action repeated
+    out to ``window_frames`` by the clamped gather. Consumers trim to
+    ``n_real_frames`` so the padded tail never reaches a video or a metric.
+    """
+
+    def __init__(
+        self,
+        *,
+        data_dir: str,
+        stats_path: str,
+        window_frames: int,
+        action_dim: int = 7,
+        text_embed_dim: int = 512,
+        down_sample: int = 3,
+        batch_size: int = 1,
+        min_traj_len_5hz: int = 2,
+    ):
+        _configure_tf_for_jax()
+
+        if window_frames <= 0:
+            raise ValueError("window_frames must be > 0")
+        self.window_frames = window_frames
+        self.action_dim = action_dim
+        self.text_embed_dim = text_embed_dim
+        self.down_sample = down_sample
+        self.is_train = False
+        # min 2 frames: one real observation to condition on plus at least one
+        # real frame to score the rollout against.
+        self.min_traj_len_5hz = max(2, int(min_traj_len_5hz))
+
+        p01, p99 = _load_state_stats(stats_path)
+        if p01.shape != (action_dim,) or p99.shape != (action_dim,):
+            raise ValueError(
+                f"stats.json must contain {action_dim}-dim percentile arrays, "
+                f"got state_01={p01.shape}, state_99={p99.shape}."
+            )
+        self._p01 = tf.constant(p01, dtype=tf.float32)
+        self._p99 = tf.constant(p99, dtype=tf.float32)
+
+        files = sorted(tf.io.gfile.glob(os.path.join(data_dir, "shard-*.tfrecord")))
+        if not files:
+            raise FileNotFoundError(
+                f"No TFRecord shards matched {data_dir}/shard-*.tfrecord."
+            )
+        self.files = files
+
+        # Deterministic and single-pass: no shuffle, no sharding, no repeat, so
+        # the driver sees every episode exactly once in a stable order.
+        ds = tf.data.TFRecordDataset(files)
+        ds = ds.with_options(_tf_data_options(deterministic=True))
+        ds = ds.map(self._parse, num_parallel_calls=AUTOTUNE)
+        ds = ds.filter(
+            lambda traj: tf.greater_equal(traj["traj_len_5hz"], self.min_traj_len_5hz)
+        )
+        ds = ds.map(self._rollout_window, num_parallel_calls=AUTOTUNE)
+        ds = ds.batch(batch_size, drop_remainder=True)
+        ds = ds.prefetch(AUTOTUNE)
+        self.dataset = ds
+
+    def _rollout_window(self, traj: dict) -> dict:
+        """Episode prefix of ``window_frames`` latents at stride 1 from frame 0."""
+        W = self.window_frames
+        T5 = tf.cast(traj["traj_len_5hz"], tf.int32)
+        T15 = tf.cast(traj["traj_len_15hz"], tf.int32)
+
+        rgb_id = tf.clip_by_value(tf.range(W), 0, T5 - 1)
+        state_id = tf.clip_by_value(rgb_id * self.down_sample, 0, T15 - 1)
+
+        latent = tf.gather(traj["latent_stacked"], rgb_id, axis=0)   # (W, 4, H, Wl)
+        state = tf.gather(traj["state"], state_id, axis=0)           # (W, 7)
+
+        # normalize_bound to [-1, 1] — identical to the training window.
+        action = 2.0 * (state - self._p01) / (self._p99 - self._p01 + 1e-8) - 1.0
+        action = tf.clip_by_value(action, -1.0, 1.0)
+
+        latent.set_shape([W, None, None, None])
+        action.set_shape([W, self.action_dim])
+
+        return {
+            "latent":        latent,
+            "action":        action,
+            "text_embeds":   traj["text_embed"],
+            "n_real_frames": tf.minimum(T5, W),
+        }
