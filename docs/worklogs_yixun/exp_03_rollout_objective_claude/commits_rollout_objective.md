@@ -12,3 +12,4 @@
 | `3e3882d` | round-3 residuals — end-to-end bf16 certificate (bfloat16 PARAMETER, dtype assertions derived from the config), two stale comments corrected. Suite 1399/2 skipped. |
 | `efb18a7` | S1-fix closing — emit-before-raise reporting seam, true 2,162-triple cross-product sweep, `exp03_snapshot_before_step` pre-step state/rng/batch snapshot. Suite 1420/2 skipped. |
 | `d3b33ae` | S1-fix final — host-scoped logging (process 0 logs, every host raises), collective snapshot save on all hosts, awaited before the armed step. Suite 1424/2 skipped. |
+| `2a8502f` | S1-fix last residuals — `is_log_due` zero-period guard shared by loop and emitter; snapshot extras materialized only on primary and only from addressable shards, with the global index recorded. Suite 1427/2 skipped. |
