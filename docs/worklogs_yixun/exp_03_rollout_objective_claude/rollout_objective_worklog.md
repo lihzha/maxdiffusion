@@ -211,3 +211,36 @@
   nothing. Real budgets (A 1.6x, B 2.5x, C 3.2x; exceeding = STOP) get measured in S1.
 - **Next** — closing micro-review, then the S1 package (ramp origins Tier 1 = 10000 / Tier 2 = 0,
   STOP budgets, D2's support-variance requirement for S1.5) for Yixun's approval.
+
+## 2026-08-03T00:30:00Z — S1 fallout: combined-arm NaN diagnosis (step-8 draw) — PARTIAL root cause
+
+- **S1 results** — control PASS (1.786 steps/s); corrective_ss PASS (1.47x); rollout_loss finite but
+  2.56x vs the 2.5x budget (STOP, marginal — S1.6 re-measures at scale, no code change); **combined
+  loss=nan from step 8 of 30** (step 7 finite at 1.972) AND 4.23x vs 3.2x.
+- **First question, settled** — C's support purposes are **identical** to the standalone arms'
+  (`k_a_draw`, `index_support`, `index_support_rollout`; one draw site each, asserted by test), so at
+  global step 8 C drew exactly what A's arm and B's arm drew at their own step 8 — and **both were
+  finite there** (A 2.158888, B 0.503659). The NaN is therefore an **interaction of the two terms in
+  one trace, not an unlucky draw**.
+- **Exact step-8 draw, reconstructed and pinned** — `k_A=2, s_A=0, e_A=2` (σ_hi = **1.0**, the top of
+  the grid; the FIRST of the 30 steps to start there), `s_B=16, e_B=18`, coin 0.4463 ≥ p_ss 0.40 ⇒
+  **teacher-forced**. The learning rate at step 8 was 2.8e-7 with grad_norm 8.277 at step 7, so a
+  gradient-driven parameter divergence is arithmetically impossible: the step-8 computation itself
+  produced the NaN.
+- **Bisection at production shapes/dtypes** — `[B,48,9,12,20]` bf16: A's advance at the step-8
+  support is finite for velocity scales 1..1e3; the corrective target is bounded (σ_lo ≥ 0.1724, max
+  |v*| ~10); B's normalizer is finite at every one of the 23 starts, computed in fp32, peaking at
+  **3422x at s=0** (in bf16 the same subtraction would land on 0.015625 and inflate it to 4096x —
+  which is why it must stay fp32). **No structurally singular support exists.**
+- **What changed** — the riskiest construct is gone: A's advance was `fori_loop` with **traced
+  bounds** (lowering to dynamic control flow inside the differentiated trace, with a graph whose
+  shape depends on the step's draw). It is now a fixed-length `k_max`-step unroll with a select,
+  proven to pick exactly the k-th state (exact) and to match the old loop to ≤1 ULP. Plus per-term
+  metrics (`loss_a`, `loss_b`, `p_ss`, `k_a`, `sigma_hi`, `horizon_sq`) so a recurrence localises
+  itself in the log instead of needing another run.
+- **Honest limitation** — the NaN was **not reproduced on CPU**: it needs the real 5B forward, and
+  every arithmetic path enumerated here is finite. The fix removes the one construct that plausibly
+  differs between C and the arms; the per-term metrics make the next smoke decisive either way.
+- **Result** — suite 1407 passed / 2 skipped (+8). Three mutants killed (dynamic-bound loop restored;
+  per-term metrics dropped; support formula shifted).
+- **Next** — focused review; the C re-smoke needs a fresh launch approval.
