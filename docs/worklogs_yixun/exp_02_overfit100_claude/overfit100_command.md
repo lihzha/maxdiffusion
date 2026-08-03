@@ -464,3 +464,18 @@ the 5e-5 segment's own deceleration and chase the D11 bar (11/100 ≥ 0.95 at 12
 instrument job at {12500 anchor = 0.06061 exact, 15000} + SSIM eval at 15,000 when training lands.
 - **Job id:** `20260803-025332-62de7eb5-exp02-o100-lr5e5ext-yixun` (submitted; COMMIT=bf912a574ae0a5f1ec4d70e72285c5741abbed9a).
 
+## Jobs 41–43 — lr5e5-extension measurement pair — launched 2026-08-03T~05:30Z
+
+Extension training (Job 40) SUCCEEDED attempt 2 (one maintenance kill; resumed from its own 12,500
+checkpoint); checkpoint 15,000 verified. Follow-on measurements per the Job-40 approval:
+- **Job 41 (CANCELLED, my error, disclosed):** `20260803-052906-4f0d7f08-exp02-o100-inst-l5x-yixun` was
+  launched with a WRONG `TRAIN_COMMIT` — a chimera of the training SHA and the HF revision string
+  (`…cf768468…`). It would have stamped bad provenance into every row. Cancelled within 3 minutes of
+  submission; nothing consumed it.
+- **Job 42 (instrument, corrected):** `20260803-054641-2e826802-exp02-o100-inst-l5x2-yixun` —
+  CHECKPOINT_STEPS="12500,15000", output to `validation_loss_15000/` (fresh dir; the run's earlier
+  instrument artifact at `validation_loss/` stays immutable), TRAIN_COMMIT=81ae5717cf631e… (correct).
+  Anchor: 12,500 must reproduce **0.06061**.
+- **Job 43 (SSIM @15000):** `20260803-052937-c63c0868-exp02-o100-ssim-l5x-yixun` — s3_intermediate,
+  seed 0, correct, canonical-100 (takes no TRAIN_COMMIT; unaffected by the Job-41 error).
+
