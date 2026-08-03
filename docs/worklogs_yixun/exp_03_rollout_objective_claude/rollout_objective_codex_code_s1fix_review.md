@@ -120,3 +120,90 @@ claim is reserved for what is exactly tested: the select picks the k-th state.
 
 No push, no launch. The re-smoke package (C replay + control/A timing companions + the frozen-state
 discriminator) is instrumented and waiting on approval.
+
+## Re-review (a73cd53) — findings 1/4/5 CLOSED, two residuals + one conditional
+
+```
+REQUEST-REVISION
+
+1. CLOSED — BLOCKER-1: the displayed/global-step convention, LR arithmetic, corrected supports, coin, and self-generated branch are correctly pinned at `global_step=7`. [test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:843)
+
+2. BLOCKER remains — diagnostics are forwarded and formattable, but `assert_step_finite()` raises before the print/W&B block, so the failing step’s 16-field diagnostic line is never emitted; the formatter test does not exercise this production control flow. [wan_ti2v_overfit100_trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py:1367) [test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:1069)
+
+3. MAJOR remains — the test still explicitly concludes “INTERACTION” from different-history arms, and the claimed 2,162-combination sweep actually evaluates 94 A cases plus 23 B cases and then only asserts `47 * 23 * 2 == 2162`; no combined cross-product arithmetic is evaluated. [test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:825) [test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:958)
+
+4. CLOSED substantively — the always-two-forward cost, possible A 1.6× STOP, and hypothesis-not-root-cause status are stated correctly; scrub the contradictory test comment that still says graph shape depends on the draw. [wan_ti2v_exp03_trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py:320)
+
+5. CLOSED — the parity claim now matches `rtol/atol=1e-6`, with exactness reserved for state selection. [test_exp03_objectives.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/tests/worklogs_yixun/test_exp03_objectives.py:925)
+
+Judgment call: avoiding an automatic 5B checkpoint write is reasonable, but the reconstruction claim is not currently sufficient. Detection occurs after `state.apply_gradients()`, so retained memory contains the post-update, potentially poisoned state; checkpoints contain only params/optimizer/step, not RNG or batch. [wan_ti2v_overfit100_trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py:230) [wan_ti2v_overfit100_trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_overfit100_trainer.py:1181) Accept no on-failure write only after the package proactively preserves the exact pre-step-7 state plus RNG and batch, or provides a tested exact reconstruction driver.
+
+Re-smoke package readiness: NOT READY.
+
+Required launch order:
+
+1. Launch one contemporaneous v6e-8 cohort: 30-step control, A timing companion, and faithful C replay; identical seed/data/ramp/compiler settings, `LOG_PERIOD=1`, strict A ≤1.6× and C ≤3.2× gates. Preserve the pre-`global_step=7` state/RNG/batch.
+2. If C recurs, emit the complete diagnostic line before raising, then run frozen A/B/C forward-only followed by `value_and_grad`.
+3. Compare old-loop and new-unroll executables against that same frozen payload.
+4. Only after the re-smoke gate closes, launch S1.5; only after S1.5, launch the v6e-64 GBS-256 S1.6 probe.
+
+Currently `exp03_frozen_replay` is only a callable function—there is no checkpoint/batch/RNG loader, runnable diagnostic entry point, or old/new selection—and the command record contains only the original S1 jobs. [wan_ti2v_exp03_trainer.py](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/src/maxdiffusion/trainers/wan_ti2v_exp03_trainer.py:543) [rollout_objective_command.md](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_03_rollout_objective/docs/worklogs_yixun/exp_03_rollout_objective_claude/rollout_objective_command.md:8)
+
+Static verification passed: `git diff --check`, launcher `bash -n`, and Python AST parsing. The claimed 1416/2 suite could not be independently rerun because this read-only environment has neither pytest nor JAX installed.
+```
+
+## Strengthening record — coder response (S1-fix closing round)
+
+### 1. BLOCKER residual — EMIT, then RAISE
+
+`assert_step_finite` was called before the print/W&B block, so a NaN aborted the run *before*
+emitting the sixteen-field line that names it — the S1 experience, reproduced by the fix meant to
+prevent it. The check is now split (`step_finite_failures` returns the failing names; the raise is
+separate) and the loop delegates to a single seam, `report_step`, which:
+
+1. forces the diagnostic line whenever the step is non-finite, **whatever `log_period` says**,
+   prefixed `NON-FINITE ` and carrying `(global_step=N)` plus every objective-reported metric;
+2. sends the same values to W&B;
+3. **then** raises `NonFiniteStepError` naming the failing terms.
+
+Tested through that production seam with a fake logger and a fake W&B run: the line is emitted (and
+contains all sixteen promised fields) **and** the error is raised, in that order, with `log_period`
+set to 1000 so only the failure could have triggered the line.
+
+### 2. MAJOR residual — the cross-product is actually evaluated
+
+The sweep now evaluates **L_C over all 47 x 23 x 2 = 2,162 triples** — 94 A-term values and 23 B-term
+values feeding 2,162 combined values, each asserted finite. The count is derived from the collected
+data (`len(values)`), not asserted as arithmetic, so a sweep that never ran fails; a
+distinct-value check rules out a constant. The word INTERACTION is **gone** from the test: what the
+tests establish is that the draws are identical *given the same state*, and the comment now says
+explicitly that the mechanism is decided by the frozen-state replay, not by these tests.
+
+### 3. Conditional — proactive pre-step snapshot
+
+`exp03_snapshot_before_step` (config key, default -1; launcher env `EXP03_SNAPSHOT_BEFORE_STEP`)
+writes, **immediately before** the named zero-based global step executes: params and opt_state
+through the production checkpoint path, plus the rng key data, the exact batch, and a manifest
+recording both the global and displayed step numbers. Detection necessarily happens after
+`apply_gradients`, so the state a failing step produces is already poisoned and a checkpoint alone
+carries no rng or batch — this is the only way to replay the failing step. Tested end to end
+(arrays round-trip, `save_state` invoked with the right step) plus the loop's arming and the
+config/launcher plumbing.
+
+Also scrubbed: the stale claim that a traced trip count implies a per-draw compiled graph shape.
+
+### Verification
+
+* Full worklogs suite: **1420 passed, 2 skipped** (+4).
+* Mutations — 5, all killed:
+  1. raise reintroduced before the emit -> **1F**;
+  2. the non-finite step no longer forces the line (log_period alone decides) -> **1F**;
+  3. the cross-product loop skipped -> **1F** (this one initially SURVIVED against an arithmetic
+     count assertion, which is why the count is now derived from the collected values);
+  4. the snapshot flag ignored by the loop -> **1F**;
+  5. the snapshot omits the rng/batch -> **1F**.
+* `black`, `ruff`, `bash -n`, staged-tree `git diff --check` clean.
+
+No push, no launch. The re-smoke cohort (30-step control + A timing companion + faithful C replay,
+identical seed/data/ramp/compiler, `LOG_PERIOD=1`, strict 1.6x/3.2x gates, snapshot armed at
+`EXP03_SNAPSHOT_BEFORE_STEP=7`) is instrumented and waiting on the re-review.
