@@ -16,3 +16,4 @@
 | `fdadb5f` | snapshot gated to single-host (eval-resume precedent) with the reason logged and multi-host capture predeclared as its own round. Suite 1431/2 skipped. |
 | `210e7b1` | S1.5 probe driver + launcher — no-update dual-state diagnostics (checkpoint + init), per-objective cosines vs control, A label isolation, p_ss=0 parity, support-gradient variance (K=8/M=4), sigma traces. Suite 1462/2 skipped. |
 | `3218d5f` | S1.5 strengthening (Codex 5 BLOCKER + 3 MAJOR) — diagnostics wired + conditional parity, support salt isolating the variance, in-memory sigma traces, pinned per-state restore/ramp, streaming O(1)-tree reductions, sha256 fingerprint. Suite 1470/2 skipped. |
+| `3ffb8f9` | S1.5 closing — renamed key + both-states end-to-end test, first state released before the next build, exact-step restore (selects 10000 from a dir holding 12500), truly streaming variance with AST-pinned laziness, branch counts + 40-hex COMMIT pin. Suite 1477/2 skipped. |
