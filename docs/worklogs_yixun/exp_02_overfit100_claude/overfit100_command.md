@@ -494,3 +494,9 @@ if seed-0 shows ≳90/100 ≥ 0.95, the formal 3-seed + full-set verdict passes 
 this approval: instrument {15000 anchor = 0.03927, 17500} + SSIM at 17,500 on landing.
 - **Job id:** `20260803-152023-05ca5770-exp02-o100-lr5e5x2-yixun` (COMMIT=0bb4dba37972efab37aed91312f4d98e56a8044c).
 
+### Job 44 resubmit (2026-08-03T~17:25Z)
+
+Job 44 FAILED attempt 2: worker-5 SIGABRT inside `maybe_initialize_jax_distributed_system` (16-host
+barrier, pre-code) — same infra signature as exp_02 S3 attempt 1. Standing auto-resubmit policy (no
+code/config change): **Job 44b** `20260803-171525-545493a4-exp02-o100-lr5e5x2b-yixun`.
+
