@@ -103,3 +103,21 @@ noted: always inline or array-expand extra args.)
   retries. **C now carries TWO S1.6 flags: step-time (3.96×) and HBM headroom.** One resubmit under the
   infra-flake reading: **Job 7c** `20260803-193617-1214ad57-exp03-rs-combined4-yixun` for the formal 30/30; the substantive verdict stands either way.
 
+### S1 CLOSED (2026-08-03T~20:45Z)
+
+**combined4 attempt 1 completed the formal 30/30 — every step finite** (zero `finite=0` occurrences; final
+line step 30/30, loss 0.974, all per-term flags green). The post-completion VM preemption made the queue
+requeue needlessly; the redundant attempt was cancelled — the evidence is complete.
+
+**S1 final gate table:**
+| arm | finiteness | steady ratio | budget | status |
+| --- | --- | --- | --- | --- |
+| control | 30/30 finite | 1.00× | — | PASS |
+| corrective_ss (A) | 30/30 finite | **1.17×** (improved from 1.47× by the unroll) | ≤1.6× | **PASS** |
+| rollout_loss (B) | 30/30 finite | 2.56× | ≤2.5× | finite; budget → S1.6 |
+| combined (C) | **30/30 finite — NaN resolved** | 3.96× | ≤3.2× | finite; budget + HBM headroom (26.5G vs 23.7G) → S1.6 |
+
+The S1 NaN's proximate cause stands as the compiler-shape hypothesis (traced-bound loop), now supported by:
+corrected-draw replay through the self-generated branch, the hazard-class pass (σ_hi=1.0, k=2,
+self-generated), and two independent full-30 finite runs. Next: **S1.5** under the Query-4 grant.
+
