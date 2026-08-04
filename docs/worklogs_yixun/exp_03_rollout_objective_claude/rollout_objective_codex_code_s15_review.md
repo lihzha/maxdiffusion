@@ -318,3 +318,20 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   at cache-served rows with the forced-origin mutation required to kill it; transactional Welford
   update; per-tag first-call wall-time log for v6e-8 compile observability.
 
+- **`99b5529` re-review (xhigh): REQUEST-REVISION** (third NO-GO on the fix-#3 series; review passes on
+  this series now: 3 — over the ~2–3/round budget note in issue #9, justified by executed-mutation
+  catches each pass). Item 4 (Welford transactional/donation) **CLOSED**; stale-`_draws` and
+  eager-fallback mutants confirmed killed. Open: (1+3) the collision pin still watches a PARALLEL
+  `_jit_observed_p_ss` recomputation — the reviewer's surgical mutation (forcing origin only inside
+  cache-served calls) survived; (2, executed) the gauge miscounts at production shape — AdamW moment
+  trees (param-shaped) read as baseline 2.0 phantom grad trees, while fp32 Welford buffers for bf16
+  params are missed by the shape+dtype filter; (5) no production specialization total
+  asserted/reported; probe tags untimed; COMPILE_TIMINGS merges the init-state replay compile.
+  **Relaunch: NO-GO.**
+- Round-4 dispatched: cached fns EMIT their ramp-dependent quantities in aux (pin re-pointed at the
+  real path; reviewer's surgical mutation as acceptance); opt_state DROPPED after restore (no-update
+  probe — moments are dead weight; frees ~40 GB HBM, the headroom that killed 8c, and cleans the
+  gauge baseline at the source); identity-based gauge (baseline buffer-identity snapshot,
+  tree-equivalents by bytes); production specialization total + per-(tag,state) compile timing into
+  the artifact.
+
