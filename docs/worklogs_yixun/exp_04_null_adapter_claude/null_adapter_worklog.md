@@ -47,3 +47,13 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Change** — `plan_null_adapter.md` rewritten as v3 (changelog in header): named noise conventions, J0 manifest job, gates module `null_adapter_gates.py`, target-selection floors, pinned adapter/P3a budgets, legacy restore contract + RNG-replicated parity, schema + fidelity-gate fixes, rounds R1–R15. Resolutions appended to the review file.
 - **Version Control** — committed with this entry; pass-3 re-review dispatched.
 - **Next** — Pass-3 verdict → surface to Yixun (target: APPROVE-PLAN; if further findings are minor, resolve and surface with the full review trail).
+
+## 2026-08-04T06:25:00Z — Re-review pass 3: REQUEST-REVISION (M1–M8) → plan v4
+
+- **Goal** — Verify v3 closures; screen new v3 content.
+- **Command / Validation** — same reviewer invocation; session `019fcad9-8634-7640-8bb0-d0751856e055`. Verified v3 at `7bead68`.
+- **Result** — `passed` (review obtained): **REQUEST-REVISION**, now narrow: 7 MAJOR + 1 NIT, all executable-precision pins — M1 exact fold_in key derivation; M2 A2 deployment estimand (global k={0} only); M3 decidable adoption rule; M4 numeric J0 caps + explicit DEV/TEST slicing; M5 artifact `latent_dtype` fallback semantics; M6 legacy checkpoint URI + effective-config override set + eval_shape guard; M7 worst-value imputation for invalid pairs; M8 count correction (pass-2 partials were **nine** — F1, F5, F6, F9, F10, F11, F14, F15, F17 — not seven as the v3 header and the previous worklog entry stated; corrected here, previous entry stands as written per append-only rule).
+- **Analysis** — All accepted; every item is a determinism/estimand pin that prevents post-hoc flexibility or execution ambiguity. Not infra.
+- **Change** — `plan_null_adapter.md` → v4 (targeted edits; changelog in header). Resolutions appended to the review file.
+- **Version Control** — committed with this entry; pass-4 re-review dispatched.
+- **Next** — Pass-4 verdict → surface to Yixun with the full four-pass review trail.
