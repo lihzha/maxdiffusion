@@ -38,3 +38,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Change** — `plan_pos_context.md` rewritten as v2; resolutions appended to `pos_context_codex_plan_review.md`.
 - **Version Control** — committed with this entry; re-review pass 2 dispatched.
 - **Next** — Pass-2 verdict → surface to Yixun (decision points now: L_pos=8; pure-regression primary; K1 conditional approval; pilot scope).
+
+## 2026-08-04T19:15:00Z — Re-review pass 2: near-converged (F1–F9: 8 RESOLVED + F4 partial → G1) → plan v3
+
+- **Goal** — Verify v2 closures; screen the delta.
+- **Result** — `passed`: F1–F3, F5–F9 RESOLVED (incl. the deployment-matching context convention verified against both implementations); F4 PARTIALLY-RESOLVED via **G1 (MAJOR)**: the shared-file merge rule ("exp_04's side verbatim") could erase exp_05's `train_wan.py` dispatch at merge-2 — internally inconsistent with the combined-green requirement. Storage note: reviewer confirms 17.1 GiB is conservative (raw ≈ 14.8 GiB).
+- **Change** — plan v3: three-class conflict policy with additive-union rule for enumerated dual-touch files, reviewed merge commits, both-dispatch-routes post-merge test requirement.
+- **Version Control** — committed with this entry; pass-3 (delta-only) dispatched.
+- **Next** — Pass-3 verdict (expected APPROVE-PLAN) → surface to Yixun.
