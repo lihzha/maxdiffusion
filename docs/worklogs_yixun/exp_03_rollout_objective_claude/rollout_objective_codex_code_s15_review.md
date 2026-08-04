@@ -260,3 +260,23 @@ No push, no launch.
 All four BLOCKERs + MAJOR residuals closed and verified (real-path execution both states; scoped state
 lifetime; exact-step 10000 from {10000,12500}; genuine streaming; canonical per-state traces; branch
 outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 3218d5f → 3ffb8f9, three passes.
+
+## Fix #2 series — config views empty on the pyconfig proxy (Job 8b failure)
+
+- **`2b9177d` review (xhigh): REQUEST-REVISION** — items 1/2/4/5 PASS (helper + guards + unit
+  closures discriminating, spot-run 5/5; no other production `vars(config)`; proxy getattr-with-default
+  raises ValueError but no replay-path soft read targets a key absent from the YAML; no new hardware-path
+  defect). **Item 3 BLOCKER:** the e2e converted the 225-key production key set into a SimpleNamespace,
+  so the reviewer's executed reversion mutation (helper back to `dict(vars(config))`) still passed both
+  e2e cases — the e2e retained the exact shape-blindness that shipped Jobs 8/8b. Relaunch: NO-GO.
+- **Strengthening `994af9b`:** `_proxy_config` test double with pyconfig's real contract (empty instance
+  `__dict__` asserted, `__getattr__` over a keys closure, `get_keys()`, missing key → ValueError,
+  assignment refused); e2e parameterized [proxy, namespace] × [checkpoint, init]. Reversion mutation now
+  fails 4 tests — both proxy e2e cases die AT VIEW CONSTRUCTION via the empty-keys guard
+  (state_report:533 → state_view:369 → guard:352) — plus the 2 unit closures; M2/M3/M4 still 1 kill
+  each; baseline 58; suite 1,489 passed / 2 skipped.
+- **`994af9b` verify (xhigh): APPROVE — "Relaunch: GO — the blocker is closed."** Reviewer re-executed
+  the reversion in-memory: both proxy cases fail at the guard with zero replay calls; all four baseline
+  e2e cases pass; namespace cases still pass under reversion (fallback branch stays covered); the commit
+  touches only tests and documentation.
+
