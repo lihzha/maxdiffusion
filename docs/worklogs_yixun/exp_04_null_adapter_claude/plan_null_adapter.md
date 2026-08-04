@@ -90,6 +90,8 @@ Replay verifier as v2, now consuming the schema's `expected_final_latent` (+hash
 
 R1 `sigma-embed-noise` (grid/embed/noise helpers + tests). R2 `invert-trajectory`. R3 `optimize-nulls`. R4 `replay-verifier-schema`. R5 `gates-module`. R6 `runner-capacity-core` (arm execution + metric tables). R7 `runner-decode-videos`. R8 `runner-cache-resume` (staging/markers/fidelity mode). R9 `manifests` (J0 builder). R10 `launchers-config`. R11 `a3-direct-opt`. R12 `adapter-module`. R13 `trainer-dispatch`. R14 `evaluator-restore` (typed + legacy contract). R15 `evaluator-modes-noise` (incl. parity mode). R12–R15 start only after the P1 gate outcome. Each round: Opus-Coder test-first → briefed Codex review → strengthening record → commit.
 
+**Amendment 2026-08-04 (scope-neutral, Planner):** R4 split into **R4a `replay-operator`** / **R4b `record-schema-io`** (+ the `_f32_bits` test-helper extraction, whose three-consumer trigger from the R2 ruling has fired) / **R4c `verify-replay`** — the Coder's write phase measured full R4 at ~435 exec LOC, ~1.7× the round ceiling. Total scope unchanged; each part keeps its own review cycle.
+
 ## 7. Validation ladder
 
 As v2, with: rung 3 additionally validates J0 manifests against a hand-checked sample; rung 4 = DEV/TEST target slice + worst-example fp16 gate before TRAIN-2000; P3a before J3's 30k run; anchor+parity checks before J4/J5 count.
