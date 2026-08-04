@@ -375,3 +375,12 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   before each release; walk-order equivalence pinned by a both-orders toy test); per-device-batch
   fallback lever to be REPORTED, not implemented.
 
+- **`ec87d8d` (round 7) review (xhigh): APPROVE — "Relaunch: GO".** All round-6 findings closed
+  (best-effort failure diagnostics; per-chip dedup sound; release/census mechanics correct — the
+  budget catches released-then-reused at 3). Reviewer CONCURS with rejecting per-objective-outer
+  (~9–10 GiB/chip of control grads, violates the 3-tree cap; batch-outer stays). Relaunch plan
+  ratified: **one bounded v6e-8 attempt (8e) at XLA_PYTHON_CLIENT_MEM_FRACTION=0.95** (+0.9 GiB) to
+  harvest unattributed-bytes attribution — improved odds only from the untried pre-replay frees +
+  mem fraction; **stop-rule: if the control→A OOM repeats, do NOT spend another v6e-8 attempt** —
+  take the ledger to Yixun for v6e-64 approval. Suite 1,523 / 2.
+
