@@ -59,6 +59,24 @@ class FlaxVideoUNetOutput(BaseOutput):
   sample: jnp.ndarray
 
 
+def _probe_add(probe, name: str, x) -> None:
+  """Record a forward intermediate for NaN localisation; no-op when probe is None."""
+  if probe is None or not hasattr(x, "shape"):
+      return
+  # Reduce here, not later: keeping the tensor itself alive until a final
+  # reduction extends every stage's live range and exhausts HBM (the up-blocks
+  # are 500M+ elements). Elementwise ops stay in x's dtype so no full-size f32
+  # temporary is materialised; only the two scalars are widened.
+  finite = jnp.isfinite(x)
+  probe.append((
+      name,
+      jnp.stack([
+          jnp.sum(~finite).astype(jnp.float32),
+          jnp.max(jnp.where(finite, jnp.abs(x), jnp.zeros((), x.dtype))).astype(jnp.float32),
+      ]),
+  ))
+
+
 @flax_register_to_config
 class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
   """VideoUNet for Stable Video Diffusion.
@@ -384,6 +402,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
       cross_attention_kwargs: Optional[Union[Dict, FrozenDict]] = None,
       frame_level_cond: bool = False,
       action_hidden_states: Optional[jnp.ndarray] = None,
+      probe: Optional[list] = None,
   ) -> Union[FlaxVideoUNetOutput, Tuple]:
     # 1. time
     if not isinstance(timesteps, jnp.ndarray):
@@ -420,6 +439,8 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
             "FlaxVideoUNet: action_hidden_states must match t_emb's shape "
             f"{t_emb.shape} (B*T, time_embed_dim), got {action_hidden_states.shape}"
         )
+      _probe_add(probe, "unet.00a_t_emb_pre_action", t_emb)
+      _probe_add(probe, "unet.00b_action_temb_flat", action_hidden_states)
       t_emb = t_emb + action_hidden_states.astype(t_emb.dtype)
 
     # 2b. frame-level cross-attn context (Ctrl-World / action-conditioned SVD).
@@ -435,14 +456,18 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
             b_lead * num_frames, -1, encoder_hidden_states.shape[-1]
         )
 
+    _up = _probe_add
+    _up(probe, "unet.00_t_emb", t_emb)
+    _up(probe, "unet.01_encoder_hidden_states", encoder_hidden_states)
 
     # 3. conv_in (NCHW -> NHWC)
     sample = jnp.transpose(sample, (0, 2, 3, 1))
     sample = self.conv_in(sample)
+    _up(probe, "unet.02_conv_in", sample)
 
     # 4. down
     down_block_res_samples = (sample,)
-    for block in self.down_blocks:
+    for _i_blk, block in enumerate(self.down_blocks):
       if isinstance(block, FlaxCrossAttnDownVideoBlock):
         sample, res_samples = block(
             sample, t_emb, encoder_hidden_states,
@@ -455,6 +480,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
             sample, t_emb, num_frames=num_frames, deterministic=not train,
             image_only_indicator=image_only_indicator,
         )
+      _up(probe, f"unet.03_down_{_i_blk}", sample)
       down_block_res_samples += res_samples
 
     # 5. mid
@@ -465,9 +491,10 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
         cross_attention_kwargs=cross_attention_kwargs,
     )
 
+    _up(probe, "unet.04_mid", sample)
 
     # 6. up
-    for block in self.up_blocks:
+    for _i_blk, block in enumerate(self.up_blocks):
       res_samples = down_block_res_samples[-(self.layers_per_block + 1):]
       down_block_res_samples = down_block_res_samples[:-(self.layers_per_block + 1)]
       if isinstance(block, FlaxCrossAttnUpVideoBlock):
@@ -484,11 +511,14 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
             image_only_indicator=image_only_indicator,
         )
 
+      _up(probe, f"unet.05_up_{_i_blk}", sample)
 
     # 7. post
     sample = self.conv_norm_out(sample)
+    _up(probe, "unet.06_conv_norm_out", sample)
     sample = nn.silu(sample)
     sample = self.conv_out(sample)
+    _up(probe, "unet.07_conv_out", sample)
     sample = jnp.transpose(sample, (0, 3, 1, 2))  # NHWC -> NCHW
 
     if not return_dict:
