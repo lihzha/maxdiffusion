@@ -25,6 +25,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from bit_test_helpers import f32_bits as _f32_bits
 from maxdiffusion.models.wan.null_inversion_wan import replay_with_nulls
 
 
@@ -34,10 +35,6 @@ _SIGMAS = (1.0, 0.6, 0.3, 0.0)  # N = 3 steps
 _NUM_TRAIN_TIMESTEPS = 1000
 _C_Z, _C_T = 0.05, 1e-4  # the oracle's coupling to the evaluation point and to the timestep
 _EDGE_VALUES = (0.0, -0.0, np.float32(np.inf), np.float32(np.nan), np.float32(1e-45), -1.0)
-
-
-def _f32_bits(x):
-    return np.asarray(jax.lax.bitcast_convert_type(jnp.asarray(x).astype(jnp.float32), jnp.uint32))
 
 
 def _pin(z, z_i0):

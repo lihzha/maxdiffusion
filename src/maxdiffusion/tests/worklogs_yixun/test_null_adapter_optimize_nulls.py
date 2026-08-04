@@ -31,6 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from bit_test_helpers import f32_bits as _f32_bits
 from maxdiffusion.models.wan.null_inversion_wan import optimize_null_embeddings
 
 
@@ -44,10 +45,6 @@ _ADAM = (0.9, 0.999, 1e-8)  # torch.optim.Adam defaults, which optax must reprod
 # not to swamp the context term (which is what is being optimized) and large enough that feeding the
 # model a wrong z or a wrong timestep moves the trajectory far outside every tolerance here.
 _C_Z, _C_T = 0.05, 1e-4
-
-
-def _f32_bits(x):
-    return np.asarray(jax.lax.bitcast_convert_type(jnp.asarray(x).astype(jnp.float32), jnp.uint32))
 
 
 def _pin(z, z_i0):

@@ -27,6 +27,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from bit_test_helpers import bf16_bits as _bf16_bits, f32_bits as _f32_bits
 from maxdiffusion.models.wan.null_inversion_wan import base_context_fingerprint, embed_null_tokens
 
 
@@ -41,19 +42,6 @@ _GOLDEN_FINGERPRINT = "e2c0a71510b5394df7773b63fb5f54372b84c3564e67811bde7d665be
 # to themselves (NaN), plus a subnormal that a lossy round-trip would flush. Planted in both the
 # replaced and the untouched row ranges.
 _EDGE_VALUES = (0.0, -0.0, np.float32(np.inf), np.float32(-np.inf), np.float32(np.nan), np.float32(1e-45), -1.0, 1.0)
-
-
-def _bits(x, storage_dtype, bit_dtype):
-    """Raw bit patterns, so +0 != -0 and NaN == NaN -- what "bitwise equal" actually means."""
-    return np.asarray(jax.lax.bitcast_convert_type(jnp.asarray(x).astype(storage_dtype), bit_dtype))
-
-
-def _bf16_bits(x):
-    return _bits(x, jnp.bfloat16, jnp.uint16)
-
-
-def _f32_bits(x):
-    return _bits(x, jnp.float32, jnp.uint32)
 
 
 def _base_context(seq=_SEQ, dim=_DIM, seed=0, dtype=jnp.float32):

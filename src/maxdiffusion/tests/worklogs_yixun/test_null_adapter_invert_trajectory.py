@@ -32,6 +32,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from bit_test_helpers import f32_bits as _f32_bits
 from maxdiffusion.models.wan.null_inversion_wan import NUM_TRAIN_TIMESTEPS, invert_trajectory
 from maxdiffusion.models.wan.side_adapter_wan import build_rollout_sigmas
 
@@ -51,11 +52,6 @@ _ROLLOUT_SIGMAS = (25, 5.0, 0.0, 1.0)
 # Values a numeric comparison cannot separate (+0/-0) or that a lossy copy would destroy; planted in
 # the pin anchor, whose bits must survive every step. Same discipline as R1.
 _EDGE_VALUES = (0.0, -0.0, np.float32(np.inf), np.float32(np.nan), np.float32(1e-45), -1.0)
-
-
-def _f32_bits(x):
-    """Raw float32 bit patterns: +0 != -0 and NaN == NaN. (Deliberately restated per test file.)"""
-    return np.asarray(jax.lax.bitcast_convert_type(jnp.asarray(x).astype(jnp.float32), jnp.uint32))
 
 
 def _inputs(batch=_B, seed=0, dtype=jnp.float32):
