@@ -132,3 +132,114 @@ All 17 findings **accepted**; none rejected. Plan v2 (same file, committed with 
 17. **F17 accepted** — rounds re-split into R1–R11, each a single contract with named tests, incl. a dedicated A3 round (§6).
 
 Material revision ⇒ full re-review of plan v2 dispatched per SOP before user approval.
+
+---
+
+## Re-review pass 2 (plan v2 @ `58c14dd`)
+
+Reviewer: Codex `gpt-5.6-sol` xhigh, session 019fcacb-6788-7cb2-9bcf-e6e3d0c525cd, read-only, exp_04 worktree.
+
+### Reviewer output (verbatim)
+
+Context loaded:
+
+- `docs/worklogs_yixun/experiment_SOP.md` — full file.
+- `docs/worklogs_yixun/announcement/01_status_block_every_reply.md` and `02_tpu_run_requires_approval.md` — full files.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_yixun_query.md` — full file.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/plan_null_adapter.md` — full plan v2 at commit `58c14dd`.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_codex_plan_review.md` — full v1 review and Planner resolutions.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_worklog.md` — full file.
+- Wan2.2 submodule commit `f370228` from its local Git object store:
+  - `scripts/embedding_search.py` — CLI/validation, context construction, inversion/null-optimization recurrence, artifacts, replay, and metrics paths.
+  - `scripts/verify_reconstruction_from_null.py` — full file.
+  - `scripts/embedding_search_smoke.py` — full file.
+  - `docs/adaptor_design.md` — §§3.11–3.14.
+- `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py` — null-context, sharding, checkpoint, restore, and training paths.
+- `src/maxdiffusion/models/wan/side_adapter_wan.py` — action encoding, pre_context, pinning/timestep, dispatch, and sigma paths.
+- `src/maxdiffusion/generate_wan_side_adapter.py` — sample reading, rollout, RNG, restore, metrics, and aggregation paths.
+- `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml` — relevant model/data/mesh/optimizer/sampler keys.
+- `docs/worklogs_yixun/master_experiment_tracker.md` — full file.
+- Supporting verification context: T5 padding in `wan_pipeline.py`, TFRecord identity/schema in `wan_side_adapter_droid_cache_to_tfrecord.py`, and dataset counts/schema in `docs/side_adaptor.md`.
+- Repository state: clean worktree; plan v2/review resolution commit `58c14dd`.
+
+## F1–F17 verification
+
+| Finding | Status | Verification |
+|---|---|---|
+| F1 | PARTIALLY-RESOLVED | Honest oracle naming, recipe scoping, and the J/LR probe are present, but the requested gradient diagnostics and rule to rerun/select an adequate primary recipe are absent. |
+| F2 | RESOLVED | A1 is renamed, all three deviations are registered, the natural-length/16-token ablation is included, and equality is tested after bf16 casting. |
+| F3 | RESOLVED | Metrics are correctly reframed around decoded latent GT; future-only metrics are primary and the PyTorch raw-RGB numbers are excluded from calibration. |
+| F4 | RESOLVED | DEV and TEST are locked, episode-disjoint cohorts; selection is DEV-only and final G3 is TEST-only with pilot-scope language. |
+| F5 | PARTIALLY-RESOLVED | A2-0, its absolute/fraction gate, and full-cohort decoding are present, but A2 fresh-noise transfer uses only `k=2`, not the claimed multi-seed probe. |
+| F6 | PARTIALLY-RESOLVED | G1/G3 are substantially improved, but G2 has no CI condition, G3 does not fix its `k` set, and “worst rank” does not define numeric mean/CI handling for invalid pairs. |
+| F7 | RESOLVED | P2 records contain the trainer inputs and targets, while the shard header binds the named provenance/configuration fields. |
+| F8 | RESOLVED | Validated completion markers, checksum/schema/fingerprint resume, coverage checks, and fp16 fallback are all specified. |
+| F9 | PARTIALLY-RESOLVED | The model/trainer are much more concrete and P3a exists, but initialization seeds, several block details, and P3a’s maximum budget/reset contract remain unspecified. |
+| F10 | PARTIALLY-RESOLVED | Same-start evaluation and achieved-quality framing are intended, but the A2 noise convention conflicts with name-keyed noise and the cross-evaluator check deliberately uses different noise without a pass criterion. |
+| F11 | PARTIALLY-RESOLVED | A3 is conditional and measurement-first, but “hard budget stop” has no numerical compile/time/HBM limits. |
+| F12 | RESOLVED | The single batched call, per-example Adam state/losses, FSDP contract, donation restrictions, and cross-talk tests are specified. |
+| F13 | RESOLVED | The invalid exact-roundtrip/monotonicity tests were replaced and the requested recurrence, layout, pinning, validation, batching, and A3-gradient cases are listed. |
+| F14 | PARTIALLY-RESOLVED | The verifier contract is present, but P2’s declared record schema omits the `expected_final_latent` that the verifier requires. |
+| F15 | PARTIALLY-RESOLVED | A separate typed evaluator, null-checkpoint metadata, and restore/rejection tests are planned, but legacy pre_context compatibility and same-input behavioral characterization remain unresolved. |
+| F16 | RESOLVED | Gaussianity is primary on unpinned elements and secondary on the full tensor. |
+| F17 | PARTIALLY-RESOLVED | Rounds are better split, but R5, R7, R10, and R11 still combine contracts unlikely to fit the stated `<200 LOC` cycle, and several lack dedicated runner/dispatch tests. |
+
+## New findings
+
+1. **N1 — MAJOR — §4 P1 basin rule:** A1 targets can be selected even when G1 fails. `A1-probe ≥ 0.7×A1` can pass when both have poor absolute quality.  
+   **Recommended change:** Require `G1 pass AND A1 transfer pass`, with an absolute A1-probe floor, before selecting A1; otherwise try G2, then stop.
+
+2. **N2 — MAJOR — §4 cohort manifests, P2, §9:** No immutable TRAIN-2000 manifest or deterministic within-episode selection rule is defined. Moreover, scanning 1,440,554 serialized training records reads over 330 GB before framing/meta overhead, yet no J0 cost or approval is listed.  
+   **Recommended change:** Build or reuse a compact authoritative name/episode index; emit TRAIN-2000 explicitly; bind every manifest to source shard path, generation, size/checksum, split, name, and ordinal. If a remote scan remains necessary, make it an approved, costed J0.
+
+3. **N3 — MAJOR — §§4 P1/P3:** A2 is alternately defined as one globally shared `ε₀` and as noise keyed by `sha256(name)`. Those are different experiments.  
+   **Recommended change:** Define separate functions for global fixed noise and per-example fresh noise, fix every `k` set, store the convention in artifacts/checkpoints, and test order/batch-size invariance.
+
+4. **N4 — MAJOR — §§4/5 revised gates and tests:** There is no planned pure gate/aggregation implementation or test. G2 lacks uncertainty, G3’s seed aggregation is unspecified, and invalid examples do not have executable mean/bootstrap semantics.  
+   **Recommended change:** Add a host-only gate module and `test_null_adapter_gates.py`; predeclare bootstrap RNG seed, resampling unit, seed reduction, exact coverage, and automatic gate failure on any missing/nonfinite pair.
+
+5. **N5 — MAJOR — §§4 P1/P3:** The `L_null` ablation has no outcome rule, while the cache is variable-`L_null` and the adapter is hardcoded to 16 queries.  
+   **Recommended change:** Either declare the ablation diagnostic-only with `L=16` fixed, or predeclare selection and parameterize the cache, model, metadata, and restore path by the selected `L_null`.
+
+6. **N6 — MAJOR — §4 P3:** P3a has no maximum steps, seed, batch/optimizer override, or statement that full training restarts from a clean initialization. The block definition also omits FFN activation, LayerNorm epsilon, initializers, and whether query self-attention exists—the stated ≈13M count depends on that distinction.  
+   **Recommended change:** Pin exact module pseudocode/parameter count and all seeds; give P3a a fixed maximum budget and checkpoint rule; state whether J3 restarts or continues.
+
+7. **N7 — MAJOR — §4 P3 Eval/§5:** The existing pre_context checkpoint contains only Orbax `params/opt_state/step`, not the proposed metadata. Additionally, a four-sample “distributional” comparison under different noise cannot validate the new evaluator.  
+   **Recommended change:** Define a legacy restore contract using a pinned config plus parameter-tree fingerprint/sidecar. Compare old and new pre_context latent outputs under identical sample, RNG/`z_start`, sigmas, and params within a numerical tolerance. Store new null metadata atomically per checkpoint step.
+
+8. **N8 — MAJOR — §4 P2/§5 replay:** The authoritative P2 schema lacks `expected_final_latent`; the fp16 gate does not state whether thresholds are maxima across all eight examples, and no fidelity-gate test is listed.  
+   **Recommended change:** Add the expected latent and exact dtype/shape policy to the schema; gate on worst-example degradation over a predeclared DEV/train-only subset; add threshold/fallback tests.
+
+9. **N9 — MINOR — §4 P3 Eval:** Under A1 fresh-noise deployment, replaying cached A1 nulls from a different name-keyed noise is not an “upper” oracle and may be outperformed by the adapter.  
+   **Recommended change:** Label it “serialized-target replay,” or separately optimize nulls for each evaluation `z_start` before calling it an achieved oracle.
+
+## Status
+
+- Running subprocesses/jobs: none; the read-only re-review is complete.
+- Earliest steer: now; safe to revise the plan before user approval.
+
+REQUEST-REVISION — v2 closes many v1 defects, but unresolved target selection, noise semantics, gate execution, cache schema, trainer specification, and legacy-evaluator parity make it not yet ready for user approval.
+
+### Planner resolutions (plan v2 → v3)
+
+All pass-2 items **accepted**; plan v3 implements them:
+
+- **F1 partial → closed:** adequacy probe now logs per-inner-iter grad-norm traces; explicit adoption rule (≥2× median improvement ⇒ adopt recipe, re-run A1/A2 DEV-wide before gating; gates evaluated once, on the adopted recipe only).
+- **F5 partial → closed:** fixed k-sets — A1-probe keyed{0,1,2}, A2-probe keyed{0,1,2}, eval keyed/global{0,1,2}; seed reduction = per-example mean over the k-set, then paired aggregation.
+- **F6 partial → closed:** G2 gains a CI condition (mean ≥ 0.75, CI-low ≥ 0.70); G3 k-set fixed {0,1,2} with declared seed reduction; invalid-pair semantics made executable (not-improved for fractions, excluded from mean/CI, auto-FAIL at >10% invalid) inside the new gates module.
+- **F9 partial → closed (with N6):** init seeds, initializers, LayerNorm eps, GELU FFN, no query self-attention, ≈9M count derivation; P3a max 2,000 steps / batch 32 / lr 3e-4 declared; J3 restarts from clean init, P3a artifacts discarded.
+- **F10 partial → closed (with N3):** named conventions `keyed(k)` / `global(k)` via fold_in(2026, sha256(name)|"GLOBAL", k); stored in every artifact/checkpoint; evaluator rejects mismatch; cross-evaluator parity now at identical z_start via RNG replication with a numeric pass criterion (final-latent max-abs ≤ 1e-2, |ΔSSIM| ≤ 0.005).
+- **F11 partial → closed:** numerical stops — compile > 30 min, update > 120 s, OOM ⇒ abort measurement; J1b proposed only if projection ≤ 4 h v6e-8.
+- **F14/F15 partial → closed (with N7, N8):** `expected_final_latent` (+sha256) added to the authoritative schema; legacy pre_context restore contract (pinned config + eval_shape structure match + step assertion + param-tree fingerprint sidecar); metadata written atomically per checkpoint step.
+- **F17 partial → closed:** rounds re-split to R1–R15, each single-contract with named tests (gates module and noise helpers got their own rounds/tests).
+- **N1 accepted:** target selection requires G1 pass AND A1-probe relative (≥0.7×) AND absolute floor (mean future-SSIM ≥ 0.70); else G2; else stop.
+- **N2 accepted:** J0 manifest job added (full val scan; bounded train scan with 5k-distinct-episode early stop + hard shard cap); TRAIN-2000 manifest with ≤2/episode and deterministic within-episode rule (lowest ordinal); rows bind shard path + GCS generation id; header binds builder SHA + listing checksum.
+- **N3 accepted:** see F10 closure; order/batch-size invariance tested (`test_null_adapter_noise.py`).
+- **N4 accepted:** host-only `null_adapter_gates.py` + `test_null_adapter_gates.py`; bootstrap RNG seed 20260804, resampling unit = example, percentile CIs, coverage assertion, auto-fail semantics.
+- **N5 accepted:** L_null ablation declared diagnostic-only; L=16 fixed for P2/P3; metadata records L_null; adapter/evaluator assert cache L_null == 16.
+- **N6 accepted:** see F9 closure.
+- **N7 accepted:** see F14/F15 closure; plus anchor re-run of the unchanged old script (|ΔSSIM| ≤ 0.01/sample) before J4/J5 count; §10 records the fallback (instrumented noise fingerprint from a 1-sample dry run) if RNG replication proves brittle.
+- **N8 accepted:** fidelity gate thresholds are worst-example maxima over the first 8 DEV-manifest examples; threshold/fallback branches unit-tested.
+- **N9 accepted:** relabeled "serialized-target replay (reference point)" under keyed deployment; achieved per-example oracle only under global(0) with A2 targets.
+
+Material revision ⇒ re-review pass 3 dispatched.
