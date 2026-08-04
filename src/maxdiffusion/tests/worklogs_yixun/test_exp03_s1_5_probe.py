@@ -1501,6 +1501,8 @@ def test_the_probe_compiles_each_function_once_across_both_states():
     # wrapper with no cache at all (``jit_cache_size`` raises on it).
     s1_5._PROBE_GRAD_CACHE.clear()
     s1_5.PROBE_COMPILATIONS.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
+    s1_5._RELEASED_REPLAY_NAMES.clear()
     exp03._LOSS_AND_GRAD_CACHE.clear()
     exp03.COMPILE_TIMINGS.clear()
     # The helpers are module-level and their XLA caches outlive any single run, so the rest of this
@@ -1514,9 +1516,11 @@ def test_the_probe_compiles_each_function_once_across_both_states():
 
     census = s1_5.specialization_census()
     for tag, size in census["probe"].items():
-        # ONE specialization each, serving BOTH states -- which is only correct because the per-state
-        # knob is traced. Two would mean the states are specializing separately again.
-        assert size == 1, (tag, size)
+        # ONE per state. It used to be one FULL STOP -- the traced ramp origin makes a single
+        # compilation correct for both states -- and releasing executables gives that up on purpose:
+        # a program dropped in the first state to free its executable must compile again in the
+        # second. Three would mean a program was released while still in use.
+        assert size == 2, (tag, size)
     # The probe side: 7 single tags plus one per (objective, salt) variance draw.
     assert len(census["probe"]) == 7 + 4 * len(s1_5.S1_5_SUPPORT_SALTS), sorted(census["probe"])
     # The replay caches per objective PER STATE VIEW (its closure captures the view), so four
@@ -1528,29 +1532,30 @@ def test_the_probe_compiles_each_function_once_across_both_states():
     for name, size in census["helpers"].items():
         assert size >= 1, (name, size)  # a helper at zero is a helper that never ran
 
-    # THE executed total for this run: 23 probe + 8 replay + 5 helpers, at the toy's float32
-    # parameters. Production runs bfloat16 (``weights_dtype: 'bfloat16'``) and the dtype mix splits
-    # THREE helpers rather than one -- ``grad_stats`` (bfloat16 gradients and the float32 Welford
-    # mean), ``welford_first`` (a bfloat16 gradient starts a within-batch mean, a float32 mean
-    # starts the between-batch one) and ``welford_update`` (float32 carry over a bfloat16 tree, and
-    # over a float32 tree) -- so the production total is 23 + 8 + 8 = 39. That split is executed in
-    # ``test_the_production_dtype_mix_splits_three_helpers``; the artifact carries whichever number
-    # the run actually measured.
-    assert census["total"] == 36, census
+    # THE executed total for this run: 23 probe tags x 2 states + 8 replay + 5 helpers, at the toy's
+    # float32 parameters. Production runs bfloat16 (``weights_dtype: 'bfloat16'``) and the dtype mix
+    # splits THREE helpers rather than one -- ``grad_stats`` (bfloat16 gradients and the float32
+    # Welford mean), ``welford_first`` (a bfloat16 gradient starts a within-batch mean, a float32
+    # mean starts the between-batch one) and ``welford_update`` (float32 carry over a bfloat16 tree,
+    # and over a float32 tree) -- so the production total is 46 + 8 + 8 = 62. That split is executed
+    # in ``test_the_production_dtype_mix_splits_three_helpers``; the artifact carries whichever
+    # number the run actually measured.
+    assert census["total"] == 46 + 8 + 5 == 59, census
     assert census["total"] == census["probe_total"] + census["replay_total"] + census["helper_total"]
     # ...and it reaches the artifact, from the run itself. Each state's census is the snapshot at the
-    # moment that state's JSON is written: the checkpoint state sees the four replay entries built
-    # for its own view (23 + 4 + 5 = 32), the init state sees both states' (23 + 8 + 5 = 36).
-    for label, report in reports.items():
-        assert report["specializations"]["probe_total"] == 23, label
+    # moment that state's JSON is written: the checkpoint state has compiled and released its own 23
+    # plus 4 replay (+5 helpers = 32), the init state's report sees both states' (46 + 8 + 5 = 59).
+    assert reports["checkpoint"]["specializations"]["probe_total"] == 23
+    assert reports["init"]["specializations"]["probe_total"] == 46
     assert reports["checkpoint"]["specializations"]["total"] == 32
     assert reports["init"]["specializations"]["total"] == census["total"]
 
-    # The driver's runtime refusal, executed both ways: silent on the real census, loud on a
-    # collision. That is the assertion that fires on hardware, where no test is watching.
-    s1_5.assert_one_specialization_per_probe_tag(census)
+    # The driver's runtime refusal, executed both ways: silent on the real census, loud on a tag
+    # that compiled more often than the release discipline can explain. That is the assertion that
+    # fires on hardware, where no test is watching.
+    s1_5.assert_specializations_within_release_budget(census)
     with pytest.raises(RuntimeError) as excinfo:
-        s1_5.assert_one_specialization_per_probe_tag({**census, "probe": {**census["probe"], "parity_trial": 2}})
+        s1_5.assert_specializations_within_release_budget({**census, "probe": {**census["probe"], "parity_trial": 3}})
     assert "parity_trial" in str(excinfo.value)
 
     # The compile-cost log is per (tag, STATE): the init state's first call is its own entry, not
@@ -1565,7 +1570,10 @@ def test_the_probe_compiles_each_function_once_across_both_states():
     # COVERAGE: one timing entry per specialization per state, no compilation unmeasured. The four
     # salts of a variance objective are four compilations and now four tags; sharing one tag left
     # twelve of the sixteen variance compilations per state with no entry at all.
-    expected_tags = {f"probe_{tag}" for tag, _ in s1_5._PROBE_GRAD_CACHE}
+    # Taken from the CENSUS, not from the live cache: every probe program has been released by now,
+    # so the live cache is empty and only the census still knows they existed.
+    assert not s1_5._PROBE_GRAD_CACHE, "the release discipline should have emptied the probe cache"
+    expected_tags = {f"probe_{label.split('(')[0]}" for label in census["probe"]}
     assert len(expected_tags) == len(census["probe"]) == 23
     for label in ("checkpoint", "init"):
         timed = {tag for tag, state in keys if state == label}
@@ -2056,16 +2064,23 @@ def test_the_memory_ledger_lines_are_well_formed(monkeypatch):
     )
     monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [fake])
     stats = s1_5.log_memory("post_restore", state_label="checkpoint")
-    assert stats == {"bytes_in_use": 21 * gib, "peak_bytes_in_use": 23 * gib, "bytes_limit": 31 * gib}
+    # The runtime's own three numbers survive verbatim; the ledger adds what it can attribute to
+    # arrays and the difference it cannot.
+    for key, value in (("bytes_in_use", 21 * gib), ("peak_bytes_in_use", 23 * gib), ("bytes_limit", 31 * gib)):
+        assert stats[key] == value, key
+    assert "something_else" not in stats
+    assert stats["unattributed_bytes"] == stats["bytes_in_use"] - stats["array_bytes"]
     assert len(lines) == 1
     line = lines[0]
     assert line.startswith("[exp03][mem] where=post_restore state=checkpoint"), line
     assert "in_use=21.00G" in line and "peak=23.00G" in line and "limit=31.00G" in line, line
+    assert "arrays=" in line and "unattributed=" in line, line
 
-    # A backend that reports nothing (CPU returns None) still emits a line and never raises.
+    # A backend that reports nothing (CPU returns None) still emits a line and never raises -- and
+    # still reports the array half, which needs no device statistics at all.
     lines.clear()
     monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: None)])
-    assert s1_5.log_memory("pre_replay") == {}
+    assert s1_5.log_memory("pre_replay") == {"array_bytes": 0}  # no device -> nothing on that chip
     assert lines and "no device memory stats" in lines[0] and "where=pre_replay" in lines[0]
 
     # ...and so does a backend that raises when asked.
@@ -2076,7 +2091,7 @@ def test_the_memory_ledger_lines_are_well_formed(monkeypatch):
 
     monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=_boom)])
     assert s1_5.memory_snapshot() == {}
-    assert s1_5.log_memory("post_moment_drop") == {}
+    assert "bytes_in_use" not in s1_5.log_memory("post_moment_drop")
     assert lines and "no device memory stats" in lines[0]
 
 
@@ -2086,9 +2101,23 @@ def test_the_headroom_check_names_the_largest_live_arrays_and_never_raises(monke
     gib = 1024**3
     hog = jnp.zeros((256, 256), jnp.float32)  # the biggest thing this test makes
 
-    monkeypatch.setattr(
-        s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: {"bytes_in_use": 21 * gib})]
-    )
+    # Resolved BEFORE the patch: asking for it inside the fake would re-enter the patched
+    # ``local_devices`` and recurse.
+    device_name = s1_5.chip_device_key()
+
+    class _FakeDevice:
+        """Named as the device the arrays are really on — the residue listing is keyed by device."""
+
+        def __init__(self, in_use):
+            self._in_use = in_use
+
+        def __str__(self):
+            return device_name
+
+        def memory_stats(self):
+            return {"bytes_in_use": self._in_use}
+
+    monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [_FakeDevice(21 * gib)])
     assert s1_5.warn_if_no_headroom("pre_replay", state_label="checkpoint", budget_bytes=8 * gib) is True
     warnings = [line for line in lines if "WARNING" in line]
     assert warnings, lines
@@ -2099,9 +2128,7 @@ def test_the_headroom_check_names_the_largest_live_arrays_and_never_raises(monke
 
     # Under the budget: the ledger line still lands, the warning does not.
     lines.clear()
-    monkeypatch.setattr(
-        s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: {"bytes_in_use": 2 * gib})]
-    )
+    monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [_FakeDevice(2 * gib)])
     assert s1_5.warn_if_no_headroom("pre_replay", budget_bytes=8 * gib) is False
     assert lines and not any("WARNING" in line for line in lines), lines
 
@@ -2131,15 +2158,23 @@ def test_the_heavy_phase_logs_the_ledger_before_re_raising():
     source = inspect.getsource(s1_5._run_one_state)
     assert "except Exception as failure:" in source
     body = source[source.index("except Exception as failure:") :]
-    assert 'log_memory("failure"' in body
-    assert "log_largest_live_arrays(" in body
+    # Through the BEST-EFFORT wrapper, never the raw calls: this path runs with an exception in
+    # flight and anything that can raise here can replace the failure everyone needs to see.
+    assert "log_diagnostics_best_effort(" in body
+    assert "log_largest_live_arrays(" not in body and "log_memory(" not in body
     assert body.rstrip().count("raise") >= 1 and "raise\n" in body
     # The ledger points the 8e run must carry, each emitted from the path that reaches them.
     build = inspect.getsource(s1_5.build_probe_state)
     for where in ("post_encode_time_free", "post_state_creation", "post_restore", "post_moment_drop"):
         assert f'log_memory("{where}"' in build, where
     assert 'log_memory("post_dead_weight_free"' in source
-    assert 'warn_if_no_headroom("pre_replay"' in inspect.getsource(s1_5.state_report)
+    report_source = inspect.getsource(s1_5.state_report)
+    assert 'warn_if_no_headroom("pre_replay"' in report_source
+    # ...and the points that show what each program costs and whether releasing it gives anything
+    # back: one per objective as it loads, and one after every release.
+    assert 'log_memory(f"post_replay_{name}"' in report_source
+    for where in ('"post_replay_release"', 'f"post_variance_{objective}_release"', '"post_parity_release"'):
+        assert f"log_memory({where}" in report_source, where
     # ...and none of it reaches the immutable artifact, for the same reason the timings do not.
     assert "mem" not in s1_5.s1_5_artifact(
         SimpleNamespace(run_name="r", checkpoint_dir="", train_data_dir="", model_manifest_path="", seed=0),
@@ -2147,3 +2182,184 @@ def test_the_heavy_phase_logs_the_ledger_before_re_raising():
         checkpoint_step=10000,
         report={},
     )
+
+
+# =============================================================================================
+# 14. Executable residency: the memory `jax.live_arrays()` cannot see. A loaded 5B program and its
+# scratch are gigabytes and no array accounts for them, which is why the ledger reports
+# `unattributed = in_use - arrays` and why programs are dropped once their last call is behind us.
+# =============================================================================================
+
+
+def test_the_walk_order_does_not_change_a_single_number():
+    # The premise of ANY reordering of the replay walk: the per-(batch, objective) losses and
+    # gradients must not depend on the order the loops are nested in. They do not -- every RNG the
+    # objectives consume is a pure function of (seed, global_step, purpose), never of a stream that
+    # advances as the walk proceeds -- and this executes that claim rather than asserting it.
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    view = s1_5.state_view(config, "checkpoint")
+    rng = jax.random.key(1)
+    first_step = s1_5.S1_5_STATE_PLAN["checkpoint"]["first_global_step"]
+
+    def _one(index, objective):
+        """One (batch, objective) cell, computed in isolation from any walk."""
+        global_step = jnp.asarray(first_step + index, jnp.int32)
+        loss_fn = parent._denoising_loss if objective == "control" else exp03.EXP03_LOSSES[objective]
+        kwargs = {} if objective == "control" else {"global_step": global_step}
+        value, _ = loss_fn(
+            state.params, state, batches[index], jax.random.fold_in(rng, index), view, scheduler, **kwargs
+        )
+        return float(value)
+
+    # Order A: batch outer, objective inner (what the probe does today).
+    order_a = {}
+    for index in range(len(batches)):
+        for objective in s1_5.S1_5_OBJECTIVES:
+            order_a[(index, objective)] = _one(index, objective)
+    # Order B: objective outer, batch inner (what per-objective executable release would require).
+    order_b = {}
+    for objective in s1_5.S1_5_OBJECTIVES:
+        for index in range(len(batches)):
+            order_b[(index, objective)] = _one(index, objective)
+
+    assert order_a.keys() == order_b.keys()
+    for key in order_a:
+        # BIT for bit, not approximately: nothing in the loss path carries state across cells.
+        assert order_a[key] == order_b[key], key
+    # ...and the cells really are different from one another, or the equality above is vacuous.
+    assert len(set(order_a.values())) > 1, order_a
+
+
+def test_releasing_a_probe_program_drops_the_wrapper_and_keeps_the_count():
+    # What a release can promise is that the probe holds no reference: the cache entry goes and the
+    # jitted wrapper -- whose C++ cache owns the executable -- becomes collectable. Whether XLA then
+    # hands the memory back is NOT observable from here (jax exposes no live-executable ledger), and
+    # the ledger lines around each release are what answer that on hardware.
+    import gc
+    import weakref
+
+    s1_5._PROBE_GRAD_CACHE.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    report = s1_5.state_report(
+        state,
+        batches,
+        jax.random.key(1),
+        config,
+        scheduler,
+        state_label="checkpoint",
+        checkpoint_step=10000,
+        support_salts=(1, 2),
+    )
+    # Every probe program is released by the end of a state -- nothing is left loaded.
+    assert not s1_5._PROBE_GRAD_CACHE, sorted(s1_5._PROBE_GRAD_CACHE)
+    # ...and the census still knows they existed, which is the whole point of snapshotting first.
+    assert report["specializations"]["probe_total"] == 7 + 4 * 2
+    assert all(size == 1 for size in report["specializations"]["probe"].values())
+
+    # The wrapper really does become collectable once the cache entry is gone.
+    s1_5._PROBE_GRAD_CACHE.clear()
+    compiled = s1_5._jitted_grad("weakref_probe", lambda origin: (lambda *a: (jnp.asarray(0.0), {})))
+    reference = weakref.ref(compiled)
+    del compiled
+    s1_5._PROBE_GRAD_CACHE.pop(("weakref_probe", ()))
+    gc.collect()
+    assert reference() is None, "the jitted wrapper is still reachable after its cache entry was dropped"
+
+
+def test_the_release_points_are_where_the_programs_die():
+    # STRUCTURAL, because the ordering is the contract: a program may only be dropped after its last
+    # call, and the variance salts are re-entered on every batch, so their release belongs after the
+    # objective's decomposition rather than inside the batch loop.
+    source = inspect.getsource(s1_5.state_report)
+    assert source.index("release_replay_programs()") > source.index("exp03.exp03_frozen_replay(")
+    assert source.index("release_replay_programs()") < source.index("for objective in S1_5_OBJECTIVES:")
+    assert source.index("variance_decomposition(_draws") < source.index("release_probe_programs(*[variance_tag")
+    for tag in ('f"isolation_{label}"', '"parity_trial"', '"parity_comparator"', '"parity_production_control"'):
+        assert f"release_probe_programs({tag})" in source, tag
+    assert 'release_probe_programs(f"forced_{objective}")' in source
+    # The trial's gradient outlives its program: the release sits between the call and the report
+    # that consumes the gradient.
+    assert source.index('release_probe_programs("parity_trial")') < source.index("parity = parity_report(")
+
+
+def test_the_ledger_separates_arrays_from_the_executables_it_cannot_see(monkeypatch):
+    lines: list[str] = []
+    monkeypatch.setattr(s1_5.max_logging, "log", lambda line: lines.append(str(line)))
+    gib = 1024**3
+    keep = jnp.zeros((1024, 1024), jnp.float32)  # 4 MiB of honestly attributable array
+
+    arrays = s1_5.chip_array_bytes()
+    assert arrays >= 4 * 1024 * 1024, arrays
+
+    class _FakeDevice:
+        """Reports stats, and NAMES ITSELF as the device the arrays are really on.
+
+        The name matters: the ledger's array half is keyed by device, so a fake that called itself
+        something else would report the arrays as belonging to another chip and read zero.
+        """
+
+        def __init__(self, name):
+            self._name = name
+
+        def __str__(self):
+            return self._name
+
+        def memory_stats(self):
+            return {"bytes_in_use": arrays + 3 * gib, "bytes_limit": 31 * gib}
+
+    device_name = s1_5.chip_device_key()
+    monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [_FakeDevice(device_name)])
+    stats = s1_5.log_memory("post_replay_control", state_label="checkpoint")
+    # THE quantity the 8d post-mortem turned on: what is resident that no array explains.
+    assert stats["array_bytes"] == arrays
+    assert stats["unattributed_bytes"] == 3 * gib
+    assert "unattributed=3.00G" in lines[0], lines[0]
+    assert "arrays=" in lines[0] and "where=post_replay_control" in lines[0]
+    assert keep is not None
+
+
+def test_the_per_chip_accounting_does_not_multiply_by_the_mesh():
+    # The previous version summed every addressable shard (all eight chips) and counted the same
+    # buffer again through each shard wrapper. Both are fixed by keying on one device and
+    # deduplicating physical allocations, so this number is comparable with ``bytes_in_use``.
+    keep = jnp.zeros((1024, 1024), jnp.float32)
+    key = s1_5.chip_device_key()
+    allocations, owners = s1_5.chip_allocation_table()
+    assert allocations, "no allocations found on this chip"
+    assert all(pair[0] == key for pair in allocations), "an allocation from another device leaked in"
+    assert len(set(allocations)) == len(allocations)  # a dict cannot double-count by construction
+    assert s1_5.chip_array_bytes() == sum(allocations.values())
+    # Every allocation is credited to exactly one owner array, and the biggest one is ours.
+    assert set(owners) == set(allocations)
+    rows = s1_5.largest_live_arrays(limit=3)
+    assert rows[0]["shape"] == (1024, 1024) and rows[0]["local_bytes"] == 1024 * 1024 * 4
+    assert rows[0]["global_bytes"] == 1024 * 1024 * 4
+    assert keep is not None
+
+
+def test_the_failure_diagnostics_can_never_replace_the_failure(monkeypatch):
+    # THE blocker: this code runs with an exception in flight. If it raises, the traceback everyone
+    # needs -- the OOM -- is replaced by one about the instrumentation.
+    lines: list[str] = []
+    monkeypatch.setattr(s1_5.max_logging, "log", lambda line: lines.append(str(line)))
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError("array inspection blew up")
+
+    monkeypatch.setattr(s1_5, "largest_live_arrays", _explode)
+    s1_5.log_diagnostics_best_effort("failure (RuntimeProgramAllocationFailure)", state_label="checkpoint")
+    assert any("diagnostics failed" in line and "array inspection blew up" in line for line in lines), lines
+
+    # ...and the same protection on the healthy path, where a warning must not become a failure.
+    lines.clear()
+    gib = 1024**3
+    monkeypatch.setattr(
+        s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: {"bytes_in_use": 21 * gib})]
+    )
+    assert s1_5.warn_if_no_headroom("pre_replay", budget_bytes=1) is True
+    assert any("diagnostics failed" in line for line in lines), lines
+
+    # The real thing does not raise either, with no monkeypatching at all.
+    monkeypatch.undo()
+    s1_5.log_diagnostics_best_effort("failure (smoke)")

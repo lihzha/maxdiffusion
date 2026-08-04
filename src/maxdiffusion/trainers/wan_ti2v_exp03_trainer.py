@@ -723,6 +723,7 @@ def exp03_frozen_replay(
     with_gradients=True,
     include_control=False,
     gauge=None,
+    on_objective=None,
 ) -> dict:
     """NO-UPDATE replay of A, B and C on a frozen state — the discriminator, off the timing path.
 
@@ -731,6 +732,10 @@ def exp03_frozen_replay(
     runs on a snapshot instead, and reports for each term the loss, whether it is finite, its
     gradient norm, its max-abs gradient, its finite-leaf count, and (for A vs B) the gradient cosine
     -- everything needed to say WHICH term and WHICH pass produced a non-finite value.
+
+    ``on_objective(name)``, if given, is called after each objective's gradient and statistics. The
+    probe uses it to write one memory-ledger line per program load, which is the only way to see
+    what a single 5B executable costs before the next one is loaded on top of it.
     """
     out: dict[str, float] = {"global_step": float(global_step)}
     resident = ResidentTrees()
@@ -791,6 +796,10 @@ def exp03_frozen_replay(
         out[f"grad_max_abs_{name}"] = stats["max_abs"]
         out[f"grad_finite_leaves_{name}"] = stats["finite_leaves"]
         out[f"grad_total_leaves_{name}"] = stats["total_leaves"]
+        if on_objective is not None:
+            # Placed BEFORE the cosine branches, which `continue`: every objective reports, not
+            # only the ones that fall through to the bottom of the loop.
+            on_objective(name)
 
         # INCREMENTAL cosines, so no more than three gradients are ever resident: the control is
         # kept as the reference, A is kept only until B can be compared against it, and every other

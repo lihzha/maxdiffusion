@@ -682,6 +682,67 @@ def jit_cache_size(fn) -> int:
     return int(sizer())
 
 
+# Specializations counted BEFORE their cache entry was dropped. A released program's compilation
+# still happened, and a census that read the live caches alone would report it as never having
+# existed -- so it is snapshotted here at the moment of release and merged back in.
+_RELEASED_SPECIALIZATIONS: dict = {}
+_RELEASED_REPLAY_NAMES: dict = {}  # name -> how many of that objective's entries have been released
+
+
+def _record_released(label: str, size: int) -> None:
+    _RELEASED_SPECIALIZATIONS[label] = _RELEASED_SPECIALIZATIONS.get(label, 0) + int(size)
+
+
+def release_probe_programs(*tags: str) -> list:
+    """Drop cache entries — and their LOADED EXECUTABLES — once a tag will not be called again.
+
+    The residency the gauge cannot see is the compiled program itself: at 5B a loaded executable and
+    its scratch are gigabytes, and ``jax.live_arrays()`` attributes none of it. The probe compiles 23
+    of them per state and, before this, kept every one loaded to the end of the run.
+
+    What "release" can and cannot promise: this drops the only Python references the probe holds --
+    the cache entry, and with it the ``jax.jit`` wrapper whose C++ cache owns the executable -- and
+    collects. If XLA or the persistent compilation cache holds its own reference the memory will not
+    come back, and no amount of Python bookkeeping changes that. THE LEDGER IS THE ANSWER: the
+    ``post_*_release`` lines around each call show whether ``in_use`` actually fell.
+
+    Calling a released tag again is not an error but it is a REGRESSION: it recompiles, and the
+    census (which merges the released snapshot) then reports two specializations for one tag, which
+    the driver's assertion turns into a failure with the tag named.
+    """
+    released = []
+    for key in [key for key in _PROBE_GRAD_CACHE if key[0] in tags]:
+        _record_released(_probe_census_label(*key), jit_cache_size(_PROBE_GRAD_CACHE[key]))
+        del _PROBE_GRAD_CACHE[key]
+        released.append(key[0])
+    if released:
+        release()
+    return released
+
+
+def release_replay_programs() -> list:
+    """The same, for the replay's four per-state ``(value_and_grad, value)`` pairs.
+
+    Their cache is keyed per state view, so they are dead the moment this state's replay is over --
+    the next state builds its own. Dropping them also drops the closure that pins the view.
+    """
+    released = []
+    for key in list(exp03._LOSS_AND_GRAD_CACHE):
+        name = key[0]
+        grad_fn, value_fn = exp03._LOSS_AND_GRAD_CACHE[key]
+        _RELEASED_REPLAY_NAMES[name] = _RELEASED_REPLAY_NAMES.get(name, 0) + 1
+        _record_released(f"{name}#{_RELEASED_REPLAY_NAMES[name]}", jit_cache_size(grad_fn) + jit_cache_size(value_fn))
+        del exp03._LOSS_AND_GRAD_CACHE[key]
+        released.append(name)
+    if released:
+        release()
+    return released
+
+
+def _probe_census_label(tag: str, static_key) -> str:
+    return tag if not static_key else f"{tag}({','.join(str(part) for part in static_key)})"
+
+
 def specialization_census() -> dict:
     """Every jitted wrapper in the probe's world, with its specialization count and their TOTAL.
 
@@ -690,18 +751,25 @@ def specialization_census() -> dict:
     derived from tags and insertion order, never from ``id()``, so the census is identical across
     runs and the artifact stays byte-reproducible.
 
-    Two specializations for one probe tag is the cache-collision regression coming back; a helper
-    with zero is a helper that never ran.
+    A tag with more specializations than the number of states that ran it is the cache-collision
+    regression coming back; a helper with zero is a helper that never ran.
+
+    RELEASED entries are merged back in from their snapshot. A program that was compiled and then
+    dropped to free its executable still cost a compilation, and a census that read only the live
+    caches would report the opposite of the truth -- zero -- for exactly the programs this probe
+    works hardest to account for.
     """
-    probe = {}
+    probe = dict.fromkeys([], 0)
     for (tag, static_key), fn in _PROBE_GRAD_CACHE.items():
-        label = tag if not static_key else f"{tag}({','.join(str(part) for part in static_key)})"
-        probe[label] = jit_cache_size(fn)
+        probe[_probe_census_label(tag, static_key)] = jit_cache_size(fn)
     replay: dict = {}
-    seen: dict = {}
+    seen: dict = dict(_RELEASED_REPLAY_NAMES)
     for (name, _, _), (grad_fn, value_fn) in exp03._LOSS_AND_GRAD_CACHE.items():
         seen[name] = seen.get(name, 0) + 1
         replay[f"{name}#{seen[name]}"] = jit_cache_size(grad_fn) + jit_cache_size(value_fn)
+    for label, size in _RELEASED_SPECIALIZATIONS.items():
+        target = replay if "#" in label else probe
+        target[label] = target.get(label, 0) + int(size)
     helpers = {name: jit_cache_size(fn) for name, fn in probe_jit_helpers().items()}
     return {
         "probe": probe,
@@ -714,20 +782,30 @@ def specialization_census() -> dict:
     }
 
 
-def assert_one_specialization_per_probe_tag(census: dict) -> None:
-    """Every probe tag compiles ONCE, serving both states — the collision, asserted at runtime.
+def assert_specializations_within_release_budget(census: dict, *, states: int = len(S1_5_STATES)) -> None:
+    """No probe tag compiles more often than the number of states that ran it.
+
+    The bound used to be exactly one -- one compilation serving both states, which the traced ramp
+    origin makes correct. Releasing executables gives that up ON PURPOSE: a program dropped to free
+    its loaded executable in the first state must be compiled again in the second, so the honest
+    budget is one per state and anything above it is a real regression (a tag released while still
+    in use, recompiling mid-phase, or a state-specific value captured in a closure).
+
+    The collision pin does NOT live here any more and never really did: the ramp origin the cached
+    functions actually ran with is emitted as aux and asserted per batch, and that evidence survives
+    mutation. This is the cost check.
 
     Called from the driver rather than from ``state_report``: ``_PROBE_GRAD_CACHE`` is module-level,
     so in a process that runs the report more than once (a test file) a second set of shapes adds a
     legitimate specialization. A production job runs the driver once, which is where the number
     means what it says.
     """
-    offenders = {tag: size for tag, size in census["probe"].items() if size != 1}
+    offenders = {tag: size for tag, size in census["probe"].items() if size > int(states)}
     if offenders:
         raise RuntimeError(
-            f"probe gradient tags with more than one specialization: {offenders}. One compilation must serve BOTH "
-            f"states -- the per-state ramp origin is a traced argument precisely so that it can. More than one "
-            f"means a state-specific value was captured in a closure again."
+            f"probe gradient tags compiled more than once per state (states={int(states)}): {offenders}. Either a "
+            f"released program was called again -- the release discipline is wrong -- or a state-specific value was "
+            f"captured in a closure instead of being threaded as a traced argument."
         )
 
 
@@ -962,9 +1040,15 @@ def free_pipeline_transformer(pipeline) -> bool:
     ``nnx.split`` does not copy: immediately after it, the pipeline's module and the state's params
     are the same buffers, so this frees nothing yet. It matters at the RESTORE -- Orbax returns
     brand-new arrays and the pipeline is left holding the pre-restore tree, a second ~5B copy that
-    nothing will ever read. The training loop survives that by accident (its train step declares
-    ``donate_argnums`` and the buffers are donated away on step 0); a probe that applies no updates
-    donates nothing and must drop them itself.
+    nothing will ever read.
+
+    Why training never had to care, CORRECTED (the first version of this comment blamed the train
+    step's donation and was wrong: what it donates is the RESTORED tree, which is precisely the one
+    the pipeline does not hold). The two real reasons are that a from-scratch run never duplicates
+    anything -- with no restore the state still aliases the pipeline's own tree -- and that exp_02's
+    restore-based runs were on v6e-64, where the stale tree is spread over 64 chips instead of 8 and
+    costs an eighth as much per chip. A v6e-8 probe that restores has neither escape, so it drops
+    the tree by name.
     """
     if getattr(pipeline, "transformer", None) is None:
         return False
@@ -989,6 +1073,52 @@ def memory_snapshot() -> dict:
     return {key: int(stats[key]) for key in ("bytes_in_use", "peak_bytes_in_use", "bytes_limit") if key in stats}
 
 
+def chip_device_key() -> str:
+    """The device every per-chip number in this module is measured on: local device 0."""
+    devices = jax.local_devices()
+    return str(devices[0]) if devices else ""
+
+
+def chip_allocation_table(device_key: str | None = None) -> tuple[dict, dict]:
+    """ONE chip's physical allocations: ``({pair: bytes}, {pair: owner})``.
+
+    Restricted to a single device and deduplicated across live arrays -- both corrections matter and
+    the previous version made neither. Summing every addressable shard added all eight chips
+    together, and iterating ``jax.live_arrays()`` counts the same physical buffer once through the
+    global array and again through each shard wrapper. Against a per-device ``bytes_in_use`` that
+    produced a number roughly 16x too large and impossible to reconcile.
+    """
+    key = chip_device_key() if device_key is None else device_key
+    allocations: dict = {}
+    owners: dict = {}
+    for array in jax.live_arrays():
+        if getattr(array, "is_deleted", lambda: False)():
+            continue
+        shards, _ = buffer_shards(array)
+        mine = {pair: nbytes for pair, nbytes in shards.items() if pair[0] == key}
+        if not mine:
+            continue
+        owner = (len(shards), id(array), tuple(array.shape), str(array.dtype), int(array.nbytes))
+        for pair, nbytes in mine.items():
+            allocations[pair] = nbytes
+            if pair not in owners or owner[0] > owners[pair][0]:
+                owners[pair] = owner
+    return allocations, owners
+
+
+def chip_array_bytes(device_key: str | None = None) -> int:
+    """What THIS chip's live arrays actually occupy — the attributable half of ``bytes_in_use``.
+
+    Never raises: it is called from every ledger line, including ones on a dying process, and an
+    instrumentation error must not become the run's cause of death.
+    """
+    try:
+        allocations, _ = chip_allocation_table(device_key)
+        return int(sum(allocations.values()))
+    except Exception:  # pragma: no cover - defensive by construction
+        return 0
+
+
 def log_memory(where: str, *, state_label: str = "") -> dict:
     """ONE stdout line at a named point — the ledger a job that dies leaves behind.
 
@@ -997,42 +1127,46 @@ def log_memory(where: str, *, state_label: str = "") -> dict:
     lines survive that: they go to the log, never into the artifact, for the same reason compile
     timings do not -- the artifact is compare-or-refuse immutable and these numbers are machine
     state, not measurements of the objectives.
+
+    ``arrays`` is what ``jax.live_arrays()`` can account for on this chip; ``unattributed`` is
+    ``in_use - arrays``, which is the part no array explains -- loaded executables, their scratch,
+    and runtime overhead. That difference is the quantity the whole 8d post-mortem turned on and
+    nothing was measuring it.
     """
     stats = memory_snapshot()
+    arrays = chip_array_bytes()
+    stats["array_bytes"] = arrays
     prefix = f"{MEM_LEDGER_TAG} where={where}" + (f" state={state_label}" if state_label else "")
-    if not stats:
-        max_logging.log(f"{prefix} (no device memory stats on this backend)")
-        return stats
     gib = 1024**3
+    if "bytes_in_use" not in stats:
+        max_logging.log(f"{prefix} arrays={arrays / gib:.2f}G (no device memory stats on this backend)")
+        return stats
+    in_use = int(stats["bytes_in_use"])
+    stats["unattributed_bytes"] = in_use - arrays
     max_logging.log(
-        f"{prefix} in_use={stats.get('bytes_in_use', 0) / gib:.2f}G "
-        f"peak={stats.get('peak_bytes_in_use', 0) / gib:.2f}G "
-        f"limit={stats.get('bytes_limit', 0) / gib:.2f}G"
+        f"{prefix} in_use={in_use / gib:.2f}G arrays={arrays / gib:.2f}G "
+        f"unattributed={(in_use - arrays) / gib:.2f}G "
+        f"peak={stats.get('peak_bytes_in_use', 0) / gib:.2f}G limit={stats.get('bytes_limit', 0) / gib:.2f}G"
     )
     return stats
 
 
 def largest_live_arrays(limit: int = 10) -> list:
-    """The biggest live arrays by LOCAL bytes — what is actually holding this chip's memory.
+    """The biggest live arrays on ONE chip, by deduplicated per-chip bytes.
 
-    Local, not global: ``bytes_in_use`` is per device, so a sharded 5B tree must be compared at its
-    per-chip size or the two numbers cannot be reconciled. Reuses the residency gauge's physical
-    allocation view, so the two instruments cannot disagree about what a byte is.
+    Per chip because ``bytes_in_use`` is per device and the two numbers have to be comparable; owner
+    attributed so a buffer reached through both the global array and its shard wrapper is one row,
+    not two.
     """
-    rows = []
-    for array in jax.live_arrays():
-        if getattr(array, "is_deleted", lambda: False)():
-            continue
-        allocations, _ = buffer_shards(array)
-        rows.append(
-            {
-                "local_bytes": int(sum(allocations.values())),
-                "global_bytes": int(array.nbytes),
-                "shape": tuple(array.shape),
-                "dtype": str(array.dtype),
-            }
+    allocations, owners = chip_allocation_table()
+    by_owner: dict = {}
+    for pair, nbytes in allocations.items():
+        _, owner_id, shape, dtype, global_bytes = owners[pair]
+        row = by_owner.setdefault(
+            owner_id, {"local_bytes": 0, "global_bytes": int(global_bytes), "shape": shape, "dtype": dtype}
         )
-    rows.sort(key=lambda row: row["local_bytes"], reverse=True)
+        row["local_bytes"] += int(nbytes)
+    rows = sorted(by_owner.values(), key=lambda row: row["local_bytes"], reverse=True)
     return rows[:limit]
 
 
@@ -1049,6 +1183,23 @@ def log_largest_live_arrays(reason: str, *, limit: int = 10) -> list:
     return rows
 
 
+def log_diagnostics_best_effort(reason: str, *, state_label: str = "") -> None:
+    """The ledger and the residue, on a path where NOTHING may raise.
+
+    This runs while an exception is in flight. An array-inspection failure here would replace the
+    original error -- the OOM everybody needs to see -- with a traceback about the diagnostics, so
+    the whole block is swallowed and reduced to one line if it fails.
+    """
+    try:
+        log_memory(reason, state_label=state_label)
+        log_largest_live_arrays(reason)
+    except Exception as diagnostic_failure:  # pragma: no cover - defensive by construction
+        try:
+            max_logging.log(f"{MEM_LEDGER_TAG} diagnostics failed: {diagnostic_failure!r}")
+        except Exception:
+            pass  # nothing left to try; the original exception is what matters
+
+
 def warn_if_no_headroom(where: str, *, state_label: str = "", budget_bytes: int = HEADROOM_BUDGET_BYTES) -> bool:
     """SOFT check before the heavy phase: name the residue rather than die on an opaque E0101.
 
@@ -1058,15 +1209,20 @@ def warn_if_no_headroom(where: str, *, state_label: str = "", budget_bytes: int 
     largest live arrays printed next to it.
     """
     stats = log_memory(where, state_label=state_label)
-    in_use = int(stats.get("bytes_in_use", 0))
-    if not stats or in_use <= int(budget_bytes):
+    if "bytes_in_use" not in stats:  # a backend that reports nothing cannot be over budget
+        return False
+    in_use = int(stats["bytes_in_use"])
+    if in_use <= int(budget_bytes):
         return False
     gib = 1024**3
     max_logging.log(
         f"{MEM_LEDGER_TAG} WARNING {in_use / gib:.2f}G already in use at {where} "
         f"(budget {int(budget_bytes) / gib:.2f}G) -- a 5B replay and its program scratch need the rest"
     )
-    log_largest_live_arrays("WARNING residue")
+    try:  # best-effort, exactly as on the failure path: a warning must not become a failure
+        log_largest_live_arrays("WARNING residue")
+    except Exception as diagnostic_failure:  # pragma: no cover - defensive by construction
+        max_logging.log(f"{MEM_LEDGER_TAG} diagnostics failed: {diagnostic_failure!r}")
     return True
 
 
@@ -1179,10 +1335,21 @@ def state_report(
             global_step=global_step,
             include_control=True,
             gauge=gauge,
+            # The FIRST batch only: one ledger line per objective as its program loads, so 8e says
+            # what loading and running ONE heavy program costs -- the measurement the whole
+            # executable-residency question turns on, and the one Job 8d died in the middle of.
+            on_objective=(
+                (lambda name: log_memory(f"post_replay_{name}", state_label=state_label)) if index == 0 else None
+            ),
         )
         row["batch_index"] = float(index)
         row["global_step"] = float(first_step + index)
         rows.append(row)
+    # The replay's four programs are dead once its batches are: their cache is keyed per state view
+    # and the next state builds its own. This is the first point where an executable can be dropped
+    # without forcing a recompile inside the same state.
+    release_replay_programs()
+    log_memory("post_replay_release", state_label=state_label)
 
     # SUPPORT variance: only the salt moves, so the batch, epsilon, dropout key, logical step,
     # p_ss and A's coin are identical across the M draws.
@@ -1235,6 +1402,11 @@ def state_report(
 
         # Generators, so a gradient exists only while Welford is consuming it.
         variance[objective] = variance_decomposition(_draws(batch, index) for index, batch in enumerate(batches))
+        # This objective's M salt programs are finished -- the salts are re-entered on every batch,
+        # so this is the earliest point at which dropping them costs no recompile. Sixteen loaded
+        # executables per state become four.
+        release_probe_programs(*[variance_tag(objective, salt) for salt in support_salts])
+        log_memory(f"post_variance_{objective}_release", state_label=state_label)
 
     # THE cache-collision evidence, merged into the per-batch rows: A's ramp as the compiled
     # function that produced A's gradient reports it. The replay's own ``p_ss_a`` never had the
@@ -1281,6 +1453,8 @@ def state_report(
         isolation_values[label] = (float(loss), grad)
         gauge.sample("isolation_peak")  # both label gradients live once the second one lands
         del grad  # ...and the loop variable does NOT survive into the parity phase
+        # Single-use tag: its gradient is kept, its PROGRAM is not.
+        release_probe_programs(f"isolation_{label}")
     isolation = label_isolation(
         corrective_loss=isolation_values["corrective"][0],
         same_eps_loss=isolation_values["same_eps"][0],
@@ -1320,6 +1494,7 @@ def state_report(
         batch_rng,
         global_step,
     )
+    release_probe_programs("parity_trial")  # the gradient outlives the program that produced it
     comparator_loss, comparator_grad = call_grad(
         "parity_comparator",
         _jitted_grad("parity_comparator", _build_parity_comparator, static_key=("p_ss_max=0.0", "ramp=0")),
@@ -1327,6 +1502,7 @@ def state_report(
         batch_rng,
         global_step,
     )
+    release_probe_programs("parity_comparator")
     parity = parity_report(
         trial_loss=trial_loss, plain_loss=comparator_loss, trial_grad=trial_grad, plain_grad=comparator_grad
     )
@@ -1337,6 +1513,8 @@ def state_report(
         batch_rng,
         global_step,
     )
+    release_probe_programs("parity_production_control")
+    log_memory("post_parity_release", state_label=state_label)
     parity["production_control_difference"] = {
         "note": (
             "A at p_ss=0 vs the PRODUCTION control: not an identity -- A scores one scalar sigma per "
@@ -1378,8 +1556,10 @@ def state_report(
         }
         gauge.sample("forced_peak")  # this forced gradient plus the production control, both live
         del grad  # consumed in the same iteration that produced it
+        release_probe_programs(f"forced_{objective}")
     del production_grad  # the last reference: nothing survives into the report but scalars
     gauge.sample("after_release")
+    log_memory("post_state_report", state_label=state_label)
 
     branch_counts = {
         "self_generated": sum(1 for row in rows if float(row.get("take_self_generated_a", 0.0)) > 0.5),
@@ -1524,7 +1704,7 @@ def run_s1_5(config) -> dict:
     # BOTH states are behind us, so this is the production total: one compilation per probe tag,
     # serving both. The per-state artifacts carry the same census; this is the loud version.
     census = specialization_census()
-    assert_one_specialization_per_probe_tag(census)
+    assert_specializations_within_release_budget(census)
     log_compile_costs(census)
     return {label: payload for label, payload in payloads.items() if payload}
 
@@ -1582,9 +1762,10 @@ def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
     except Exception as failure:
         # The heavy phase is where the memory goes and where Job 8d died. Whatever killed it, the
         # ledger and the residue are printed BEFORE the traceback -- then the failure is re-raised
-        # untouched, because a probe that swallows an OOM is worse than one that dies loudly.
-        log_memory("failure", state_label=state_label)
-        log_largest_live_arrays(f"failure ({type(failure).__name__})")
+        # untouched, because a probe that swallows an OOM is worse than one that dies loudly. The
+        # diagnostics are STRICTLY best-effort: an array-inspection failure in here would otherwise
+        # replace the original OOM with a traceback about the instrumentation.
+        log_diagnostics_best_effort(f"failure ({type(failure).__name__})", state_label=state_label)
         raise
     assert_no_update(before, params_fingerprint(state.params))
     payload = {}
