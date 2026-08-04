@@ -17,10 +17,12 @@ What has to be true before its numbers mean anything:
 from __future__ import annotations
 
 import inspect
+import json
 import math
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1408,9 +1410,8 @@ def test_the_two_states_get_their_own_ramp_and_not_each_others():
         # ran with, and each must be this state's.
         emitted = reports[label]["cache_served_ramp"]
         assert emitted, label
-        assert {row["tag"] for row in emitted} >= {
-            "variance_control",
-            "variance_corrective_ss",
+        tags = {row["tag"] for row in emitted}
+        assert tags >= {
             "parity_trial",
             "parity_comparator",
             "parity_production_control",
@@ -1418,7 +1419,11 @@ def test_the_two_states_get_their_own_ramp_and_not_each_others():
             "isolation_same_eps",
             "forced_corrective_ss",
             "forced_combined",
-        }, sorted({row["tag"] for row in emitted})
+        }, sorted(tags)
+        # ...including every (objective, salt) variance compilation, each of which is its own tag.
+        for objective in s1_5.S1_5_OBJECTIVES:
+            for salt in (1, 2):
+                assert s1_5.variance_tag(objective, salt) in tags, (objective, salt, sorted(tags))
         for row in emitted:
             assert row["ramp_elapsed"] == pytest.approx(row["global_step"] - origin, abs=1e-6), (label, row)
 
@@ -1519,10 +1524,14 @@ def test_the_probe_compiles_each_function_once_across_both_states():
     for name, size in census["helpers"].items():
         assert size >= 1, (name, size)  # a helper at zero is a helper that never ran
 
-    # THE production total, asserted and not merely reported: 23 probe + 8 replay + 5 helpers.
-    # At the toy's float32 parameters each helper specializes once; a bfloat16 production state adds
-    # exactly one (``grad_stats`` sees bfloat16 gradients and the float32 Welford mean), which is
-    # why the artifact carries the census rather than this number being hard-coded anywhere but here.
+    # THE executed total for this run: 23 probe + 8 replay + 5 helpers, at the toy's float32
+    # parameters. Production runs bfloat16 (``weights_dtype: 'bfloat16'``) and the dtype mix splits
+    # THREE helpers rather than one -- ``grad_stats`` (bfloat16 gradients and the float32 Welford
+    # mean), ``welford_first`` (a bfloat16 gradient starts a within-batch mean, a float32 mean
+    # starts the between-batch one) and ``welford_update`` (float32 carry over a bfloat16 tree, and
+    # over a float32 tree) -- so the production total is 23 + 8 + 8 = 39. That split is executed in
+    # ``test_the_production_dtype_mix_splits_three_helpers``; the artifact carries whichever number
+    # the run actually measured.
     assert census["total"] == 36, census
     assert census["total"] == census["probe_total"] + census["replay_total"] + census["helper_total"]
     # ...and it reaches the artifact, from the run itself. Each state's census is the snapshot at the
@@ -1548,6 +1557,18 @@ def test_the_probe_compiles_each_function_once_across_both_states():
     assert ("replay_a", "checkpoint") in keys and ("replay_a", "init") in keys
     assert ("probe_parity_trial", "checkpoint") in keys and ("probe_parity_trial", "init") in keys
     assert all(seconds >= 0.0 for seconds in exp03.COMPILE_TIMINGS.values())
+
+    # COVERAGE: one timing entry per specialization per state, no compilation unmeasured. The four
+    # salts of a variance objective are four compilations and now four tags; sharing one tag left
+    # twelve of the sixteen variance compilations per state with no entry at all.
+    expected_tags = {f"probe_{tag}" for tag, _ in s1_5._PROBE_GRAD_CACHE}
+    assert len(expected_tags) == len(census["probe"]) == 23
+    for label in ("checkpoint", "init"):
+        timed = {tag for tag, state in keys if state == label}
+        missing = expected_tags - timed
+        assert not missing, (label, sorted(missing))
+        # ...and nothing beyond them but the four replay objectives this state compiled.
+        assert len(timed) == len(expected_tags) + 4, (label, sorted(timed - expected_tags))
 
 
 def test_an_eager_wrapper_cannot_pass_as_a_compiled_one():
@@ -1746,10 +1767,16 @@ def test_the_moments_are_dropped_after_the_exact_step_restore_and_the_buffers_go
     # EXECUTED: the moments go, the parameters do not, and the buffers are actually released.
     import gc
 
+    def _pairs(arrays):
+        found = set()
+        for array in arrays:
+            found |= set(s1_5.buffer_shards(array)[0])
+        return found
+
     state, _, _, _ = _toy_state_with_adam_moments()
     moments = jax.tree_util.tree_leaves(state.opt_state)
-    moment_ids = {s1_5.buffer_identity(leaf)[0] for leaf in moments}
-    param_ids = {s1_5.buffer_identity(leaf)[0] for leaf in jax.tree_util.tree_leaves(state.params)}
+    moment_ids = _pairs(moments)
+    param_ids = _pairs(jax.tree_util.tree_leaves(state.params))
     assert moment_ids and not (moment_ids & param_ids)
     del moments
 
@@ -1757,7 +1784,7 @@ def test_the_moments_are_dropped_after_the_exact_step_restore_and_the_buffers_go
     gc.collect()
     assert jax.tree_util.tree_leaves(state.opt_state) == []
     assert state.opt_state == s1_5.EMPTY_OPT_STATE
-    live = {s1_5.buffer_identity(array)[0] for array in jax.live_arrays()}
+    live = _pairs(jax.live_arrays())
     assert not (moment_ids & live), "the moment buffers are still resident"
     assert param_ids <= live, "the parameters were released along with the moments"
     # It stays a TrainState, with everything the probe does read.
@@ -1791,3 +1818,123 @@ def test_nothing_downstream_reads_the_optimizer_state():
     # ...and the residency measurement is the same too: the identity gauge was never fooled by the
     # moments, so dropping them is a memory saving rather than a change of what is being measured.
     assert without["grad_tree_equivalents_peak"] == pytest.approx(with_moments["grad_tree_equivalents_peak"], abs=0.5)
+
+
+def test_the_production_dtype_mix_splits_three_helpers():
+    # WHY the production census is 39 and the toy's is 36, executed rather than asserted in a
+    # comment. Production parameters are bfloat16 while every accumulator is float32, and the mix
+    # reaches THREE helpers, not one. This models the production call pattern at toy size: the
+    # variance decomposition over bfloat16 gradients, then the statistics the replay takes on them.
+    for helper in s1_5.probe_jit_helpers().values():
+        helper.clear_cache()
+
+    def _tree(value, dtype=jnp.bfloat16):
+        return {"w": jnp.full((4,), value, dtype=dtype)}
+
+    # Two batches x two draws, exactly as the probe streams them.
+    s1_5.variance_decomposition((_tree(1.0 + index + draw) for draw in range(2)) for index in range(2))
+    exp03.grad_stats(_tree(1.0))  # the replay's per-gradient statistics, on a bfloat16 gradient
+    exp03.grad_cosine(_tree(1.0), _tree(2.0))
+    s1_5._relative_gradient_gap(_tree(1.0), _tree(2.0))
+
+    sizes = {name: s1_5.jit_cache_size(fn) for name, fn in s1_5.probe_jit_helpers().items()}
+    # bfloat16 gradients AND the float32 means: two specializations each.
+    assert sizes["grad_stats"] == 2, sizes
+    assert sizes["welford_first"] == 2, sizes
+    assert sizes["welford_update"] == 2, sizes
+    # These only ever see gradients, so they stay at one.
+    assert sizes["tree_vdot"] == 1, sizes
+    assert sizes["relative_gap"] == 1, sizes
+    assert sum(sizes.values()) == 8, sizes
+    # 23 probe + 8 replay + 8 helpers. The float32 toy reads 36; the difference is exactly the
+    # three helpers above.
+    assert 23 + 8 + sum(sizes.values()) == 39
+
+
+# The 8-device inversion runs in a SUBPROCESS: the device count is fixed when the backend
+# initialises, so it cannot be changed inside a session that has already used jax.
+_EIGHT_DEVICE_SCRIPT = """
+import json, sys, types
+
+_grain = types.ModuleType("grain")
+_grain_python = types.ModuleType("grain.python")
+_grain_python.MapTransform = type("MapTransform", (), {})
+_grain_python.RandomAccessDataSource = type("RandomAccessDataSource", (), {})
+_grain.python = _grain_python
+sys.modules["grain"] = _grain
+sys.modules["grain.python"] = _grain_python
+
+import jax
+import jax.numpy as jnp
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+
+import maxdiffusion.probe_exp03_s1_5 as s1_5
+
+assert jax.device_count() == 8, jax.device_count()
+mesh = Mesh(jax.devices(), ("fsdp",))
+sharding = NamedSharding(mesh, PartitionSpec("fsdp"))
+params = {"w": jax.device_put(jnp.zeros((64,), jnp.float32), sharding)}
+
+gauge = s1_5.LiveBufferGauge(params)
+gauge.sample("baseline")
+grad = {"w": jax.device_put(jnp.ones((64,), jnp.float32), sharding)}
+reading = gauge.sample("one_sharded_gradient")
+
+# What summing over ARRAY OBJECTS reports -- the defect, measured in the same process.
+live = [a for a in jax.live_arrays() if not a.is_deleted()]
+baseline_pairs = gauge.baseline_ids
+naive_bytes = 0
+objects = 0
+for array in live:
+    pairs, _ = s1_5.buffer_shards(array)
+    if any(pair not in baseline_pairs for pair in pairs):
+        naive_bytes += int(array.nbytes)
+        objects += 1
+
+print("RESULT " + json.dumps({
+    "devices": jax.device_count(),
+    "shards": len(grad["w"].addressable_shards),
+    "one_tree_bytes": gauge.one_tree_bytes,
+    "tree_equivalents": reading["grad_tree_equivalents"],
+    "new_bytes": reading["new_bytes"],
+    "new_buffers": reading["new_buffers"],
+    "param_shaped": reading["new_param_shaped"],
+    "naive_object_sum_bytes": naive_bytes,
+    "naive_object_count": objects,
+    "fallbacks": gauge.identity_fallbacks,
+}))
+"""
+
+
+def test_one_sharded_gradient_over_eight_devices_reads_one_tree_not_two():
+    # THE blocker, inverted and EXECUTED. On an 8-device mesh a single sharded gradient is reachable
+    # as the global array and as its eight shard arrays, so anything summing ``array.nbytes`` over
+    # live arrays double-counts it -- 2.0 tree-equivalents for one gradient, which would have made
+    # the residency cap meaningless on every real (v6e-8) run. Deduplicated by physical
+    # (device, pointer) allocation, one gradient is one tree.
+    import os
+
+    env = dict(os.environ)
+    env["XLA_FLAGS"] = env.get("XLA_FLAGS", "") + " --xla_force_host_platform_device_count=8"
+    env["JAX_PLATFORMS"] = "cpu"
+    env["PYTHONPATH"] = str(_REPO / "src")
+    proc = subprocess.run(
+        [sys.executable, "-c", _EIGHT_DEVICE_SCRIPT], capture_output=True, text=True, timeout=600, env=env
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    line = next(line for line in proc.stdout.splitlines() if line.startswith("RESULT "))
+    result = json.loads(line[len("RESULT ") :])
+
+    assert result["devices"] == 8 and result["shards"] == 8, result
+    # The denominator is the parameter tree's own physical bytes, measured the same way: 64 float32
+    # elements spread over eight devices is still 256 bytes.
+    assert result["one_tree_bytes"] == 256, result
+    assert result["new_bytes"] == 256, result
+    assert result["new_buffers"] == 8, result  # eight physical allocations, one logical gradient
+    assert result["tree_equivalents"] == pytest.approx(1.0), result
+    assert result["param_shaped"] == 1, result  # credited to the global array, not to its shards
+    assert result["fallbacks"] == 0, result
+    # ...and the defect is real in this very process: summing over array objects reports double.
+    assert result["naive_object_count"] == 9, result  # the global array plus its eight shards
+    assert result["naive_object_sum_bytes"] == 512, result
+    assert result["naive_object_sum_bytes"] / result["one_tree_bytes"] == pytest.approx(2.0), result

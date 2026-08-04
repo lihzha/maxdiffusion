@@ -190,21 +190,28 @@ def _welford_update(mean, tree, count):
     return new_mean, increment
 
 
-def buffer_identity(array):
-    """A key identifying the DEVICE ALLOCATION behind a live array, per addressable shard.
+def buffer_shards(array) -> tuple[dict, bool]:
+    """The PHYSICAL allocations behind one live array: ``{(device, pointer): bytes}``.
 
-    Not ``(shape, dtype)`` and not ``id()``. Shape matching was the previous gauge's mechanism and
+    The unit is the allocation, not the array object, because one allocation is reachable through
+    several array objects. The review executed an 8-device mesh and found exactly that: a single
+    256-byte gradient appears in ``jax.live_arrays()`` as the global array AND as its eight 32-byte
+    shard arrays, so anything summing ``array.nbytes`` over live arrays reported 512 bytes -- two
+    gradient trees for one gradient, on every sharded run, which is every real one.
+
+    Keyed by ``(device, pointer, bytes)``. The device because two devices' allocators are
+    independent address spaces and can hand out the same numeric address for different memory; the
+    size because a freed small buffer's address can become the start of a much larger allocation,
+    and treating that as "already at baseline" would lose a whole gradient tree. The same physical
+    buffer always reports the same triple, so deduplication is unaffected.
+
+    Not ``(shape, dtype)`` and not ``id()``. Shape matching was the gauge's original mechanism and
     it was wrong in both directions, as the review demonstrated by executing it: AdamW's moment
     trees are parameter-shaped, so a probe that merely restored an optimizer read two phantom
     gradient trees at baseline; and a float32 Welford accumulator over bfloat16 parameters matches
-    no parameter ``(shape, dtype)`` at all, so the one buffer class the memory contract most needs
-    to see was invisible. ``id()`` is worse still -- CPython recycles object addresses, and
+    no parameter ``(shape, dtype)`` at all, so the buffer class the memory contract most needs to
+    see was invisible. ``id()`` is worse still -- CPython recycles object addresses, and
     ``jax.live_arrays()`` hands back fresh wrapper objects.
-
-    So: the per-shard device pointer. ``unsafe_buffer_pointer()`` is defined on a single-device
-    array, which is what each entry of ``addressable_shards`` is, so this works for a replicated or
-    FSDP-sharded 5B array on TPU exactly as it does for a toy array on CPU. The shape and dtype ride
-    along so a recycled address serving a differently-shaped buffer still reads as new.
 
     Failure modes, handled rather than assumed away:
 
@@ -212,47 +219,60 @@ def buffer_identity(array):
       reads as "already at baseline". That is the RIGHT answer for this gauge: it measures resident
       bytes, and memory reused in place is not additional memory. Donation (``_welford_update``)
       is the common case and is deliberately not counted as growth.
-    * **No pointer available.** Non-addressable shards (multi-process) or a backend that refuses
-      the call raise; the key falls back to object identity and the fallback is COUNTED into the
-      report, so a run that silently degraded is visible rather than quietly mis-measured.
+    * **No pointer available.** A backend that refuses the call falls back to object identity for
+      that shard, and the fallback is COUNTED into the report, so a run that silently degraded is
+      visible rather than quietly mis-measured.
+    * **No addressable shards at all.** In multi-process runs an array can have no local shard. It
+      then holds no local memory, but rather than assume that, the array is counted once at its own
+      size under a fallback key -- conservative, and flagged.
     * **Deleted buffers.** A donated-away array is still an object; it holds no memory and is
-      skipped.
+      skipped by the caller.
 
     Cost, since it is paid per sample point: one pointer read per addressable shard. At 5B that is
     on the order of 10^4 reads per sample against a probe whose compilations take minutes, so the
     exact per-shard key is bought rather than approximated by the first shard's address.
     """
     try:
-        shards = array.addressable_shards
+        shards = list(array.addressable_shards)
     except Exception:  # pragma: no cover - backend-dependent
-        shards = ()
-    pointers = []
-    for shard in shards:
+        shards = []
+    allocations: dict = {}
+    fell_back = False
+    for index, shard in enumerate(shards):
+        data = shard.data
+        nbytes = int(data.nbytes)
         try:
-            pointers.append(int(shard.data.unsafe_buffer_pointer()))
+            allocations[(str(shard.device), int(data.unsafe_buffer_pointer()), nbytes)] = nbytes
         except Exception:  # pragma: no cover - backend-dependent
-            pointers = []
-            break
-    shape_dtype = (tuple(array.shape), str(array.dtype))
-    if pointers:
-        return ("ptr", tuple(pointers), shape_dtype), False
-    return ("obj", id(array), shape_dtype), True
+            fell_back = True
+            allocations[(str(shard.device), ("obj", id(array), index), nbytes)] = nbytes
+    if not allocations:  # pragma: no cover - multi-process only
+        fell_back = True
+        allocations[("?", ("obj", id(array)), int(array.nbytes))] = int(array.nbytes)
+    return allocations, fell_back
 
 
 class LiveBufferGauge:
-    """New-since-baseline device memory, by BUFFER IDENTITY, from ``jax.live_arrays()``.
+    """New-since-baseline device memory, by PHYSICAL ALLOCATION, from ``jax.live_arrays()``.
 
-    The baseline is snapshotted at construction: the identity of every array alive before the probe
-    computes anything -- parameters, the batches, the context table, and anything an optimizer or a
-    caller happened to be holding. Every later sample counts only what is NOT in that set, so the
-    gauge measures what the probe ITSELF made resident and cannot be poisoned by what it inherited.
+    The baseline is snapshotted at construction: every allocation alive before the probe computes
+    anything -- parameters, the batches, the context table, and anything an optimizer or a caller
+    happened to be holding. Every later sample counts only allocations NOT in that set, so the gauge
+    measures what the probe ITSELF made resident and cannot be poisoned by what it inherited.
+
+    Identity and BYTES are the same set: a ``(device, pointer)`` pair contributes its shard's bytes
+    exactly once, however many array objects reference it. That is what makes the reading survive
+    sharding -- an FSDP-sharded gradient reads 1.0 tree-equivalents on 8 devices exactly as it does
+    on 1, instead of 2.0 for the global array plus its shards.
 
     The primary number is ``new_bytes / one_grad_tree_bytes`` -- GRADIENT-TREE EQUIVALENTS -- which
-    is the probe's actual contract (at most three trees) and is scale-free: it reads 3.0 for three
-    5B gradients and 3.0 for three toy ones. It is also dtype-honest, which the count-based version
-    was not: a float32 accumulator over bfloat16 parameters is two tree-equivalents, because that is
-    what it costs. Parameter-SHAPED new buffers are still counted, bucketed by dtype, as secondary
-    evidence of what the bytes are made of.
+    is the probe's actual contract (at most three trees) and is scale-free. The denominator is the
+    parameter tree measured THE SAME WAY (its own physical allocations), so replication does not
+    change the ratio either. It is also dtype-honest, which the count-based version was not: a
+    float32 accumulator over bfloat16 parameters is two tree-equivalents, because that is what it
+    costs. Parameter-SHAPED new arrays are still counted, bucketed by dtype, as secondary evidence
+    of what the bytes are made of; each allocation is credited to the LARGEST array that covers it,
+    so a shard view of a bigger array is not counted a second time there either.
 
     Only identity KEYS are retained, never the arrays: a gauge that held references would keep the
     buffers it is measuring alive, which is the failure it exists to detect.
@@ -265,42 +285,53 @@ class LiveBufferGauge:
         leaves = jax.tree_util.tree_leaves(params)
         self.param_shapes = {tuple(leaf.shape) for leaf in leaves}
         self.num_param_leaves = max(1, len(leaves))
-        # ONE gradient tree in bytes = the parameter tree's bytes. A gradient has the parameters'
-        # shapes; if it carries a wider dtype the ratio says so, which is the point.
-        self.one_tree_bytes = max(1, sum(int(leaf.nbytes) for leaf in leaves))
         self.identity_fallbacks = 0
-        self.baseline_ids = self._identities(jax.live_arrays())
+        # ONE gradient tree in bytes = the parameter tree's own PHYSICAL bytes, deduplicated the
+        # same way the numerator is. A gradient has the parameters' shapes and sharding; if it
+        # carries a wider dtype the ratio says so, which is the point.
+        param_allocations, _ = self._allocations(leaves)
+        self.one_tree_bytes = max(1, sum(param_allocations.values()))
+        self.baseline_ids = set(self._allocations(jax.live_arrays())[0])
         self.baseline_buffers = len(self.baseline_ids)
         self.peak_new_bytes = 0
         self.peak_tree_equivalents = 0.0
         self.peak_new_param_shaped = 0
         self.samples: list[dict] = []
 
-    def _identities(self, arrays) -> set:
-        identities = set()
+    def _allocations(self, arrays) -> tuple[dict, dict]:
+        """``({(device, pointer): bytes}, {(device, pointer): owner})`` over live arrays.
+
+        The owner is the array covering the most allocations -- the global array rather than one of
+        its shards -- so the secondary per-dtype count credits each buffer to one array.
+        """
+        allocations: dict = {}
+        owners: dict = {}
         for array in arrays:
             if getattr(array, "is_deleted", lambda: False)():
                 continue
-            key, fell_back = buffer_identity(array)
+            shards, fell_back = buffer_shards(array)
             self.identity_fallbacks += int(fell_back)
-            identities.add(key)
-        return identities
+            owner = (len(shards), id(array), tuple(array.shape), str(array.dtype))
+            for pair, nbytes in shards.items():
+                allocations[pair] = nbytes
+                if pair not in owners or owner[0] > owners[pair][0]:
+                    owners[pair] = owner
+        return allocations, owners
 
     def sample(self, where: str) -> dict:
-        live = [array for array in jax.live_arrays() if not getattr(array, "is_deleted", lambda: False)()]
-        new = []
-        for array in live:
-            key, fell_back = buffer_identity(array)
-            self.identity_fallbacks += int(fell_back)
-            if key not in self.baseline_ids:
-                new.append(array)
-        new_bytes = sum(int(array.nbytes) for array in new)
+        allocations, owners = self._allocations(jax.live_arrays())
+        new = {pair: nbytes for pair, nbytes in allocations.items() if pair not in self.baseline_ids}
+        new_bytes = sum(new.values())
         equivalents = new_bytes / self.one_tree_bytes
+        by_owner: dict = {}
+        for pair in new:
+            _, owner_id, shape, dtype = owners[pair]
+            if shape in self.param_shapes:
+                by_owner[owner_id] = dtype
         by_dtype: dict[str, int] = {}
-        for array in new:
-            if tuple(array.shape) in self.param_shapes:
-                by_dtype[str(array.dtype)] = by_dtype.get(str(array.dtype), 0) + 1
-        param_shaped = sum(by_dtype.values())
+        for dtype in by_owner.values():
+            by_dtype[dtype] = by_dtype.get(dtype, 0) + 1
+        param_shaped = len(by_owner)
         self.peak_new_bytes = max(self.peak_new_bytes, new_bytes)
         self.peak_tree_equivalents = max(self.peak_tree_equivalents, equivalents)
         self.peak_new_param_shaped = max(self.peak_new_param_shaped, param_shaped)
@@ -571,6 +602,16 @@ def state_view(config, state_label: str, **overrides):
 
 _PROBE_GRAD_CACHE: dict = {}
 PROBE_COMPILATIONS: list = []  # every distinct compiled function, for the executable count test
+
+
+def variance_tag(objective: str, salt) -> str:
+    """The tag of ONE support-variance compilation — objective AND salt.
+
+    One tag per compilation, because the tag is what the compile-cost ledger is keyed by: the four
+    salts are four separate specializations, and a per-objective tag timed the first of them and
+    silently attributed nothing to the rest.
+    """
+    return f"variance_{objective}_salt{int(salt)}"
 
 
 def _jitted_grad(tag: str, builder, *, static_key=()):
@@ -1008,8 +1049,12 @@ def state_report(
                 # here, before this iteration allocates anything. With the `del` below this shows
                 # only Welford's mean; without it, the stale gradient shows up beside the mean.
                 gauge.sample("variance_draw_entry")
-                compiled = _jitted_grad(f"variance_{objective}", _build, static_key=(objective, int(salt)))
-                _, gradient = call_grad(f"variance_{objective}", compiled, batch, batch_rng, global_step)
+                # The SALT is part of the tag, not only of the static key. Each salt is its own
+                # compilation, and a tag shared across the M salts timed one of them and left the
+                # other M-1 -- twelve of sixteen compilations per state -- with no entry at all.
+                tag = variance_tag(objective, salt)
+                compiled = _jitted_grad(tag, _build, static_key=(objective, int(salt)))
+                _, gradient = call_grad(tag, compiled, batch, batch_rng, global_step)
                 # SAMPLE INSIDE the peak window, and at the discriminating moment: this gradient is
                 # live alongside Welford's mean AND anything the previous iteration failed to drop.
                 # A stale loop variable shows up here as one extra tree.
@@ -1026,8 +1071,11 @@ def state_report(
     # THE cache-collision evidence, merged into the per-batch rows: A's ramp as the compiled
     # function that produced A's gradient reports it. The replay's own ``p_ss_a`` never had the
     # collision (its cache is keyed per state view), which is why asserting on that proved nothing.
+    # The first salt, arbitrarily but deterministically: p_ss does not depend on the support salt,
+    # and every salt's function emitted the same ramp -- ``cache_served_ramp`` carries all of them.
+    a_tag = variance_tag("corrective_ss", list(support_salts)[0])
     for index, row in enumerate(rows):
-        emitted = witness.at("variance_corrective_ss", first_step + index)
+        emitted = witness.at(a_tag, first_step + index)
         row["p_ss_cache_served"] = emitted["p_ss_used"]
         row["ramp_elapsed_cache_served"] = emitted["ramp_elapsed"]
     per_objective = {}
