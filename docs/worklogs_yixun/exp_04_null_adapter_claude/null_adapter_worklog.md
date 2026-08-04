@@ -66,3 +66,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Change** — plan v5 (targeted edits: §3 gates imputation contract, §4 J0 TRAIN-2000 fill rule, header/changelog). Resolutions appended to the review file.
 - **Version Control** — committed with this entry; delta-only pass-5 re-review dispatched.
 - **Next** — Pass-5 verdict (expected APPROVE-PLAN) → surface to Yixun with the full trail.
+
+## 2026-08-04T07:45:00Z — Re-review pass 5: APPROVE-PLAN — plan cycle closed; surfaced to Yixun
+
+- **Goal** — Verify P1/P2 closures and the v5 delta.
+- **Result** — `passed`: **APPROVE-PLAN** ("P1 and P2 are fully closed, and the narrowly scoped v5 delta introduces no blocking defect"). Five-pass trail complete; all findings across all passes accepted and implemented, none rejected.
+- **Analysis** — The plan cycle (SOP artifact 2+3) is closed: plan → review → resolutions → re-reviews → APPROVE. Total reviewer spend: 5 xhigh passes (~200k tokens each) — recorded for budget sizing.
+- **Next** — Surface the approval package to Yixun: plan v5, review trail, §11 decision points (cohorts; L_null=16; J0+J1 approval; ε₀ fallback convention; pilot scope). Implementation (R1–R15) begins only on Yixun's approval; every TPU job additionally needs its own pre-launch approval per announcement 02.
