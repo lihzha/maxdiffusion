@@ -331,3 +331,54 @@ All pass-3 items **accepted**; plan v4 implements them:
 - **F17 residue:** R6/R7/R13 now have named dedicated tests (`test_null_adapter_runner_capacity.py`, `test_null_adapter_runner_decode.py`, `test_null_adapter_dispatch.py`).
 
 Material revision ⇒ re-review pass 4 dispatched.
+
+---
+
+## Re-review pass 4 (plan v4 @ `7f4859e`)
+
+Reviewer: Codex `gpt-5.6-sol` xhigh, read-only, exp_04 worktree.
+
+### Reviewer output (verbatim)
+
+Context loaded:
+
+- Full `docs/worklogs_yixun/experiment_SOP.md`.
+- Full announcements `01_status_block_every_reply.md` and `02_tpu_run_requires_approval.md`.
+- Full exp_04 query, plan v4 at `7f4859e`, complete review trail, and worklog.
+- The `7bead68`→`7f4859e` plan/review/worklog diff.
+- Targeted legacy-restore references: current and `7260778` versions of the side-adapter YAML/trainer; current adapter model/generator; pre-context methodology/worklog; training/validation launchers; master-tracker baseline entry.
+
+M-item verification:
+
+- **M1 — RESOLVED:** UTF-8 hashing, byte order, two uint32 folds, domain separation, latent shape/dtype, and golden key/noise tests are pinned.
+- **M2 — RESOLVED:** Global deployment is consistently restricted to `k={0}`; keyed deployment remains `{0,1,2}` with per-example seed reduction.
+- **M3 — RESOLVED:** The score, qualifying threshold, deterministic selection/ties, DEV rerun, and +2-hour stop rule are decidable.
+- **M4 — RESOLVED:** The 200-shard/60-GiB fail-before-open caps and first-64/next-64 DEV/TEST slicing are explicit.
+- **M5 — RESOLVED:** `latent_dtype`, its exact tensor scope, fp32 fallback, byte-length validation, and tests are specified.
+- **M6 — RESOLVED:** URI, step, effective base-plus-overrides configuration, structure guard, fingerprint, and parity gates are pinned; the referenced historical run used the matching 8-token/8-head fresh-noise configuration.
+- **M7 — PARTIALLY-RESOLVED:** Invalid observations are no longer excluded, but the imputation rule does not define a conservative paired effect for G3.
+- **M8 — RESOLVED:** The incorrect seven count is removed from the header and the append-only worklog explicitly records the correct nine items.
+- **F17 residue — RESOLVED:** Dedicated R6, R7, and R13 test files and contract mappings are now named.
+
+New v4-delta findings:
+
+1. **P1 — MAJOR — §3 gates / §4 G3:** `SSIM ← 0.0` is ambiguous and potentially anti-conservative for paired differences. If the missing value belongs to the baseline, imputing baseline SSIM as zero can increase the adapter’s measured advantage; imputing both methods as zero makes an unknown failure neutral rather than worst-case. Either fail the affected gate on every invalid pair, or define aggregate-level imputation directly: G1/G2 optimized SSIM `=0`, ratio `=1`, improved `=false`; G3 paired ΔSSIM set to its validated worst bound and improved `=false`. Add missing-adapter and missing-baseline tests separately.
+
+2. **P2 — MINOR — §4 J0:** Requiring exactly 2,000 windows from exactly the first 1,000 eligible episodes assumes every episode has at least two windows. Traverse additional hash-ordered episodes until exactly 2,000 windows are collected, or explicitly fail and surface an underfilled cohort; test one-window episodes.
+
+**Final verdict: REQUEST-REVISION — M7’s unresolved paired-imputation contract can allow G3 to pass despite invalid comparison pairs, directly compromising the experiment’s final conclusion.**
+
+**Status**
+
+- Running subprocesses/jobs: none.
+- Earliest steer: now; revision is safe before implementation or any launch.
+
+
+### Planner resolutions (plan v4 → v5)
+
+Both pass-4 items **accepted**; plan v5 implements them:
+
+- **P1 (closes M7):** invalid-pair imputation is now defined at the aggregate level, per gate, always penalizing the claim under test — G1/G2: invalid pair ⇒ improved=false, ratio ← 1.0; invalid *method* observation ⇒ that example's method SSIM ← 0.0 in the absolute condition (invalid control alone does not alter the method's measured SSIM); G3: invalid pair on either side ⇒ improved=false and paired ΔSSIM ← −1.0 (worst bound with SSIM clipped to [0,1] before differencing), so a missing baseline can never award the adapter an advantage. Separate missing-adapter and missing-baseline unit tests added; >10%-invalid auto-fail retained.
+- **P2:** TRAIN-2000 now traverses hash-ordered episodes taking min(2, available) lowest-ordinal windows until exactly 2,000; fail-closed with surfaced underfill if the pool (within J0 caps) exhausts first; one-window-episode behavior unit-tested.
+
+Delta-only re-review pass 5 dispatched.

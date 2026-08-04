@@ -57,3 +57,12 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Change** — `plan_null_adapter.md` → v4 (targeted edits; changelog in header). Resolutions appended to the review file.
 - **Version Control** — committed with this entry; pass-4 re-review dispatched.
 - **Next** — Pass-4 verdict → surface to Yixun with the full four-pass review trail.
+
+## 2026-08-04T07:05:00Z — Re-review pass 4: near-converged (M1–M6, M8 RESOLVED; P1/P2) → plan v5
+
+- **Goal** — Verify M-item closures; screen the v4 delta.
+- **Result** — `passed` (review obtained): M1–M6 + M8 + F17-residue RESOLVED; M7 PARTIALLY-RESOLVED sharpened into **P1 (MAJOR)**: `SSIM←0.0` imputation is ambiguous/anti-conservative for *paired* differences (a missing baseline could inflate the adapter's advantage) — fix = aggregate-level, claim-penalizing imputation per gate with ΔSSIM←−1.0 for invalid G3 pairs; **P2 (MINOR)**: TRAIN-2000 assumed ≥2 windows/episode.
+- **Analysis** — Both accepted; P1 is a genuine conservativeness hole in the gate contract. Not infra.
+- **Change** — plan v5 (targeted edits: §3 gates imputation contract, §4 J0 TRAIN-2000 fill rule, header/changelog). Resolutions appended to the review file.
+- **Version Control** — committed with this entry; delta-only pass-5 re-review dispatched.
+- **Next** — Pass-5 verdict (expected APPROVE-PLAN) → surface to Yixun with the full trail.
