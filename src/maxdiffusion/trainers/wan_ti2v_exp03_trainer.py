@@ -656,22 +656,28 @@ _LOSS_AND_GRAD_CACHE: dict = {}
 COMPILE_TIMINGS: dict = {}
 
 
-def _timed_first_call(tag: str, compiled):
+def _timed_first_call(tag: str, compiled, *, state_label: str = "run"):
     """Log the FIRST call's wall time for a jitted tag — its compile cost, on the real machine.
 
     Compilation dominates a no-update probe's runtime, and the only machine where that number means
     anything is the one the job runs on. One line per tag at first call costs nothing and makes the
     run its own compile-cost measurement, with no separate probe.
+
+    Keyed by ``(tag, state_label)``, not by tag alone. S1.5 runs the same tags at two states in one
+    process; under a tag-only key the second state's first call was never timed at all and its cost
+    was silently reported as the first state's. Outside the probe the label defaults to ``"run"``,
+    which is the training loop's single state.
     """
+    key = (tag, str(state_label))
 
     def _wrapper(*args, **kwargs):
-        if tag in COMPILE_TIMINGS:
+        if key in COMPILE_TIMINGS:
             return compiled(*args, **kwargs)
         started = time.perf_counter()
         result = compiled(*args, **kwargs)
         jax.block_until_ready(result)
-        COMPILE_TIMINGS[tag] = time.perf_counter() - started
-        max_logging.log(f"[exp03] first call (compile+run) {tag}: {COMPILE_TIMINGS[tag]:.1f}s")
+        COMPILE_TIMINGS[key] = time.perf_counter() - started
+        max_logging.log(f"[exp03] first call (compile+run) {tag} [{state_label}]: {COMPILE_TIMINGS[key]:.1f}s")
         return result
 
     _wrapper.jitted = compiled  # so a test can read the real ._cache_size()
@@ -692,8 +698,15 @@ def _loss_and_grad_fn(name: str, loss_fn, config, scheduler):
             kwargs = {} if objective == "control" else {"global_step": global_step}
             return fn(params, state, data, rng, config, scheduler, **kwargs)
 
+        # An ``id()`` in a cache key is only safe while the object cannot be collected and its
+        # address reused. It cannot: ``_call`` closes over ``config`` and ``scheduler``, so the
+        # cache entry itself pins both for as long as the entry exists.
         _LOSS_AND_GRAD_CACHE[key] = (
-            _timed_first_call(f"replay_{name}", jax.jit(jax.value_and_grad(_call, has_aux=True))),
+            _timed_first_call(
+                f"replay_{name}",
+                jax.jit(jax.value_and_grad(_call, has_aux=True)),
+                state_label=str(getattr(config, "exp03_state_label", "run")),
+            ),
             jax.jit(_call),
         )
     return _LOSS_AND_GRAD_CACHE[key]

@@ -1390,80 +1390,182 @@ def test_the_two_states_get_their_own_ramp_and_not_each_others():
     assert reports["checkpoint"]["first_global_step"] == 10000
     assert reports["init"]["first_global_step"] == 0
     for label in ("checkpoint", "init"):
+        origin = reports[label]["ramp_origin"]
         for row in reports[label]["per_batch"]:
-            elapsed = row["global_step"] - reports[label]["ramp_origin"]
+            elapsed = row["global_step"] - origin
             expected = min(p_max, p_max * max(0.0, elapsed) / ramp) if ramp > 0 else p_max
-            # THE cache-served observable: computed from the traced origin the jitted probe
-            # functions receive. The replay's own p_ss_a never had the collision, so asserting on it
-            # proved nothing -- this is the field that moves when a state runs with the other
-            # state's origin.
-            assert row["p_ss_from_threaded_origin"] == pytest.approx(expected, abs=1e-6), (
-                label,
-                row["global_step"],
-            )
+            # THE pin, and it is EMITTED rather than recomputed: these two fields come out of the
+            # cache-served gradient function's own aux, computed inside it from the origin it was
+            # traced with. The previous version of this assertion read a parallel jitted
+            # recomputation standing beside the cache, which is why the review's mutation -- force
+            # the origin only inside cache-served calls -- left it green.
+            assert row["p_ss_cache_served"] == pytest.approx(expected, abs=1e-6), (label, row["global_step"])
+            assert row["ramp_elapsed_cache_served"] == pytest.approx(elapsed, abs=1e-6), (label, row["global_step"])
+            # The replay's own p_ss, kept as a SECONDARY cross-check: its cache is keyed per state
+            # view, so it never had the collision and can never be the pin.
             assert row["p_ss_a"] == pytest.approx(expected, abs=1e-6), (label, row["global_step"])
+        # ...and EVERY cache-served function, not just A's: each one emitted the elapsed ramp it
+        # ran with, and each must be this state's.
+        emitted = reports[label]["cache_served_ramp"]
+        assert emitted, label
+        assert {row["tag"] for row in emitted} >= {
+            "variance_control",
+            "variance_corrective_ss",
+            "parity_trial",
+            "parity_comparator",
+            "parity_production_control",
+            "isolation_corrective",
+            "isolation_same_eps",
+            "forced_corrective_ss",
+            "forced_combined",
+        }, sorted({row["tag"] for row in emitted})
+        for row in emitted:
+            assert row["ramp_elapsed"] == pytest.approx(row["global_step"] - origin, abs=1e-6), (label, row)
 
     # ...and the two states genuinely disagree somewhere in the batch range, or the pin is vacuous.
-    checkpoint_values = [row["p_ss_from_threaded_origin"] for row in reports["checkpoint"]["per_batch"]]
-    init_values = [row["p_ss_from_threaded_origin"] for row in reports["init"]["per_batch"]]
+    checkpoint_values = [row["p_ss_cache_served"] for row in reports["checkpoint"]["per_batch"]]
+    init_values = [row["p_ss_cache_served"] for row in reports["init"]["per_batch"]]
     crossed = [min(p_max, p_max * max(0.0, row["global_step"] - 10000) / ramp) for row in reports["init"]["per_batch"]]
     assert init_values != crossed, "init would look identical under the checkpoint's origin"
     assert checkpoint_values == pytest.approx(init_values), "both states ramp from their own origin"
+
+
+def _force_origin_inside_cache_served_calls(monkeypatch, forced: int = 10000):
+    """THE review's surgical mutation: the cached gradients run with a foreign origin, nothing else.
+
+    It touches neither the report fields nor the replay -- only the value the ``_PROBE_GRAD_CACHE``
+    functions are called with. That is precisely the defect a collision would produce, and it is
+    what a pin reading anything other than those functions' own output cannot see.
+    """
+    original = s1_5._jitted_grad
+
+    def _mutated(tag, builder, *, static_key=()):
+        compiled = original(tag, builder, static_key=static_key)
+
+        def _forced(params, state, data, rng, global_step, ramp_origin):
+            del ramp_origin
+            return compiled(params, state, data, rng, global_step, jnp.asarray(forced, jnp.int32))
+
+        return _forced
+
+    monkeypatch.setattr(s1_5, "_jitted_grad", _mutated)
+
+
+def test_the_collision_pin_fails_under_the_surgical_origin_mutation(monkeypatch):
+    # The pin above, EXECUTED against the defect it exists for. A regression test that survives its
+    # own mutation is decoration; this one is run under the mutation here, in the suite, so the
+    # claim "it would catch a collision" is a result rather than an assurance.
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    ramp, p_max = int(config.exp03_p_ss_ramp_steps), float(config.exp03_p_ss_max)
+    _force_origin_inside_cache_served_calls(monkeypatch)
+    report = s1_5.state_report(
+        state,
+        batches,
+        jax.random.key(1),
+        config,
+        scheduler,
+        state_label="init",  # origin 0; the mutation forces 10000, so the init state is the victim
+        checkpoint_step=0,
+        support_salts=(1, 2),
+    )
+    violations = []
+    for row in report["per_batch"]:
+        expected = min(p_max, p_max * max(0.0, row["global_step"]) / ramp)
+        if row["p_ss_cache_served"] != pytest.approx(expected, abs=1e-6):
+            violations.append(("p_ss", row["global_step"], row["p_ss_cache_served"], expected))
+        if row["ramp_elapsed_cache_served"] != pytest.approx(row["global_step"], abs=1e-6):
+            violations.append(("elapsed", row["global_step"], row["ramp_elapsed_cache_served"]))
+    assert violations, (
+        "the mutation ran the cached gradients at origin 10000 and the emitted evidence did not "
+        "move -- the pin is reading something other than what the cache-served functions computed"
+    )
+    # Concretely: the emitted elapsed is the foreign origin's, at every step and every tag.
+    assert all(row["ramp_elapsed"] == pytest.approx(row["global_step"] - 10000) for row in report["cache_served_ramp"])
+    # ...while the replay's own p_ss is untouched, which is exactly why it could never be the pin.
+    assert report["per_batch"][1]["p_ss_a"] == pytest.approx(min(p_max, p_max / ramp), abs=1e-6)
 
 
 def test_the_probe_compiles_each_function_once_across_both_states():
     # REAL specializations, read from each jitted wrapper's own ``_cache_size()`` -- not a count of
     # wrapper constructions, which is bookkeeping and stays right even when the function underneath
     # is eager. A collision regression shows up as cache_size 2; an eager fallback shows up as a
-    # wrapper with no cache at all.
+    # wrapper with no cache at all (``jit_cache_size`` raises on it).
     s1_5._PROBE_GRAD_CACHE.clear()
     s1_5.PROBE_COMPILATIONS.clear()
     exp03._LOSS_AND_GRAD_CACHE.clear()
-    _run_both_states(support_salts=(1, 2))
+    exp03.COMPILE_TIMINGS.clear()
+    # The helpers are module-level and their XLA caches outlive any single run, so the rest of this
+    # file's toy shapes would otherwise be counted into "this run's" census. Cleared here, which is
+    # also the only way this total means what a fresh production process would report.
+    for helper in s1_5.probe_jit_helpers().values():
+        helper.clear_cache()
+    # The PRODUCTION support draws (M=4), so the census below is the production shape rather than a
+    # cheaper stand-in: K does not change the count, M does.
+    reports = _run_both_states(support_salts=s1_5.S1_5_SUPPORT_SALTS)
 
-    def _cache_size(fn):
-        target = getattr(fn, "jitted", fn)
-        sizer = getattr(target, "_cache_size", None)
-        assert callable(sizer), f"{fn} is not a jitted function -- an eager fallback would look like this"
-        return sizer()
-
-    probe_sizes = {key: _cache_size(fn) for key, fn in s1_5._PROBE_GRAD_CACHE.items()}
-    assert probe_sizes, "no probe gradient was compiled at all"
-    for key, size in probe_sizes.items():
+    census = s1_5.specialization_census()
+    for tag, size in census["probe"].items():
         # ONE specialization each, serving BOTH states -- which is only correct because the per-state
         # knob is traced. Two would mean the states are specializing separately again.
-        assert size == 1, (key, size)
+        assert size == 1, (tag, size)
+    # The probe side: 7 single tags plus one per (objective, salt) variance draw.
+    assert len(census["probe"]) == 7 + 4 * len(s1_5.S1_5_SUPPORT_SALTS), sorted(census["probe"])
+    # The replay caches per objective PER STATE VIEW (its closure captures the view), so four
+    # objectives across two states is eight entries, each compiled once. Its value-only twin is
+    # never called in the probe, so it contributes zero.
+    assert len(census["replay"]) == 8, sorted(census["replay"])
+    assert set(census["replay"].values()) == {1}, census["replay"]
+    assert set(census["helpers"]) == {"grad_stats", "tree_vdot", "welford_update", "welford_first", "relative_gap"}
+    for name, size in census["helpers"].items():
+        assert size >= 1, (name, size)  # a helper at zero is a helper that never ran
 
-    replay_sizes = {}
-    for key, (grad_fn, value_fn) in exp03._LOSS_AND_GRAD_CACHE.items():
-        replay_sizes[key] = (_cache_size(grad_fn), _cache_size(value_fn))
-        assert replay_sizes[key][0] == 1, (key, replay_sizes[key])
+    # THE production total, asserted and not merely reported: 23 probe + 8 replay + 5 helpers.
+    # At the toy's float32 parameters each helper specializes once; a bfloat16 production state adds
+    # exactly one (``grad_stats`` sees bfloat16 gradients and the float32 Welford mean), which is
+    # why the artifact carries the census rather than this number being hard-coded anywhere but here.
+    assert census["total"] == 36, census
+    assert census["total"] == census["probe_total"] + census["replay_total"] + census["helper_total"]
+    # ...and it reaches the artifact, from the run itself. Each state's census is the snapshot at the
+    # moment that state's JSON is written: the checkpoint state sees the four replay entries built
+    # for its own view (23 + 4 + 5 = 32), the init state sees both states' (23 + 8 + 5 = 36).
+    for label, report in reports.items():
+        assert report["specializations"]["probe_total"] == 23, label
+    assert reports["checkpoint"]["specializations"]["total"] == 32
+    assert reports["init"]["specializations"]["total"] == census["total"]
 
-    helpers = {
-        "grad_stats": exp03._jit_grad_stats,
-        "tree_vdot": exp03._jit_tree_vdot,
-        "welford_update": s1_5._welford_update,
-        "welford_first": s1_5._welford_first,
-        "relative_gap": s1_5._jit_relative_gap,
-        "observed_p_ss": s1_5._jit_observed_p_ss,
-    }
-    helper_sizes = {name: _cache_size(fn) for name, fn in helpers.items()}
-    for name, size in helper_sizes.items():
-        assert size >= 1, (name, size)
+    # The driver's runtime refusal, executed both ways: silent on the real census, loud on a
+    # collision. That is the assertion that fires on hardware, where no test is watching.
+    s1_5.assert_one_specialization_per_probe_tag(census)
+    with pytest.raises(RuntimeError) as excinfo:
+        s1_5.assert_one_specialization_per_probe_tag({**census, "probe": {**census["probe"], "parity_trial": 2}})
+    assert "parity_trial" in str(excinfo.value)
 
-    total = sum(probe_sizes.values()) + sum(size for size, _ in replay_sizes.values()) + sum(helper_sizes.values())
-    assert total > 0
-    # The probe side: 7 tags compiled once each, plus one per (objective, salt) variance draw.
-    assert len(probe_sizes) == 7 + 4 * 2, sorted(probe_sizes)
+    # The compile-cost log is per (tag, STATE): the init state's first call is its own entry, not
+    # the checkpoint state's. Probe tags are timed too, which they were not before.
+    keys = set(exp03.COMPILE_TIMINGS)
+    assert all(isinstance(key, tuple) and len(key) == 2 for key in keys), sorted(keys)[:3]
+    assert {label for _, label in keys} == {"checkpoint", "init"}
+    assert ("replay_a", "checkpoint") in keys and ("replay_a", "init") in keys
+    assert ("probe_parity_trial", "checkpoint") in keys and ("probe_parity_trial", "init") in keys
+    assert all(seconds >= 0.0 for seconds in exp03.COMPILE_TIMINGS.values())
+
+
+def test_an_eager_wrapper_cannot_pass_as_a_compiled_one():
+    # The census is only evidence if it refuses to count something that is not jitted at all.
+    assert s1_5.jit_cache_size(s1_5._welford_first) >= 0
+    with pytest.raises(TypeError):
+        s1_5.jit_cache_size(lambda x: x)
 
 
 def test_the_measured_grad_tree_peak_is_recorded_and_capped():
-    # MEASURED from jax.live_arrays(), counted in GRAD-SHAPED buffers rather than bytes -- so the
-    # "at most three resident gradient trees" contract is assertable at toy scale exactly as it is
-    # at 5B, where a byte threshold would be the only thing that worked.
+    # MEASURED from jax.live_arrays() by buffer IDENTITY, in GRADIENT-TREE EQUIVALENTS (new bytes
+    # over one parameter tree's bytes) -- so the "at most three resident gradient trees" contract is
+    # assertable at toy scale exactly as at 5B, and a float32 accumulator over bfloat16 parameters
+    # reads as the two tree-equivalents it actually costs instead of vanishing.
     reports = _run_both_states()
     for label, report in reports.items():
         assert report["param_leaves"] >= 1.0, label
+        assert report["one_grad_tree_bytes"] >= 1.0, label
         assert report["gauge_samples"] >= 8, (label, report["gauge_samples"])
         # The sample points must include the ones INSIDE peak windows; sampling after a release
         # measures the trough.
@@ -1471,27 +1573,37 @@ def test_the_measured_grad_tree_peak_is_recorded_and_capped():
         assert {"baseline", "parity_peak", "forced_peak", "after_release"} <= points, sorted(points)
         assert any(point.startswith("replay_") for point in points), sorted(points)
         assert any(point == "variance_draw" for point in points), sorted(points)
-        # THE contract: at most three gradient trees co-resident anywhere in the probe.
-        # EXACT, not a bound: at toy scale the probe's peak is the replay's three-gradient moment,
-        # and a bound of "<= 3" would sit still while a stale loop variable added a fourth tree
-        # somewhere else. The mutation that removes a `del` moves this number.
-        assert report["grad_trees_peak_measured"] == pytest.approx(3.0), (
+        # THE contract: at most three gradient trees co-resident anywhere in the probe. The
+        # tolerance is for the scalars (losses, sigmas, the emitted ramp aux) that ride along --
+        # 56 bytes against a 256-byte toy tree; a fourth gradient tree is +1.0 and cannot hide in
+        # it. The mutation that removes a `del` moves this number.
+        assert report["grad_tree_equivalents_peak"] == pytest.approx(3.0, abs=0.5), (
             label,
-            report["grad_trees_peak_measured"],
+            report["grad_tree_equivalents_peak"],
             report["gauge_sample_points"],
         )
-        # The baseline is recorded, not dropped.
+        assert report["grad_tree_equivalents_peak"] >= 3.0, label  # ...and the three ARE resident
+        # The secondary, exact because it counts buffers rather than bytes: three parameter-shaped
+        # arrays new since baseline, no more.
+        assert report["new_param_shaped_peak"] == 3.0, (label, report["new_param_shaped_peak"])
+        # The identity mechanism did not silently degrade to object identity anywhere.
+        assert report["gauge_identity_fallbacks"] == 0.0, label
+        assert report["gauge_baseline_buffers"] >= 1.0, label
+        # The baseline is recorded, not dropped -- and by construction it is empty, because it is
+        # the snapshot everything else is measured against.
         assert report["gauge_baseline"]["where"] == "baseline"
+        assert report["gauge_baseline"]["grad_tree_equivalents"] == pytest.approx(0.0, abs=1e-9), label
         # THE stale-loop-variable detector: at the top of each variance draw nothing from the
-        # previous iteration may still be resident, so only Welford's running mean is grad-shaped.
+        # previous iteration may still be resident.
         entries = [reading for reading in report["gauge_readings"] if reading["where"] == "variance_draw_entry"]
         assert entries, "the entry sample point is missing"
-        # The floor here is the accumulator's own honest footprint -- Welford's running mean plus
-        # the buffer the donated update just produced -- measured at 2 trees. What must NOT happen
-        # is growth beyond it: a gradient the previous iteration failed to release adds a third.
-        assert max(reading["grad_trees"] for reading in entries) <= 2.0, [
-            reading for reading in entries if reading["grad_trees"] > 2.0
+        # The floor here is the decomposition's own honest footprint -- the within-batch mean and
+        # the between-batch mean. What must NOT happen is growth beyond it: a gradient the previous
+        # iteration failed to release adds a third.
+        assert max(reading["grad_tree_equivalents"] for reading in entries) <= 2.5, [
+            reading for reading in entries if reading["grad_tree_equivalents"] > 2.5
         ][:3]
+        assert max(reading["new_param_shaped"] for reading in entries) <= 2.0, label
         # The replay's own counter agrees with the measurement.
         assert report["per_objective"]["grad_trees_peak_resident"]["max"] <= 3.0
 
@@ -1524,25 +1636,158 @@ def test_the_welford_update_is_transactional_and_correct():
     assert accumulator.m2 == pytest.approx(float(np.sum((vectors - vectors.mean(axis=0)) ** 2)), rel=1e-4)
 
 
-def test_the_gauge_counts_grad_shaped_buffers_not_the_params():
+def test_the_gauge_counts_what_the_probe_made_resident_not_what_it_inherited():
     params = {"big": jnp.zeros((16, 16), dtype=jnp.float32), "small": jnp.zeros((3,), dtype=jnp.float32)}
     gauge = s1_5.LiveBufferGauge(params)
     assert gauge.num_param_leaves == 2
+    assert gauge.one_tree_bytes == 16 * 16 * 4 + 3 * 4
     baseline = gauge.sample("baseline")
-    # The parameters themselves are excluded, so a fresh gauge sees no gradient trees.
-    assert baseline["grad_shaped_buffers"] == 0 and baseline["grad_trees"] == 0.0
+    # The parameters are in the baseline snapshot, so a fresh gauge reads nothing new.
+    assert baseline["new_buffers"] == 0.0 and baseline["grad_tree_equivalents"] == 0.0
 
     # One full "gradient tree": one buffer of each parameter leaf's shape and dtype.
     grad = {"big": jnp.ones((16, 16), dtype=jnp.float32), "small": jnp.ones((3,), dtype=jnp.float32)}
     reading = gauge.sample("one_tree")
-    assert reading["grad_shaped_buffers"] == 2 and reading["grad_trees"] == pytest.approx(1.0)
+    assert reading["grad_tree_equivalents"] == pytest.approx(1.0)
+    assert reading["new_param_shaped"] == 2.0
     second = {"big": jnp.full((16, 16), 2.0, dtype=jnp.float32), "small": jnp.full((3,), 2.0, dtype=jnp.float32)}
-    assert gauge.sample("two_trees")["grad_trees"] == pytest.approx(2.0)
+    assert gauge.sample("two_trees")["grad_tree_equivalents"] == pytest.approx(2.0)
     del grad, second
     import gc
 
     gc.collect()
-    assert gauge.sample("released")["grad_trees"] == pytest.approx(0.0)
+    assert gauge.sample("released")["grad_tree_equivalents"] == pytest.approx(0.0)
     # ...and the high-water mark survives the release, which is the point of a gauge.
-    assert gauge.report()["grad_trees_peak_measured"] == pytest.approx(2.0)
+    assert gauge.report()["grad_tree_equivalents_peak"] == pytest.approx(2.0)
     assert gauge.report()["gauge_baseline"]["where"] == "baseline"
+    assert gauge.report()["gauge_identity_fallbacks"] == 0.0
+
+
+def test_adam_moments_alive_at_baseline_read_as_zero_not_as_two_gradient_trees():
+    # INVERSION 1, the review's own case run backwards. It executed the shape-matching gauge against
+    # a state that had restored its optimizer and read TWO resident gradient trees before a single
+    # gradient existed -- AdamW's mu and nu are parameter-shaped. Identity, not shape, is what tells
+    # a phantom from a gradient.
+    import optax
+
+    params = {"big": jnp.zeros((16, 16), dtype=jnp.float32), "small": jnp.zeros((3,), dtype=jnp.float32)}
+    opt_state = optax.adamw(1e-4).init(params)
+    moments = jax.tree_util.tree_leaves(opt_state)
+    assert len(moments) >= 2 * len(jax.tree_util.tree_leaves(params)), "no moment trees to be fooled by"
+    # The shape-and-dtype rule the old gauge used, applied here so the inversion is a comparison
+    # rather than a claim about code that no longer exists.
+    param_shapes = {(tuple(leaf.shape), str(leaf.dtype)) for leaf in jax.tree_util.tree_leaves(params)}
+    phantoms = [leaf for leaf in moments if (tuple(leaf.shape), str(leaf.dtype)) in param_shapes]
+    assert len(phantoms) == 4, phantoms  # exactly the two phantom "trees" the review measured
+
+    gauge = s1_5.LiveBufferGauge(params)  # baseline taken WITH the moments alive
+    assert gauge.sample("baseline")["grad_tree_equivalents"] == 0.0
+    assert gauge.sample("still_nothing_happened")["grad_tree_equivalents"] == 0.0
+    assert gauge.report()["grad_tree_equivalents_peak"] == 0.0
+    assert jax.tree_util.tree_leaves(opt_state), "the moments must still be alive, or nothing was proved"
+
+
+def test_float32_welford_buffers_over_bfloat16_params_are_counted():
+    # INVERSION 2. Production parameters are bfloat16 (``weights_dtype: 'bfloat16'``) while the
+    # Welford accumulator is float32 by construction, so under the old (shape, dtype) rule the one
+    # buffer class most likely to break the memory budget matched NO parameter leaf and was counted
+    # as zero. It costs two tree-equivalents, and the gauge must say so.
+    params = {"w": jnp.zeros((16, 16), dtype=jnp.bfloat16), "b": jnp.zeros((16,), dtype=jnp.bfloat16)}
+    gauge = s1_5.LiveBufferGauge(params)
+    gauge.sample("baseline")
+    old_rule_matches = {(tuple(leaf.shape), str(leaf.dtype)) for leaf in jax.tree_util.tree_leaves(params)}
+
+    welford_mean = s1_5._welford_first({"w": jnp.ones((16, 16), jnp.bfloat16), "b": jnp.ones((16,), jnp.bfloat16)})
+    leaves = jax.tree_util.tree_leaves(welford_mean)
+    assert {str(leaf.dtype) for leaf in leaves} == {"float32"}  # the accumulator really is wider
+    assert not any((tuple(leaf.shape), str(leaf.dtype)) in old_rule_matches for leaf in leaves), "the old rule would"
+
+    reading = gauge.sample("welford_resident")
+    assert reading["new_param_shaped"] == 2.0, reading  # SHAPE-matched, dtype recorded not required
+    assert reading["new_param_shaped_by_dtype"] == {"float32": 2.0}, reading
+    # float32 over bfloat16 is exactly twice the parameter tree's bytes.
+    assert reading["grad_tree_equivalents"] == pytest.approx(2.0), reading
+    assert welford_mean is not None  # the buffers were alive for the whole measurement
+
+
+# =============================================================================================
+# 12. The optimizer the probe never uses. A no-update probe restores AdamW's moments through the
+# checkpoint's own layout and then carries two parameter-shaped float32 trees -- ~40 GB at 5B --
+# that nothing will ever read.
+# =============================================================================================
+
+
+def _toy_state_with_adam_moments():
+    """The toy state, rebuilt on AdamW so its optimizer state really has moment trees."""
+    import optax
+
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    tx = optax.adamw(1e-4)
+    state = state.replace(tx=tx, opt_state=tx.init(state.params))
+    assert jax.tree_util.tree_leaves(state.opt_state), "the fixture must actually carry moments"
+    return state, batches, config, scheduler
+
+
+def test_the_moments_are_dropped_after_the_exact_step_restore_and_the_buffers_go():
+    # ORDER is the contract: the restore needs the optimizer tree as its target structure and the
+    # required-step check is what makes this the right state at all, so the drop happens after both
+    # and before anything measures memory.
+    source = inspect.getsource(s1_5.build_probe_state)
+    assert source.index("restore_exact_step(manager, state, required=required)") < source.index(
+        "drop_optimizer_moments(state)"
+    )
+    assert source.index("if int(start_step) != int(required):") < source.index("drop_optimizer_moments(state)")
+    assert source.index("drop_optimizer_moments(state)") < source.index("return state, state_shardings")
+    # ...and the restore itself is untouched: it still restores the optimizer it was handed.
+    restorer = inspect.getsource(s1_5.restore_exact_step)
+    assert "opt_state=ocp.args.StandardRestore(state.opt_state)" in restorer
+    assert 'opt_state=restored["opt_state"]' in restorer
+
+    # EXECUTED: the moments go, the parameters do not, and the buffers are actually released.
+    import gc
+
+    state, _, _, _ = _toy_state_with_adam_moments()
+    moments = jax.tree_util.tree_leaves(state.opt_state)
+    moment_ids = {s1_5.buffer_identity(leaf)[0] for leaf in moments}
+    param_ids = {s1_5.buffer_identity(leaf)[0] for leaf in jax.tree_util.tree_leaves(state.params)}
+    assert moment_ids and not (moment_ids & param_ids)
+    del moments
+
+    state = s1_5.drop_optimizer_moments(state)
+    gc.collect()
+    assert jax.tree_util.tree_leaves(state.opt_state) == []
+    assert state.opt_state == s1_5.EMPTY_OPT_STATE
+    live = {s1_5.buffer_identity(array)[0] for array in jax.live_arrays()}
+    assert not (moment_ids & live), "the moment buffers are still resident"
+    assert param_ids <= live, "the parameters were released along with the moments"
+    # It stays a TrainState, with everything the probe does read.
+    assert isinstance(state, parent.Overfit100TrainState)
+    assert state.context_table is not None and state.graphdef is not None
+    # ...and dropping an already-empty optimizer is a no-op rather than an error.
+    assert s1_5.drop_optimizer_moments(state) is state
+
+
+def test_nothing_downstream_reads_the_optimizer_state():
+    # The claim "the moments are dead weight" is only true if the measurements do not depend on
+    # them. Run the WHOLE report both ways and compare, rather than asserting it in a comment.
+    state, batches, config, scheduler = _toy_state_with_adam_moments()
+    kwargs = {"state_label": "checkpoint", "checkpoint_step": 10000, "support_salts": (1,)}
+    with_moments = s1_5.state_report(state, batches, jax.random.key(1), config, scheduler, **kwargs)
+    dropped = s1_5.drop_optimizer_moments(state)
+    without = s1_5.state_report(dropped, batches, jax.random.key(1), config, scheduler, **kwargs)
+
+    for index, (left, right) in enumerate(zip(with_moments["per_batch"], without["per_batch"])):
+        assert set(left) == set(right), index
+        for key in left:
+            assert left[key] == pytest.approx(right[key], rel=1e-6, abs=1e-9), (index, key)
+    assert without["p_ss_zero_parity"]["passes"] == with_moments["p_ss_zero_parity"]["passes"]
+    assert without["label_isolation"]["grad_cosine"] == pytest.approx(
+        with_moments["label_isolation"]["grad_cosine"], rel=1e-6
+    )
+    for objective in s1_5.S1_5_OBJECTIVES:
+        assert without["support_variance"][objective]["support_variance"] == pytest.approx(
+            with_moments["support_variance"][objective]["support_variance"], rel=1e-6, abs=1e-12
+        ), objective
+    # ...and the residency measurement is the same too: the identity gauge was never fooled by the
+    # moments, so dropping them is a memory saving rather than a change of what is being measured.
+    assert without["grad_tree_equivalents_peak"] == pytest.approx(with_moments["grad_tree_equivalents_peak"], abs=0.5)

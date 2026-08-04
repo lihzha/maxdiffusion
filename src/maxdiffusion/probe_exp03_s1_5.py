@@ -190,69 +190,145 @@ def _welford_update(mean, tree, count):
     return new_mean, increment
 
 
+def buffer_identity(array):
+    """A key identifying the DEVICE ALLOCATION behind a live array, per addressable shard.
+
+    Not ``(shape, dtype)`` and not ``id()``. Shape matching was the previous gauge's mechanism and
+    it was wrong in both directions, as the review demonstrated by executing it: AdamW's moment
+    trees are parameter-shaped, so a probe that merely restored an optimizer read two phantom
+    gradient trees at baseline; and a float32 Welford accumulator over bfloat16 parameters matches
+    no parameter ``(shape, dtype)`` at all, so the one buffer class the memory contract most needs
+    to see was invisible. ``id()`` is worse still -- CPython recycles object addresses, and
+    ``jax.live_arrays()`` hands back fresh wrapper objects.
+
+    So: the per-shard device pointer. ``unsafe_buffer_pointer()`` is defined on a single-device
+    array, which is what each entry of ``addressable_shards`` is, so this works for a replicated or
+    FSDP-sharded 5B array on TPU exactly as it does for a toy array on CPU. The shape and dtype ride
+    along so a recycled address serving a differently-shaped buffer still reads as new.
+
+    Failure modes, handled rather than assumed away:
+
+    * **Address reuse.** A freed buffer's address can be handed to a new allocation, which then
+      reads as "already at baseline". That is the RIGHT answer for this gauge: it measures resident
+      bytes, and memory reused in place is not additional memory. Donation (``_welford_update``)
+      is the common case and is deliberately not counted as growth.
+    * **No pointer available.** Non-addressable shards (multi-process) or a backend that refuses
+      the call raise; the key falls back to object identity and the fallback is COUNTED into the
+      report, so a run that silently degraded is visible rather than quietly mis-measured.
+    * **Deleted buffers.** A donated-away array is still an object; it holds no memory and is
+      skipped.
+
+    Cost, since it is paid per sample point: one pointer read per addressable shard. At 5B that is
+    on the order of 10^4 reads per sample against a probe whose compilations take minutes, so the
+    exact per-shard key is bought rather than approximated by the first shard's address.
+    """
+    try:
+        shards = array.addressable_shards
+    except Exception:  # pragma: no cover - backend-dependent
+        shards = ()
+    pointers = []
+    for shard in shards:
+        try:
+            pointers.append(int(shard.data.unsafe_buffer_pointer()))
+        except Exception:  # pragma: no cover - backend-dependent
+            pointers = []
+            break
+    shape_dtype = (tuple(array.shape), str(array.dtype))
+    if pointers:
+        return ("ptr", tuple(pointers), shape_dtype), False
+    return ("obj", id(array), shape_dtype), True
+
+
 class LiveBufferGauge:
-    """High-water mark of live GRADIENT-SHAPED device buffers, measured from ``jax.live_arrays()``.
+    """New-since-baseline device memory, by BUFFER IDENTITY, from ``jax.live_arrays()``.
 
-    A byte threshold is meaningless at toy scale -- a toy model's gradients are scalars -- so the
-    count is shape-based instead: a buffer counts if its ``(shape, dtype)`` matches some parameter
-    leaf and it is not one of the parameter buffers themselves. Dividing by the number of parameter
-    leaves gives resident GRADIENT TREES, which is the probe's actual contract (at most three) and
-    is assertable identically at toy scale and at 5B.
+    The baseline is snapshotted at construction: the identity of every array alive before the probe
+    computes anything -- parameters, the batches, the context table, and anything an optimizer or a
+    caller happened to be holding. Every later sample counts only what is NOT in that set, so the
+    gauge measures what the probe ITSELF made resident and cannot be poisoned by what it inherited.
 
-    The count comes from ``jax.live_arrays()`` -- the runtime's own ledger -- not from bookkeeping
-    the code could be wrong about. Bytes are kept as secondary artifact information.
+    The primary number is ``new_bytes / one_grad_tree_bytes`` -- GRADIENT-TREE EQUIVALENTS -- which
+    is the probe's actual contract (at most three trees) and is scale-free: it reads 3.0 for three
+    5B gradients and 3.0 for three toy ones. It is also dtype-honest, which the count-based version
+    was not: a float32 accumulator over bfloat16 parameters is two tree-equivalents, because that is
+    what it costs. Parameter-SHAPED new buffers are still counted, bucketed by dtype, as secondary
+    evidence of what the bytes are made of.
+
+    Only identity KEYS are retained, never the arrays: a gauge that held references would keep the
+    buffers it is measuring alive, which is the failure it exists to detect.
+
+    ``identity_fallbacks`` is CUMULATIVE over every array inspected at every sample: it is a
+    "did this ever degrade to object identity" alarm, not a count of distinct buffers.
     """
 
-    def __init__(self, params, *, byte_fraction: float = 0.25):
+    def __init__(self, params):
         leaves = jax.tree_util.tree_leaves(params)
-        self.param_shapes = {(tuple(leaf.shape), str(leaf.dtype)) for leaf in leaves}
-        self.param_ids = {id(leaf) for leaf in leaves}
+        self.param_shapes = {tuple(leaf.shape) for leaf in leaves}
         self.num_param_leaves = max(1, len(leaves))
-        self.byte_threshold = max(1, int(max((int(leaf.nbytes) for leaf in leaves), default=0) * byte_fraction))
-        self.peak_buffers = 0
-        self.peak_trees = 0.0
-        self.peak_bytes = 0
+        # ONE gradient tree in bytes = the parameter tree's bytes. A gradient has the parameters'
+        # shapes; if it carries a wider dtype the ratio says so, which is the point.
+        self.one_tree_bytes = max(1, sum(int(leaf.nbytes) for leaf in leaves))
+        self.identity_fallbacks = 0
+        self.baseline_ids = self._identities(jax.live_arrays())
+        self.baseline_buffers = len(self.baseline_ids)
+        self.peak_new_bytes = 0
+        self.peak_tree_equivalents = 0.0
+        self.peak_new_param_shaped = 0
         self.samples: list[dict] = []
 
+    def _identities(self, arrays) -> set:
+        identities = set()
+        for array in arrays:
+            if getattr(array, "is_deleted", lambda: False)():
+                continue
+            key, fell_back = buffer_identity(array)
+            self.identity_fallbacks += int(fell_back)
+            identities.add(key)
+        return identities
+
     def sample(self, where: str) -> dict:
-        live = jax.live_arrays()
-        grad_shaped = [
-            array
-            for array in live
-            if (tuple(array.shape), str(array.dtype)) in self.param_shapes and id(array) not in self.param_ids
-        ]
-        trees = len(grad_shaped) / self.num_param_leaves
-        large_bytes = sum(int(array.nbytes) for array in live if array.nbytes >= self.byte_threshold)
-        self.peak_buffers = max(self.peak_buffers, len(grad_shaped))
-        self.peak_trees = max(self.peak_trees, trees)
-        self.peak_bytes = max(self.peak_bytes, large_bytes)
-        reading = {"where": where, "grad_shaped_buffers": len(grad_shaped), "grad_trees": trees, "bytes": large_bytes}
+        live = [array for array in jax.live_arrays() if not getattr(array, "is_deleted", lambda: False)()]
+        new = []
+        for array in live:
+            key, fell_back = buffer_identity(array)
+            self.identity_fallbacks += int(fell_back)
+            if key not in self.baseline_ids:
+                new.append(array)
+        new_bytes = sum(int(array.nbytes) for array in new)
+        equivalents = new_bytes / self.one_tree_bytes
+        by_dtype: dict[str, int] = {}
+        for array in new:
+            if tuple(array.shape) in self.param_shapes:
+                by_dtype[str(array.dtype)] = by_dtype.get(str(array.dtype), 0) + 1
+        param_shaped = sum(by_dtype.values())
+        self.peak_new_bytes = max(self.peak_new_bytes, new_bytes)
+        self.peak_tree_equivalents = max(self.peak_tree_equivalents, equivalents)
+        self.peak_new_param_shaped = max(self.peak_new_param_shaped, param_shaped)
+        reading = {
+            "where": where,
+            "new_buffers": float(len(new)),
+            "new_bytes": float(new_bytes),
+            "grad_tree_equivalents": float(equivalents),
+            "new_param_shaped": float(param_shaped),
+            "new_param_shaped_by_dtype": {name: float(count) for name, count in sorted(by_dtype.items())},
+        }
         self.samples.append(reading)
         return reading
 
     def report(self) -> dict:
         return {
-            "grad_trees_peak_measured": float(self.peak_trees),
-            "grad_shaped_buffers_peak": float(self.peak_buffers),
+            "grad_tree_equivalents_peak": float(self.peak_tree_equivalents),
+            "new_bytes_peak": float(self.peak_new_bytes),
+            "one_grad_tree_bytes": float(self.one_tree_bytes),
+            "new_param_shaped_peak": float(self.peak_new_param_shaped),
             "param_leaves": float(self.num_param_leaves),
-            "large_buffer_peak_bytes": float(self.peak_bytes),
-            "large_buffer_threshold_bytes": float(self.byte_threshold),
+            "gauge_baseline_buffers": float(self.baseline_buffers),
+            "gauge_identity_fallbacks": float(self.identity_fallbacks),
             "gauge_samples": float(len(self.samples)),
             "gauge_sample_points": [reading["where"] for reading in self.samples],
             "gauge_baseline": self.samples[0] if self.samples else {},
             "gauge_readings": list(self.samples),
         }
-
-
-def gauge_threshold_bytes(params, fraction: float = 0.25) -> int:
-    """A threshold scaled to ONE parameter tree: gradient-sized buffers, not scalars.
-
-    ``fraction`` of the largest single leaf, so the gauge counts things of gradient-leaf magnitude
-    at any model size and a toy model does not need a hand-tuned constant.
-    """
-    leaves = jax.tree_util.tree_leaves(params)
-    largest = max((int(leaf.nbytes) for leaf in leaves), default=0)
-    return max(1, int(largest * float(fraction)))
 
 
 class _TreeWelford:
@@ -476,9 +552,21 @@ def _config_key_dict(config) -> dict:
 
 
 def state_view(config, state_label: str, **overrides):
-    """A read-only config view carrying THIS state's ramp origin (and any forced knobs)."""
+    """A read-only config view carrying THIS state's ramp origin (and any forced knobs).
+
+    It also carries the state LABEL, which is not a knob: the replay's compile-time log keys its
+    first-call timings by it, so the init state's compile is reported as its own number instead of
+    being merged into the checkpoint state's entry.
+    """
     plan = S1_5_STATE_PLAN[state_label]
-    return SimpleNamespace(**{**_config_key_dict(config), "exp03_ramp_origin": plan["ramp_origin"], **overrides})
+    return SimpleNamespace(
+        **{
+            **_config_key_dict(config),
+            "exp03_ramp_origin": plan["ramp_origin"],
+            "exp03_state_label": state_label,
+            **overrides,
+        }
+    )
 
 
 _PROBE_GRAD_CACHE: dict = {}
@@ -509,7 +597,7 @@ def _jitted_grad(tag: str, builder, *, static_key=()):
         def _call(params, state, data, rng, global_step, ramp_origin, make=builder):
             return make(ramp_origin)(params, state, data, rng, global_step)
 
-        compiled = jax.jit(jax.value_and_grad(_call))
+        compiled = jax.jit(jax.value_and_grad(_call, has_aux=True))
         _PROBE_GRAD_CACHE[key] = compiled
         PROBE_COMPILATIONS.append(key)
     return _PROBE_GRAD_CACHE[key]
@@ -517,20 +605,149 @@ def _jitted_grad(tag: str, builder, *, static_key=()):
 
 def traced_view(config, base_label: str, ramp_origin, **overrides):
     """A config view whose ramp origin is whatever was threaded in — tracer or int."""
-    del base_label
-    return SimpleNamespace(**{**_config_key_dict(config), "exp03_ramp_origin": ramp_origin, **overrides})
+    return SimpleNamespace(
+        **{
+            **_config_key_dict(config),
+            "exp03_ramp_origin": ramp_origin,
+            "exp03_state_label": base_label,
+            **overrides,
+        }
+    )
 
 
-@jax.jit
-def _jit_observed_p_ss(global_step, ramp_origin, p_max, ramp_steps):
-    """``p_ss`` as the CACHE-SERVED path computes it, from the threaded origin.
+# The jitted helpers that are not gradient functions. Named here rather than in the test, so the
+# census the artifact carries and the count the test asserts come from ONE list.
+def probe_jit_helpers() -> dict:
+    return {
+        "grad_stats": exp03._jit_grad_stats,
+        "tree_vdot": exp03._jit_tree_vdot,
+        "welford_update": _welford_update,
+        "welford_first": _welford_first,
+        "relative_gap": _jit_relative_gap,
+    }
 
-    The collision pin needs an observable that flows through a ``_PROBE_GRAD_CACHE``-served
-    function; the replay's rows do not, which is why an earlier pin passed under the very mutation
-    it was written for. This mirrors ``exp03_p_ss`` with the origin as a traced argument.
+
+def jit_cache_size(fn) -> int:
+    """A jitted wrapper's REAL specialization count — and a refusal if it is not jitted at all.
+
+    ``._cache_size()`` is XLA's own ledger. Counting wrapper CONSTRUCTIONS instead (which the probe
+    also keeps, in ``PROBE_COMPILATIONS``) stays right even when the thing underneath has silently
+    become eager, which is the regression that costs a 5B probe its memory budget.
     """
-    elapsed = global_step.astype(jnp.float32) - ramp_origin.astype(jnp.float32)
-    return jnp.where(ramp_steps <= 0, p_max, p_max * jnp.clip(elapsed / jnp.maximum(ramp_steps, 1.0), 0.0, 1.0))
+    target = getattr(fn, "jitted", fn)
+    sizer = getattr(target, "_cache_size", None)
+    if not callable(sizer):
+        raise TypeError(f"{fn!r} exposes no _cache_size(): it is not a jitted function (an eager fallback looks so)")
+    return int(sizer())
+
+
+def specialization_census() -> dict:
+    """Every jitted wrapper in the probe's world, with its specialization count and their TOTAL.
+
+    Three families: the probe's cached gradient functions, the replay's cached
+    ``(value_and_grad, value)`` pair per objective per state view, and the jitted helpers. Keys are
+    derived from tags and insertion order, never from ``id()``, so the census is identical across
+    runs and the artifact stays byte-reproducible.
+
+    Two specializations for one probe tag is the cache-collision regression coming back; a helper
+    with zero is a helper that never ran.
+    """
+    probe = {}
+    for (tag, static_key), fn in _PROBE_GRAD_CACHE.items():
+        label = tag if not static_key else f"{tag}({','.join(str(part) for part in static_key)})"
+        probe[label] = jit_cache_size(fn)
+    replay: dict = {}
+    seen: dict = {}
+    for (name, _, _), (grad_fn, value_fn) in exp03._LOSS_AND_GRAD_CACHE.items():
+        seen[name] = seen.get(name, 0) + 1
+        replay[f"{name}#{seen[name]}"] = jit_cache_size(grad_fn) + jit_cache_size(value_fn)
+    helpers = {name: jit_cache_size(fn) for name, fn in probe_jit_helpers().items()}
+    return {
+        "probe": probe,
+        "replay": replay,
+        "helpers": helpers,
+        "probe_total": sum(probe.values()),
+        "replay_total": sum(replay.values()),
+        "helper_total": sum(helpers.values()),
+        "total": sum(probe.values()) + sum(replay.values()) + sum(helpers.values()),
+    }
+
+
+def assert_one_specialization_per_probe_tag(census: dict) -> None:
+    """Every probe tag compiles ONCE, serving both states — the collision, asserted at runtime.
+
+    Called from the driver rather than from ``state_report``: ``_PROBE_GRAD_CACHE`` is module-level,
+    so in a process that runs the report more than once (a test file) a second set of shapes adds a
+    legitimate specialization. A production job runs the driver once, which is where the number
+    means what it says.
+    """
+    offenders = {tag: size for tag, size in census["probe"].items() if size != 1}
+    if offenders:
+        raise RuntimeError(
+            f"probe gradient tags with more than one specialization: {offenders}. One compilation must serve BOTH "
+            f"states -- the per-state ramp origin is a traced argument precisely so that it can. More than one "
+            f"means a state-specific value was captured in a closure again."
+        )
+
+
+def _ramp_aux(view, global_step) -> dict:
+    """The ramp quantities read off the VERY VIEW the loss is being evaluated on.
+
+    ``view`` is the config view the cache-served function built from its traced origin and handed
+    to the loss; both numbers therefore come from the same object the measurement came from, not
+    from a recomputation standing beside it.
+    """
+    origin = getattr(view, "exp03_ramp_origin", 0)
+    return {
+        "p_ss_used": exp03.exp03_p_ss(view, global_step),
+        "ramp_elapsed": jnp.asarray(global_step, jnp.float32) - jnp.asarray(origin, jnp.float32),
+    }
+
+
+def _with_ramp_aux(view, loss_fn):
+    """Make a cache-served loss EMIT the ramp quantities it computed with, as aux.
+
+    THE fix for a pin that could not bite. The evidence was previously a parallel jitted
+    recomputation of ``p_ss`` sitting next to the cache: the review's surgical mutation -- force the
+    origin to 10000 inside cache-served calls only -- changed what the gradients were computed with
+    and left the recomputation untouched, so the regression test passed while the probe was
+    measuring the wrong state. Emitting from INSIDE the cached function removes that gap: the
+    number in the report is the number the compiled program used, and there is nowhere for a
+    corrupted origin to hide.
+    """
+
+    def _fn(params, state, data, rng, global_step):
+        return loss_fn(params, state, data, rng, global_step), _ramp_aux(view, global_step)
+
+    return _fn
+
+
+class RampWitness:
+    """Every cache-served function's own account of the ramp it ran with.
+
+    One row per ``(tag, global_step)``: the M support draws re-enter the same compiled function at
+    the same step, and recording each of them would pad the artifact without adding evidence.
+    """
+
+    def __init__(self):
+        self.rows: dict = {}
+
+    def record(self, tag: str, global_step, aux) -> dict:
+        key = (str(tag), int(global_step))
+        if key not in self.rows:
+            self.rows[key] = {
+                "tag": str(tag),
+                "global_step": float(int(global_step)),
+                "p_ss_used": float(aux["p_ss_used"]),
+                "ramp_elapsed": float(aux["ramp_elapsed"]),
+            }
+        return self.rows[key]
+
+    def at(self, tag: str, global_step) -> dict:
+        return self.rows[(str(tag), int(global_step))]
+
+    def report(self) -> list:
+        return [self.rows[key] for key in sorted(self.rows)]
 
 
 def _objective_config(config, objective: str, **overrides):
@@ -640,7 +857,33 @@ def build_probe_state(config, trainer, pipeline, mesh, *, state_label: str):
             f"{int(required)}. Tier 1 is about the step-10,000 checkpoint and Tier 2 about the untouched init; "
             f"a state that is neither would answer a question nobody asked."
         )
+    # AFTER the exact-step restore and its check, never before: the restore needs the optimizer tree
+    # as its target structure, and the step contract is what makes this the right state at all.
+    state = drop_optimizer_moments(state)
+    release()  # the moment buffers are unreachable now; collect BEFORE anything measures memory
     return state, state_shardings, int(start_step)
+
+
+EMPTY_OPT_STATE = ()  # a valid, leafless pytree: the state stays a TrainState, minus the moments
+
+
+def drop_optimizer_moments(state):
+    """Release the AdamW moments a no-update probe has no use for.
+
+    They cost ~40 GB of HBM at 5B (two parameter-shaped float32 trees) in a probe that applies no
+    updates by construction -- and they are not merely dead weight. The review executed the older
+    shape-matching residency gauge against a restored state and read TWO gradient trees at baseline
+    from these buffers alone, because moment trees are parameter-shaped. The identity-based gauge no
+    longer confuses them for gradients, but a probe that carries 40 GB it will never read is still
+    40 GB closer to the OOM that produced this whole line of work.
+
+    The state stays a ``TrainState`` (nothing downstream constructs a new one) and keeps ``tx``; only
+    the moments go. Correctness rests on the fact that the probe never calls ``apply_gradients`` --
+    which is asserted independently, bit for bit, by ``assert_no_update``.
+    """
+    if not jax.tree_util.tree_leaves(state.opt_state):
+        return state
+    return state.replace(opt_state=EMPTY_OPT_STATE)
 
 
 def restore_exact_step(manager, state, *, required: int):
@@ -697,9 +940,23 @@ def state_report(
     # The per-state knob, threaded as a TRACED value rather than captured in a closure: this is what
     # makes one compilation correct for both states instead of silently reusing the other's.
     ramp_origin = jnp.asarray(plan["ramp_origin"], jnp.int32)
+    witness = RampWitness()
     gauge = LiveBufferGauge(state.params)
     gauge.sample("baseline")  # the state alone, before any gradient exists
     view = state_view(config, state_label)
+
+    def call_grad(tag: str, compiled, batch, batch_rng, global_step):
+        """One cache-served gradient: TIMED on its first call at this state, and WITNESSED.
+
+        The aux the compiled function emits is recorded here, at the call site, from the same
+        return value the gradient came out of -- so the ramp this state actually ran with is
+        evidence produced by the measurement rather than beside it.
+        """
+        timed = exp03._timed_first_call(f"probe_{tag}", compiled, state_label=state_label)
+        (loss, ramp_aux), grad = timed(state.params, state, batch, batch_rng, global_step, ramp_origin)
+        witness.record(tag, global_step, ramp_aux)
+        return loss, grad
+
     rows = []
     for index, batch in enumerate(batches):
         global_step = jnp.asarray(first_step + index, jnp.int32)
@@ -716,22 +973,7 @@ def state_report(
         )
         row["batch_index"] = float(index)
         row["global_step"] = float(first_step + index)
-        # The threaded origin, observed through a jitted function fed the SAME traced value the
-        # cache-served gradients receive -- so a probe running with the other state's origin shows
-        # up here even though the replay's own rows would not notice.
-        row["p_ss_from_threaded_origin"] = float(
-            _jit_observed_p_ss(
-                jnp.asarray(first_step + index, jnp.float32),
-                ramp_origin,
-                jnp.asarray(float(getattr(config, "exp03_p_ss_max", 0.5)), jnp.float32),
-                jnp.asarray(float(getattr(config, "exp03_p_ss_ramp_steps", 500)), jnp.float32),
-            )
-        )
         rows.append(row)
-    per_objective = {}
-    for key in sorted({name for row in rows for name in row}):
-        values = [row[key] for row in rows if key in row]
-        per_objective[key] = {"mean": statistics.fmean(values), "min": min(values), "max": max(values)}
 
     # SUPPORT variance: only the salt moves, so the batch, epsilon, dropout key, logical step,
     # p_ss and A's coin are identical across the M draws.
@@ -743,27 +985,31 @@ def state_report(
             global_step = jnp.asarray(first_step + index, jnp.int32)
             batch_rng = jax.random.fold_in(rng, index)
             for salt in support_salts:
-                kwargs = {} if objective == "control" else {"global_step": global_step}
-                # ENTRY sample: whatever the previous iteration failed to release is still bound
-                # here, before this iteration allocates anything. With the `del` below this shows
-                # only Welford's mean; without it, the stale gradient shows up beside the mean.
-                gauge.sample("variance_draw_entry")
-                compiled = _jitted_grad(
-                    f"variance_{objective}",
-                    lambda origin, f=fn, salt=int(salt), obj=objective, uses_step=bool(kwargs): (
+                uses_step = objective != "control"
+
+                def _build(origin, f=fn, salt=int(salt), obj=objective, uses_step=uses_step):
+                    # ONE view, handed to the loss AND to the aux, so the emitted ramp numbers are
+                    # by construction the ones this compiled program computed with.
+                    traced = traced_view(config, state_label, origin, exp03_objective=obj, exp03_support_salt=salt)
+                    return _with_ramp_aux(
+                        traced,
                         lambda params, st, b, key, gs: f(
                             params,
                             st,
                             b,
                             key,
-                            traced_view(config, state_label, origin, exp03_objective=obj, exp03_support_salt=salt),
+                            traced,
                             scheduler,
                             **({"global_step": gs} if uses_step else {}),
-                        )[0]
-                    ),
-                    static_key=(objective, int(salt)),
-                )
-                gradient = compiled(state.params, state, batch, batch_rng, global_step, ramp_origin)[1]
+                        )[0],
+                    )
+
+                # ENTRY sample: whatever the previous iteration failed to release is still bound
+                # here, before this iteration allocates anything. With the `del` below this shows
+                # only Welford's mean; without it, the stale gradient shows up beside the mean.
+                gauge.sample("variance_draw_entry")
+                compiled = _jitted_grad(f"variance_{objective}", _build, static_key=(objective, int(salt)))
+                _, gradient = call_grad(f"variance_{objective}", compiled, batch, batch_rng, global_step)
                 # SAMPLE INSIDE the peak window, and at the discriminating moment: this gradient is
                 # live alongside Welford's mean AND anything the previous iteration failed to drop.
                 # A stale loop variable shows up here as one extra tree.
@@ -777,28 +1023,45 @@ def state_report(
         # Generators, so a gradient exists only while Welford is consuming it.
         variance[objective] = variance_decomposition(_draws(batch, index) for index, batch in enumerate(batches))
 
+    # THE cache-collision evidence, merged into the per-batch rows: A's ramp as the compiled
+    # function that produced A's gradient reports it. The replay's own ``p_ss_a`` never had the
+    # collision (its cache is keyed per state view), which is why asserting on that proved nothing.
+    for index, row in enumerate(rows):
+        emitted = witness.at("variance_corrective_ss", first_step + index)
+        row["p_ss_cache_served"] = emitted["p_ss_used"]
+        row["ramp_elapsed_cache_served"] = emitted["ramp_elapsed"]
+    per_objective = {}
+    for key in sorted({name for row in rows for name in row}):
+        values = [row[key] for row in rows if key in row]
+        per_objective[key] = {"mean": statistics.fmean(values), "min": min(values), "max": max(values)}
+
     # A's LABEL ISOLATION and the CONDITIONAL parity, on the first batch, forced to the branch each
     # one is about (p_ss=1 for the off-path label question, p_ss=0 for the identity).
     batch, batch_rng = batches[0], jax.random.fold_in(rng, 0)
     global_step = jnp.asarray(first_step, jnp.int32)
     isolation_values = {}
     for flag, label in ((False, "corrective"), (True, "same_eps")):
-        loss, grad = _jitted_grad(
-            f"isolation_{label}",
-            lambda origin, f=flag: (
+
+        def _build_isolation(origin, f=flag):
+            traced = traced_view(config, state_label, origin, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0)
+            return _with_ramp_aux(
+                traced,
                 lambda params, st, b, key, gs: corrective_at_support(
-                    params,
-                    st,
-                    b,
-                    key,
-                    traced_view(config, state_label, origin, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0),
-                    scheduler,
-                    global_step=gs,
-                    same_eps_label_flag=f,
-                )[0]
+                    params, st, b, key, traced, scheduler, global_step=gs, same_eps_label_flag=f
+                )[0],
+            )
+
+        loss, grad = call_grad(
+            f"isolation_{label}",
+            _jitted_grad(
+                f"isolation_{label}",
+                _build_isolation,
+                static_key=("p_ss_max=1.0", "ramp=0", f"same_eps={flag}"),
             ),
-            static_key=("p_ss_max=1.0", "ramp=0", f"same_eps={flag}"),
-        )(state.params, state, batch, batch_rng, global_step, ramp_origin)
+            batch,
+            batch_rng,
+            global_step,
+        )
         isolation_values[label] = (float(loss), grad)
         gauge.sample("isolation_peak")  # both label gradients live once the second one lands
         del grad  # ...and the loop variable does NOT survive into the parity phase
@@ -810,47 +1073,54 @@ def state_report(
     )
     del isolation_values  # two 5B gradients, consumed and dropped before the parity pair is built
 
-    trial_loss, trial_grad = _jitted_grad(
-        "parity_trial",
-        lambda origin: (
+    def _build_parity_trial(origin):
+        traced = traced_view(config, state_label, origin, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0)
+        return _with_ramp_aux(
+            traced,
             lambda params, st, b, key, gs: exp03._corrective_ss_loss(
-                params,
-                st,
-                b,
-                key,
-                traced_view(config, state_label, origin, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0),
-                scheduler,
-                global_step=gs,
-            )[0]
-        ),
-        static_key=("p_ss_max=0.0", "ramp=0"),
-    )(state.params, state, batch, batch_rng, global_step, ramp_origin)
-    comparator_loss, comparator_grad = _jitted_grad(
-        "parity_comparator",
-        lambda origin: (
+                params, st, b, key, traced, scheduler, global_step=gs
+            )[0],
+        )
+
+    def _build_parity_comparator(origin):
+        traced = traced_view(config, state_label, origin, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0)
+        return _with_ramp_aux(
+            traced,
             lambda params, st, b, key, gs: plain_fixed_support_loss(
-                params,
-                st,
-                b,
-                key,
-                traced_view(config, state_label, origin, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0),
-                scheduler,
-                global_step=gs,
-            )[0]
-        ),
-        static_key=("p_ss_max=0.0", "ramp=0"),
-    )(state.params, state, batch, batch_rng, global_step, ramp_origin)
+                params, st, b, key, traced, scheduler, global_step=gs
+            )[0],
+        )
+
+    def _build_production_control(origin):
+        traced = traced_view(config, state_label, origin)
+        return _with_ramp_aux(
+            traced, lambda params, st, b, key, gs: _denoising_loss(params, st, b, key, traced, scheduler)[0]
+        )
+
+    trial_loss, trial_grad = call_grad(
+        "parity_trial",
+        _jitted_grad("parity_trial", _build_parity_trial, static_key=("p_ss_max=0.0", "ramp=0")),
+        batch,
+        batch_rng,
+        global_step,
+    )
+    comparator_loss, comparator_grad = call_grad(
+        "parity_comparator",
+        _jitted_grad("parity_comparator", _build_parity_comparator, static_key=("p_ss_max=0.0", "ramp=0")),
+        batch,
+        batch_rng,
+        global_step,
+    )
     parity = parity_report(
         trial_loss=trial_loss, plain_loss=comparator_loss, trial_grad=trial_grad, plain_grad=comparator_grad
     )
-    production_loss, production_grad = _jitted_grad(
+    production_loss, production_grad = call_grad(
         "parity_production_control",
-        lambda origin: (
-            lambda params, st, b, key, gs: _denoising_loss(
-                params, st, b, key, traced_view(config, state_label, origin), scheduler
-            )[0]
-        ),
-    )(state.params, state, batch, batch_rng, global_step, ramp_origin)
+        _jitted_grad("parity_production_control", _build_production_control),
+        batch,
+        batch_rng,
+        global_step,
+    )
     parity["production_control_difference"] = {
         "note": (
             "A at p_ss=0 vs the PRODUCTION control: not an identity -- A scores one scalar sigma per "
@@ -868,27 +1138,27 @@ def state_report(
     del trial_grad, comparator_grad
     forced_diagnostics = {}
     for objective in ("corrective_ss", "combined"):
-        loss, grad = _jitted_grad(
+
+        def _build_forced(origin, fn=exp03.EXP03_LOSSES[objective], obj=objective):
+            traced = traced_view(
+                config, state_label, origin, exp03_objective=obj, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0
+            )
+            return _with_ramp_aux(
+                traced, lambda params, st, b, key, gs: fn(params, st, b, key, traced, scheduler, global_step=gs)[0]
+            )
+
+        loss, grad = call_grad(
             f"forced_{objective}",
-            lambda origin, fn=exp03.EXP03_LOSSES[objective], obj=objective: (
-                lambda params, st, b, key, gs: fn(
-                    params,
-                    st,
-                    b,
-                    key,
-                    traced_view(
-                        config, state_label, origin, exp03_objective=obj, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0
-                    ),
-                    scheduler,
-                    global_step=gs,
-                )[0]
-            ),
-            static_key=(objective, "p_ss_max=1.0", "ramp=0"),
-        )(state.params, state, batch, batch_rng, global_step, ramp_origin)
+            _jitted_grad(f"forced_{objective}", _build_forced, static_key=(objective, "p_ss_max=1.0", "ramp=0")),
+            batch,
+            batch_rng,
+            global_step,
+        )
         forced_diagnostics[objective] = {
             "loss": float(loss),
             "grad_norm": float(np.sqrt(exp03.tree_sq_norm(grad))),
             "grad_cosine_vs_production_control": exp03.grad_cosine(grad, production_grad),
+            "ramp_elapsed": witness.at(f"forced_{objective}", global_step)["ramp_elapsed"],
         }
         gauge.sample("forced_peak")  # this forced gradient plus the production control, both live
         del grad  # consumed in the same iteration that produced it
@@ -912,6 +1182,11 @@ def state_report(
         "support_salts": [int(salt) for salt in support_salts],
         "per_objective": per_objective,
         "per_batch": rows,
+        # What the cache-served functions themselves reported about the ramp they ran with, one row
+        # per (tag, step). Deliberately NOT accompanied by a recomputation of the same quantity: the
+        # previous evidence was exactly that, and it survived the mutation it was written to catch.
+        "cache_served_ramp": witness.report(),
+        "specializations": specialization_census(),
         **gauge.report(),
         "support_variance": variance,
         "label_isolation": isolation,
@@ -1030,7 +1305,29 @@ def run_s1_5(config) -> dict:
         # next pipeline is built: two live 5B states is an OOM, and holding the first one across the
         # second load is exactly how that happens.
         release()
+    # BOTH states are behind us, so this is the production total: one compilation per probe tag,
+    # serving both. The per-state artifacts carry the same census; this is the loud version.
+    census = specialization_census()
+    assert_one_specialization_per_probe_tag(census)
+    log_compile_costs(census)
     return {label: payload for label, payload in payloads.items() if payload}
+
+
+def log_compile_costs(census: dict) -> None:
+    """The specialization total and every timed first call, per (tag, state).
+
+    The timings are LOGGED and not written into the artifact on purpose: the S1.5 JSONs are written
+    through the compare-or-refuse immutable writer, and a wall-clock number would make a re-run of
+    the identical code look like a conflicting result. The specialization counts, which are
+    reproducible, do go into the artifact.
+    """
+    max_logging.log(
+        f"[exp03_s1_5] specializations: total={census['total']} "
+        f"(probe {census['probe_total']} over {len(census['probe'])} tags, replay {census['replay_total']}, "
+        f"helpers {census['helper_total']})"
+    )
+    for (tag, state_label), seconds in sorted(exp03.COMPILE_TIMINGS.items()):
+        max_logging.log(f"[exp03_s1_5]   first call {tag} [{state_label}]: {seconds:.1f}s")
 
 
 def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
