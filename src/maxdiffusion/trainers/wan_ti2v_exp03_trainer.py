@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 from types import SimpleNamespace
 
 import jax
@@ -652,6 +653,29 @@ class ResidentTrees:
 
 
 _LOSS_AND_GRAD_CACHE: dict = {}
+COMPILE_TIMINGS: dict = {}
+
+
+def _timed_first_call(tag: str, compiled):
+    """Log the FIRST call's wall time for a jitted tag — its compile cost, on the real machine.
+
+    Compilation dominates a no-update probe's runtime, and the only machine where that number means
+    anything is the one the job runs on. One line per tag at first call costs nothing and makes the
+    run its own compile-cost measurement, with no separate probe.
+    """
+
+    def _wrapper(*args, **kwargs):
+        if tag in COMPILE_TIMINGS:
+            return compiled(*args, **kwargs)
+        started = time.perf_counter()
+        result = compiled(*args, **kwargs)
+        jax.block_until_ready(result)
+        COMPILE_TIMINGS[tag] = time.perf_counter() - started
+        max_logging.log(f"[exp03] first call (compile+run) {tag}: {COMPILE_TIMINGS[tag]:.1f}s")
+        return result
+
+    _wrapper.jitted = compiled  # so a test can read the real ._cache_size()
+    return _wrapper
 
 
 def _loss_and_grad_fn(name: str, loss_fn, config, scheduler):
@@ -668,12 +692,24 @@ def _loss_and_grad_fn(name: str, loss_fn, config, scheduler):
             kwargs = {} if objective == "control" else {"global_step": global_step}
             return fn(params, state, data, rng, config, scheduler, **kwargs)
 
-        _LOSS_AND_GRAD_CACHE[key] = (jax.jit(jax.value_and_grad(_call, has_aux=True)), jax.jit(_call))
+        _LOSS_AND_GRAD_CACHE[key] = (
+            _timed_first_call(f"replay_{name}", jax.jit(jax.value_and_grad(_call, has_aux=True))),
+            jax.jit(_call),
+        )
     return _LOSS_AND_GRAD_CACHE[key]
 
 
 def exp03_frozen_replay(
-    state, data, rng, config, scheduler, *, global_step, with_gradients=True, include_control=False
+    state,
+    data,
+    rng,
+    config,
+    scheduler,
+    *,
+    global_step,
+    with_gradients=True,
+    include_control=False,
+    gauge=None,
 ) -> dict:
     """NO-UPDATE replay of A, B and C on a frozen state — the discriminator, off the timing path.
 
@@ -731,6 +767,11 @@ def exp03_frozen_replay(
         if not with_gradients:
             continue
 
+        if gauge is not None:
+            # INSIDE the peak window: this objective's gradient has just materialized and every
+            # tree the incremental scheme still holds is live. Sampling after the release would
+            # measure the trough and prove nothing.
+            gauge.sample(f"replay_{name}")
         stats = grad_stats(grad)
         out[f"grad_norm_{name}"] = stats["l2_norm"]
         out[f"grad_sq_norm_{name}"] = stats["sq_norm"]

@@ -646,13 +646,17 @@ def _toy_state_and_batches(num_batches=2, config_shape="namespace"):
 
     class _Stub(nnx.Module):
         def __init__(self):
-            self.gain = nnx.Param(jnp.asarray(0.25, dtype=jnp.float32))
+            # A MATRIX, not a scalar: the gauge counts buffers whose (shape, dtype) matches a
+            # parameter leaf, and a scalar parameter would match every scalar in the process --
+            # losses, sigmas, metrics -- which is what made the toy count meaningless.
+            self.gain = nnx.Param(jnp.full((8, 8), 0.25, dtype=jnp.float32))
 
         def __call__(self, **kwargs):
             hidden = kwargs["hidden_states"].astype(jnp.float32)
-            return (
-                self.gain[...] * jnp.tanh(hidden) + 0.01 * jnp.mean(kwargs["timestep"].astype(jnp.float32))
-            ).astype(kwargs["hidden_states"].dtype)
+            gain = jnp.mean(self.gain[...])
+            return (gain * jnp.tanh(hidden) + 0.01 * jnp.mean(kwargs["timestep"].astype(jnp.float32))).astype(
+                kwargs["hidden_states"].dtype
+            )
 
     graphdef, params, rest = nnx.split(_Stub(), nnx.Param, ...)
     state = parent.Overfit100TrainState.create(
@@ -1389,82 +1393,127 @@ def test_the_two_states_get_their_own_ramp_and_not_each_others():
         for row in reports[label]["per_batch"]:
             elapsed = row["global_step"] - reports[label]["ramp_origin"]
             expected = min(p_max, p_max * max(0.0, elapsed) / ramp) if ramp > 0 else p_max
+            # THE cache-served observable: computed from the traced origin the jitted probe
+            # functions receive. The replay's own p_ss_a never had the collision, so asserting on it
+            # proved nothing -- this is the field that moves when a state runs with the other
+            # state's origin.
+            assert row["p_ss_from_threaded_origin"] == pytest.approx(expected, abs=1e-6), (
+                label,
+                row["global_step"],
+            )
             assert row["p_ss_a"] == pytest.approx(expected, abs=1e-6), (label, row["global_step"])
+
+    # ...and the two states genuinely disagree somewhere in the batch range, or the pin is vacuous.
+    checkpoint_values = [row["p_ss_from_threaded_origin"] for row in reports["checkpoint"]["per_batch"]]
+    init_values = [row["p_ss_from_threaded_origin"] for row in reports["init"]["per_batch"]]
+    crossed = [min(p_max, p_max * max(0.0, row["global_step"] - 10000) / ramp) for row in reports["init"]["per_batch"]]
+    assert init_values != crossed, "init would look identical under the checkpoint's origin"
+    assert checkpoint_values == pytest.approx(init_values), "both states ramp from their own origin"
 
 
 def test_the_probe_compiles_each_function_once_across_both_states():
-    # One compilation per distinct traced program, serving BOTH states -- which is only correct
-    # because the per-state knob is a traced argument rather than a closure capture. A collision
-    # would show up as too FEW compilations for the work done; an eager fallback or a per-state
-    # closure would show up as too many.
+    # REAL specializations, read from each jitted wrapper's own ``_cache_size()`` -- not a count of
+    # wrapper constructions, which is bookkeeping and stays right even when the function underneath
+    # is eager. A collision regression shows up as cache_size 2; an eager fallback shows up as a
+    # wrapper with no cache at all.
     s1_5._PROBE_GRAD_CACHE.clear()
     s1_5.PROBE_COMPILATIONS.clear()
+    exp03._LOSS_AND_GRAD_CACHE.clear()
     _run_both_states(support_salts=(1, 2))
 
-    keys = list(s1_5.PROBE_COMPILATIONS)
-    assert len(keys) == len(set(keys)), "a cache key was compiled twice"
-    tags = sorted({key[0] for key in keys})
-    assert tags == [
-        "forced_combined",
-        "forced_corrective_ss",
-        "isolation_corrective",
-        "isolation_same_eps",
-        "parity_comparator",
-        "parity_production_control",
-        "parity_trial",
-        "variance_combined",
-        "variance_control",
-        "variance_corrective_ss",
-        "variance_rollout_loss",
-    ], tags
-    # The variance tags carry a salt in their static key (the salt changes the traced draw); every
-    # other tag compiles exactly once for the whole probe, both states included.
-    non_variance = [key for key in keys if not key[0].startswith("variance_")]
-    assert len(non_variance) == 7, non_variance
-    variance = [key for key in keys if key[0].startswith("variance_")]
-    assert len(variance) == 4 * 2, variance  # 4 objectives x 2 salts, shared across both states
+    def _cache_size(fn):
+        target = getattr(fn, "jitted", fn)
+        sizer = getattr(target, "_cache_size", None)
+        assert callable(sizer), f"{fn} is not a jitted function -- an eager fallback would look like this"
+        return sizer()
+
+    probe_sizes = {key: _cache_size(fn) for key, fn in s1_5._PROBE_GRAD_CACHE.items()}
+    assert probe_sizes, "no probe gradient was compiled at all"
+    for key, size in probe_sizes.items():
+        # ONE specialization each, serving BOTH states -- which is only correct because the per-state
+        # knob is traced. Two would mean the states are specializing separately again.
+        assert size == 1, (key, size)
+
+    replay_sizes = {}
+    for key, (grad_fn, value_fn) in exp03._LOSS_AND_GRAD_CACHE.items():
+        replay_sizes[key] = (_cache_size(grad_fn), _cache_size(value_fn))
+        assert replay_sizes[key][0] == 1, (key, replay_sizes[key])
+
+    helpers = {
+        "grad_stats": exp03._jit_grad_stats,
+        "tree_vdot": exp03._jit_tree_vdot,
+        "welford_update": s1_5._welford_update,
+        "welford_first": s1_5._welford_first,
+        "relative_gap": s1_5._jit_relative_gap,
+        "observed_p_ss": s1_5._jit_observed_p_ss,
+    }
+    helper_sizes = {name: _cache_size(fn) for name, fn in helpers.items()}
+    for name, size in helper_sizes.items():
+        assert size >= 1, (name, size)
+
+    total = sum(probe_sizes.values()) + sum(size for size, _ in replay_sizes.values()) + sum(helper_sizes.values())
+    assert total > 0
+    # The probe side: 7 tags compiled once each, plus one per (objective, salt) variance draw.
+    assert len(probe_sizes) == 7 + 4 * 2, sorted(probe_sizes)
 
 
-def test_the_measured_live_buffer_peak_is_recorded_and_bounded():
-    # MEASURED, not book-kept: the gauge samples jax.live_arrays() at every allocation-heavy point,
-    # so a hidden reference would show up here even though the manual counter said otherwise.
-    state, batches, _, _ = _toy_state_and_batches(config_shape="proxy")
-    params_bytes = sum(int(leaf.nbytes) for leaf in jax.tree_util.tree_leaves(state.params))
-    batch_bytes = sum(int(leaf.nbytes) for batch in batches for leaf in jax.tree_util.tree_leaves(batch))
-    # RELEASE the sizing fixture before measuring: jax.live_arrays() is process-global, so a second
-    # fixture held by the test would show up in the probe's own high-water mark and the bound would
-    # be measuring the test rather than the code.
-    del state, batches
-    import gc
-
-    gc.collect()
-
+def test_the_measured_grad_tree_peak_is_recorded_and_capped():
+    # MEASURED from jax.live_arrays(), counted in GRAD-SHAPED buffers rather than bytes -- so the
+    # "at most three resident gradient trees" contract is assertable at toy scale exactly as it is
+    # at 5B, where a byte threshold would be the only thing that worked.
     reports = _run_both_states()
     for label, report in reports.items():
-        assert report["large_buffer_threshold_bytes"] > 0, label
-        assert report["large_buffer_samples"] >= 5, (label, report["large_buffer_samples"])
-        assert report["large_buffer_peak_count"] > 0, label
-        # SCOPE, stated: at toy scale the model's largest leaf is a scalar, so a byte cap expressed
-        # in gradient-tree multiples is meaningless -- gradients here are 4 bytes and the inputs
-        # dominate. What this asserts is the property that survives the scale change: the probe never
-        # holds more than about twice its own input footprint, i.e. nothing accumulates across the
-        # 24 sample points. The three-gradient contract itself is asserted by the replay's counter
-        # below, and at 5B the byte peak is what the run's own artifact will show.
-        assert report["large_buffer_peak_bytes"] <= 2 * (params_bytes + batch_bytes), (
+        assert report["param_leaves"] >= 1.0, label
+        assert report["gauge_samples"] >= 8, (label, report["gauge_samples"])
+        # The sample points must include the ones INSIDE peak windows; sampling after a release
+        # measures the trough.
+        points = set(report["gauge_sample_points"])
+        assert {"baseline", "parity_peak", "forced_peak", "after_release"} <= points, sorted(points)
+        assert any(point.startswith("replay_") for point in points), sorted(points)
+        assert any(point == "variance_draw" for point in points), sorted(points)
+        # THE contract: at most three gradient trees co-resident anywhere in the probe.
+        # EXACT, not a bound: at toy scale the probe's peak is the replay's three-gradient moment,
+        # and a bound of "<= 3" would sit still while a stale loop variable added a fourth tree
+        # somewhere else. The mutation that removes a `del` moves this number.
+        assert report["grad_trees_peak_measured"] == pytest.approx(3.0), (
             label,
-            report["large_buffer_peak_bytes"],
-            params_bytes + batch_bytes,
+            report["grad_trees_peak_measured"],
+            report["gauge_sample_points"],
         )
+        # The baseline is recorded, not dropped.
+        assert report["gauge_baseline"]["where"] == "baseline"
+        # THE stale-loop-variable detector: at the top of each variance draw nothing from the
+        # previous iteration may still be resident, so only Welford's running mean is grad-shaped.
+        entries = [reading for reading in report["gauge_readings"] if reading["where"] == "variance_draw_entry"]
+        assert entries, "the entry sample point is missing"
+        # The floor here is the accumulator's own honest footprint -- Welford's running mean plus
+        # the buffer the donated update just produced -- measured at 2 trees. What must NOT happen
+        # is growth beyond it: a gradient the previous iteration failed to release adds a third.
+        assert max(reading["grad_trees"] for reading in entries) <= 2.0, [
+            reading for reading in entries if reading["grad_trees"] > 2.0
+        ][:3]
+        # The replay's own counter agrees with the measurement.
         assert report["per_objective"]["grad_trees_peak_resident"]["max"] <= 3.0
 
 
-def test_the_welford_carry_is_actually_donated():
-    # The double-mean the reviewer saw: donation is only honoured when the caller holds no other
-    # reference, and ``self.mean`` was one. The attribute is cleared before the call now.
+def test_the_welford_update_is_transactional_and_correct():
+    # The alias theory is WITHDRAWN: a Python alias does not inhibit JAX donation -- donation is
+    # declared at the jit boundary and a surviving reference raises on later use rather than
+    # silently declining. What the earlier dance did leave was a real bug: count was incremented
+    # before the call, so a raising update left the accumulator claiming an observation it never
+    # absorbed. State now advances only after the call returns.
     source = inspect.getsource(s1_5._TreeWelford.update)
-    assert "mean, self.mean = self.mean, None" in source
-    assert source.index("mean, self.mean") < source.index("_welford_update(")
-    # Behaviour is unchanged by the donation dance.
+    assert "mean, self.mean = self.mean, None" not in source  # the dance is gone
+    assert source.index("_welford_update(") < source.index("self.count = next_count")
+
+    accumulator = s1_5._TreeWelford()
+    accumulator.update({"w": jnp.asarray([1.0], dtype=jnp.float32)})
+    before = (accumulator.count, accumulator.m2)
+    with pytest.raises(Exception):
+        accumulator.update({"v": jnp.asarray([1.0], dtype=jnp.float32)})  # different tree structure
+    assert (accumulator.count, accumulator.m2) == before  # nothing advanced
+    assert accumulator.mean is not None  # ...and the mean was not left as None
+
     rng = np.random.default_rng(11)
     stream = [{"w": jnp.asarray(rng.normal(size=(4,)), dtype=jnp.float32)} for _ in range(5)]
     accumulator = s1_5._TreeWelford()
@@ -1475,13 +1524,25 @@ def test_the_welford_carry_is_actually_donated():
     assert accumulator.m2 == pytest.approx(float(np.sum((vectors - vectors.mean(axis=0)) ** 2)), rel=1e-4)
 
 
-def test_the_gauge_threshold_scales_with_the_model():
-    params = {"big": jnp.zeros((100, 100), dtype=jnp.float32), "small": jnp.zeros((3,), dtype=jnp.float32)}
-    threshold = s1_5.gauge_threshold_bytes(params, fraction=0.25)
-    assert threshold == int(params["big"].nbytes * 0.25)
-    assert s1_5.gauge_threshold_bytes({}) == 1  # no leaves: a floor, not a crash
-    gauge = s1_5.LiveBufferGauge(threshold)
-    held = jnp.zeros((200, 200), dtype=jnp.float32)  # comfortably above the threshold
-    total, count = gauge.sample()
-    assert count >= 1 and total >= held.nbytes
-    assert gauge.report()["large_buffer_peak_count"] >= 1
+def test_the_gauge_counts_grad_shaped_buffers_not_the_params():
+    params = {"big": jnp.zeros((16, 16), dtype=jnp.float32), "small": jnp.zeros((3,), dtype=jnp.float32)}
+    gauge = s1_5.LiveBufferGauge(params)
+    assert gauge.num_param_leaves == 2
+    baseline = gauge.sample("baseline")
+    # The parameters themselves are excluded, so a fresh gauge sees no gradient trees.
+    assert baseline["grad_shaped_buffers"] == 0 and baseline["grad_trees"] == 0.0
+
+    # One full "gradient tree": one buffer of each parameter leaf's shape and dtype.
+    grad = {"big": jnp.ones((16, 16), dtype=jnp.float32), "small": jnp.ones((3,), dtype=jnp.float32)}
+    reading = gauge.sample("one_tree")
+    assert reading["grad_shaped_buffers"] == 2 and reading["grad_trees"] == pytest.approx(1.0)
+    second = {"big": jnp.full((16, 16), 2.0, dtype=jnp.float32), "small": jnp.full((3,), 2.0, dtype=jnp.float32)}
+    assert gauge.sample("two_trees")["grad_trees"] == pytest.approx(2.0)
+    del grad, second
+    import gc
+
+    gc.collect()
+    assert gauge.sample("released")["grad_trees"] == pytest.approx(0.0)
+    # ...and the high-water mark survives the release, which is the point of a gauge.
+    assert gauge.report()["grad_trees_peak_measured"] == pytest.approx(2.0)
+    assert gauge.report()["gauge_baseline"]["where"] == "baseline"

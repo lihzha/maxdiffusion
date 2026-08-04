@@ -191,35 +191,56 @@ def _welford_update(mean, tree, count):
 
 
 class LiveBufferGauge:
-    """High-water mark of LARGE live device buffers, measured rather than book-kept.
+    """High-water mark of live GRADIENT-SHAPED device buffers, measured from ``jax.live_arrays()``.
 
-    ``ResidentTrees`` counts what the code believes it is holding; a hidden reference never appears
-    in it. This samples ``jax.live_arrays()`` instead, so the number in the artifact is what the
-    runtime actually had alive. Only buffers at or above ``threshold_bytes`` are counted -- the
-    interest is in gradient-sized objects, not in the thousands of scalars a report produces -- and
-    the threshold is a parameter so a toy test can scale it down to its own model.
+    A byte threshold is meaningless at toy scale -- a toy model's gradients are scalars -- so the
+    count is shape-based instead: a buffer counts if its ``(shape, dtype)`` matches some parameter
+    leaf and it is not one of the parameter buffers themselves. Dividing by the number of parameter
+    leaves gives resident GRADIENT TREES, which is the probe's actual contract (at most three) and
+    is assertable identically at toy scale and at 5B.
+
+    The count comes from ``jax.live_arrays()`` -- the runtime's own ledger -- not from bookkeeping
+    the code could be wrong about. Bytes are kept as secondary artifact information.
     """
 
-    def __init__(self, threshold_bytes: int):
-        self.threshold_bytes = int(threshold_bytes)
+    def __init__(self, params, *, byte_fraction: float = 0.25):
+        leaves = jax.tree_util.tree_leaves(params)
+        self.param_shapes = {(tuple(leaf.shape), str(leaf.dtype)) for leaf in leaves}
+        self.param_ids = {id(leaf) for leaf in leaves}
+        self.num_param_leaves = max(1, len(leaves))
+        self.byte_threshold = max(1, int(max((int(leaf.nbytes) for leaf in leaves), default=0) * byte_fraction))
+        self.peak_buffers = 0
+        self.peak_trees = 0.0
         self.peak_bytes = 0
-        self.peak_count = 0
-        self.samples = 0
+        self.samples: list[dict] = []
 
-    def sample(self) -> tuple[int, int]:
-        large = [array for array in jax.live_arrays() if array.nbytes >= self.threshold_bytes]
-        total = sum(int(array.nbytes) for array in large)
-        self.samples += 1
-        self.peak_bytes = max(self.peak_bytes, total)
-        self.peak_count = max(self.peak_count, len(large))
-        return total, len(large)
+    def sample(self, where: str) -> dict:
+        live = jax.live_arrays()
+        grad_shaped = [
+            array
+            for array in live
+            if (tuple(array.shape), str(array.dtype)) in self.param_shapes and id(array) not in self.param_ids
+        ]
+        trees = len(grad_shaped) / self.num_param_leaves
+        large_bytes = sum(int(array.nbytes) for array in live if array.nbytes >= self.byte_threshold)
+        self.peak_buffers = max(self.peak_buffers, len(grad_shaped))
+        self.peak_trees = max(self.peak_trees, trees)
+        self.peak_bytes = max(self.peak_bytes, large_bytes)
+        reading = {"where": where, "grad_shaped_buffers": len(grad_shaped), "grad_trees": trees, "bytes": large_bytes}
+        self.samples.append(reading)
+        return reading
 
     def report(self) -> dict:
         return {
+            "grad_trees_peak_measured": float(self.peak_trees),
+            "grad_shaped_buffers_peak": float(self.peak_buffers),
+            "param_leaves": float(self.num_param_leaves),
             "large_buffer_peak_bytes": float(self.peak_bytes),
-            "large_buffer_peak_count": float(self.peak_count),
-            "large_buffer_threshold_bytes": float(self.threshold_bytes),
-            "large_buffer_samples": float(self.samples),
+            "large_buffer_threshold_bytes": float(self.byte_threshold),
+            "gauge_samples": float(len(self.samples)),
+            "gauge_sample_points": [reading["where"] for reading in self.samples],
+            "gauge_baseline": self.samples[0] if self.samples else {},
+            "gauge_readings": list(self.samples),
         }
 
 
@@ -249,17 +270,27 @@ class _TreeWelford:
         self.m2 = 0.0
 
     def update(self, tree) -> None:
-        self.count += 1
+        """One compiled Welford step. TRANSACTIONAL: state advances only if the call returns.
+
+        The earlier version cleared ``self.mean`` into a local first, on the theory that a Python
+        alias suppresses JAX donation. That theory was WRONG -- donation is declared at the jit
+        boundary, and a surviving reference produces a use-after-donate error on later access, not a
+        silent decline. The dance is reverted. It also left a real bug: ``count`` was incremented
+        before the call, so a raised exception left the accumulator claiming an observation it never
+        absorbed, with ``mean`` set to ``None``. Count advances last now.
+
+        Honest footprint: while this runs, the accumulator holds ONE fp32 mean tree, and the caller
+        holds the gradient being absorbed. Two trees is the floor for a streaming mean, and the
+        budget counts it as such.
+        """
         if self.mean is None:
             self.mean = _welford_first(tree)
+            self.count += 1
             return
-        # ONE compiled step, with the running mean DONATED. The attribute is cleared first: JAX
-        # only honours donation when the caller holds no other reference, and ``self.mean`` was one
-        # -- which is why two fp32 mean trees were alive during later rows despite the annotation.
-        mean, self.mean = self.mean, None
-        mean, increment = _welford_update(mean, tree, jnp.asarray(self.count, jnp.float32))
-        self.mean = mean
+        next_count = self.count + 1
+        self.mean, increment = _welford_update(self.mean, tree, jnp.asarray(next_count, jnp.float32))
         self.m2 += float(increment)
+        self.count = next_count
 
     def population_variance(self) -> float:
         return self.m2 / self.count if self.count else 0.0
@@ -490,6 +521,18 @@ def traced_view(config, base_label: str, ramp_origin, **overrides):
     return SimpleNamespace(**{**_config_key_dict(config), "exp03_ramp_origin": ramp_origin, **overrides})
 
 
+@jax.jit
+def _jit_observed_p_ss(global_step, ramp_origin, p_max, ramp_steps):
+    """``p_ss`` as the CACHE-SERVED path computes it, from the threaded origin.
+
+    The collision pin needs an observable that flows through a ``_PROBE_GRAD_CACHE``-served
+    function; the replay's rows do not, which is why an earlier pin passed under the very mutation
+    it was written for. This mirrors ``exp03_p_ss`` with the origin as a traced argument.
+    """
+    elapsed = global_step.astype(jnp.float32) - ramp_origin.astype(jnp.float32)
+    return jnp.where(ramp_steps <= 0, p_max, p_max * jnp.clip(elapsed / jnp.maximum(ramp_steps, 1.0), 0.0, 1.0))
+
+
 def _objective_config(config, objective: str, **overrides):
     """A read-only config view selecting one objective.
 
@@ -654,20 +697,37 @@ def state_report(
     # The per-state knob, threaded as a TRACED value rather than captured in a closure: this is what
     # makes one compilation correct for both states instead of silently reusing the other's.
     ramp_origin = jnp.asarray(plan["ramp_origin"], jnp.int32)
-    gauge = LiveBufferGauge(gauge_threshold_bytes(state.params))
-    gauge.sample()  # baseline: the state itself, before any gradient exists
+    gauge = LiveBufferGauge(state.params)
+    gauge.sample("baseline")  # the state alone, before any gradient exists
     view = state_view(config, state_label)
     rows = []
     for index, batch in enumerate(batches):
         global_step = jnp.asarray(first_step + index, jnp.int32)
         step_rng = jax.random.fold_in(rng, index)
         row = exp03.exp03_frozen_replay(
-            state, batch, step_rng, view, scheduler, global_step=global_step, include_control=True
+            state,
+            batch,
+            step_rng,
+            view,
+            scheduler,
+            global_step=global_step,
+            include_control=True,
+            gauge=gauge,
         )
         row["batch_index"] = float(index)
         row["global_step"] = float(first_step + index)
+        # The threaded origin, observed through a jitted function fed the SAME traced value the
+        # cache-served gradients receive -- so a probe running with the other state's origin shows
+        # up here even though the replay's own rows would not notice.
+        row["p_ss_from_threaded_origin"] = float(
+            _jit_observed_p_ss(
+                jnp.asarray(first_step + index, jnp.float32),
+                ramp_origin,
+                jnp.asarray(float(getattr(config, "exp03_p_ss_max", 0.5)), jnp.float32),
+                jnp.asarray(float(getattr(config, "exp03_p_ss_ramp_steps", 500)), jnp.float32),
+            )
+        )
         rows.append(row)
-        gauge.sample()  # after each replay: the replay's own three-tree peak has just unwound
     per_objective = {}
     for key in sorted({name for row in rows for name in row}):
         values = [row[key] for row in rows if key in row]
@@ -684,6 +744,10 @@ def state_report(
             batch_rng = jax.random.fold_in(rng, index)
             for salt in support_salts:
                 kwargs = {} if objective == "control" else {"global_step": global_step}
+                # ENTRY sample: whatever the previous iteration failed to release is still bound
+                # here, before this iteration allocates anything. With the `del` below this shows
+                # only Welford's mean; without it, the stale gradient shows up beside the mean.
+                gauge.sample("variance_draw_entry")
                 compiled = _jitted_grad(
                     f"variance_{objective}",
                     lambda origin, f=fn, salt=int(salt), obj=objective, uses_step=bool(kwargs): (
@@ -700,8 +764,15 @@ def state_report(
                     static_key=(objective, int(salt)),
                 )
                 gradient = compiled(state.params, state, batch, batch_rng, global_step, ramp_origin)[1]
-                gauge.sample()  # while a draw's gradient is alive and Welford still holds its mean
+                # SAMPLE INSIDE the peak window, and at the discriminating moment: this gradient is
+                # live alongside Welford's mean AND anything the previous iteration failed to drop.
+                # A stale loop variable shows up here as one extra tree.
+                gauge.sample("variance_draw")
                 yield gradient
+                # ...and DROP it before the next reverse pass starts. Without this the previous
+                # draw's gradient stayed bound while the next one was being computed -- a four-tree
+                # peak on every iteration that no counter saw.
+                del gradient
 
         # Generators, so a gradient exists only while Welford is consuming it.
         variance[objective] = variance_decomposition(_draws(batch, index) for index, batch in enumerate(batches))
@@ -729,6 +800,8 @@ def state_report(
             static_key=("p_ss_max=1.0", "ramp=0", f"same_eps={flag}"),
         )(state.params, state, batch, batch_rng, global_step, ramp_origin)
         isolation_values[label] = (float(loss), grad)
+        gauge.sample("isolation_peak")  # both label gradients live once the second one lands
+        del grad  # ...and the loop variable does NOT survive into the parity phase
     isolation = label_isolation(
         corrective_loss=isolation_values["corrective"][0],
         same_eps_loss=isolation_values["same_eps"][0],
@@ -736,7 +809,6 @@ def state_report(
         same_eps_grad=isolation_values["same_eps"][1],
     )
     del isolation_values  # two 5B gradients, consumed and dropped before the parity pair is built
-    gauge.sample()
 
     trial_loss, trial_grad = _jitted_grad(
         "parity_trial",
@@ -792,7 +864,7 @@ def state_report(
     # The parity trio is consumed into scalars and RELEASED before the forced diagnostics allocate
     # their own gradients: holding trial + comparator + production while building a fourth was a
     # real four-tree peak, outside the replay's counter and outside its cap.
-    gauge.sample()  # the parity trio at its peak, BEFORE the release below
+    gauge.sample("parity_peak")  # trial + comparator + production, all live, BEFORE the release
     del trial_grad, comparator_grad
     forced_diagnostics = {}
     for objective in ("corrective_ss", "combined"):
@@ -818,10 +890,10 @@ def state_report(
             "grad_norm": float(np.sqrt(exp03.tree_sq_norm(grad))),
             "grad_cosine_vs_production_control": exp03.grad_cosine(grad, production_grad),
         }
-        gauge.sample()  # a forced gradient plus the production control, at their joint peak
+        gauge.sample("forced_peak")  # this forced gradient plus the production control, both live
         del grad  # consumed in the same iteration that produced it
     del production_grad  # the last reference: nothing survives into the report but scalars
-    gauge.sample()
+    gauge.sample("after_release")
 
     branch_counts = {
         "self_generated": sum(1 for row in rows if float(row.get("take_self_generated_a", 0.0)) > 0.5),
