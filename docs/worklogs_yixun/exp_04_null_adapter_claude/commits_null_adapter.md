@@ -5,3 +5,4 @@
 - `bd55102` — feat(exp_04): R2 invert-trajectory — reverse-Euler pivot recurrence (TDD, 73 tests)
 - `34512cd` — feat(exp_04): R3 optimize-nulls — per-step null-embedding Adam core (TDD, 96 tests)
 - `af47c13` — feat(exp_04): R4a replay-operator — CFG Euler deployment replay (TDD, 115 tests)
+- `b5a8bf5` — feat(exp_04): R4b record-schema-io — self-contained artifact records (TDD, 166 tests)
