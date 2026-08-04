@@ -1,98 +1,99 @@
 # plan_pos_context — exp_05: Positive text-token inversion + pre_context-structure regression adapter
 
-Planner: Claude Fable 5 (max effort). Status: **v1 — awaiting Codex plan review, then Yixun approval.**
+Planner: Claude Fable 5 (max effort). Status: **v2 — revised per Codex plan review of v1 (9/9 findings accepted); awaiting re-review, then Yixun approval.**
 Branch `claude-exp_05_pos_context-20260804` off `yixun-dev` @ `695d410`. Worktree `/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context`.
 
-**Contract inheritance.** exp_05 is the positive-slot sibling of exp_04. It **binds by reference to `docs/worklogs_yixun/exp_04_null_adapter_claude/plan_null_adapter.md` v5** (APPROVE-PLAN after five review passes) for every shared contract: cohort manifests (J0's DEV-64 / TEST-64 / TRAINFIT-16 / TRAIN-2000 — the identical manifest files), noise conventions and exact key derivation, the gates module and its statistics/imputation semantics, artifact integrity (staging/markers/`latent_dtype`/fidelity gate), the batching/sharding contract, the replay-verifier contract, the legacy pre_context restore contract + anchor/parity protocol, the validation ladder, and the parity-audit style. This plan specifies **only the deltas and exp_05-specific parts**; where it is silent, exp_04 v5 governs. Reviewed changes to shared contracts happen in exp_04's plan, never silently here.
+v2 changelog vs v1 (findings in `pos_context_codex_plan_review.md`): **direct 8-token conditional-context convention replacing the 512-row embed — targets now match the deployed pre_context representation exactly** (F1); decidable training/overfit/closed-loop rules + pre-K4 DEV closed-loop gate (F2); trainer batching/sharding/cost contract with P3a measurement gates (F3); commit-pinned dependency matrix on exp_04 rounds with two one-way merges (F4); fold-K1-into-J1 option REMOVED, separate jobs default (F5); no mutation of exp_04's settled module — new `pos_context_inversion_wan.py`; rounds split S1–S10 (F6); `z_bar_states` fidelity gate + corrected storage math + TEST-uninspected rule (F7); Q3' reframed achieved-quality (F8); per-token-steering claim removed (F9).
 
-References: `third_party/Wan2.2/scripts/embedding_search.py` — `optimize_positive_embeddings` (:681-788), `regenerate_with_positive_embeds` (:822-853), `run_positive_inversion` (:1150+); prior-art negative results in `third_party/Wan2.2/docs/adaptor_design.md` §§3.11–3.14; maxdiffusion `wan_pre_context_adapter_forward` (`side_adapter_wan.py:737-774`), `NNXPreContextFeatureContextHead` (`side_adapter_wan.py:376-421`).
+**Contract inheritance** (unchanged): binds by reference to `exp_04_null_adapter_claude/plan_null_adapter.md` v5 for manifests, noise conventions + key derivation, gates module + imputation, artifact integrity, batching, replay verifier, legacy restore + anchor/parity, ladder. Where silent, exp_04 v5 governs; shared-contract changes happen only via exp_04's reviewed plan. **exp_05 never edits exp_04's settled modules** — positive-slot code lives in its own module; runner/evaluator extensions are additive and reviewed in exp_05 rounds on the exp_05 branch only (F6).
+
+References: `third_party/Wan2.2/scripts/embedding_search.py` — `optimize_positive_embeddings` (:681-788), `regenerate_with_positive_embeds` (:822-853), `run_positive_inversion` (:1150-1389), **L_pos forcing (:1181-1195)**; `third_party/Wan2.2/docs/adaptor_design.md` §§3.6, 3.11–3.14; maxdiffusion `wan_pre_context_adapter_forward` (`side_adapter_wan.py:737-774` — **the head's `[B,8,4096]` output is passed directly as the entire context; no 512-row restoration**), `NNXPreContextFeatureContextHead` (:376-421), `_first_block_self_attention_features` (:611-649).
 
 ---
 
-## 1. What Yixun asked for (Query 1)
-
-Get **text tokens from inverse DDIM** — per-step **positive** text embeddings C*_t — and train the **pre_context structure** to predict them, "use loss function to constrain adapter to do that" = a regression loss onto the inversion-derived tokens. Run in parallel with exp_04.
+## 1. What Yixun asked for — unchanged (Query 1: positive text tokens from inverse DDIM; pre_context structure; regression-loss constraint; parallel with exp_04).
 
 ## 2. Questions
 
-- **Q1' (achieved reconstruction bound, positive slot):** per-example optimized oracle for C_t at w=5 — directly comparable to exp_04's null-slot bound **on the same cohorts, same pivots, same gates**. Science bonus: which slot steers more per token (cond weight +w vs uncond −(w−1)).
-- **Q2' (basin/transfer):** the PyTorch fork measured catastrophic fresh-noise failure for positive embeddings (latent MSE ≈ 2.7 vs 0.015; `adaptor_design.md` §3.6/`WORKLOG.md:943-949`) — at 480²/other settings. Re-measured here under our exact recipe with matched controls.
-- **Q3' (amortization via the existing structure):** does the **existing pre_context architecture**, trained by **teacher-forced regression onto C*_t** instead of one-step denoising, beat its own denoising-trained baseline (0.2946 SSIM checkpoint) on the locked TEST cohort? This isolates "training signal" from "architecture capacity" for the deployed adapter — the head, injection point, and rollout path are byte-identical to the baseline's.
+- **Q1' (achieved reconstruction bound, positive slot):** per-example optimized oracle for the **8-token conditional context** at w=5, under the deployed representation. Comparable to exp_04 descriptively (same cohorts, gates); raw side-by-side tables only — no per-token-steering claim (F9: token counts and CFG coefficients differ; any such statistic would be non-causal and is dropped).
+- **Q2' (basin/transfer):** as v1 (multi-seed probes, matched controls).
+- **Q3' (amortization, achieved-quality framing — F8):** does the existing pre_context architecture, trained by teacher-forced regression onto C*_t, beat the historical denoising-trained checkpoint on TEST-64? Architecture is held fixed, but data exposure and optimizer settings differ from the 30k baseline run — this is the requested same-architecture comparison, **not** a controlled loss-only ablation; interpretation language follows.
 
 ## 3. Method (deltas from exp_04 §3)
 
-Same latents, σ grid, pin, per-token timestep, bf16/fp32 boundaries, batching contract. Same `embed(·)` helper: `embed_pos(C)` = T5("") `[512,4096]` with rows `[0:L_pos]` replaced; **L_pos = 8** (aligned with `pre_context_tokens: 8` so the target lives exactly in the head's output space); warm start `C_init = T5("")[0:8]` ⇒ branch equality at init (same bf16 bitwise test).
+Same latents, σ grid, pin, per-token timestep, bf16/fp32 boundaries, batching-contract structure, noise conventions.
 
-1. **Inversion (w=1):** identical to exp_04 — same function, same context T5(""), **identical pivot trajectories** (a cross-experiment determinism check: exp_05's recomputed traj-derived B0 metrics must equal exp_04's A0 metrics on shared examples when both jobs have run; provenance-linked, reported).
-2. **Per-step positive optimization (w=5)** — reference `optimize_positive_embeddings`: `z̄_0 = z_start`; for `i = 0..24`: **cache `v_unc = v_θ(z̄_i, σ_i, T5(""))`** (the role swap: uncond is C-independent); fresh Adam(lr) on C_i for J inner iters minimizing `‖pin(z̄_i + (σ_{i+1}−σ_i)·[v_unc + w(v_cond(C_i) − v_unc)]) − traj[i+1]‖²` with `v_cond = v_θ(z̄_i, σ_i, embed_pos(C_i))`, **gradients through v_cond**; lock C_i, advance with it, warm-start C_{i+1} ← C_i. Defaults J=10, lr=1e-2 (own adequacy probe, §4).
-3. **Replay** — reference `regenerate_with_positive_embeds`: per-step C_i in the cond slot, frozen T5("") uncond, w=5.
-4. **Per-step states are first-class artifacts:** the optimization records `z̄_0..z̄_24` (post-pin, the per-step inputs) — the pre_context head consumes the current latent, so teacher-forced training needs them.
+**Context convention (F1 — matches deployment exactly):**
+- Conditional context: `C ∈ R^{8×4096}`, **passed directly as the entire `encoder_hidden_states` (sequence length 8)** — exactly what `wan_pre_context_adapter_forward` feeds the transformer. Construction of the warm start mirrors the reference's L_pos forcing (:1181-1195): `C_init = truncate_or_pad(T5(""), 8)` (T5("") has ≥ 8 rows post-padding, so truncation applies; the rule is implemented and tested for both cases).
+- Unconditional context: the baseline's normal frozen `T5("")` `[1,512,4096]`, untouched.
+- **CFG is active at init** (v_cond at 8 tokens ≠ v_uncond at 512 — different sequence lengths are separate forwards, as in the reference). The v1 branch-equality premise is removed; replaced by two parity tests: **context-construction parity** (our truncate/pad ≡ reference :1181-1195 semantics on fixtures) and **conditional-velocity parity** (the deployed forward invoked with a head emitting constant C equals the replay operator's v_cond with the same C, elementwise — the guarantee that serialized-target replay and the deployed adapter realize the same conditioning).
+- **Pivots are NOT shared with exp_04** (F1/F5 consequence): inversion at w=1 uses `C_init` (8 tokens, reference-faithful — the reference inverts with the truncated positive context), so exp_05's trajectories differ from exp_04's 512-token-context trajectories. No B0/A0 or B2-0/A2-0 artifact reuse; K1 computes everything itself (~25 extra forwards/example — negligible).
 
-Naming discipline (inherited): the arm is "empty-warm-start positive-context inversion" — the reference warm-starts from T5(caption); no captions exist, so warm start is T5("")[0:8]; deviations register extends exp_04 §8 with this line. PyTorch DROID precedent used L_pos=1; our L_pos=8 is a declared choice probed by a diagnostic-only ablation {1, 8}.
+**Optimization (w=5)** — as v1's branch swap, now on the 8-token context: cache `v_unc = v_θ(z̄_i, σ_i, T5("")[512])`; Adam on C_i through `v_cond = v_θ(z̄_i, σ_i, C_i)`; lock, advance, warm-start. J=10, lr=1e-2 defaults; own adequacy probe (exp_04's statistic/adoption/±2 h rules). **Replay** — per-step C_i cond (8 tokens), frozen T5("") uncond, w=5. **Per-step states z̄_0..z̄_24 recorded** (post-pin) by the positive path only.
 
 ## 4. Phases, arms, gates
 
-### Cohorts — **reuse exp_04's J0 manifests verbatim** (same files, provenance-checked). No new manifest job.
+### Cohorts — reuse exp_04's J0 manifests verbatim (dependency: J0 published; §6 matrix).
 
-### P0' — TDD (no TPU)
-exp_05-specific tests only (shared machinery is tested in exp_04's suite): positive-optimization contract on the tiny model + convex toy (grads reach C, cached-v_unc asymmetry, locked-C advance, warm start), `embed_pos` branch equality, state-recording shapes/pin invariants, and the S-round tests in §6.
+### P0' — TDD (no TPU): positive-optimization contract tests (tiny model + convex toy: cached-v_unc C-independence, grads through C only, locked-C advance, warm start, state recording + pin), context-construction parity, conditional-velocity parity, plus per-round tests (§6).
 
 ### P1' — Positive reconstruction study + basin probe (job K1, v6e-8; **needs approval**)
-Arms on DEV-64 + TRAINFIT-16, mirroring exp_04's table with C in place of ∅: **B0** (frozen replay from traj[0] — bitwise the same computation as exp_04's A0; if J1's provenance-verified artifacts exist, reuse instead of recompute, else compute and cross-check later), **B1** (optimize from traj[0], replay from traj[0]), **B1-probe** (keyed{0,1,2}), **B2** (from ε₀=global(0)), **B2-0** (≡ A2-0, same reuse rule), **B2-probe** (keyed{0,1,2}). Own adequacy probe (8 DEV examples, J∈{10,25,50} × lr∈{1e-2,3e-2}, same adoption statistic/rule/±2 h budget as exp_04). **L_pos ablation {1, 8}** on the same 8 examples — diagnostic-only, L_pos=8 fixed for K2/K3.
-
-**Gates (same forms, thresholds, imputation, and module as exp_04):** **H1** (B1 vs B0) ≡ G1's conditions; **H2** (B2 vs B2-0) ≡ G2's; **target-selection rule** ≡ exp_04's (keyed deployment iff H1 + probe relative ≥0.7× + absolute ≥0.70; else global iff H2; else stop and report). Metrics identical (future-frame primary, full-cohort decode).
+Arms on DEV-64 + TRAINFIT-16: **B0** frozen-C CFG replay from traj[0] (C_init in cond slot — the matched control under the active-CFG convention), **B1** optimize from traj[0]/replay from traj[0], **B1-probe** keyed{0,1,2}, **B2** from ε₀=global(0), **B2-0** frozen-C replay from ε₀, **B2-probe** keyed{0,1,2}. Adequacy probe (8 DEV examples). **L_pos ablation {1, 8}** — diagnostic-only, same arm and adopted recipe as the main run (F1 residue pinned), L_pos=8 fixed for K2/K3. Gates **H1/H2** and the target-selection rule ≡ exp_04's G1/G2 forms verbatim (thresholds, imputation, k-sets). Metrics identical.
 
 ### P2' — Target caching (job K2, gated; **needs approval**)
-Chosen arm over TRAIN-2000 + DEV-64 + TEST-64. **Schema = exp_04's P2 schema with:** `nulls` → `pos_embeds [25,8,4096]`, plus **`z_bar_states [25,48,9,12,20]`** (post-pin per-step inputs; `latent_dtype`-governed alongside z_start/expected_final_latent/pos_embeds; ≈ 2.3 MB fp16 → record ≈ 6 MB, cache ≈ 13 GiB). Same staging/markers/coverage/fidelity gate (fidelity replay uses the serialized pos_embeds; worst-example thresholds identical). Same cross-example structure diagnostic (cosine/PCA of C*_t) before K3.
+Chosen arm over TRAIN-2000 + DEV-64 + TEST-64. Schema = exp_04's with `pos_embeds [25,8,4096]` and **`z_bar_states [25,48,9,12,20]`** (both `latent_dtype`-governed). **Storage (F7, corrected):** states ≈ 5.93 MiB/record fp16; full record ≈ 8.2 MiB; 2,128 records ≈ **17.1 GiB** (fp32 fallback ≈ 34 GiB) — free-space check against the bucket before the build. **Integrity (F7):** byte-length validation and completion-marker fingerprints explicitly cover `z_bar_states`. **Fidelity gate extension (F7):** on the predeclared 8-DEV subset, serialized-fp16 states must produce **bit-identical bf16 model inputs** to in-memory fp32 states (the model consumes bf16; if bf16(fp16(x)) ≡ bf16(x) holds — expected, fp16→bf16 is value-preserving at bf16 precision for our range — the gate passes trivially and is documented; if not, a pinned block-0 feature tolerance max|Δ| ≤ 1e-2 applies, else fp32). Cross-example structure diagnostic (cosine/PCA of C*) computed on **TRAIN + DEV only; TEST targets are written but uninspected until K4** (F7).
 
-### P3' — Regression training of the pre_context structure + eval (jobs K3/K4; **needs approval**)
-**Model:** the **existing** `NNXWanSideAdapterStack` in `pre_context` configuration, unchanged (`action_adapter_type: pre_context`, `pre_context_tokens: 8` — same class, same init, same freeze split; ~128M trainable). No new architecture: that is the point of Q3'.
-**Training objective (teacher-forced regression):** per example, sample `t ~ U{0..24}` (per-example independent); inputs: cached `z̄_t`, per-token timestep for σ_t, actions; forward ONLY the pre-context path — `_patchify_and_time_embed` → `_first_block_self_attention_features` (stop-grad, frozen) → `predict_pre_context(features, actions)` → `Ĉ_t [B,8,4096]`; **loss = MSE(Ĉ_t, C*_t)** (fp32). The frozen transformer contributes block-0 only per step (≈ 1/40 of a forward — cheap; the full-transformer re-run of the deployed forward is NOT executed during training). Optimizer/schedule/budget/checkpoint-selection: exactly exp_04-P3's recipe (adamw 1e-4, wd 0.01, betas (0.9,0.95), 1k warmup, cosine 0.1×, batch 256, fixed 30k steps, best-DEV-embedding-MSE selection, atomic metadata incl. `model_type: POS_CONTEXT_TI2V`, cache hash, noise convention, L_pos). Dispatch key `POS_CONTEXT_TI2V` in `train_wan.py`.
-**P3a' learnability gate:** exp_04's rule verbatim (32 examples, ≤2k steps, batch 32, lr 3e-4; embedding-MSE ≤ 10% of target variance AND rollout ΔSSIM ≤ 0.02 vs serialized-target replay; clean restart for the full run).
-**Overfit risk (declared):** 128M params vs 50k (state, target) pairs (2,000 examples × 25 steps) — regularization = the recipe's wd + early selection on DEV embedding MSE; if the DEV/train gap explodes in K3, stop and bring a bigger-cache decision to Yixun rather than tuning ad hoc.
-**Closed-loop eval (K4):** deployment is the **existing pre_context rollout structure** — v_cond = full transformer re-run with `encoder_hidden_states = predicted context` from the head at each step's own z_t (`wan_pre_context_adapter_forward`), v_uncond = frozen transformer + T5(""), w=5 — via exp_04's evaluator `pre_context` mode pointed at the regressed checkpoint. Noise-matched protocol, k-sets, and anchor/parity preconditions exactly as exp_04-P3. Methods on TEST-64: **regressed pre_context** (ours), **denoising-trained pre_context@30k** (the baseline — same architecture, different training signal), **null-only**, **serialized-target replay** (reference point / achieved oracle per convention). Cross-experiment row (informational, not gated): exp_04's null adapter on the same table.
-**Gate H3 (≡ G3 forms):** regressed vs null-only ≥ +0.05 (CI excl. 0); success vs the denoising-trained baseline ≥ +0.02 mean future-SSIM, 95% CI excl. 0, ≥ 60% improved; same imputation.
-**Teacher-forced → closed-loop shift (declared risk):** at rollout the head sees its own states, not z̄_t. Mitigations are follow-ups needing approval, not silent additions: (a) input-noise augmentation on z̄_t; (b) a short closed-loop fine-tune; (c) exp_03-style corrective objectives. K4's serialized-target replay vs regressed-adapter gap isolates how much quality the shift costs.
+### P3' — Regression training + eval (jobs K3/K4; **needs approval**)
+**Model:** the existing `NNXWanSideAdapterStack` pre_context configuration, unchanged (~128M trainable; exact param count recorded at P3a). Head output `[B,8,4096]` **is** the deployed conditioning — no representation shim (F1).
+**Objective:** teacher-forced regression as v1 (sample t per example; cached z̄_t + per-token timestep + actions → block-0 features (stop-grad) → head → MSE(Ĉ_t, C*_t) fp32).
+**Decidable training contract (F2):** metric = **normalized MSE** (MSE ÷ per-step target variance computed once on the TRAIN cache); eval on DEV targets every 1k steps; **stop rule:** if DEV normalized MSE > 2× its running best for 3 consecutive evals while train MSE is still falling, stop and retain the prior best checkpoint; otherwise run the fixed 30k budget; selection = best DEV normalized MSE. **Pre-K4 closed-loop DEV gate (F2):** before TEST is touched, run one noise-matched closed-loop DEV-64 evaluation of the selected checkpoint vs null-only and serialized-target replay under inherited coverage/imputation rules; proceed to K4 only if the adapter beats null-only on DEV (same +0.05 form). **Any shift mitigation is selected on DEV; TEST is never a tuning set** (predeclared).
+**Feasibility/sharding contract (F3):** adapter params + opt state replicated (side-adapter trainer convention), data batch-sharded over the mesh, frozen embedder/block-0 params FSDP-sharded as in the trainer; logical global batch 256 with a **gradient-accumulation fallback preserving logical GBS** (microbatch per device × accumulation steps; never a silent logical-batch change). **P3a additionally records:** compile time, step time, peak HBM, actual trainable param count, projected 30k wall time; continuing requires HBM headroom > 10% and projected wall ≤ 6 h, else stop and surface (hardware/recipe reopened with Yixun).
+**P3a' learnability gate:** as v1 (32 examples, ≤2k steps, thresholds, clean restart), now with the F3 measurements.
+**Eval (K4):** as v1 (exp_04 evaluator's pre_context mode: regressed checkpoint vs denoising-trained baseline vs null-only vs serialized-target replay; noise-matched; anchor/parity preconditions; **H3** ≡ G3 forms). The serialized-replay-vs-adapter gap is the closed-loop-shift measurement; conditional-velocity parity (§3) guarantees the replay and deployed paths share the conditioning representation.
 
-### P4' — Results, analysis, HTML reports — as exp_04, incl. a side-by-side null-vs-positive page (`pos_context_02-slot-comparison_results.html`).
+### P4' — Reports as v1.
 
-## 5. Planned code, per file (deltas only; shared core comes from exp_04's branch)
+## 5. Planned code, per file (F6: no exp_04-module edits)
 
-1. **(E) `src/maxdiffusion/models/wan/null_inversion_wan.py`** — add `optimize_positive_embeddings(...)` mirroring `optimize_null_embeddings`'s signature/batching with the branch swap (cache v_unc; grads through v_cond) and per-step state recording (also retrofitted to the null path behind a flag, so exp_04 caches states too if ever needed); `replay_with_positive(...)` (or a `branch=` parameter on the existing replay — Coder's choice, reviewed).
-2. **(E) `src/maxdiffusion/run_wan_null_inversion.py`** — `embedding_slot: null|positive` config key; B-arm wiring; `z_bar_states` in the schema; A0/A2-0 artifact-reuse path (provenance-verified) + cross-check report.
-3. **(N) `src/maxdiffusion/configs/base_wan_5b_pos_context_inversion.yml`** — exp_05 keys (`embedding_slot: positive`, `pos_L: 8`, cache paths).
-4. **(N) `src/maxdiffusion/trainers/wan_pos_context_regression_trainer.py`** — teacher-forced regression trainer per §4-P3' (reuses the side-adapter trainer's pipeline/checkpoint/mesh patterns; only adapter params in opt state — pinned by test).
-5. **(E) `src/maxdiffusion/train_wan.py`** — `POS_CONTEXT_TI2V` dispatch.
-6. **(E) `src/maxdiffusion/generate_wan_null_adapter.py`** — accept the regressed checkpoint in `pre_context` mode (metadata-checked; rejects wrong model_type) + the cross-experiment comparison table.
-7. **(N) bash launchers** — `run_wan_pos_inversion.sh`, `train_wan_pos_context.sh`.
-8. **(N) tests** (`src/maxdiffusion/tests/worklogs_yixun/`): `test_pos_context_optimize.py` (branch-swap contract: v_unc cached/C-independent, grads reach C only, locked-C advance, warm start, `[N,J,B]` losses, state recording + pin), `test_pos_context_embed.py` (embed_pos + bf16 branch equality at L=8), `test_pos_context_runner.py` (slot dispatch, z_bar_states schema/bytes, reuse-path provenance rejection), `test_pos_context_trainer.py` (teacher-forced step: loss decreases on synthetic targets; frozen-transformer params absent from opt state; t-sampling per-example independence; save/restore + metadata rejection), `test_pos_context_evaluator.py` (regressed-checkpoint acceptance, wrong-type rejection).
+1. **(N) `src/maxdiffusion/models/wan/pos_context_inversion_wan.py`** — `truncate_or_pad_context`, `optimize_positive_embeddings` (batched; per-example losses `[N,J,B]`; grad-norm traces; state recording), `replay_with_positive` (own API; no `branch=` overload of exp_04's function), B-arm helpers. exp_04's `null_inversion_wan.py` is imported for shared primitives (noise, fingerprint) and **never modified**.
+2. **(E) `src/maxdiffusion/run_wan_null_inversion.py`** — additive `embedding_slot: positive` dispatch to the new module; `z_bar_states` schema extension; no change to null-slot behavior (characterization test).
+3. **(N) `src/maxdiffusion/configs/base_wan_5b_pos_context_inversion.yml`**.
+4. **(N) `src/maxdiffusion/trainers/wan_pos_context_regression_trainer.py`** + **(E) `train_wan.py`** dispatch `POS_CONTEXT_TI2V`.
+5. **(E) `src/maxdiffusion/generate_wan_null_adapter.py`** — accept the regressed checkpoint in pre_context mode (metadata-checked) + comparison table row; additive only.
+6. **(N) launchers** `run_wan_pos_inversion.sh`, `train_wan_pos_context.sh`.
+7. **(N) tests**, one file per round (names in §6): construction/velocity parity, optimization contract, replay/state capture, runner slot + null-characterization, schema/states fidelity, gather/loss, trainer state/checkpoint/stop-rule, dispatch/config, restore, rollout/gates, launchers.
 
-## 6. Coder rounds (dependency: start after exp_04's shared core R1–R8 is committed; merge exp_04's branch into this branch at that boundary — recorded in the worklog like exp_03's merge of exp_02)
+## 6. Coder rounds (F6: single-contract, <200 LOC each) and dependency matrix (F4)
 
-S1 `optimize-positives` (item 1 + tests). S2 `runner-positive-mode` (items 2–3 + tests). S3 `regression-trainer` (items 4–5 + tests). S4 `evaluator-regressed` (item 6 + tests + launchers). S3–S4 start only after K1's gate outcome. Same closed write→review→strengthen cycles; each < 200 LOC.
+Rounds: **S1** `truncate-pad-parity` (construction parity + velocity-parity test fixtures). **S2** `optimize-positives`. **S3** `replay-state-capture`. **S4** `runner-slot-arms` (+ null characterization). **S5** `schema-states-fidelity`. **S6** `regression-gather-loss`. **S7** `trainer-state-checkpoint` (incl. stop rule + accumulation). **S8** `dispatch-config`. **S9** `evaluator-regressed-restore-rollout`. **S10** `launchers`. Each: red test → green → Codex review (`pos_context_codex_code_<marker>_review.md`) → strengthen → commit.
 
-## 7. Validation ladder / 8. Parity audit — inherited from exp_04 (§7/§8) with the §3 deltas audited against `optimize_positive_embeddings`/`regenerate_with_positive_embeds` line-by-line; deviations register adds: empty warm start (no captions), L_pos=8 vs reference natural-length/L_pos=1 precedent.
+**Dependency matrix (commit-pinned at execution time, recorded in the worklog):**
+| exp_05 item | requires exp_04 | mechanism |
+|---|---|---|
+| S1–S5 (P0'/K1 code) | R1–R9 committed (shared core + manifests round) | **merge-1**: one-way `exp_04-branch → exp_05-branch` at the R9 boundary SHA |
+| K1 launch | J0 manifests published + K1 approval + parity audit | provenance check against J0 manifest hashes |
+| S6–S8 (K2/K3 code) | nothing beyond merge-1 | — |
+| S9/K4 | R14–R15 committed (evaluator) + J5 anchor/parity artifacts | **merge-2**: same one-way direction at the R15 boundary SHA |
 
-## 9. Launch plan (all pending explicit approval; v6e-8)
+Merge policy: one-way exp_04→exp_05 only, plain `git merge` (no cherry-picks), conflicts resolved in exp_05's favor ONLY for exp_05-owned files (shared files take exp_04's side verbatim), full combined suite green post-merge, both merges logged in `commits_pos_context.md` + worklog with SHAs. If exp_04's rounds slip, exp_05 stalls at the matrix rather than duplicating code.
+
+## 7. Validation ladder / 8. Parity audit — inherited, with §3's positive-slot deltas audited line-by-line against `optimize_positive_embeddings` / `regenerate_with_positive_embeds` / the L_pos forcing; deviations register: empty warm start; **8-token direct context (deployment-matching; reference-faithful via L_pos forcing)**; active CFG at init; no pivot sharing with exp_04.
+
+## 9. Launch plan (all pending explicit approval; v6e-8; **K1 is its own job — the fold option is removed (F5)**)
 
 | Job | What | Est. |
 |---|---|---|
-| K1 | P1': B-arms + adequacy probe + L_pos ablation on DEV-64+TRAINFIT-16 (reuses J0 manifests; reuses J1's A0/A2-0 artifacts when available) | ~3–6 h |
-| K2 | P2' cache (TRAIN-2000 + DEV + TEST, +states) | ~2–5 h |
-| K3 | P3a' gate → 30k regression training | ~1–3 h |
-| K4 | TEST-64 eval: regressed / baseline pre_context / null-only / target-replay (+ exp_04 cross-row) | ~1–2 h |
-| (J5) | pre_context baseline anchor + re-eval — **shared with exp_04, one job serves both**; asked once at its gate | — |
+| K1 | P1': B-arms + adequacy probe + L_pos ablation on DEV-64+TRAINFIT-16 (reuses J0 manifests; computes own pivots) | ~3–6 h |
+| K2 | P2' cache (TRAIN-2000 + DEV + TEST, + states; ≈ 17.1 GiB fp16) | ~2–5 h |
+| K3 | P3a' (+F3 measurements) → 30k regression training with the stop rule | measured at P3a; ceiling 6 h |
+| K4 | pre-K4 DEV closed-loop gate → TEST-64 eval (regressed / baseline / null-only / target-replay) | ~1–2 h |
+| (J5) | shared with exp_04 (anchor + baseline re-eval) — asked once at its gate | — |
 
-Option (Yixun decision 2): fold K1 into exp_04's J1 as one TPU submission (both arm-sets share the per-example pivot trajectories — saves the duplicated inversion pass and one queue slot; the runner supports both slots). Default if not chosen: separate jobs.
-
-## 10. Risks
-
-Prior-art negative results for the positive slot (underfit; basin MSE ≈ 2.7 from fresh noise; seed-sensitivity cosine 0.515) — differences here are declared (timestep-aware z_t-conditioned head, L=8, teacher-forced supervised targets, matched controls, fixed-noise fallback) and the basin is measured before any training spend; 128M-vs-50k-pairs overfit (K3 stop rule); teacher-forced/closed-loop shift (measured by the replay-vs-adapter gap; mitigations gated); shared-contract drift (bound to exp_04 v5 — changes only via exp_04's reviewed plan); merge risk at the R8 boundary (single-direction merge exp_04→exp_05, recorded, suite must stay green).
+## 10. Risks — as v1 (prior-art positive-slot failures; overfit — now with the F2 stop rule; closed-loop shift — now with the pre-K4 DEV gate; merge risk — now with the F4 matrix/policy), plus: 8-token inversion pivots are new territory (no exp_04 cross-check possible — mitigated by B0's matched control and the same gate discipline); storage floor check before K2.
 
 ## 11. Decision points for Yixun (at plan approval)
 
-1. **L_pos = 8** (aligned with the pre_context head; {1, 8} ablation diagnostic-only)?
-2. **Fold K1 into J1** as one TPU submission (shared pivots, one queue slot), or keep separate jobs?
-3. Primary training = **pure teacher-forced regression**; a combined regression+denoising-loss arm is optional/deferred unless you want it in K3 now?
-4. Approve **K1** now, conditional on (exp_04 shared core committed + exp_05 parity audit clean + P0' green) — or wait for J1's null-slot results first?
-5. Same pilot scope as exp_04 (TEST-64; DROID-wide claims deferred)?
+1. **L_pos = 8** (deployment-aligned; {1, 8} ablation diagnostic-only)?
+2. Primary training = pure teacher-forced regression; combined regression+denoising arm deferred unless you want it in K3?
+3. Approve **K1** conditional on (merge-1 done + P0' green + exp_05 parity audit clean + J0 published)?
+4. Same pilot scope as exp_04?
