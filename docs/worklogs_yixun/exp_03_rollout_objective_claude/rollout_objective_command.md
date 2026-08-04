@@ -227,3 +227,21 @@ instrumented, not fixed — improved odds come only from the pre-replay frees + 
 ledger goes to Yixun with a v6e-64 request.** Suite 1,523 / 2.
 - **Job 8e:** `20260804-221039-98cc77e9-exp03-s15-probe5-yixun` (COMMIT=8a4f834, tip at submission; code = APPROVED ec87d8d + docs).
 
+### Job 8e outcome (2026-08-05T~00:30Z) — FAILED same point; THE LEDGER FOUND THE ROOT CAUSE
+
+Same E0101 at A's program load (`reserve 15.11G ... 10.69G free`) — the stop-rule formally fired.
+But the harvest worked: per-chip ledger shows pre_replay **1.59G** (all round-6 frees effective:
+5.16 → 2.78 after moment drop → 1.58 after dead-weight free), and post_replay_control
+**arrays 11.07G / unattributed 0.29G** — the executable-residency hypothesis is REFUTED by
+measurement. The failure top-10 names full-size weight-shaped arrays with local==global
+(fp32[3072,18432] 0.211G; ffn kernels 0.082G full each): **the jitted value_and_grad returns the
+gradient tree REPLICATED** (no out_shardings pin; XLA chose replication) — ~9.5G/chip instead of
+the 1.25G FSDP shard, which also fragments the contiguous bottom region programs reserve from
+(19.9G nominally free, only 10.69G reservable).
+
+**Stop-rule disposition:** its intent was no-blind-retries. This is not a blind retry — a specific
+code defect with a quantitative fit prediction (post-control ≈2.9G; A's 15.11G then fits with
+~13G margin). Round-8 fix (pin out_shardings on every jitted grad producer + welford carries)
+dispatched; after review APPROVE+GO the intent is ONE 8f attempt on v6e-8 under the standing
+grant — Yixun is informed and can redirect to v6e-64 before it launches.
+
