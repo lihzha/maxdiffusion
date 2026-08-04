@@ -358,3 +358,20 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   at v6e-8 (single-VM, one process). **Fix-#3 series CLOSED after 5 rounds** (46b43c5 → 7241030 →
   99b5529 → ce6717d → 2ef9b8a; review passes: 5). Suite 1,511 / 2.
 
+## Round 6 (`4d2a79e`, Job-8d program-OOM fix) — REQUEST-REVISION
+
+- Accepted: stale pre-restore 5B transformer retention analysis + free (no surviving alias);
+  encode-time frees downstream-safe; umt5-xxl correction (PyTorch, host RAM). Factual fix: training
+  donates RESTORED arrays — its immunity comes from no-restore aliasing (from-scratch) and v6e-64
+  sharding, not from donating the stale tree.
+- **BLOCKER:** except-path `largest_live_arrays()` unguarded (an inspection failure would REPLACE
+  the original OOM) and sums shards across all 8 devices with global/shard double-counting.
+- **Key insight (finding 4):** remaining deficit (~5.61G = 15.11 wanted − 9.50 free, vs ~2.6G
+  visible reclaim) is plausibly LOADED-EXECUTABLE residency — invisible to `jax.live_arrays()`.
+  "Instrument or release the cached control executable." **Relaunch: NO-GO.**
+- Round-7 dispatched: best-effort failure diagnostics; per-chip deduplicated top-10;
+  `unattributed = in_use − arrays_bytes` per ledger point + `post_control_replay` point;
+  **per-objective-outer replay walk with per-objective executable release** (census snapshots
+  before each release; walk-order equivalence pinned by a both-orders toy test); per-device-batch
+  fallback lever to be REPORTED, not implemented.
+
