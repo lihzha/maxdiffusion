@@ -366,3 +366,105 @@ def optimize_null_embeddings(
     z_bar_0 = apply_first_frame_pin(traj[0], z_i0)
     _, (nulls, z_next, losses, grad_norms) = lax.scan(outer, (z_bar_0, null_init), jnp.arange(sigmas.shape[0] - 1))
     return nulls, jnp.concatenate([z_bar_0[None], z_next], axis=0), losses, grad_norms
+
+
+def replay_with_nulls(
+    velocity_fn: Callable[[jax.Array, jax.Array, jax.Array], jax.Array],
+    z_start: jax.Array,
+    z_i0: jax.Array,
+    sigmas: jax.Array,
+    nulls: jax.Array,
+    base_context: jax.Array,
+    *,
+    guide_scale: float,
+    return_trajectory: bool = False,
+):
+    """Deployment CFG replay from ``z_start`` under per-step nulls (plan §3 step 3).
+
+    ``z_0 = pin(z_start)`` and, for i = 0 .. N-1::
+
+        z_{i+1} = pin(z_i + (sigma_{i+1} - sigma_i) * [v_unc(∅_i) + w * (v_cond - v_unc(∅_i))])
+
+    Ported from ``regenerate_with_null_embeds``
+    (``third_party/Wan2.2/scripts/embedding_search.py:791-819``, submodule pin f370228).
+
+    ``v_cond`` is recomputed at **every** step. That is the one structural difference from
+    ``optimize_null_embeddings``, which caches it per outer step: the optimizer holds ``z_bar_i``
+    fixed while it works on ∅_i, whereas replay moves ``z`` after every step, so a cached conditional
+    velocity would be evaluated at a stale latent -- a correctness bug, not a saving.
+
+    A0 (frozen-∅) control: pass ``nulls`` equal to ``base_context``'s own leading ``L`` rows. Then
+    ``v_unc == v_cond``, the CFG combine collapses to ``v_cond`` for any ``guide_scale``, and this is
+    the unguided sampler -- no separate code path, and no second operator to validate.
+
+    Args:
+      velocity_fn: ``(latents, timestep_2d, encoder_hidden_states) -> v``, as in R3.
+      z_start: ``[B, C, F, H, W]`` starting latents (an inversion endpoint, or fresh noise).
+      z_i0: ``[B, C, 1, H, W]`` (or ``[B, C, F, H, W]``) first-frame condition.
+      sigmas: the ``N+1`` descending grid ending at 0.0; validated eagerly, so it must be concrete.
+      nulls: ``[N, B, L, D]``, or ``[N, L, D]`` to share one null per step across the batch.
+      base_context: ``[S, D]`` or ``[1, S, D]`` T5("") context whose leading ``L`` rows are replaced.
+      guide_scale: deployment CFG weight ``w``.
+      return_trajectory: also return the ``[N+1, B, C, F, H, W]`` trajectory.
+
+    Returns:
+      ``z_final`` ``[B, C, F, H, W]`` float32, or ``(z_final, trajectory)``.
+    """
+    _validate_sigmas(sigmas)
+    if not np.isfinite(guide_scale):
+        raise ValueError(f"guide_scale must be finite, got {guide_scale}")
+
+    sigmas = jnp.asarray(sigmas, dtype=jnp.float32)
+    z_start = jnp.asarray(z_start).astype(jnp.float32)
+    z_i0 = jnp.asarray(z_i0).astype(jnp.float32)
+    nulls = jnp.asarray(nulls).astype(jnp.float32)
+    base_context = jnp.asarray(base_context).astype(jnp.float32)
+    steps = sigmas.shape[0] - 1
+
+    if z_start.ndim != 5:
+        raise ValueError(f"z_start must be [B, C, F, H, W], got shape {z_start.shape}")
+    batch, channels, f_lat, h_lat, w_lat = z_start.shape
+    if z_i0.ndim != 5 or (z_i0.shape[0], z_i0.shape[1], z_i0.shape[3:]) != (batch, channels, (h_lat, w_lat)):
+        raise ValueError(f"z_i0 shape {z_i0.shape} is inconsistent with z_start shape {z_start.shape}")
+    if z_i0.shape[2] not in (1, f_lat):
+        raise ValueError(f"z_i0 must carry 1 or {f_lat} latent frames, got {z_i0.shape[2]}")
+    if base_context.ndim == 3:
+        if base_context.shape[0] != 1:
+            raise ValueError(f"base_context must have a unit leading axis when rank-3, got {base_context.shape}")
+        base_context = base_context[0]
+    if base_context.ndim != 2:
+        raise ValueError(f"base_context must be [S, D] or [1, S, D], got shape {base_context.shape}")
+    if nulls.ndim == 3:
+        nulls = jnp.broadcast_to(nulls[:, None], (nulls.shape[0], batch, *nulls.shape[1:]))
+    if nulls.ndim != 4:
+        raise ValueError(f"nulls must be [N, L, D] or [N, B, L, D], got shape {nulls.shape}")
+    if nulls.shape[0] != steps:
+        raise ValueError(f"nulls must carry one entry per sampler step: got {nulls.shape[0]}, expected {steps}")
+    if nulls.shape[1] != batch:
+        # Checked separately from the feature-dim clause below so neither can mask the other: a
+        # rank-4 [N, 1, L, D] tensor at B > 1 would otherwise drive the whole batch with example 0's
+        # nulls, and the velocity seam's own guard would still see v.shape == z.shape.
+        raise ValueError(f"nulls batch {nulls.shape[1]} does not match z_start batch {batch}")
+    if nulls.shape[3] != base_context.shape[1]:
+        raise ValueError(f"nulls shape {nulls.shape} is inconsistent with base_context {base_context.shape}")
+    if nulls.shape[2] > base_context.shape[0]:
+        raise ValueError(f"nulls length {nulls.shape[2]} exceeds context length {base_context.shape[0]}")
+
+    timesteps = rollout_timesteps_from_sigmas(sigmas, NUM_TRAIN_TIMESTEPS)
+    cond_context = jnp.broadcast_to(base_context, (batch, *base_context.shape))
+    weight = jnp.asarray(guide_scale, dtype=jnp.float32)
+
+    def body(current, i):
+        step_t = jnp.broadcast_to(timesteps[i], (batch,))
+        timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=N_HIST_FRAMES)
+        v_cond = _checked_velocity(velocity_fn, current, timestep_2d, cond_context)
+        v_unc = _checked_velocity(velocity_fn, current, timestep_2d, embed_null_tokens(nulls[i], base_context))
+        v_cfg = v_unc + weight * (v_cond - v_unc)
+        filled = apply_first_frame_pin(current + (sigmas[i + 1] - sigmas[i]) * v_cfg, z_i0)
+        return filled, filled
+
+    start = apply_first_frame_pin(z_start, z_i0)
+    z_final, stepped = lax.scan(body, start, jnp.arange(steps))
+    if return_trajectory:
+        return z_final, jnp.concatenate([start[None], stepped], axis=0)
+    return z_final

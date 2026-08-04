@@ -129,3 +129,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed` (R4a write). **Planner decisions:** (1) split APPROVED — R4a `replay-operator` (delivered), R4b `record-schema-io` (+ `_f32_bits` extraction, trigger fired: 4 consumers), R4c `verify-replay`; scope-neutral amendment noted in plan §6. (2) A0-identity tolerance rtol 1e-4 accepted — mechanism measured (ULP-level XLA scheduling difference between branches, amplified linearly by w: 6.3e-6@w5 → 7.7e-5@w50, vs real guidance at 59.9 absolute; contrast assertion retained); bitwise would force the operator to serve the test. (3) `nulls [N,L,D]` broadcast acceptance — accepted, mirrors R3. (4) replay B-independence test — deferred to the reviewer's ruling.
 - **Change** — `replay_with_nulls` (+59 exec LOC); `test_null_adapter_replay.py` (170 exec LOC, 16 tests). **112 passed in 14.96s**; 8 mutants killed incl. the R3-vs-R4 asymmetry mutant (v_cond hoisted out of the scan — correct in R3, a bug here — caught by call-structure + A0 + literal-loop).
 - **Next** — R4a review → strengthen → commit → R4b.
+
+## 2026-08-05T01:20:00Z — R4a cycle CLOSED: review (2 test-strength MINORs) → strengthen (115 green) → commit
+
+- **Goal** — Close R4a.
+- **Command / Validation** — Review saved (`null_adapter_codex_code_replay-operator_review.md`): no operator defect; A0 tolerance/broadcast/split all ratified; reviewer's independent probes incl. bitwise batched-vs-singleton and A0-through-w=50. Strengthen: guard split with matched messages (reviewer's deletion probe now killed), bitwise B-composition test pinning R4c's B=1 verification path. **115 passed in 14.68s**; S1–S3 killed.
+- **Result** — `passed`. R4a committed with this entry.
+- **Next** — R4b `record-schema-io`: `null_adapter_records.py` (record schema per plan §4-P2, npz serialization, latent_dtype-derived byte-length validation, expected-latent hash, provenance header) + the `_f32_bits`/`_bf16_bits` test-helper extraction (4 consumers; R2 ruling's trigger fired).
