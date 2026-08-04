@@ -405,3 +405,9 @@ worked at 2e-5 and 5e-5; 39 min + measurements); (b) accept the characterization
 verdict machinery at the best checkpoint for the record; (c) more 5e-5 segments at diminishing returns.
 Planner recommends (a): highest information per chip-hour, and a failure would itself sharpen exp_03's
 motivation (the residual as the compounding term).
+
+## Decision: Yixun chose (a) — 2026-08-04
+
+"you can use (a) for the exp_02 next step" — one LR 1e-4 probe segment 17,500 → 20,000 (Job 47,
+`20260804-021109-19080ff3`). (b) formal verdict machinery stays parked until the probe reads out.
+
