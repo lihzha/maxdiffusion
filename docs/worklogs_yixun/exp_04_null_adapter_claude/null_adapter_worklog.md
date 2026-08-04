@@ -217,3 +217,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 ## 2026-08-05T12:30:00Z — CORRECTION to the R7 write-phase entry (append-only)
 
 - The R7 entry's Planner position (1) stated scikit-image/imageio/imageio-ffmpeg are "NOT declared anywhere in the repo". **That was factually wrong** — the R7 reviewer verified all three are declared in `dependencies/requirements/base_requirements/requirements.txt` and the generated requirements. The R10 launcher contract is revised accordingly: preflight the actual TPU-host imports + the ffmpeg backend executable (the issue-#8 lesson — declared ≠ installed), but do not describe the packages as undeclared. The error originated in the Coder's environment report and was not independently checked by the Planner before recording — noted as a process reminder: verify repo-state claims against the repo.
+
+## 2026-08-05T13:30:00Z — R7 cycle CLOSED: review (1 MAJOR + 2 MINOR + 1 NIT) → strengthen (392 green, 0/32) → commit
+
+- **Goal** — Close R7; pixel metrics + videos done, gates tables completable.
+- **Command / Validation** — Review saved; frame mapping independently confirmed (future = pixel frames 1–32); SSIM parity bit-exact; the dependency-premise NIT corrected in the appended worklog entry. Strengthen: pre-decode finiteness on everything, strict [0,1] decode contract with metric clipping removed (exact reference parity), transactional video publishing. **392 passed in 28.6s**; 32 mutants, 0 survivors.
+- **Result** — `passed`. R7 committed with this entry.
+- **Next** — R8 `runner-cache-resume`: shard writer (staging + completion markers, validated resume, coverage), the fp16 fidelity gate, the R6 writer contracts (optimization_config keys; cast→replay→record already pinned), and the QUARANTINE POLICY design for per-example divergence in cache mode — a plan-affecting decision to be ratified by the reviewer, never silent.
