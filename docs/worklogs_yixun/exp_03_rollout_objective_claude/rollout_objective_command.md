@@ -198,3 +198,19 @@ specialization census (production expect 39) + per-(tag, salt, state) compile ti
 Same probe spec as 8/8b/8c. Suite 1,511 / 2.
 - **Job 8d:** `20260804-170835-735ed465-exp03-s15-probe4-yixun` (COMMIT=86aaf1cf61973f2eb7dc8a1e0a7510b3966339fa, tip at submission; code = APPROVED 2ef9b8a + docs).
 
+### Job 8d outcome (2026-08-04T19:14Z) — FAILED: program-reservation OOM; the replay itself now works
+
+Attempts 1–2 infra (maintenance + preemption). Attempt 3: restore + moment-drop + views + **the
+first 5B replay row EXECUTED** (`replay_control [checkpoint]: 80.3s` first-call, per the new
+timing instrumentation) — then loading **A's** compiled program failed:
+`RuntimeProgramAllocationFailure: Attempting to reserve 15.11G ... 9.50G free` (E0101). So buffers
+occupy ~21.5G/chip where the capped tree design accounts for ~4G. Sharding is confirmed healthy
+(FSDP-8 on every spec). The unexplained ~13–14G matches the umt5-xxl text encoder (~11G, probably
+replicated) + VAE staying resident on the PROBE path — S1 training on the same hardware ran with
+only ~7.5G occupied (C's flake: 26.5G wanted vs 23.7G free), so the training path frees or never
+retains what the probe is holding; the moment-drop's on-hardware effect is also unproven (the
+round-4 release proof ran at toy scale). Round-6 fix dispatched: find and free the encoder/VAE/
+pipeline references after the embedding table is built; add crash-surviving `memory_stats()` log
+lines (bytes_in_use at post-restore / post-drop / post-free / pre-first-call per state) so the next
+run carries its own memory ledger in stdout.
+
