@@ -13,3 +13,15 @@
 **Why the experiment needs to run:** The pre_context adapter trained on one-step denoising reached only rollout SSIM 0.2946. exp_04 tests the null slot; exp_05 tests the positive slot with the *existing* pre_context architecture — a direct answer to whether the pre_context structure's capacity was the bottleneck or its training signal was. The PyTorch fork's positive line (TrajectoryAdaptor, L_pos=1, μ+rank-1) underfit and hit the noise-basin problem; exp_05 differs in: timestep-aware z_t-conditioned head (the pre_context structure sees the current latent), L_pos=8, teacher-forced regression on cached optimization-trajectory states, and the exp_04-shared de-risking arms (basin probes, fixed-noise variant, matched controls).
 
 **Planner scope reading (to be confirmed by the plan):** "text token from inverse DDIM" = per-step C*_t from positive inversion (warm-started from T5("") — the dataset has no captions); "pre_context structure" = the existing `NNXPreContextFeatureContextHead` + action-encoder stack, reused as-is where possible; "loss function to constrain" = MSE regression of the head's predicted context onto C*_t (teacher-forced on cached trajectory states), with a combined regression+denoising variant as an optional ablation.
+
+## Query 2 — 2026-08-04 (plan approval)
+
+**Verbatim:**
+
+> Yes to all for exp_05, continue
+
+**Grants recorded (per plan v3 §11's decision points 1–4):**
+1. **Plan v3 APPROVED.** L_pos = 8 approved ({1, 8} ablation diagnostic-only).
+2. Primary training = pure teacher-forced regression approved; the combined regression+denoising arm stays deferred.
+3. **K1 approved conditional on**: merge-1 (exp_04 R9 boundary) done + P0' tests green + exp_05 parity audit clean + J0 manifests published — conditional grant per announcement 02; no re-ask when the conditions are met. K2–K4 remain gated and will be asked at their gates.
+4. Pilot scope acknowledged (TEST-64; DROID-wide claims deferred).
