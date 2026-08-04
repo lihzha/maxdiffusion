@@ -508,3 +508,31 @@ fresh output dir `validation_loss_17500/`) + SSIM `20260803-201058-94fb61a2-exp0
 on the line: mean loss ~0.025–0.030 → mean SSIM ~0.953–0.959; the bar count (51/100 → ?) decides whether
 the formal 3-seed + full-set verdict proposal goes to Yixun.
 
+### Jobs 45–46 outcome (2026-08-04T~00:10Z)
+
+- **Job 45 (instrument):** 15,000 anchor **0.03927 reproduced exactly**; 17,500 = **0.03476** (n=1,629).
+  Segment gains −0.0617 → −0.0213 → −0.0045 per 2,500 steps: the 5e-5 trajectory itself flattened ~4.7×.
+- **Job 46 (SSIM, attempt 5 after infra kills):** canonical seed-0 mean **0.9508** — the mean crossed the
+  0.95 bar; **62/100 windows ≥ 0.95** (arc 0 → 11 → 51 → 62). Line held: predicted 0.9467, actual +0.0041.
+  Decision menu (a)/(b)/(c) presented to Yixun.
+
+## Job 47 — v6e-64 LR 1e-4 PROBE SEGMENT 17,500 → 20,000 — launched 2026-08-04T02:11Z
+
+**Approved by Yixun ("you can use (a) for the exp_02 next step").** Option (a): ONE probe segment at
+LR **1e-4** (Wan 2.1's own pretraining LR) from the lr5e5 run's step-17,500 checkpoint — does a
+Wan-native LR restore the collapsed pace, or does 1e-4 destabilize this far into memorization?
+- **Seed:** server-side copy of `wan-overfit100-s3ext-lr5e5-20260802/checkpoints/17500` →
+  `wan-overfit100-s3ext-lr1e4-20260804/checkpoints/17500`, verified byte-identical (23,626,279,825 B;
+  single-process gsutil per the Jobs 32–34 lesson).
+- **Env:** RUN_NAME=wan-overfit100-s3ext-lr1e4-20260804, LEARNING_RATE=1e-4, MAX_TRAIN_STEPS=20000,
+  CHECKPOINT_STEPS="[17500,20000]", train100 pins unchanged, COMMIT=a215d6096d8029bbbe301c2ff513627ced910e98
+  (tip at submission; trainer path byte-identical lineage since e27fdc3).
+- **Cost:** one ~39-min v6e-64 segment + the standard measurement pair after landing.
+- **Acceptance:** restore reports start_step=17500; `lr=` line shows 1e-4; loss continues from ≈0.0348
+  without NaN (divergence at 1e-4 = informative negative, not a bug); checkpoint 20,000 saved.
+- **Follow-on under this approval (established pattern):** instrument {17500 anchor = **0.03476** exact,
+  20000} to fresh `validation_loss_20000/` + SSIM eval at 20,000 (s3_intermediate, canonical, seed 0).
+  Reading: segment gain ≫0.0045 ⇒ LR was still the binding lever; gain ≈0.0045 or divergence ⇒ the 5e-5
+  echo plateau is not LR-curable at this depth.
+- **Job id:** `20260804-021109-19080ff3-exp02-o100-lr1e4-yixun`.
+
