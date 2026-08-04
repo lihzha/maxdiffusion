@@ -350,3 +350,11 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   bytes; executed 8-device inversion test; census 39; per-(tag, salt, state) timing with a
   coverage==specializations assertion.
 
+- **`2ef9b8a` (round 5) closing review (xhigh): APPROVE — "Relaunch: GO".** All three items CLOSED:
+  physical-allocation aggregation exclusive (8-device execution: 256 B / 1.0 tree; old object-sum
+  reproduces 9 objects / 512 B / 2.0 trees as the asserted must-fail); helper caches split 2/2/2/1/1
+  → 8 helpers, production total 39; 16 distinct variance tags; missing/collapsed timings fail the
+  23-tag / 27-per-state assertions; zero-addressable fallback conservative + flagged and irrelevant
+  at v6e-8 (single-VM, one process). **Fix-#3 series CLOSED after 5 rounds** (46b43c5 → 7241030 →
+  99b5529 → ce6717d → 2ef9b8a; review passes: 5). Suite 1,511 / 2.
+
