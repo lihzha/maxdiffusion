@@ -44,6 +44,7 @@ video. It scores gradients, not pixels.
 
 from __future__ import annotations
 
+import functools
 import gc
 import hashlib
 import re
@@ -167,6 +168,28 @@ def assert_no_update(before: Sequence[str], after: Sequence[str]) -> None:
 # ------------------------------------------------------------------------ support-variance (D2)
 
 
+@jax.jit
+def _welford_first(tree):
+    """The first observation becomes the running mean (in float32)."""
+    return jax.tree_util.tree_map(lambda leaf: leaf.astype(jnp.float32), tree)
+
+
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _welford_update(mean, tree, count):
+    """One compiled Welford step; the mean buffer is DONATED so it is updated in place.
+
+    Eagerly this was three whole-tree traversals plus a dot, each materializing its own tree -- the
+    same shape as the replay's OOM, in the accumulator that runs K x M times.
+    """
+    delta = jax.tree_util.tree_map(lambda g, m: g.astype(jnp.float32) - m, tree, mean)
+    new_mean = jax.tree_util.tree_map(lambda m, d: m + d / count, mean, delta)
+    delta2 = jax.tree_util.tree_map(lambda g, m: g.astype(jnp.float32) - m, tree, new_mean)
+    increment = sum(
+        jnp.sum(x * y) for x, y in zip(jax.tree_util.tree_leaves(delta), jax.tree_util.tree_leaves(delta2))
+    )
+    return new_mean, increment
+
+
 class _TreeWelford:
     """Streaming mean/variance over gradient TREES, retaining O(1) trees.
 
@@ -184,12 +207,12 @@ class _TreeWelford:
     def update(self, tree) -> None:
         self.count += 1
         if self.mean is None:
-            self.mean = jax.tree_util.tree_map(lambda leaf: leaf.astype(jnp.float32), tree)
+            self.mean = _welford_first(tree)
             return
-        delta = jax.tree_util.tree_map(lambda g, m: g.astype(jnp.float32) - m, tree, self.mean)
-        self.mean = jax.tree_util.tree_map(lambda m, d: m + d / self.count, self.mean, delta)
-        delta2 = jax.tree_util.tree_map(lambda g, m: g.astype(jnp.float32) - m, tree, self.mean)
-        self.m2 += exp03.tree_dot(delta, delta2)
+        # ONE compiled step: the two deltas and the dot never exist as separate eager whole trees,
+        # and the running mean's buffer is donated so the update is in place.
+        self.mean, increment = _welford_update(self.mean, tree, jnp.asarray(self.count, jnp.float32))
+        self.m2 += float(increment)
 
     def population_variance(self) -> float:
         return self.m2 / self.count if self.count else 0.0
@@ -263,10 +286,21 @@ def variance_decomposition(gradients) -> dict:
 # ---------------------------------------------------------------------------- A's label isolation
 
 
+@jax.jit
+def _jit_relative_gap(left, right):
+    """``||left - right||`` and ``||right||`` in ONE compiled pass (no eager difference tree)."""
+    difference_sq = sum(
+        jnp.sum((a.astype(jnp.float32) - b.astype(jnp.float32)) ** 2)
+        for a, b in zip(jax.tree_util.tree_leaves(left), jax.tree_util.tree_leaves(right))
+    )
+    right_sq = sum(jnp.sum(b.astype(jnp.float32) ** 2) for b in jax.tree_util.tree_leaves(right))
+    return jnp.sqrt(difference_sq), jnp.sqrt(right_sq)
+
+
 def _relative_gradient_gap(left, right) -> float:
-    """``||left - right|| / ||right||`` — leafwise, so no gradient is ever flattened on the host."""
-    difference = jax.tree_util.tree_map(lambda a, b: a.astype(jnp.float32) - b.astype(jnp.float32), left, right)
-    return float(np.sqrt(exp03.tree_sq_norm(difference)) / max(np.sqrt(exp03.tree_sq_norm(right)), 1e-12))
+    """``||left - right|| / ||right||`` — compiled, so no whole difference tree is ever materialized."""
+    difference, magnitude = _jit_relative_gap(left, right)
+    return float(difference) / max(float(magnitude), 1e-12)
 
 
 def same_eps_label(z_lo, z_gt, eps):
@@ -367,6 +401,22 @@ def state_view(config, state_label: str, **overrides):
     """A read-only config view carrying THIS state's ramp origin (and any forced knobs)."""
     plan = S1_5_STATE_PLAN[state_label]
     return SimpleNamespace(**{**_config_key_dict(config), "exp03_ramp_origin": plan["ramp_origin"], **overrides})
+
+
+_PROBE_GRAD_CACHE: dict = {}
+
+
+def _jitted_grad(tag: str, fn):
+    """A cached, JITTED value-and-gradient for one of the probe's own losses.
+
+    Same reason as the replay's (Job 8c): an unjitted backward through a 5B forward runs op by op,
+    so nothing is scheduled or freed and the peak is the whole graph. These are the label-isolation,
+    conditional-parity, production-control, forced-p_ss and support-variance paths -- dozens of
+    gradients per state, every one of which was eager.
+    """
+    if tag not in _PROBE_GRAD_CACHE:
+        _PROBE_GRAD_CACHE[tag] = jax.jit(jax.value_and_grad(fn))
+    return _PROBE_GRAD_CACHE[tag]
 
 
 def _objective_config(config, objective: str, **overrides):
@@ -558,9 +608,13 @@ def state_report(
             for salt in support_salts:
                 salted = state_view(config, state_label, exp03_objective=objective, exp03_support_salt=int(salt))
                 kwargs = {} if objective == "control" else {"global_step": global_step}
-                yield jax.grad(
-                    lambda params, cfg=salted, kw=kwargs: fn(params, state, batch, batch_rng, cfg, scheduler, **kw)[0]
-                )(state.params)
+                compiled = _jitted_grad(
+                    f"variance_{objective}_{int(salt)}",
+                    lambda params, st, b, key, gs, cfg=salted, f=fn, uses_step=bool(kwargs): f(
+                        params, st, b, key, cfg, scheduler, **({"global_step": gs} if uses_step else {})
+                    )[0],
+                )
+                yield compiled(state.params, state, batch, batch_rng, global_step)[1]
 
         # Generators, so a gradient exists only while Welford is consuming it.
         variance[objective] = variance_decomposition(_draws(batch, index) for index, batch in enumerate(batches))
@@ -572,21 +626,12 @@ def state_report(
     forced_on = state_view(config, state_label, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0)
     isolation_values = {}
     for flag, label in ((False, "corrective"), (True, "same_eps")):
-        loss, _ = corrective_at_support(
-            state.params,
-            state,
-            batch,
-            batch_rng,
-            forced_on,
-            scheduler,
-            global_step=global_step,
-            same_eps_label_flag=flag,
-        )
-        grad = jax.grad(
-            lambda params, f=flag: corrective_at_support(
-                params, state, batch, batch_rng, forced_on, scheduler, global_step=global_step, same_eps_label_flag=f
-            )[0]
-        )(state.params)
+        loss, grad = _jitted_grad(
+            f"isolation_{label}",
+            lambda params, st, b, key, gs, f=flag: corrective_at_support(
+                params, st, b, key, forced_on, scheduler, global_step=gs, same_eps_label_flag=f
+            )[0],
+        )(state.params, state, batch, batch_rng, global_step)
         isolation_values[label] = (float(loss), grad)
     isolation = label_isolation(
         corrective_loss=isolation_values["corrective"][0],
@@ -594,31 +639,28 @@ def state_report(
         corrective_grad=isolation_values["corrective"][1],
         same_eps_grad=isolation_values["same_eps"][1],
     )
+    del isolation_values  # two 5B gradients, consumed and dropped before the parity pair is built
 
     forced_off = state_view(config, state_label, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0)
-    trial_loss, _ = exp03._corrective_ss_loss(
-        state.params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
-    )
-    trial_grad = jax.grad(
-        lambda params: exp03._corrective_ss_loss(
-            params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
-        )[0]
-    )(state.params)
-    comparator_loss, _ = plain_fixed_support_loss(
-        state.params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
-    )
-    comparator_grad = jax.grad(
-        lambda params: plain_fixed_support_loss(
-            params, state, batch, batch_rng, forced_off, scheduler, global_step=global_step
-        )[0]
-    )(state.params)
+    trial_loss, trial_grad = _jitted_grad(
+        "parity_trial",
+        lambda params, st, b, key, gs: exp03._corrective_ss_loss(
+            params, st, b, key, forced_off, scheduler, global_step=gs
+        )[0],
+    )(state.params, state, batch, batch_rng, global_step)
+    comparator_loss, comparator_grad = _jitted_grad(
+        "parity_comparator",
+        lambda params, st, b, key, gs: plain_fixed_support_loss(
+            params, st, b, key, forced_off, scheduler, global_step=gs
+        )[0],
+    )(state.params, state, batch, batch_rng, global_step)
     parity = parity_report(
         trial_loss=trial_loss, plain_loss=comparator_loss, trial_grad=trial_grad, plain_grad=comparator_grad
     )
-    production_loss, _ = _denoising_loss(state.params, state, batch, batch_rng, view, scheduler)
-    production_grad = jax.grad(lambda params: _denoising_loss(params, state, batch, batch_rng, view, scheduler)[0])(
-        state.params
-    )
+    production_loss, production_grad = _jitted_grad(
+        "parity_production_control",
+        lambda params, st, b, key, gs: _denoising_loss(params, st, b, key, view, scheduler)[0],
+    )(state.params, state, batch, batch_rng, global_step)
     parity["production_control_difference"] = {
         "note": (
             "A at p_ss=0 vs the PRODUCTION control: not an identity -- A scores one scalar sigma per "
@@ -634,19 +676,18 @@ def state_report(
         forced_view = state_view(
             config, state_label, exp03_objective=objective, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0
         )
-        loss, _ = exp03.EXP03_LOSSES[objective](
-            state.params, state, batch, batch_rng, forced_view, scheduler, global_step=global_step
-        )
-        grad = jax.grad(
-            lambda params, fn=exp03.EXP03_LOSSES[objective], cfg=forced_view: fn(
-                params, state, batch, batch_rng, cfg, scheduler, global_step=global_step
-            )[0]
-        )(state.params)
+        loss, grad = _jitted_grad(
+            f"forced_{objective}",
+            lambda params, st, b, key, gs, fn=exp03.EXP03_LOSSES[objective], cfg=forced_view: fn(
+                params, st, b, key, cfg, scheduler, global_step=gs
+            )[0],
+        )(state.params, state, batch, batch_rng, global_step)
         forced_diagnostics[objective] = {
             "loss": float(loss),
             "grad_norm": float(np.sqrt(exp03.tree_sq_norm(grad))),
             "grad_cosine_vs_production_control": exp03.grad_cosine(grad, production_grad),
         }
+        del grad  # consumed in the same iteration that produced it
 
     branch_counts = {
         "self_generated": sum(1 for row in rows if float(row.get("take_self_generated_a", 0.0)) > 0.5),

@@ -17,6 +17,7 @@ What has to be true before its numbers mean anything:
 from __future__ import annotations
 
 import inspect
+import math
 import re
 import shutil
 import subprocess
@@ -108,8 +109,12 @@ def test_the_driver_asserts_no_update_around_the_measurement():
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
     }
-    assert not called & {"apply_gradients", "value_and_grad"}, called
-    assert "tx.update" not in Path(s1_5.__file__).read_text()
+    # Computing gradients is the probe's JOB (value_and_grad is expected, and since the Job 8c fix
+    # it is the jitted form); APPLYING them is what must never happen.
+    assert not called & {"apply_gradients"}, called
+    module_text = Path(s1_5.__file__).read_text()
+    assert "tx.update" not in module_text
+    assert "state.replace(params=" not in module_text.split("def restore_exact_step")[0]
 
 
 # =============================================================================================
@@ -555,9 +560,19 @@ def test_the_frozen_replay_default_is_unchanged_from_the_parent_commit():
     signature = inspect.signature(exp03.exp03_frozen_replay)
     assert signature.parameters["include_control"].default is False
     assert signature.parameters["with_gradients"].default is True
-    # ...and grad_cosine is the float32 TREE reduction, not a host flatten.
+    # ...and grad_cosine is still a float32 TREE reduction, not a host flatten -- now through the
+    # JITTED dot and squared-norm helpers (jaxopt's eager tree_l2_norm was part of what exhausted
+    # HBM in Job 8c, and is gone from this module).
     cosine_source = inspect.getsource(exp03.grad_cosine)
-    assert "tree_l2_norm" in cosine_source and "tree_dot" in cosine_source
+    assert "tree_dot(" in cosine_source and "tree_sq_norm(" in cosine_source
+    # Structural: the module may NAME jaxopt in the comment recording why it is gone; it must not
+    # import or call it.
+    import ast
+
+    tree = ast.parse(Path(exp03.__file__).read_text())
+    imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    imported |= {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert not any(name.startswith("jaxopt") for name in imported), imported
 
 
 def test_no_vacuous_assertions_survive_in_this_file():
@@ -1110,3 +1125,201 @@ def test_the_helper_prefers_get_keys_over_vars():
     assert "_bookkeeping" not in keys and keys["weights_dtype"] == "bfloat16"
     source = inspect.getsource(s1_5._config_key_dict)
     assert "config.get_keys()" in source and "callable(getter)" in source
+
+
+# =============================================================================================
+# 10. Job 8c: the replay's memory SHAPE.
+#
+# HBM OOM inside exp03_frozen_replay -- eager (unjitted) backward through a 5B forward, four grad
+# trees resident, and whole-tree temporaries from jaxopt's tree_l2_norm, a tree_reduce with a full
+# abs copy per leaf, and a per-leaf finiteness sweep. OOM cannot be reproduced in CI, so what is
+# pinned here is the STRUCTURE: fused statistics equal their plain references, the resident-tree
+# high-water mark is recorded and capped, and the replay's numbers are unchanged.
+# =============================================================================================
+
+
+def _reference_grad_stats(grad):
+    """The statistics as four separate plain traversals — the shape the fused pass replaced."""
+    leaves = jax.tree_util.tree_leaves(grad)
+    sq = float(sum(float(np.sum(np.asarray(leaf, dtype=np.float64) ** 2)) for leaf in leaves))
+    return {
+        "sq_norm": sq,
+        "l2_norm": float(np.sqrt(sq)),
+        "max_abs": max(float(np.max(np.abs(np.asarray(leaf)))) for leaf in leaves),
+        "finite_leaves": float(sum(1 for leaf in leaves if bool(np.all(np.isfinite(np.asarray(leaf)))))),
+        "total_leaves": float(len(leaves)),
+    }
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_the_fused_grad_stats_equal_a_plain_reference(dtype):
+    rng = np.random.default_rng(0)
+    grad = {
+        "w": jnp.asarray(rng.normal(size=(4, 5)), dtype=dtype),
+        "b": jnp.asarray(rng.normal(size=(7,)) * 10.0, dtype=dtype),
+        "deep": {"k": jnp.asarray(rng.normal(size=(3, 2, 2)), dtype=dtype)},
+    }
+    got = exp03.grad_stats(grad)
+    want = _reference_grad_stats(grad)
+    for key in ("sq_norm", "l2_norm", "max_abs"):
+        assert got[key] == pytest.approx(want[key], rel=1e-5), key
+    assert got["finite_leaves"] == want["finite_leaves"] == 3.0
+    assert got["total_leaves"] == want["total_leaves"] == 3.0
+
+    # A non-finite leaf is counted, not hidden.
+    poisoned = {**grad, "b": grad["b"].at[0].set(jnp.asarray(float("nan"), dtype=dtype))}
+    assert exp03.grad_stats(poisoned)["finite_leaves"] == 2.0
+
+    # The empty-tree edge does not raise.
+    empty = exp03.grad_stats({})
+    assert empty["total_leaves"] == 0.0 and empty["sq_norm"] == 0.0
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_the_fused_dot_and_cosine_equal_plain_references(dtype):
+    rng = np.random.default_rng(1)
+    left = {"w": jnp.asarray(rng.normal(size=(6, 3)), dtype=dtype)}
+    right = {"w": jnp.asarray(rng.normal(size=(6, 3)), dtype=dtype)}
+    reference_dot = float(np.sum(np.asarray(left["w"], np.float64) * np.asarray(right["w"], np.float64)))
+    assert exp03.tree_dot(left, right) == pytest.approx(reference_dot, rel=1e-3 if dtype is jnp.bfloat16 else 1e-5)
+
+    reference_cosine = reference_dot / (
+        float(np.linalg.norm(np.asarray(left["w"], np.float64)))
+        * float(np.linalg.norm(np.asarray(right["w"], np.float64)))
+    )
+    tolerance = 1e-2 if dtype is jnp.bfloat16 else 1e-5
+    assert exp03.grad_cosine(left, right) == pytest.approx(reference_cosine, rel=tolerance)
+    # Supplying the squared norms (the caller already has them) must not change the answer.
+    stats_left, stats_right = exp03.grad_stats(left), exp03.grad_stats(right)
+    assert exp03.grad_cosine(
+        left, right, left_sq_norm=stats_left["sq_norm"], right_sq_norm=stats_right["sq_norm"]
+    ) == pytest.approx(exp03.grad_cosine(left, right), rel=1e-6)
+    # A degenerate operand gives nan rather than a division blow-up.
+    assert math.isnan(exp03.grad_cosine(left, {"w": jnp.zeros_like(right["w"])}))
+
+
+def test_the_replay_caps_resident_gradient_trees_and_reports_the_peak():
+    state, data, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    view = s1_5.state_view(config, "checkpoint")
+    report = exp03.exp03_frozen_replay(
+        state, data[0], jax.random.key(3), view, scheduler, global_step=jnp.asarray(7, jnp.int32), include_control=True
+    )
+    # THE contract, measured rather than asserted in a comment: control + A + B is the high-water
+    # mark, and it lands in the artifact so a run's own JSON shows whether it held.
+    assert report["grad_trees_peak_resident"] == 3.0
+    for name in ("control", "a", "b", "c"):
+        assert f"grad_norm_{name}" in report and f"grad_max_abs_{name}" in report
+        assert f"grad_finite_leaves_{name}" in report
+    for name in ("a", "b", "c"):
+        assert f"grad_cosine_{name}_vs_control" in report
+    assert "grad_cosine_ab" in report
+
+
+def test_the_report_peak_reaches_the_probe_artifact():
+    # The auditability claim: the cap is readable from the run's own JSON.
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    report = s1_5.state_report(
+        state,
+        batches,
+        jax.random.key(1),
+        config,
+        scheduler,
+        state_label="checkpoint",
+        checkpoint_step=10000,
+        support_salts=(1, 2),
+    )
+    peaks = [row["grad_trees_peak_resident"] for row in report["per_batch"]]
+    assert peaks and max(peaks) <= 3.0
+    assert report["per_objective"]["grad_trees_peak_resident"]["max"] <= 3.0
+
+
+def test_the_replay_values_are_unchanged_by_the_memory_fix():
+    # A REGRESSION reference implemented inline (not imported from the old code): the same losses
+    # and gradient statistics, computed the previous way -- separate eager grads, plain traversals.
+    state, data, config, scheduler = _toy_state_and_batches(config_shape="namespace")
+    batch = data[0]
+    rng = jax.random.key(3)
+    global_step = jnp.asarray(7, jnp.int32)
+    view = s1_5.state_view(config, "checkpoint")
+    report = exp03.exp03_frozen_replay(
+        state, batch, rng, view, scheduler, global_step=global_step, include_control=True
+    )
+
+    references = {"control": parent._denoising_loss, **exp03.EXP03_LOSSES}
+    name_of = {"control": "control", "corrective_ss": "a", "rollout_loss": "b", "combined": "c"}
+    grads = {}
+    for objective, loss_fn in references.items():
+        kwargs = {} if objective == "control" else {"global_step": global_step}
+
+        def _loss(params, fn=loss_fn, kw=kwargs):
+            return fn(params, state, batch, rng, view, scheduler, **kw)[0]
+
+        short = name_of[objective]
+        assert report[f"loss_{short}"] == pytest.approx(float(_loss(state.params)), rel=1e-6)
+        grads[short] = jax.grad(_loss)(state.params)
+        want = _reference_grad_stats(grads[short])
+        assert report[f"grad_norm_{short}"] == pytest.approx(want["l2_norm"], rel=1e-5)
+        assert report[f"grad_max_abs_{short}"] == pytest.approx(want["max_abs"], rel=1e-5)
+        assert report[f"grad_finite_leaves_{short}"] == want["finite_leaves"]
+
+    def _reference_cosine(left, right):
+        dot = sum(
+            float(np.sum(np.asarray(x, np.float64) * np.asarray(y, np.float64)))
+            for x, y in zip(jax.tree_util.tree_leaves(left), jax.tree_util.tree_leaves(right))
+        )
+        norms = np.sqrt(_reference_grad_stats(left)["sq_norm"]) * np.sqrt(_reference_grad_stats(right)["sq_norm"])
+        return dot / norms
+
+    for short in ("a", "b", "c"):
+        assert report[f"grad_cosine_{short}_vs_control"] == pytest.approx(
+            _reference_cosine(grads[short], grads["control"]), rel=1e-5
+        )
+    assert report["grad_cosine_ab"] == pytest.approx(_reference_cosine(grads["a"], grads["b"]), rel=1e-5)
+
+
+def test_the_welford_update_is_compiled_and_matches_a_plain_reference():
+    # Behavioural: the jitted carry update must equal a plain Welford over the same stream.
+    rng = np.random.default_rng(4)
+    stream = [{"w": jnp.asarray(rng.normal(size=(5,)), dtype=jnp.float32)} for _ in range(6)]
+
+    accumulator = s1_5._TreeWelford()
+    for tree in stream:
+        accumulator.update(tree)
+
+    vectors = np.stack([np.asarray(tree["w"], dtype=np.float64) for tree in stream])
+    reference_mean = vectors.mean(axis=0)
+    reference_m2 = float(np.sum((vectors - reference_mean) ** 2))
+    assert np.allclose(np.asarray(accumulator.mean["w"], dtype=np.float64), reference_mean, atol=1e-5)
+    assert accumulator.m2 == pytest.approx(reference_m2, rel=1e-4)
+    assert accumulator.population_variance() == pytest.approx(reference_m2 / len(stream), rel=1e-4)
+    # ...and it goes through the compiled update with a donated carry.
+    import ast
+
+    tree = ast.parse(Path(s1_5.__file__).read_text())
+    welford = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_welford_update"
+    )
+    decorators = [ast.unparse(node) for node in welford.decorator_list]
+    assert any("jax.jit" in text and "donate_argnums" in text for text in decorators), decorators
+    assert "_welford_update(" in inspect.getsource(s1_5._TreeWelford.update)
+
+
+def test_no_eager_whole_tree_gradient_remains_in_the_probe_or_replay():
+    # The audit, pinned: every gradient in these two modules goes through a jitted seam.
+    import ast
+
+    for module in (s1_5, exp03):
+        tree = ast.parse(Path(module.__file__).read_text())
+        bare = [
+            ast.unparse(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "grad"
+            and getattr(node.func.value, "id", "") == "jax"
+        ]
+        assert not bare, (module.__name__, bare)
+    # ...and the replay's own value+grad is jitted and cached.
+    source = inspect.getsource(exp03._loss_and_grad_fn)
+    assert "jax.jit(jax.value_and_grad(_call, has_aux=True))" in source
+    assert "_LOSS_AND_GRAD_CACHE" in source

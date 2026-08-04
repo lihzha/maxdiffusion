@@ -32,7 +32,6 @@ import math
 from types import SimpleNamespace
 
 import jax
-import jaxopt
 import jax.numpy as jnp
 import numpy as np
 
@@ -554,29 +553,116 @@ EXP03_LOSSES = {
 EXP03_IMPLEMENTED_OBJECTIVES = (EXP03_CONTROL_OBJECTIVE, *EXP03_LOSSES)
 
 
-def tree_dot(left, right) -> float:
-    """Leafwise float32 dot product — O(1) host memory, whatever the model's size."""
-    return float(
-        sum(
-            jnp.sum(x.astype(jnp.float32) * y.astype(jnp.float32))
-            for x, y in zip(jax.tree_util.tree_leaves(left), jax.tree_util.tree_leaves(right))
-        )
+@jax.jit
+def _jit_tree_vdot(left, right):
+    """Leafwise float32 dot, as ONE compiled graph.
+
+    Jitted, not eager: at 5B an eager leafwise reduction materializes a full product tree before
+    anything is freed. Under jit, XLA schedules the whole reduction and keeps only the accumulator.
+    """
+    return sum(
+        jnp.sum(x.astype(jnp.float32) * y.astype(jnp.float32))
+        for x, y in zip(jax.tree_util.tree_leaves(left), jax.tree_util.tree_leaves(right))
     )
 
 
+@jax.jit
+def _jit_grad_stats(grad):
+    """Every gradient statistic in ONE compiled pass: sq norm, l2, max-abs, finite-leaf count.
+
+    Replaces four separate eager whole-tree traversals (jaxopt's ``tree_l2_norm`` squared tree, a
+    ``tree_reduce`` with a full ``jnp.abs`` copy per leaf, and a per-leaf finiteness sweep). Those
+    stacked their temporaries on top of four resident 5B gradients, which is what exhausted HBM in
+    Job 8c -- the allocator was asking for 18 MB with 12.64 MB free.
+    """
+    leaves = jax.tree_util.tree_leaves(grad)
+    if not leaves:
+        zero = jnp.asarray(0.0, dtype=jnp.float32)
+        return {"sq_norm": zero, "l2_norm": zero, "max_abs": zero, "finite_leaves": jnp.asarray(0, jnp.int32)}
+    sq_norm = sum(jnp.sum(leaf.astype(jnp.float32) ** 2) for leaf in leaves)
+    max_abs = jnp.max(jnp.stack([jnp.max(jnp.abs(leaf.astype(jnp.float32))) for leaf in leaves]))
+    finite_leaves = sum(jnp.all(jnp.isfinite(leaf)).astype(jnp.int32) for leaf in leaves)
+    return {
+        "sq_norm": sq_norm,
+        "l2_norm": jnp.sqrt(sq_norm),
+        "max_abs": max_abs,
+        "finite_leaves": finite_leaves,
+    }
+
+
+def grad_stats(grad) -> dict:
+    """:func:`_jit_grad_stats` with the host-side scalars pulled out (and the static leaf count)."""
+    stats = _jit_grad_stats(grad)
+    return {
+        "sq_norm": float(stats["sq_norm"]),
+        "l2_norm": float(stats["l2_norm"]),
+        "max_abs": float(stats["max_abs"]),
+        "finite_leaves": float(stats["finite_leaves"]),
+        "total_leaves": float(len(jax.tree_util.tree_leaves(grad))),
+    }
+
+
+def tree_dot(left, right) -> float:
+    """Leafwise float32 dot product — compiled, so nothing whole-tree is materialized on the way."""
+    return float(_jit_tree_vdot(left, right))
+
+
 def tree_sq_norm(tree) -> float:
-    """Leafwise squared L2 norm, on device."""
-    return float(sum(jnp.sum(leaf.astype(jnp.float32) ** 2) for leaf in jax.tree_util.tree_leaves(tree)))
+    """Leafwise squared L2 norm, in one compiled pass."""
+    return float(_jit_grad_stats(tree)["sq_norm"])
 
 
-def grad_cosine(left, right) -> float:
+def grad_cosine(left, right, *, left_sq_norm: float | None = None, right_sq_norm: float | None = None) -> float:
     """Cosine between two gradient pytrees; ``nan`` if either is degenerate.
 
-    The float32 TREE reduction the parent commit used -- not a host float64 flatten, which at 5B
-    parameters would be a 40 GB copy per gradient.
+    The squared norms can be supplied by a caller that already computed them, so a cosine costs one
+    compiled dot rather than a dot plus two more whole-tree reductions.
     """
-    norms = float(jaxopt.tree_util.tree_l2_norm(left)) * float(jaxopt.tree_util.tree_l2_norm(right))
-    return tree_dot(left, right) / norms if norms > 0 else float("nan")
+    left_sq = tree_sq_norm(left) if left_sq_norm is None else float(left_sq_norm)
+    right_sq = tree_sq_norm(right) if right_sq_norm is None else float(right_sq_norm)
+    denominator = math.sqrt(left_sq) * math.sqrt(right_sq)
+    return tree_dot(left, right) / denominator if denominator > 0 else float("nan")
+
+
+class ResidentTrees:
+    """Counts how many gradient trees are alive at once, so the cap is a measurement.
+
+    The replay's memory contract is "at most three 5B gradients resident". A comment cannot enforce
+    that; this counter records the high-water mark into the report, where the run's own artifact
+    shows whether the contract held.
+    """
+
+    def __init__(self):
+        self.live = 0
+        self.peak = 0
+
+    def acquire(self) -> None:
+        self.live += 1
+        self.peak = max(self.peak, self.live)
+
+    def release(self, count: int = 1) -> None:
+        self.live -= count
+
+
+_LOSS_AND_GRAD_CACHE: dict = {}
+
+
+def _loss_and_grad_fn(name: str, loss_fn, config, scheduler):
+    """A jitted ``value_and_grad`` per objective, cached.
+
+    THE fix for Job 8c: the backward pass runs as one compiled graph instead of op by op, so XLA
+    schedules and frees it. The value comes from the same call as the gradient -- the previous shape
+    ran the whole 5B forward twice per objective, once for the loss and once inside ``jax.grad``.
+    """
+    key = (name, id(config), id(scheduler))
+    if key not in _LOSS_AND_GRAD_CACHE:
+
+        def _call(params, state, data, rng, global_step, fn=loss_fn, objective=name):
+            kwargs = {} if objective == "control" else {"global_step": global_step}
+            return fn(params, state, data, rng, config, scheduler, **kwargs)
+
+        _LOSS_AND_GRAD_CACHE[key] = (jax.jit(jax.value_and_grad(_call, has_aux=True)), jax.jit(_call))
+    return _LOSS_AND_GRAD_CACHE[key]
 
 
 def exp03_frozen_replay(
@@ -591,22 +677,27 @@ def exp03_frozen_replay(
     -- everything needed to say WHICH term and WHICH pass produced a non-finite value.
     """
     out: dict[str, float] = {"global_step": float(global_step)}
-    grads: dict[str, object] = {}
+    resident = ResidentTrees()
     objectives = [("a", _corrective_ss_loss), ("b", _rollout_loss), ("c", _combined_loss)]
     if include_control:
         # The plain objective is the reference every cosine is taken against, so it is replayed here
         # rather than in a second pass that could drift from this one.
         objectives.insert(0, ("control", _denoising_loss))
+
+    control_grad = None
+    control_sq = None
+    a_grad = None
+    a_sq = None
     for name, loss_fn in objectives:
-
-        def fn_with_aux(params, fn=loss_fn, name=name):
-            kwargs = {} if name == "control" else {"global_step": global_step}
-            return fn(params, state, data, rng, config, scheduler, **kwargs)
-
-        def _loss(params, fn=fn_with_aux):
-            return fn(params)[0]
-
-        value, aux = fn_with_aux(state.params)
+        compiled_grad, compiled_value = _loss_and_grad_fn(name, loss_fn, config, scheduler)
+        if with_gradients:
+            (value, aux), grad = compiled_grad(state.params, state, data, rng, global_step)
+            resident.acquire()
+        else:
+            # Also compiled: a 5B forward run op-by-op is the same memory failure, and running both
+            # modes through XLA keeps their values identical rather than differing in the last ULPs.
+            value, aux = compiled_value(state.params, state, data, rng, global_step)
+            grad = None
         loss = float(value)
         out[f"loss_{name}"] = loss
         out[f"loss_{name}_finite"] = float(math.isfinite(loss))
@@ -632,24 +723,42 @@ def exp03_frozen_replay(
                 out[f"{extra}_{name}"] = float(aux[extra])
         if not with_gradients:
             continue
-        grad = jax.grad(_loss)(state.params)
-        grads[name] = grad
-        leaves = jax.tree_util.tree_leaves(grad)
-        finite = [bool(jnp.all(jnp.isfinite(leaf))) for leaf in leaves]
-        out[f"grad_norm_{name}"] = float(jaxopt.tree_util.tree_l2_norm(grad))
-        out[f"grad_sq_norm_{name}"] = tree_sq_norm(grad)
-        out[f"grad_max_abs_{name}"] = float(
-            jax.tree_util.tree_reduce(lambda m, leaf: jnp.maximum(m, jnp.max(jnp.abs(leaf))), grad, -1.0)
-        )
-        out[f"grad_finite_leaves_{name}"] = float(sum(finite))
-        out[f"grad_total_leaves_{name}"] = float(len(finite))
-    if with_gradients and "control" in grads:
-        # Cosine vs the PLAIN objective: how much of each trial's gradient is the control's.
-        for name in ("a", "b", "c"):
-            if name in grads:
-                out[f"grad_cosine_{name}_vs_control"] = grad_cosine(grads[name], grads["control"])
-    if with_gradients and "a" in grads and "b" in grads:
-        out["grad_cosine_ab"] = grad_cosine(grads["a"], grads["b"])
+
+        stats = grad_stats(grad)
+        out[f"grad_norm_{name}"] = stats["l2_norm"]
+        out[f"grad_sq_norm_{name}"] = stats["sq_norm"]
+        out[f"grad_max_abs_{name}"] = stats["max_abs"]
+        out[f"grad_finite_leaves_{name}"] = stats["finite_leaves"]
+        out[f"grad_total_leaves_{name}"] = stats["total_leaves"]
+
+        # INCREMENTAL cosines, so no more than three gradients are ever resident: the control is
+        # kept as the reference, A is kept only until B can be compared against it, and every other
+        # tree is consumed and dropped in the same iteration that produced it.
+        if name == "control":
+            control_grad, control_sq = grad, stats["sq_norm"]
+            continue
+        if control_grad is not None:
+            out[f"grad_cosine_{name}_vs_control"] = grad_cosine(
+                grad, control_grad, left_sq_norm=stats["sq_norm"], right_sq_norm=control_sq
+            )
+        if name == "a":
+            a_grad, a_sq = grad, stats["sq_norm"]
+            continue
+        if name == "b" and a_grad is not None:
+            out["grad_cosine_ab"] = grad_cosine(grad, a_grad, left_sq_norm=stats["sq_norm"], right_sq_norm=a_sq)
+            del a_grad
+            a_grad = None
+            resident.release()
+        del grad
+        resident.release()
+
+    if a_grad is not None:  # no B in this replay: A was never consumed
+        del a_grad
+        resident.release()
+    if control_grad is not None:
+        del control_grad
+        resident.release()
+    out["grad_trees_peak_resident"] = float(resident.peak)
     return out
 
 

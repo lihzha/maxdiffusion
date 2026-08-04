@@ -454,3 +454,34 @@
   correctly still pass; they exercise the branch where `vars()` is right.
 - **Result** — suite 1489 passed / 2 skipped (+2 e2e cases). All four earlier mutations still killed
   (the exact defect now takes 4 tests down, up from 2, because the proxy e2e joins them).
+
+## 2026-08-04T02:00:00Z — Job 8c fix: the replay's memory SHAPE (HBM OOM at 5B)
+
+- **Defect** — `exp03_frozen_replay(with_gradients=True)` had never executed at 5B (Jobs 8/8b died
+  earlier). Its shape: an EAGER `jax.grad` per objective (op-by-op backward through the full forward,
+  nothing scheduled or freed), all four gradient trees retained until the end-of-loop cosines, and
+  eager whole-tree temporaries on top (jaxopt's `tree_l2_norm` squared tree, a `tree_reduce` with a
+  full `jnp.abs` copy per leaf, a per-leaf finiteness sweep). OOM at 18 MB requested / 12.64 MB free.
+- **Fix** — (1) jitted `value_and_grad` per objective, cached, with the loss taken from the SAME call
+  (the old shape ran the 5B forward twice per objective); the forward-only mode is compiled too;
+  (2) one jitted fused `grad_stats` (sq norm, l2, max-abs, finite leaves) replacing four traversals,
+  jaxopt dropped from this module; (3) jitted `tree_vdot` behind `grad_cosine`, with incremental
+  cosines so residency is capped at three trees — control kept as the reference, A kept only until B
+  can be compared against it, everything else consumed and dropped in its own iteration; the
+  high-water mark is recorded as `grad_trees_peak_resident` and lands in the run artifact.
+- **Audit (item 4)** — `_TreeWelford.update`: FIXED (jitted update, mean buffer donated; it ran K×M
+  times eagerly). `_relative_gradient_gap`: FIXED (was building a whole difference tree eagerly).
+  The probe's other six `jax.grad` sites — label isolation ×2, parity trial/comparator, production
+  control, forced-p_ss ×2, plus the variance draws — all FIXED via a cached `_jitted_grad`; consumed
+  trees are `del`ed in the iteration that produced them. `tree_sq_norm`/`grad_cosine`: FIXED (now the
+  jitted primitives). The sha256 fingerprint: ALREADY SAFE — it is a per-leaf `np.asarray`, one leaf
+  at a time to host RAM, never a whole-tree device_get. jaxopt in the other trainers: LEFT ALONE —
+  those calls are inside jitted train steps, which is the safe shape.
+- **Semantics** — no intended change. One real difference found and removed: the forward-only path
+  was eager while the with-gradients path became compiled, and their losses differed in the last
+  ULPs (59.851017 vs 59.850998, ~3e-7 relative). Compiling both made them identical again. Beyond
+  that, values match plain references to fp tolerance; reduction ORDER inside the fused passes may
+  differ from the old separate traversals, so bit-identity with pre-fix artifacts is not claimed —
+  S1.5's readings are cross-state comparisons computed by the same code, so internal consistency is
+  what matters.
+- **Result** — suite 1498 passed / 2 skipped (+9).
