@@ -411,3 +411,23 @@ motivation (the residual as the compounding term).
 "you can use (a) for the exp_02 next step" — one LR 1e-4 probe segment 17,500 → 20,000 (Job 47,
 `20260804-021109-19080ff3`). (b) formal verdict machinery stays parked until the probe reads out.
 
+## lr1e4 @ 20,000 (Jobs 47–49) — the (a) probe: 1e-4 does NOT restore the pace — 2026-08-04
+
+| segment | LR | loss gain | SSIM (canonical seed-0) | ≥0.95 |
+| --- | --- | --- | --- | --- |
+| 10,000→12,500 | 5e-5 | −0.0617 | 0.9174 | 11 |
+| 12,500→15,000 | 5e-5 | −0.0213 | 0.9427 | 51 |
+| 15,000→17,500 | 5e-5 | −0.0045 | 0.9508 | 62 |
+| **17,500→20,000** | **1e-4** | **−0.00156** | **0.9536** | **67** |
+
+Anchor 0.0347633288 reproduced exactly; 20,000 loss 0.03320. Line: predicted 0.9486, actual +0.0047
+(sixth hold, first at 1e-4). Stable at 1e-4 (no divergence). Conclusion: the LR axis is CLOSED —
+two raises tested (5e-5: 27.5× control; 1e-4: no pace restoration); what remains between 0.9536 and
+the 0.95-per-window bar is the compounding rollout price the law's slope measures — exp_03's target.
+
+**Decision menu (updated) for Yixun:**
+- **(b) formalize the verdict at 20,000** — 3-seed canonical + full-set verdict passes at the best
+  checkpoint (mean crossed D11's 0.95 bar; formal claim needs the predeclared machinery).
+- **(d) stop here** — leave exp_02's headline as "mean 0.9536, 67/100 at 20k; LR axis closed" and
+  let exp_03 carry the objective-mismatch question; formal verdict machinery stays available.
+
