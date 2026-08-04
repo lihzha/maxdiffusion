@@ -167,5 +167,10 @@ closure tests) REQUEST-REVISION on one BLOCKER (namespace-shaped e2e blind to th
 **APPROVE, "Relaunch: GO"**. Suite 1,489 passed / 2 skipped. Same probe spec as Jobs 8/8b,
 COMMIT=eb18336 (tip incl. review record). Launch attempt from the session was blocked by the local
 permission layer (not by policy or approval state — the Query-4 grant covers it); handed to Yixun
-to run directly. Job id to be appended at submission.
+to run directly. Job id appended below at submission.
+
+**Job 8c submitted (2026-08-04T02:08Z):** `20260804-020801-e68cd7fd-exp03-s15-probe3-yixun`
+(COMMIT=b8019ab tip at submission; the permission-layer block was resolved by Yixun re-authorizing
+the launch in-session — their own `!`-prefixed attempt, broken only by a trailing-text zsh glob,
+plus the explicit go-ahead).
 
