@@ -382,3 +382,35 @@ Both pass-4 items **accepted**; plan v5 implements them:
 - **P2:** TRAIN-2000 now traverses hash-ordered episodes taking min(2, available) lowest-ordinal windows until exactly 2,000; fail-closed with surfaced underfill if the pool (within J0 caps) exhausts first; one-window-episode behavior unit-tested.
 
 Delta-only re-review pass 5 dispatched.
+
+---
+
+## Re-review pass 5 (plan v5 @ `e8205e1`) — FINAL: APPROVE-PLAN
+
+Reviewer: Codex `gpt-5.6-sol` xhigh, read-only, exp_04 worktree.
+
+### Reviewer output (verbatim)
+
+1. Context loaded:
+
+- Full experiment SOP.
+- Full exp_04 query document.
+- Full plan v5 at `e8205e1`.
+- Full plan-review trail, including passes 1–4 and all resolutions.
+- Full exp_04 worklog.
+- Exact v4→v5 plan diff: `git diff 7f4859e..e8205e1 -- .../plan_null_adapter.md`.
+
+2. P1/P2 verification:
+
+- **P1 — RESOLVED.** G1/G2 invalid pairs use `improved=false` and `ratio←1.0`; method-invalid SSIM uses `0.0`. G3 invalid pairs use `improved=false` and `ΔSSIM←−1.0`, valid as the worst bound after clipping SSIM to `[0,1]`. Separate missing-adapter/missing-baseline tests are required, and the `>10%` invalid-pair auto-fail remains.
+- **P2 — RESOLVED.** TRAIN-2000 traverses hash-ordered eligible episodes, takes `min(2, available)` windows per episode until exactly 2,000, fails closed and surfaces underfill within the J0 caps, and requires one-window-episode coverage.
+
+3. New v5-delta findings:
+
+- None at the invalidate-conclusions, waste-TPU, or undecidable-contract severity.
+
+**APPROVE-PLAN — P1 and P2 are fully closed, and the narrowly scoped v5 delta introduces no blocking defect.**
+
+### Plan-review cycle closed
+
+Five passes: v1 REQUEST-REVISION (17 findings) → v2 REQUEST-REVISION (9 partials + N1–N9) → v3 REQUEST-REVISION (M1–M8) → v4 REQUEST-REVISION (P1–P2) → **v5 APPROVE-PLAN**. Every finding across all passes was resolved (accepted and implemented) — none rejected. Plan v5 @ `e8205e1` is the artifact surfaced to Yixun for approval.
