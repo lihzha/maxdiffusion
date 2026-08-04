@@ -55,3 +55,13 @@ Item-6 ruling:
 **APPROVE / KEEP.** The R6 test-module import is confined to one test-only end-to-end composition check, reuses a genuinely cached production run, and is not R7’s principal metric oracle—the independent synthetic tests already carry that role. Extract shared test support only if R8 or another round becomes a second cross-round consumer.
 
 Final verdict: **REQUEST-REVISION — non-finite arm latents can currently be converted into valid gate evidence, and the clipping/fallback discrepancies should be tightened in the same round.**
+
+---
+
+## Strengthening record (Coder, same round; all three code findings closed, none rejected; the NIT was a Planner-side worklog correction, already appended)
+
+1. **MAJOR (non-finite latents) — FIXED.** Finiteness required for GT and every arm/probe tensor, all validated before the FIRST decode (forbidden-decode proof, 9 cases); the reviewer's exact probe (NaN + input-independent decoder → future_ssim 1.0) kept as a regression that now raises.
+2. **MINOR (clipping/parity) — FIXED, strict option.** Excursion tolerance removed ([0,1] exact), metric-layer clipping removed from SSIM and MSE; bit-exact parity pinned against direct unclipped skimage with an assert-clipped-would-differ guard.
+3. **MINOR (video fallback) — FIXED.** Staged .partial.mp4 + os.replace publish; failure removes staged AND previously-published output, warns with repr(exc), falls back to a freshly-recreated frame directory; the deliberate after-call contract (path holds this call's output or nothing) documented and tested.
+
+Suite **392 passed in 28.6s**; **32 mutants, 0 survivors** (Q8's staging mutant initially unobservable post-hoc — closed with a during-encoding published-path observation test). Behavior beyond findings: none. Round R7 closed; committed with this record.
