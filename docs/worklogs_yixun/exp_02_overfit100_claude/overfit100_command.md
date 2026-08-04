@@ -542,5 +542,5 @@ Job 47 FAILED attempt 1: worker-9 SIGABRT (exit 134) inside `jax.distributed.ini
 16-host barrier, pre-code; byte-for-byte the Job 44 / S3-attempt-1 infra signature (verified in
 worker-9.log before classifying). Standing auto-resubmit policy applies (infra, no code/config
 change). The session's permission layer intermittently blocked the resubmit; handed to Yixun.
-**Job 47b** id appended at submission.
+**Job 47b:** `20260804-025418-b2e2884f-exp02-o100-lr1e4b-yixun` (submitted by Yixun in-session, 2026-08-04T02:54Z; identical spec, COMMIT=899cb5d tip — docs-only delta from a215d60, trainer bytes unchanged).
 
