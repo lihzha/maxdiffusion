@@ -544,3 +544,23 @@ worker-9.log before classifying). Standing auto-resubmit policy applies (infra, 
 change). The session's permission layer intermittently blocked the resubmit; handed to Yixun.
 **Job 47b:** `20260804-025418-b2e2884f-exp02-o100-lr1e4b-yixun` (submitted by Yixun in-session, 2026-08-04T02:54Z; identical spec, COMMIT=899cb5d tip — docs-only delta from a215d60, trainer bytes unchanged).
 
+### Job 47b outcome (2026-08-04T04:01Z) — SUCCEEDED
+
+Restored at 17,500 in the new run dir, ran the 1e-4 segment, saved checkpoint 20,000, exit 0
+(single attempt). LR confirmed in config (`learning_rate: 0.0001`). Step-loss lines went to wandb
+only (no process-0 stdout lines in any worker log) — divergence/health is read authoritatively by
+the instrument below.
+
+## Jobs 48–49 — lr1e4@20,000 measurement pair — launched 2026-08-04T04:08Z
+
+Per the Job-47 (option-a) approval, established pattern (Jobs 42/43, 45/46):
+- **Job 48 (instrument):** `20260804-040821-1d5cfe7d-exp02-o100-inst-l1e4-yixun` —
+  CHECKPOINT_STEPS="17500,20000" on the lr1e4 run, fresh `validation_loss_20000/`,
+  TRAIN_COMMIT=899cb5d27189ae8925c6c08cc8ea58e7dc3aec5a (47b), COMMIT=bd3cbef (eval tip, byte-identical
+  eval lineage). **Validity anchor: 17,500 must reproduce 0.03476 exactly** (copied checkpoint,
+  identical bytes). The 20,000 reading is the option-(a) answer: segment gain ≫0.0045 ⇒ LR was still
+  the binding lever; ≈0.0045 or worse/NaN ⇒ the plateau is not LR-curable at this depth.
+- **Job 49 (SSIM @20,000):** `20260804-040837-c6136dbd-exp02-o100-ssim-l1e4-yixun` — s3_intermediate,
+  canonical, seed 0, correct (takes no TRAIN_COMMIT). Line check: predicted SSIM = 0.9885 − 1.201 ×
+  (Job-48's 20,000 loss); sixth independent test of the law, first at 1e-4.
+
