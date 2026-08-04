@@ -304,3 +304,17 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   `jax.live_arrays()`-based high-water gauge recorded into the artifact, executable two-state
   compilation-count + residency test housing the collision regression pin, empty-tree semantics pinned.
 
+- **`7241030` re-review (xhigh): REQUEST-REVISION** — design accepted (tracer-safe ramp_origin,
+  static_key, cache shape sound; parity trio released; empty-tree max_abs pinned) but the EVIDENCE
+  layer failed under executed mutations: collision pin watched replay outputs (never collision-prone —
+  forced-origin mutation passed it); gauge samples after peaks unwind (`_draws` holds the previous
+  gradient through the next reverse pass; replay sampled post-unwind; baseline dropped);
+  `PROBE_COMPILATIONS` counts wrapper constructions, not JAX compilations; stale isolation-loop `grad`
+  → real four-tree parity peak; Welford alias-dance rested on a false theory (aliases don't decline
+  donation) and added an exception-path bug (count incremented, mean=None). **Relaunch: NO-GO.**
+- Round-3 dispatched: stale-loop-variable sweep + dels; gauge sampling inside peak windows and inside
+  the replay; grad-shaped buffer COUNT from `jax.live_arrays()` (tree-multiples assertable at toy AND
+  5B scale); per-wrapper `._cache_size()` compile assertions incl. helpers; collision pin re-pointed
+  at cache-served rows with the forced-origin mutation required to kill it; transactional Welford
+  update; per-tag first-call wall-time log for v6e-8 compile observability.
+
