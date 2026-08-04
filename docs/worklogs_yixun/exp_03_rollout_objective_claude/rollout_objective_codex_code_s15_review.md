@@ -280,3 +280,27 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   e2e cases pass; namespace cases still pass under reversion (fallback branch stays covered); the commit
   touches only tests and documentation.
 
+## Fix #3 series — frozen-replay HBM OOM at 5B (Job 8c failure)
+
+- **`46b43c5` review (xhigh): REQUEST-REVISION** — 2 BLOCKERs / 2 MAJORs / 1 MINOR; Welford donation
+  VERIFIED; replay-side jit caching ruled sound (objective/config/scheduler identities separate
+  closures; global_step traced; K batches reuse 4 compilations/state).
+  1. **BLOCKER (correctness, silent):** `_PROBE_GRAD_CACHE` keyed by `tag` only while cached functions
+     closure-capture state-specific views — the init state would reuse checkpoint closures, corrupting
+     A/C variance + forced_p_ss_one via the wrong ramp origin.
+  2. VERIFIED — `_TreeWelford` donation safe; equations match reference.
+  3. **MAJOR:** `ResidentTrees` is manual acquire/release bookkeeping, not lifetime measurement —
+     hidden references would not change the artifact; auditability claim false as stated.
+  4. **MAJOR:** `test_no_eager_whole_tree_gradient_remains...` is inspect-only (AST-matches `jax.grad`
+     spellings) — 6th instance of the inspect-vs-execute class.
+  5. MINOR: empty-tree max_abs silently changed −1 → 0, untested.
+  6. **BLOCKER:** probe-wide residency not capped — parity path retains trial/comparator/production
+     grads while forced grads are created (real 4-tree peak outside the replay counter); Welford holds
+     two fp32 mean trees in later rows; ~54 reverse specializations probe-wide (8 in the replay).
+  **Relaunch: NO-GO** — "fix the cross-state cache collision and release the parity gradients before
+  forced diagnostics; then measure the complete probe's residency, including Welford."
+- Revision round dispatched: varying quantities as traced/static args instead of closure captures
+  (structural collision removal + fewer specializations), parity grads released pre-forced,
+  `jax.live_arrays()`-based high-water gauge recorded into the artifact, executable two-state
+  compilation-count + residency test housing the collision regression pin, empty-tree semantics pinned.
+
