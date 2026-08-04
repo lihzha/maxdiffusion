@@ -592,7 +592,38 @@ def _production_config_keys():
         pyconfig._config, pyconfig.config = saved
 
 
-def _toy_state_and_batches(num_batches=2):
+def _proxy_config(keys: dict):
+    """A config with pyconfig's SHAPE, not merely its keys.
+
+    Mimics ``pyconfig.HyperParameters``: the instance ``__dict__`` stays EMPTY (so ``vars()`` is
+    ``{}``, the property that broke Job 8b), the keys are served from a closure through
+    ``__getattr__``, ``get_keys()`` returns them, a missing key raises ``ValueError`` exactly as
+    pyconfig does, and assignment is refused.
+
+    A ``SimpleNamespace`` carrying the same 225 keys is NOT a substitute: its ``vars()`` works, so an
+    end-to-end test built on one passes even with the defect reinstated. That is precisely how this
+    defect shipped twice.
+    """
+    store = dict(keys)
+
+    class _ProxyConfig:
+        def __getattr__(self, attr):
+            if attr not in store:
+                raise ValueError(f"Requested key {attr}, not in config")
+            return store[attr]
+
+        def __setattr__(self, attr, value):
+            raise ValueError
+
+        def get_keys(self):
+            return store
+
+    proxy = _ProxyConfig()
+    assert vars(proxy) == {}, "the proxy must have an empty __dict__ or it is not the shape under test"
+    return proxy
+
+
+def _toy_state_and_batches(num_batches=2, config_shape="namespace"):
     """A tiny real Overfit100TrainState and real batches — enough to EXECUTE the report path."""
     import optax
     from flax import nnx
@@ -653,21 +684,31 @@ def _toy_state_and_batches(num_batches=2):
         train_data_dir="gs://x/train100",
         model_manifest_path="gs://x/manifest.json",
     )
-    config = SimpleNamespace(**settings)
-    assert s1_5.CONFIG_SENTINEL_KEY in vars(config)  # the guard is genuinely exercised below
+    if config_shape == "proxy":
+        # THE production shape: vars() is empty, so a view built from vars() would carry nothing.
+        config = _proxy_config(settings)
+        assert vars(config) == {}
+        assert config.weights_dtype == "float32"  # ...but the attribute path works
+    else:
+        config = SimpleNamespace(**settings)
+        assert s1_5.CONFIG_SENTINEL_KEY in vars(config)  # the helper's fallback branch
     from maxdiffusion.schedulers import FlaxFlowMatchScheduler
 
     scheduler = FlaxFlowMatchScheduler(dtype=jnp.float32, shift=5.0, sigma_min=0.0, sigma_max=1.0)
     return state, batches, config, scheduler
 
 
+@pytest.mark.parametrize("config_shape", ["proxy", "namespace"])
 @pytest.mark.parametrize("state_label", ["checkpoint", "init"])
-def test_both_states_run_the_full_report_and_log_path(state_label, tmp_path, monkeypatch):
+def test_both_states_run_the_full_report_and_log_path(state_label, config_shape, tmp_path, monkeypatch):
     # END TO END through the REAL control flow, for BOTH states -- the wiring bug class that has now
     # bitten twice (an unreachable branch, then a KeyError on a renamed key that killed the init
     # state) is only caught by executing it, never by inspecting it.
-    state, batches, config, scheduler = _toy_state_and_batches()
-    config.output_dir = str(tmp_path)
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape=config_shape)
+    if config_shape == "proxy":
+        config.get_keys()["output_dir"] = str(tmp_path)  # the proxy refuses assignment, like pyconfig
+    else:
+        config.output_dir = str(tmp_path)
     checkpoint_step = s1_5.S1_5_STATE_PLAN[state_label]["required_checkpoint_step"]
     lines: list[str] = []
     monkeypatch.setattr(s1_5.max_logging, "log", lambda line: lines.append(str(line)))

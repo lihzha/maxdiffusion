@@ -437,3 +437,20 @@
   `get_keys()` — the first version let it survive).
 - **Note** — `make fixup` cannot run in this fork (`utils/get_modified_files.py` and
   `utils/custom_init_isort.py` are absent upstream-only tooling); black + ruff were run directly.
+
+## 2026-08-03T19:20:00Z — Job 8b fix, BLOCKER closed: the e2e now runs pyconfig's SHAPE
+
+- **Finding** — the e2e carried production KEYS in a `SimpleNamespace`, whose `vars()` works, so the
+  reviewer's reversion mutation (helper back to `dict(vars(config))`) left both e2e cases GREEN. The
+  test still had the shape-blindness that let Jobs 8 and 8b ship.
+- **Fix** — `_proxy_config(keys)`: a test double with pyconfig's contract — empty instance
+  `__dict__` (so `vars()` is `{}`), keys served from a closure via `__getattr__`, `get_keys()`
+  returning them, missing keys raising `ValueError`, assignment refused. The e2e is parameterized
+  over `["proxy", "namespace"]` × `["checkpoint", "init"]`, so the production shape runs end to end
+  while the namespace shape keeps covering the helper's fallback branch.
+- **Reversion now fails** — with `_config_key_dict` reverted to `dict(vars(config))`, both proxy e2e
+  cases die at `probe_exp03_s1_5.py:352` (the empty-keys guard), raised through `state_view` (:369)
+  from `state_report` (:533) — the hardware failure mode, made loud and early. The namespace cases
+  correctly still pass; they exercise the branch where `vars()` is right.
+- **Result** — suite 1489 passed / 2 skipped (+2 e2e cases). All four earlier mutations still killed
+  (the exact defect now takes 4 tests down, up from 2, because the proxy e2e joins them).
