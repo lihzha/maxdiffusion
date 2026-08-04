@@ -141,3 +141,41 @@ Status:
 - **G1 accepted (closes F4):** merge policy rewritten with three file classes; the enumerated dual-touch files (`train_wan.py`, `run_wan_null_inversion.py`, `generate_wan_null_adapter.py`) resolve to the additive union preserving both experiments' behavior; any merge commit containing such a resolution gets its own focused Codex review (`pos_context_codex_code_merge-<n>_review.md`) before the next round; post-merge acceptance requires the combined suite green with BOTH dispatch-route tests exercised. S8's ordering unchanged; merge-2 can no longer erase it.
 
 Delta-only re-review pass 3 dispatched.
+
+---
+
+## Re-review pass 3 (plan v3 @ `ebd91ce`) — FINAL: APPROVE-PLAN
+
+Reviewer: Codex `gpt-5.6-sol` xhigh, read-only, exp_05 worktree.
+
+### Reviewer output (verbatim)
+
+Context loaded:
+
+- Full experiment SOP and both standing announcements.
+- Full exp_05 query, plan v3 at `ebd91ce`, prior review/resolution trail, and worklog.
+- Exact `git diff bac718b..ebd91ce -- docs/worklogs_yixun/exp_05_pos_context_claude/plan_pos_context.md`.
+- Inherited exp_04 plan v5 for the shared-file and round-order cross-check.
+
+G1 verification:
+
+- **Three-class conflict policy:** Closed; classes (a), (b), and (c) are explicit.
+- **Additive union:** Closed for all enumerated dual-touch files: `train_wan.py`, `run_wan_null_inversion.py`, and `generate_wan_null_adapter.py`, preserving both dispatch keys, slots, and evaluator modes.
+- **Focused merge review:** Closed; every merge commit with a class-(c) resolution receives its own focused Codex review before the next round.
+- **Post-merge validation:** Closed; the full combined suite must be green, explicitly exercising both exp_04 and exp_05 dispatch-route tests.
+- **S8 ordering:** Unchanged; S8 remains after merge-1 and before merge-2, whose additive rule prevents exp_04 R13 from erasing `POS_CONTEXT_TI2V`.
+
+New findings:
+
+- None. The delta changes only the status line and G1 merge-policy paragraph and introduces no invalidate-conclusions, waste-TPU, or undecidable-contract defect.
+
+**APPROVE-PLAN — G1 is fully closed, and the v2→v3 delta is clean at the specified severity threshold.**
+
+**Status**
+
+- Running subprocesses/jobs: none; this read-only review is complete.
+- Earliest steer: now, before implementation or any TPU approval.
+
+### Plan-review cycle closed
+
+Three passes: v1 REQUEST-REVISION (7 MAJOR + 2 MINOR, headline = deployment-representation mismatch F1) → v2 REQUEST-REVISION (G1 merge-policy inconsistency) → **v3 APPROVE-PLAN**. Every finding accepted and implemented, none rejected. Plan v3 @ `ebd91ce` is the artifact surfaced to Yixun.

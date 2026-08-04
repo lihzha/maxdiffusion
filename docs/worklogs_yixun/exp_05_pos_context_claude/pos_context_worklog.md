@@ -46,3 +46,9 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Change** — plan v3: three-class conflict policy with additive-union rule for enumerated dual-touch files, reviewed merge commits, both-dispatch-routes post-merge test requirement.
 - **Version Control** — committed with this entry; pass-3 (delta-only) dispatched.
 - **Next** — Pass-3 verdict (expected APPROVE-PLAN) → surface to Yixun.
+
+## 2026-08-04T19:45:00Z — Re-review pass 3: APPROVE-PLAN — exp_05 plan cycle closed; surfaced to Yixun
+
+- **Goal** — Verify G1 closure.
+- **Result** — `passed`: **APPROVE-PLAN** ("G1 is fully closed, and the v2→v3 delta is clean"). Three-pass trail complete; all findings accepted and implemented.
+- **Next** — Surface the approval package to Yixun: plan v3, review trail, decision points (L_pos=8; pure-regression primary; K1 conditional approval; pilot scope). Implementation S1 waits on exp_04's R9 boundary (merge-1) per the dependency matrix — exp_04 is at R2 in flight.
