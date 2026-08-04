@@ -214,3 +214,16 @@ pipeline references after the embedding table is built; add crash-surviving `mem
 lines (bytes_in_use at post-restore / post-drop / post-free / pre-first-call per state) so the next
 run carries its own memory ledger in stdout.
 
+## Job 8e — v6e-8 S1.5 BOUNDED RELAUNCH — launched 2026-08-04T22:10Z
+
+**Under the Query-4 grant; rounds 6–7 CLOSED at `ec87d8d` (APPROVE + GO with a ratified stop-rule).**
+Changes since 8d: pipeline's stale pre-restore 5B tree + encode-time models freed pre-replay;
+executables released after last use (late-phase 16→≤4); crash-surviving `[exp03][mem]` ledger with
+`unattributed = in_use − arrays` at ~17 points incl. per-program-load; best-effort failure
+diagnostics with per-chip top-10; `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` (was 0.92, +0.9 GiB).
+Known residual risk, stated plainly: 8d's batch-0 control→A program reservation deficit is
+instrumented, not fixed — improved odds come only from the pre-replay frees + mem fraction.
+**Stop-rule (reviewer-ratified): if the control→A OOM repeats, NO further v6e-8 attempts — the
+ledger goes to Yixun with a v6e-64 request.** Suite 1,523 / 2.
+- **Job 8e:** `20260804-221039-98cc77e9-exp03-s15-probe5-yixun` (COMMIT=8a4f834, tip at submission; code = APPROVED ec87d8d + docs).
+
