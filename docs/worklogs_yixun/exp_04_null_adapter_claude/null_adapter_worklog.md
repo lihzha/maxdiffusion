@@ -122,3 +122,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed`. R3 committed with this entry.
 - **Analysis** — The optimizer core — the function every arm and every cached target depends on — is now pinned by an independent reference sensitive to all of its inputs. This is the strongest-reviewed unit in the experiment so far, appropriately.
 - **Next** — R4 `replay-verifier-schema`: `replay_with_nulls` (A0≡w=1 identity), the self-contained artifact record schema (latent_dtype, provenance, expected_final_latent+hash), and the replay verifier (consumes ONLY the record; provenance fail-closed).
+
+## 2026-08-05T00:20:00Z — R4 split R4a/R4b/R4c (Planner-approved); R4a write phase complete; review dispatched
+
+- **Goal** — R4 per plan §6; the Coder measured full scope at ~435 exec LOC and stopped at the ceiling per instruction, proposing a three-way split.
+- **Result** — `passed` (R4a write). **Planner decisions:** (1) split APPROVED — R4a `replay-operator` (delivered), R4b `record-schema-io` (+ `_f32_bits` extraction, trigger fired: 4 consumers), R4c `verify-replay`; scope-neutral amendment noted in plan §6. (2) A0-identity tolerance rtol 1e-4 accepted — mechanism measured (ULP-level XLA scheduling difference between branches, amplified linearly by w: 6.3e-6@w5 → 7.7e-5@w50, vs real guidance at 59.9 absolute; contrast assertion retained); bitwise would force the operator to serve the test. (3) `nulls [N,L,D]` broadcast acceptance — accepted, mirrors R3. (4) replay B-independence test — deferred to the reviewer's ruling.
+- **Change** — `replay_with_nulls` (+59 exec LOC); `test_null_adapter_replay.py` (170 exec LOC, 16 tests). **112 passed in 14.96s**; 8 mutants killed incl. the R3-vs-R4 asymmetry mutant (v_cond hoisted out of the scan — correct in R3, a bug here — caught by call-structure + A0 + literal-loop).
+- **Next** — R4a review → strengthen → commit → R4b.
