@@ -436,3 +436,21 @@ the 0.95-per-window bar is the compounding rollout price the law's slope measure
 "use (b)" — formal verdict at 20,000. Jobs 50–51 launched (segment-final 3×3 + full-set); verdict
 CLI recomputation follows their landing.
 
+## FORMAL VERDICT @ 20,000 (Jobs 50–51 + verdict CLI) — `partial` — 2026-08-04
+
+| tier | rule | result | established |
+| --- | --- | --- | --- |
+| headline (canonical) | median-of-3-seeds m_corr ≥ 0.95 for ≥ 90/100 | **69/100** (seeds: 67/69/69; means 0.9536/0.9537/0.9536) | **no** |
+| full-set | SSIM ≥ 0.90 for ≥ 90% of all 1,629 (seed 0) | **99.32%** (1,618/1,629) | numerically yes; two-tier claim withheld (requires headline) |
+
+Verdict: **`partial`** (the 0.90-threshold canonical claim holds; the strict 0.95 headline does not).
+Ablations at 20k: correct−null +0.0974, correct−shuffled +0.1233 (doubled from 10k's 0.053; wrong
+context < no context — the model actively uses the instruction). Validity: seed-0 correct cells
+reproduce Job 49 bit-consistent; artifact coverage complete; c* = 20000.
+
+**exp_02 formal close.** The experiment's summary sentence: full-FT Wan2.2-5B *nearly* memorizes
+100 DROID trajectories — every window essentially reaches 0.90 (99.3%), the canonical mean crosses
+0.95, but the strict per-window 0.95 bar stops at ~69/100 under an LR-closed, law-governed
+optimization (loss→SSIM law held 6×; intercept 0.9885 above the bar; the shortfall is the
+compounding rollout price — exp_03's objective).
+
