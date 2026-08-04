@@ -335,3 +335,18 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   tree-equivalents by bytes); production specialization total + per-(tag,state) compile timing into
   the artifact.
 
+- **`ce6717d` (round 4, fresh Coder after two stalls) re-review (xhigh): REQUEST-REVISION** — finding
+  1 (collision evidence) **CLOSED**: "loss and aux share one traced view; RampWitness is cache-served,
+  and the surgical-origin test faithfully mutates only that path" (`_jit_observed_p_ss` deleted; the
+  surgical mutation is itself a committed test; the fresh Coder also fixed a latent bug in the
+  inherited partial work — aux had been computed on a DIFFERENT view than the loss). Moment-drop
+  ruled safe (restore contract + no-reader proof by full double-execution diff); census mechanism
+  ruled real. Remaining: **(BLOCKER, executed on an 8-device mesh)** the gauge double-counts sharded
+  allocations — `jax.live_arrays()` returns global arrays PLUS per-shard arrays, one 256-byte
+  gradient read as 512 B / 2.0 trees; production bf16 census is 39 not 37 (grad_stats + welford_first
+  + welford_update each specialize twice); 4 salt-specific variance wrappers share one timing key
+  (12/16 variance compiles untimed per state). **Relaunch: NO-GO.**
+- Round-5 dispatched (mechanical): physical (device, buffer-pointer) dedupe for both identity and
+  bytes; executed 8-device inversion test; census 39; per-(tag, salt, state) timing with a
+  coverage==specializations assertion.
+
