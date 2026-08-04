@@ -184,7 +184,11 @@ def exp03_p_ss(config, global_step) -> jax.Array:
     """
     ramp = int(getattr(config, "exp03_p_ss_ramp_steps", 500))
     p_max = jnp.asarray(float(getattr(config, "exp03_p_ss_max", 0.5)), dtype=jnp.float32)
-    origin = int(getattr(config, "exp03_ramp_origin", 0))
+    # NOT ``int()``-coerced: the origin is used only in arithmetic, so it may arrive as a TRACER.
+    # That is what lets S1.5 thread it as an explicit argument and have one compilation serve both
+    # states -- rather than capturing it in a closure, where the checkpoint state's compiled function
+    # would silently be reused for the init state and run it with the wrong ramp.
+    origin = getattr(config, "exp03_ramp_origin", 0)
     elapsed = jnp.asarray(global_step, dtype=jnp.float32) - jnp.asarray(origin, dtype=jnp.float32)
     if ramp <= 0:
         return p_max * (elapsed >= 0.0).astype(jnp.float32)
@@ -577,6 +581,9 @@ def _jit_grad_stats(grad):
     """
     leaves = jax.tree_util.tree_leaves(grad)
     if not leaves:
+        # An empty gradient reports max_abs = 0, DELIBERATELY: the old tree_reduce seeded its fold
+        # with -1.0, which is not a magnitude and would read as a real measurement in the artifact.
+        # Zero is the honest answer for "no elements" and is what the empty-tree test pins.
         zero = jnp.asarray(0.0, dtype=jnp.float32)
         return {"sq_norm": zero, "l2_norm": zero, "max_abs": zero, "finite_leaves": jnp.asarray(0, jnp.int32)}
     sq_norm = sum(jnp.sum(leaf.astype(jnp.float32) ** 2) for leaf in leaves)

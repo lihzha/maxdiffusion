@@ -171,7 +171,8 @@ def test_the_driver_varies_the_support_not_the_batch_across_draws():
     # draw index moves the global step the aux keys fold on.
     source = inspect.getsource(s1_5.state_report)
     assert "for salt in support_salts" in source
-    assert "exp03_support_salt=int(salt)" in source
+    # The salt now travels through the jitted builder's static key rather than a captured view.
+    assert "exp03_support_salt=salt" in source and "static_key=(objective, int(salt))" in source
     # The global step, the batch and the shared-stream key are FIXED across the M draws: only the
     # salt moves, so the within-batch spread is the sigma support and nothing else.
     inner = source[source.index("for salt in support_salts") : source.index("# A's LABEL ISOLATION")]
@@ -1173,6 +1174,10 @@ def test_the_fused_grad_stats_equal_a_plain_reference(dtype):
     # The empty-tree edge does not raise.
     empty = exp03.grad_stats({})
     assert empty["total_leaves"] == 0.0 and empty["sq_norm"] == 0.0
+    # DELIBERATE convention change from the old reducer's -1.0 seed: an empty gradient has no
+    # magnitude, and -1 would read as a real measurement in the artifact.
+    assert empty["max_abs"] == 0.0 and empty["l2_norm"] == 0.0
+    assert empty["finite_leaves"] == 0.0
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
@@ -1305,7 +1310,7 @@ def test_the_welford_update_is_compiled_and_matches_a_plain_reference():
 
 
 def test_no_eager_whole_tree_gradient_remains_in_the_probe_or_replay():
-    # The audit, pinned: every gradient in these two modules goes through a jitted seam.
+    # Kept as a cheap static net; the EXECUTABLE evidence is the both-states test below.
     import ast
 
     for module in (s1_5, exp03):
@@ -1319,7 +1324,164 @@ def test_no_eager_whole_tree_gradient_remains_in_the_probe_or_replay():
             and getattr(node.func.value, "id", "") == "jax"
         ]
         assert not bare, (module.__name__, bare)
-    # ...and the replay's own value+grad is jitted and cached.
     source = inspect.getsource(exp03._loss_and_grad_fn)
     assert "jax.jit(jax.value_and_grad(_call, has_aux=True))" in source
     assert "_LOSS_AND_GRAD_CACHE" in source
+
+
+# =============================================================================================
+# 11. BOTH states, EXECUTED back to back: the cache-collision regression, the compilation count,
+# and the measured live-buffer high-water. The sixth inspect-only instance was a test that
+# AST-matched `jax.grad` spellings and ran nothing; this one runs the thing.
+# =============================================================================================
+
+
+def _run_both_states(support_salts=(1, 2)):
+    """Run the checkpoint state then the init state through the real ``state_report``."""
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    reports = {}
+    for label in ("checkpoint", "init"):
+        reports[label] = s1_5.state_report(
+            state,
+            batches,
+            jax.random.key(1),
+            config,
+            scheduler,
+            state_label=label,
+            checkpoint_step=s1_5.S1_5_STATE_PLAN[label]["required_checkpoint_step"],
+            support_salts=support_salts,
+        )
+    return reports
+
+
+def test_the_two_states_get_their_own_ramp_and_not_each_others():
+    # THE regression pin for the cache collision. The states differ ONLY in ramp origin, and at
+    # these global steps that difference decides A's branch: the checkpoint state runs at
+    # global_step 10000.. with origin 10000 (elapsed 0 -> p_ss 0 -> teacher-forced), while init runs
+    # at 0.. with origin 0 (same elapsed, same p_ss) -- so the discriminating quantity is p_ss
+    # itself, which must be computed from EACH state's origin. Under the old tag-only cache the init
+    # state reused the checkpoint's compiled closures and would have been evaluated with elapsed
+    # 0 - 10000, clamping p_ss and flipping A's branch.
+    _, _, config, _ = _toy_state_and_batches(config_shape="proxy")
+    ramp = int(config.exp03_p_ss_ramp_steps)
+    p_max = float(config.exp03_p_ss_max)
+    for label in ("checkpoint", "init"):
+        plan = s1_5.S1_5_STATE_PLAN[label]
+        other = s1_5.S1_5_STATE_PLAN["checkpoint" if label == "init" else "init"]
+        # Mid-ramp is where the two origins visibly disagree: the first batch sits at elapsed 0 for
+        # BOTH (p_ss 0), so a first-step comparison would prove nothing.
+        step = plan["first_global_step"] + ramp // 2
+        correct = SimpleNamespace(
+            exp03_p_ss_max=p_max, exp03_p_ss_ramp_steps=ramp, exp03_ramp_origin=plan["ramp_origin"]
+        )
+        crossed = SimpleNamespace(
+            exp03_p_ss_max=p_max, exp03_p_ss_ramp_steps=ramp, exp03_ramp_origin=other["ramp_origin"]
+        )
+        assert float(exp03.exp03_p_ss(correct, step)) == pytest.approx(p_max / 2, abs=1e-6)
+        assert float(exp03.exp03_p_ss(crossed, step)) != pytest.approx(p_max / 2, abs=1e-6), label
+
+    reports = _run_both_states()
+    # The reports carry each state's own origin and step range -- not the other's.
+    assert reports["checkpoint"]["ramp_origin"] == 10000 and reports["init"]["ramp_origin"] == 0
+    assert reports["checkpoint"]["first_global_step"] == 10000
+    assert reports["init"]["first_global_step"] == 0
+    for label in ("checkpoint", "init"):
+        for row in reports[label]["per_batch"]:
+            elapsed = row["global_step"] - reports[label]["ramp_origin"]
+            expected = min(p_max, p_max * max(0.0, elapsed) / ramp) if ramp > 0 else p_max
+            assert row["p_ss_a"] == pytest.approx(expected, abs=1e-6), (label, row["global_step"])
+
+
+def test_the_probe_compiles_each_function_once_across_both_states():
+    # One compilation per distinct traced program, serving BOTH states -- which is only correct
+    # because the per-state knob is a traced argument rather than a closure capture. A collision
+    # would show up as too FEW compilations for the work done; an eager fallback or a per-state
+    # closure would show up as too many.
+    s1_5._PROBE_GRAD_CACHE.clear()
+    s1_5.PROBE_COMPILATIONS.clear()
+    _run_both_states(support_salts=(1, 2))
+
+    keys = list(s1_5.PROBE_COMPILATIONS)
+    assert len(keys) == len(set(keys)), "a cache key was compiled twice"
+    tags = sorted({key[0] for key in keys})
+    assert tags == [
+        "forced_combined",
+        "forced_corrective_ss",
+        "isolation_corrective",
+        "isolation_same_eps",
+        "parity_comparator",
+        "parity_production_control",
+        "parity_trial",
+        "variance_combined",
+        "variance_control",
+        "variance_corrective_ss",
+        "variance_rollout_loss",
+    ], tags
+    # The variance tags carry a salt in their static key (the salt changes the traced draw); every
+    # other tag compiles exactly once for the whole probe, both states included.
+    non_variance = [key for key in keys if not key[0].startswith("variance_")]
+    assert len(non_variance) == 7, non_variance
+    variance = [key for key in keys if key[0].startswith("variance_")]
+    assert len(variance) == 4 * 2, variance  # 4 objectives x 2 salts, shared across both states
+
+
+def test_the_measured_live_buffer_peak_is_recorded_and_bounded():
+    # MEASURED, not book-kept: the gauge samples jax.live_arrays() at every allocation-heavy point,
+    # so a hidden reference would show up here even though the manual counter said otherwise.
+    state, batches, _, _ = _toy_state_and_batches(config_shape="proxy")
+    params_bytes = sum(int(leaf.nbytes) for leaf in jax.tree_util.tree_leaves(state.params))
+    batch_bytes = sum(int(leaf.nbytes) for batch in batches for leaf in jax.tree_util.tree_leaves(batch))
+    # RELEASE the sizing fixture before measuring: jax.live_arrays() is process-global, so a second
+    # fixture held by the test would show up in the probe's own high-water mark and the bound would
+    # be measuring the test rather than the code.
+    del state, batches
+    import gc
+
+    gc.collect()
+
+    reports = _run_both_states()
+    for label, report in reports.items():
+        assert report["large_buffer_threshold_bytes"] > 0, label
+        assert report["large_buffer_samples"] >= 5, (label, report["large_buffer_samples"])
+        assert report["large_buffer_peak_count"] > 0, label
+        # SCOPE, stated: at toy scale the model's largest leaf is a scalar, so a byte cap expressed
+        # in gradient-tree multiples is meaningless -- gradients here are 4 bytes and the inputs
+        # dominate. What this asserts is the property that survives the scale change: the probe never
+        # holds more than about twice its own input footprint, i.e. nothing accumulates across the
+        # 24 sample points. The three-gradient contract itself is asserted by the replay's counter
+        # below, and at 5B the byte peak is what the run's own artifact will show.
+        assert report["large_buffer_peak_bytes"] <= 2 * (params_bytes + batch_bytes), (
+            label,
+            report["large_buffer_peak_bytes"],
+            params_bytes + batch_bytes,
+        )
+        assert report["per_objective"]["grad_trees_peak_resident"]["max"] <= 3.0
+
+
+def test_the_welford_carry_is_actually_donated():
+    # The double-mean the reviewer saw: donation is only honoured when the caller holds no other
+    # reference, and ``self.mean`` was one. The attribute is cleared before the call now.
+    source = inspect.getsource(s1_5._TreeWelford.update)
+    assert "mean, self.mean = self.mean, None" in source
+    assert source.index("mean, self.mean") < source.index("_welford_update(")
+    # Behaviour is unchanged by the donation dance.
+    rng = np.random.default_rng(11)
+    stream = [{"w": jnp.asarray(rng.normal(size=(4,)), dtype=jnp.float32)} for _ in range(5)]
+    accumulator = s1_5._TreeWelford()
+    for tree in stream:
+        accumulator.update(tree)
+    vectors = np.stack([np.asarray(tree["w"], np.float64) for tree in stream])
+    assert np.allclose(np.asarray(accumulator.mean["w"], np.float64), vectors.mean(axis=0), atol=1e-5)
+    assert accumulator.m2 == pytest.approx(float(np.sum((vectors - vectors.mean(axis=0)) ** 2)), rel=1e-4)
+
+
+def test_the_gauge_threshold_scales_with_the_model():
+    params = {"big": jnp.zeros((100, 100), dtype=jnp.float32), "small": jnp.zeros((3,), dtype=jnp.float32)}
+    threshold = s1_5.gauge_threshold_bytes(params, fraction=0.25)
+    assert threshold == int(params["big"].nbytes * 0.25)
+    assert s1_5.gauge_threshold_bytes({}) == 1  # no leaves: a floor, not a crash
+    gauge = s1_5.LiveBufferGauge(threshold)
+    held = jnp.zeros((200, 200), dtype=jnp.float32)  # comfortably above the threshold
+    total, count = gauge.sample()
+    assert count >= 1 and total >= held.nbytes
+    assert gauge.report()["large_buffer_peak_count"] >= 1

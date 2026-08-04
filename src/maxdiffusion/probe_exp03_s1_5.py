@@ -190,6 +190,50 @@ def _welford_update(mean, tree, count):
     return new_mean, increment
 
 
+class LiveBufferGauge:
+    """High-water mark of LARGE live device buffers, measured rather than book-kept.
+
+    ``ResidentTrees`` counts what the code believes it is holding; a hidden reference never appears
+    in it. This samples ``jax.live_arrays()`` instead, so the number in the artifact is what the
+    runtime actually had alive. Only buffers at or above ``threshold_bytes`` are counted -- the
+    interest is in gradient-sized objects, not in the thousands of scalars a report produces -- and
+    the threshold is a parameter so a toy test can scale it down to its own model.
+    """
+
+    def __init__(self, threshold_bytes: int):
+        self.threshold_bytes = int(threshold_bytes)
+        self.peak_bytes = 0
+        self.peak_count = 0
+        self.samples = 0
+
+    def sample(self) -> tuple[int, int]:
+        large = [array for array in jax.live_arrays() if array.nbytes >= self.threshold_bytes]
+        total = sum(int(array.nbytes) for array in large)
+        self.samples += 1
+        self.peak_bytes = max(self.peak_bytes, total)
+        self.peak_count = max(self.peak_count, len(large))
+        return total, len(large)
+
+    def report(self) -> dict:
+        return {
+            "large_buffer_peak_bytes": float(self.peak_bytes),
+            "large_buffer_peak_count": float(self.peak_count),
+            "large_buffer_threshold_bytes": float(self.threshold_bytes),
+            "large_buffer_samples": float(self.samples),
+        }
+
+
+def gauge_threshold_bytes(params, fraction: float = 0.25) -> int:
+    """A threshold scaled to ONE parameter tree: gradient-sized buffers, not scalars.
+
+    ``fraction`` of the largest single leaf, so the gauge counts things of gradient-leaf magnitude
+    at any model size and a toy model does not need a hand-tuned constant.
+    """
+    leaves = jax.tree_util.tree_leaves(params)
+    largest = max((int(leaf.nbytes) for leaf in leaves), default=0)
+    return max(1, int(largest * float(fraction)))
+
+
 class _TreeWelford:
     """Streaming mean/variance over gradient TREES, retaining O(1) trees.
 
@@ -209,9 +253,12 @@ class _TreeWelford:
         if self.mean is None:
             self.mean = _welford_first(tree)
             return
-        # ONE compiled step: the two deltas and the dot never exist as separate eager whole trees,
-        # and the running mean's buffer is donated so the update is in place.
-        self.mean, increment = _welford_update(self.mean, tree, jnp.asarray(self.count, jnp.float32))
+        # ONE compiled step, with the running mean DONATED. The attribute is cleared first: JAX
+        # only honours donation when the caller holds no other reference, and ``self.mean`` was one
+        # -- which is why two fp32 mean trees were alive during later rows despite the annotation.
+        mean, self.mean = self.mean, None
+        mean, increment = _welford_update(mean, tree, jnp.asarray(self.count, jnp.float32))
+        self.mean = mean
         self.m2 += float(increment)
 
     def population_variance(self) -> float:
@@ -404,19 +451,43 @@ def state_view(config, state_label: str, **overrides):
 
 
 _PROBE_GRAD_CACHE: dict = {}
+PROBE_COMPILATIONS: list = []  # every distinct compiled function, for the executable count test
 
 
-def _jitted_grad(tag: str, fn):
-    """A cached, JITTED value-and-gradient for one of the probe's own losses.
+def _jitted_grad(tag: str, builder, *, static_key=()):
+    """A cached, JITTED value-and-gradient whose per-state knob is a TRACED argument.
 
-    Same reason as the replay's (Job 8c): an unjitted backward through a 5B forward runs op by op,
-    so nothing is scheduled or freed and the peak is the whole graph. These are the label-isolation,
-    conditional-parity, production-control, forced-p_ss and support-variance paths -- dozens of
-    gradients per state, every one of which was eager.
+    Two things this shape fixes. First the memory one (Job 8c): an unjitted backward through a 5B
+    forward runs op by op, so nothing is scheduled or freed.
+
+    Second, and worse because it was silent: the previous version cached by ``tag`` alone while its
+    closures captured state-specific config views. The init state would have reused the checkpoint
+    state's compiled functions and run with ``ramp_origin=10000`` instead of 0 -- wrong branch, wrong
+    p_ss, wrong science, no crash. The fix is not a wider key: the varying quantity is now an
+    explicit traced argument (``ramp_origin``), so ONE compilation legitimately serves both states
+    and the collision cannot exist. ``static_key`` carries only the knobs that genuinely change the
+    traced program (forced ``p_ss`` constants, salts, objective), each of which is identical across
+    states by construction.
+
+    ``builder(ramp_origin)`` returns the loss callable for that origin; it is invoked at trace time
+    with the tracer, so the config view it builds carries the traced origin.
     """
-    if tag not in _PROBE_GRAD_CACHE:
-        _PROBE_GRAD_CACHE[tag] = jax.jit(jax.value_and_grad(fn))
-    return _PROBE_GRAD_CACHE[tag]
+    key = (tag, tuple(static_key))
+    if key not in _PROBE_GRAD_CACHE:
+
+        def _call(params, state, data, rng, global_step, ramp_origin, make=builder):
+            return make(ramp_origin)(params, state, data, rng, global_step)
+
+        compiled = jax.jit(jax.value_and_grad(_call))
+        _PROBE_GRAD_CACHE[key] = compiled
+        PROBE_COMPILATIONS.append(key)
+    return _PROBE_GRAD_CACHE[key]
+
+
+def traced_view(config, base_label: str, ramp_origin, **overrides):
+    """A config view whose ramp origin is whatever was threaded in — tracer or int."""
+    del base_label
+    return SimpleNamespace(**{**_config_key_dict(config), "exp03_ramp_origin": ramp_origin, **overrides})
 
 
 def _objective_config(config, objective: str, **overrides):
@@ -580,6 +651,11 @@ def state_report(
     """Every S1.5 measurement at ONE state (no updates; the caller pins that)."""
     plan = S1_5_STATE_PLAN[state_label]
     first_step = plan["first_global_step"]
+    # The per-state knob, threaded as a TRACED value rather than captured in a closure: this is what
+    # makes one compilation correct for both states instead of silently reusing the other's.
+    ramp_origin = jnp.asarray(plan["ramp_origin"], jnp.int32)
+    gauge = LiveBufferGauge(gauge_threshold_bytes(state.params))
+    gauge.sample()  # baseline: the state itself, before any gradient exists
     view = state_view(config, state_label)
     rows = []
     for index, batch in enumerate(batches):
@@ -591,6 +667,7 @@ def state_report(
         row["batch_index"] = float(index)
         row["global_step"] = float(first_step + index)
         rows.append(row)
+        gauge.sample()  # after each replay: the replay's own three-tree peak has just unwound
     per_objective = {}
     for key in sorted({name for row in rows for name in row}):
         values = [row[key] for row in rows if key in row]
@@ -606,15 +683,25 @@ def state_report(
             global_step = jnp.asarray(first_step + index, jnp.int32)
             batch_rng = jax.random.fold_in(rng, index)
             for salt in support_salts:
-                salted = state_view(config, state_label, exp03_objective=objective, exp03_support_salt=int(salt))
                 kwargs = {} if objective == "control" else {"global_step": global_step}
                 compiled = _jitted_grad(
-                    f"variance_{objective}_{int(salt)}",
-                    lambda params, st, b, key, gs, cfg=salted, f=fn, uses_step=bool(kwargs): f(
-                        params, st, b, key, cfg, scheduler, **({"global_step": gs} if uses_step else {})
-                    )[0],
+                    f"variance_{objective}",
+                    lambda origin, f=fn, salt=int(salt), obj=objective, uses_step=bool(kwargs): (
+                        lambda params, st, b, key, gs: f(
+                            params,
+                            st,
+                            b,
+                            key,
+                            traced_view(config, state_label, origin, exp03_objective=obj, exp03_support_salt=salt),
+                            scheduler,
+                            **({"global_step": gs} if uses_step else {}),
+                        )[0]
+                    ),
+                    static_key=(objective, int(salt)),
                 )
-                yield compiled(state.params, state, batch, batch_rng, global_step)[1]
+                gradient = compiled(state.params, state, batch, batch_rng, global_step, ramp_origin)[1]
+                gauge.sample()  # while a draw's gradient is alive and Welford still holds its mean
+                yield gradient
 
         # Generators, so a gradient exists only while Welford is consuming it.
         variance[objective] = variance_decomposition(_draws(batch, index) for index, batch in enumerate(batches))
@@ -623,15 +710,24 @@ def state_report(
     # one is about (p_ss=1 for the off-path label question, p_ss=0 for the identity).
     batch, batch_rng = batches[0], jax.random.fold_in(rng, 0)
     global_step = jnp.asarray(first_step, jnp.int32)
-    forced_on = state_view(config, state_label, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0)
     isolation_values = {}
     for flag, label in ((False, "corrective"), (True, "same_eps")):
         loss, grad = _jitted_grad(
             f"isolation_{label}",
-            lambda params, st, b, key, gs, f=flag: corrective_at_support(
-                params, st, b, key, forced_on, scheduler, global_step=gs, same_eps_label_flag=f
-            )[0],
-        )(state.params, state, batch, batch_rng, global_step)
+            lambda origin, f=flag: (
+                lambda params, st, b, key, gs: corrective_at_support(
+                    params,
+                    st,
+                    b,
+                    key,
+                    traced_view(config, state_label, origin, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0),
+                    scheduler,
+                    global_step=gs,
+                    same_eps_label_flag=f,
+                )[0]
+            ),
+            static_key=("p_ss_max=1.0", "ramp=0", f"same_eps={flag}"),
+        )(state.params, state, batch, batch_rng, global_step, ramp_origin)
         isolation_values[label] = (float(loss), grad)
     isolation = label_isolation(
         corrective_loss=isolation_values["corrective"][0],
@@ -640,27 +736,49 @@ def state_report(
         same_eps_grad=isolation_values["same_eps"][1],
     )
     del isolation_values  # two 5B gradients, consumed and dropped before the parity pair is built
+    gauge.sample()
 
-    forced_off = state_view(config, state_label, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0)
     trial_loss, trial_grad = _jitted_grad(
         "parity_trial",
-        lambda params, st, b, key, gs: exp03._corrective_ss_loss(
-            params, st, b, key, forced_off, scheduler, global_step=gs
-        )[0],
-    )(state.params, state, batch, batch_rng, global_step)
+        lambda origin: (
+            lambda params, st, b, key, gs: exp03._corrective_ss_loss(
+                params,
+                st,
+                b,
+                key,
+                traced_view(config, state_label, origin, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0),
+                scheduler,
+                global_step=gs,
+            )[0]
+        ),
+        static_key=("p_ss_max=0.0", "ramp=0"),
+    )(state.params, state, batch, batch_rng, global_step, ramp_origin)
     comparator_loss, comparator_grad = _jitted_grad(
         "parity_comparator",
-        lambda params, st, b, key, gs: plain_fixed_support_loss(
-            params, st, b, key, forced_off, scheduler, global_step=gs
-        )[0],
-    )(state.params, state, batch, batch_rng, global_step)
+        lambda origin: (
+            lambda params, st, b, key, gs: plain_fixed_support_loss(
+                params,
+                st,
+                b,
+                key,
+                traced_view(config, state_label, origin, exp03_p_ss_max=0.0, exp03_p_ss_ramp_steps=0),
+                scheduler,
+                global_step=gs,
+            )[0]
+        ),
+        static_key=("p_ss_max=0.0", "ramp=0"),
+    )(state.params, state, batch, batch_rng, global_step, ramp_origin)
     parity = parity_report(
         trial_loss=trial_loss, plain_loss=comparator_loss, trial_grad=trial_grad, plain_grad=comparator_grad
     )
     production_loss, production_grad = _jitted_grad(
         "parity_production_control",
-        lambda params, st, b, key, gs: _denoising_loss(params, st, b, key, view, scheduler)[0],
-    )(state.params, state, batch, batch_rng, global_step)
+        lambda origin: (
+            lambda params, st, b, key, gs: _denoising_loss(
+                params, st, b, key, traced_view(config, state_label, origin), scheduler
+            )[0]
+        ),
+    )(state.params, state, batch, batch_rng, global_step, ramp_origin)
     parity["production_control_difference"] = {
         "note": (
             "A at p_ss=0 vs the PRODUCTION control: not an identity -- A scores one scalar sigma per "
@@ -671,23 +789,39 @@ def state_report(
         "grad_cosine": exp03.grad_cosine(trial_grad, production_grad),
     }
 
+    # The parity trio is consumed into scalars and RELEASED before the forced diagnostics allocate
+    # their own gradients: holding trial + comparator + production while building a fourth was a
+    # real four-tree peak, outside the replay's counter and outside its cap.
+    gauge.sample()  # the parity trio at its peak, BEFORE the release below
+    del trial_grad, comparator_grad
     forced_diagnostics = {}
     for objective in ("corrective_ss", "combined"):
-        forced_view = state_view(
-            config, state_label, exp03_objective=objective, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0
-        )
         loss, grad = _jitted_grad(
             f"forced_{objective}",
-            lambda params, st, b, key, gs, fn=exp03.EXP03_LOSSES[objective], cfg=forced_view: fn(
-                params, st, b, key, cfg, scheduler, global_step=gs
-            )[0],
-        )(state.params, state, batch, batch_rng, global_step)
+            lambda origin, fn=exp03.EXP03_LOSSES[objective], obj=objective: (
+                lambda params, st, b, key, gs: fn(
+                    params,
+                    st,
+                    b,
+                    key,
+                    traced_view(
+                        config, state_label, origin, exp03_objective=obj, exp03_p_ss_max=1.0, exp03_p_ss_ramp_steps=0
+                    ),
+                    scheduler,
+                    global_step=gs,
+                )[0]
+            ),
+            static_key=(objective, "p_ss_max=1.0", "ramp=0"),
+        )(state.params, state, batch, batch_rng, global_step, ramp_origin)
         forced_diagnostics[objective] = {
             "loss": float(loss),
             "grad_norm": float(np.sqrt(exp03.tree_sq_norm(grad))),
             "grad_cosine_vs_production_control": exp03.grad_cosine(grad, production_grad),
         }
+        gauge.sample()  # a forced gradient plus the production control, at their joint peak
         del grad  # consumed in the same iteration that produced it
+    del production_grad  # the last reference: nothing survives into the report but scalars
+    gauge.sample()
 
     branch_counts = {
         "self_generated": sum(1 for row in rows if float(row.get("take_self_generated_a", 0.0)) > 0.5),
@@ -706,6 +840,7 @@ def state_report(
         "support_salts": [int(salt) for salt in support_salts],
         "per_objective": per_objective,
         "per_batch": rows,
+        **gauge.report(),
         "support_variance": variance,
         "label_isolation": isolation,
         "p_ss_zero_parity": parity,

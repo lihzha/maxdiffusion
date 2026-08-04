@@ -485,3 +485,32 @@
   S1.5's readings are cross-state comparisons computed by the same code, so internal consistency is
   what matters.
 - **Result** — suite 1498 passed / 2 skipped (+9).
+
+## 2026-08-04T04:00:00Z — Fix #3 review: cache collision (silent), residency, real gauge
+
+- **BLOCKER 1 (correctness, silent)** — `_PROBE_GRAD_CACHE` keyed by tag while the cached closures
+  captured state-specific config views. The init state would have reused the checkpoint state's
+  compiled functions and run with `ramp_origin=10000` instead of 0: wrong branch, wrong p_ss, wrong
+  science, no crash. **Removed structurally, not by widening the key:** `exp03_p_ss` no longer
+  `int()`-coerces the origin, so it can arrive as a TRACER; the probe threads `ramp_origin` as an
+  explicit traced argument and each jitted builder constructs its config view from it at trace time.
+  One compilation now legitimately serves both states. `static_key` carries only knobs that genuinely
+  change the traced program (forced p_ss constants, salt, objective), each identical across states.
+  Evidence the captures are gone: ruff flagged all four state-specific views as unused, and they were
+  deleted.
+- **BLOCKER 6** — the parity trio (trial, comparator, production) is consumed to scalars and released
+  BEFORE the forced diagnostics allocate; `production_grad` is dropped after the loop. The Welford
+  double-mean was the donation dance: `donate_argnums=(0,)` is only honoured when the caller holds no
+  other reference, and `self.mean` was one — the attribute is now cleared into a local before the
+  call and reassigned after.
+- **MAJOR 3** — `LiveBufferGauge` samples `jax.live_arrays()` (filtered by a threshold scaled to the
+  largest parameter leaf) at 24 points per state: baseline, after each replay, during each variance
+  draw, at the isolation and parity peaks, and after release. `large_buffer_peak_bytes/_count/
+  _threshold_bytes/_samples` land in the artifact, so the auditability claim rests on a measured
+  number. The manual counter is kept for the replay's internal contract.
+- **MAJOR 4** — the inspect-only guard is retained as a cheap net but the evidence is now executable:
+  both states run back to back through the real `state_report`, with compilation counting and the
+  measured high-water asserted.
+- **MINOR 5** — empty-tree `max_abs` is deliberately 0 (the old `-1.0` fold seed is not a magnitude);
+  commented at the source and asserted in the test.
+- **Result** — suite 1503 passed / 2 skipped (+5).
