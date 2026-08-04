@@ -792,8 +792,12 @@ def test_the_first_state_is_released_before_the_next_one_is_built():
     assert "_run_one_state(config, trainer, scheduler, state_label)" in driver
     assert "release()" in driver
     per_state = inspect.getsource(s1_5._run_one_state)
-    assert "release(state, batches, report, pipeline, iterator)" in per_state
+    assert "release(state, batches, report, iterator)" in per_state
     assert per_state.index("trainer._load_wan_pipeline()") < per_state.index("release(state,")
+    # ...and the pipeline itself is dropped BEFORE the heavy phase, not merely at the end of it.
+    assert "del pipeline" in per_state
+    assert per_state.index("del pipeline") < per_state.index("state_report(")
+    assert "trace_in_memory_state(\n" in per_state and "pipeline," not in per_state.split("del pipeline")[1]
 
 
 def test_the_required_step_is_selected_from_a_directory_that_holds_later_ones():
@@ -1938,3 +1942,208 @@ def test_one_sharded_gradient_over_eight_devices_reads_one_tree_not_two():
     assert result["naive_object_count"] == 9, result  # the global array plus its eight shards
     assert result["naive_object_sum_bytes"] == 512, result
     assert result["naive_object_sum_bytes"] / result["one_tree_bytes"] == pytest.approx(2.0), result
+
+
+# =============================================================================================
+# 13. The dead weight, and the ledger that survives a job dying. Job 8d reached the replay at 5B
+# and then failed to LOAD A's program: 15.11G of scratch wanted against 9.50G free (E0101), with
+# no artifact written because the failure came before one existed.
+#
+# The 5B reclaim itself cannot be shown in CI -- there is no TPU here and no 5B pipeline. What is
+# executed here is the mechanism: the references really are dropped, the buffers really do go, and
+# the ledger lines really are emitted and well formed. The reclaim is proven by the 8e stdout
+# ledger (post_state_creation / post_restore / post_moment_drop / post_dead_weight_free / pre_replay).
+# =============================================================================================
+
+
+class _FakePipeline:
+    """A pipeline shaped like the real one where it matters: plain attributes, one hidden alias.
+
+    ``vae_cache.module`` is the real ``AutoencoderKLWanCache`` behaviour (``self.module = module``),
+    which is why dropping ``vae`` alone frees nothing and the drop order is not cosmetic.
+    """
+
+    def __init__(self):
+        self.vae = {"w": jnp.zeros((32, 32), jnp.float32)}
+        self.vae_cache = SimpleNamespace(module=self.vae)
+        self.text_encoder = {"w": jnp.zeros((48, 48), jnp.float32)}
+        self.tokenizer = SimpleNamespace(vocab={"a": 1})
+        self.video_processor = SimpleNamespace()
+        self.transformer = {"w": jnp.zeros((64, 64), jnp.float32)}
+        self.scheduler = SimpleNamespace(name="flow-match")
+        self.scheduler_state = SimpleNamespace(step=0)
+        self.mesh = SimpleNamespace(shape="toy")
+        self.config = SimpleNamespace(run_name="toy")
+
+
+def _live_pairs():
+    found = set()
+    for array in jax.live_arrays():
+        found |= set(s1_5.buffer_shards(array)[0])
+    return found
+
+
+def _pairs_of(tree):
+    found = set()
+    for leaf in jax.tree_util.tree_leaves(tree):
+        found |= set(s1_5.buffer_shards(leaf)[0])
+    return found
+
+
+def test_the_probe_frees_the_encode_time_models_and_their_buffers_go():
+    # EXECUTED with the same buffer-identity machinery as the moment-release test: the attributes go
+    # AND the device buffers behind them stop being live.
+    import gc
+
+    pipeline = _FakePipeline()
+    vae_pairs = _pairs_of(pipeline.vae)
+    encoder_pairs = _pairs_of(pipeline.text_encoder)
+    transformer_pairs = _pairs_of(pipeline.transformer)
+    assert vae_pairs and encoder_pairs and transformer_pairs
+    assert vae_pairs <= _live_pairs() and encoder_pairs <= _live_pairs()
+
+    dropped = s1_5.free_encode_time_models(pipeline)
+    gc.collect()
+    assert dropped == ["vae_cache", "vae", "text_encoder", "tokenizer", "video_processor"], dropped
+    for attr in ("vae", "vae_cache", "text_encoder", "tokenizer", "video_processor"):
+        assert not hasattr(pipeline, attr), attr
+    live = _live_pairs()
+    assert not (vae_pairs & live), "the VAE buffers are still resident"
+    assert not (encoder_pairs & live), "the text-encoder buffers are still resident"
+    # What the probe still needs is untouched -- the scheduler above all, which every objective uses.
+    assert pipeline.scheduler.name == "flow-match" and pipeline.scheduler_state.step == 0
+    assert pipeline.mesh.shape == "toy" and pipeline.config.run_name == "toy"
+    assert transformer_pairs <= live, "the transformer is not encode-time and must survive this call"
+    # Idempotent: a second call finds nothing and does not raise.
+    assert s1_5.free_encode_time_models(pipeline) == []
+
+
+def test_the_probe_drops_the_pipelines_own_copy_of_the_transformer():
+    # The pipeline's module aliases the state's parameters at ``nnx.split`` time, and becomes a
+    # SECOND ~5B tree the moment Orbax swaps new arrays in. Training donates those buffers away on
+    # step 0; a no-update probe never donates anything, so it drops them by name.
+    import gc
+
+    pipeline = _FakePipeline()
+    transformer_pairs = _pairs_of(pipeline.transformer)
+    assert transformer_pairs <= _live_pairs()
+    assert s1_5.free_pipeline_transformer(pipeline) is True
+    gc.collect()
+    assert not hasattr(pipeline, "transformer")
+    assert not (transformer_pairs & _live_pairs()), "the pipeline's transformer buffers are still resident"
+    assert s1_5.free_pipeline_transformer(pipeline) is False  # nothing left to drop
+
+    # ...and the probe does both, in the only order that works: the context table is built while the
+    # encoder is alive, the split happens while the transformer is, and each dies immediately after.
+    source = inspect.getsource(s1_5.build_probe_state)
+    assert source.index("_build_context_table") < source.index("free_encode_time_models(pipeline)")
+    assert source.index("free_encode_time_models(pipeline)") < source.index("nnx.split(pipeline.transformer")
+    assert source.index("nnx.split(pipeline.transformer") < source.index("free_pipeline_transformer(pipeline)")
+
+
+def test_the_memory_ledger_lines_are_well_formed(monkeypatch):
+    lines: list[str] = []
+    monkeypatch.setattr(s1_5.max_logging, "log", lambda line: lines.append(str(line)))
+
+    gib = 1024**3
+    fake = SimpleNamespace(
+        memory_stats=lambda: {
+            "bytes_in_use": 21 * gib,
+            "peak_bytes_in_use": 23 * gib,
+            "bytes_limit": 31 * gib,
+            "something_else": 5,
+        }
+    )
+    monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [fake])
+    stats = s1_5.log_memory("post_restore", state_label="checkpoint")
+    assert stats == {"bytes_in_use": 21 * gib, "peak_bytes_in_use": 23 * gib, "bytes_limit": 31 * gib}
+    assert len(lines) == 1
+    line = lines[0]
+    assert line.startswith("[exp03][mem] where=post_restore state=checkpoint"), line
+    assert "in_use=21.00G" in line and "peak=23.00G" in line and "limit=31.00G" in line, line
+
+    # A backend that reports nothing (CPU returns None) still emits a line and never raises.
+    lines.clear()
+    monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: None)])
+    assert s1_5.log_memory("pre_replay") == {}
+    assert lines and "no device memory stats" in lines[0] and "where=pre_replay" in lines[0]
+
+    # ...and so does a backend that raises when asked.
+    lines.clear()
+
+    def _boom():
+        raise RuntimeError("no stats here")
+
+    monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=_boom)])
+    assert s1_5.memory_snapshot() == {}
+    assert s1_5.log_memory("post_moment_drop") == {}
+    assert lines and "no device memory stats" in lines[0]
+
+
+def test_the_headroom_check_names_the_largest_live_arrays_and_never_raises(monkeypatch):
+    lines: list[str] = []
+    monkeypatch.setattr(s1_5.max_logging, "log", lambda line: lines.append(str(line)))
+    gib = 1024**3
+    hog = jnp.zeros((256, 256), jnp.float32)  # the biggest thing this test makes
+
+    monkeypatch.setattr(
+        s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: {"bytes_in_use": 21 * gib})]
+    )
+    assert s1_5.warn_if_no_headroom("pre_replay", state_label="checkpoint", budget_bytes=8 * gib) is True
+    warnings = [line for line in lines if "WARNING" in line]
+    assert warnings, lines
+    assert "21.00G already in use at pre_replay" in warnings[0], warnings[0]
+    assert any("largest live arrays" in line for line in lines), lines
+    # The residue is NAMED: dtype and shape, at per-chip size.
+    assert any("float32[256, 256]" in line for line in lines), [line for line in lines if "#1" in line]
+
+    # Under the budget: the ledger line still lands, the warning does not.
+    lines.clear()
+    monkeypatch.setattr(
+        s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: {"bytes_in_use": 2 * gib})]
+    )
+    assert s1_5.warn_if_no_headroom("pre_replay", budget_bytes=8 * gib) is False
+    assert lines and not any("WARNING" in line for line in lines), lines
+
+    # A backend with no stats cannot warn, and must not crash the probe on the way past.
+    lines.clear()
+    monkeypatch.setattr(s1_5.jax, "local_devices", lambda: [SimpleNamespace(memory_stats=lambda: None)])
+    assert s1_5.warn_if_no_headroom("pre_replay", budget_bytes=1) is False
+    assert hog is not None  # kept alive across the whole measurement
+
+
+def test_the_largest_live_arrays_report_local_and_global_bytes():
+    # Sorted by LOCAL bytes, because ``bytes_in_use`` is per device and the two numbers have to be
+    # comparable; the global size rides along so a sharded tree is still recognisable.
+    keep = jnp.zeros((512, 512), jnp.float32)  # 1 MiB, larger than anything else this test holds
+    rows = s1_5.largest_live_arrays(limit=5)
+    assert rows and len(rows) <= 5
+    assert rows[0]["local_bytes"] >= 512 * 512 * 4
+    assert rows[0]["shape"] == (512, 512) and rows[0]["dtype"] == "float32"
+    assert rows[0]["global_bytes"] == 512 * 512 * 4
+    assert all(rows[index]["local_bytes"] >= rows[index + 1]["local_bytes"] for index in range(len(rows) - 1))
+    assert keep is not None
+
+
+def test_the_heavy_phase_logs_the_ledger_before_re_raising():
+    # A failure in the heavy phase must leave the ledger and the residue behind it -- that is the
+    # whole point of the instrumentation -- and must then re-raise untouched.
+    source = inspect.getsource(s1_5._run_one_state)
+    assert "except Exception as failure:" in source
+    body = source[source.index("except Exception as failure:") :]
+    assert 'log_memory("failure"' in body
+    assert "log_largest_live_arrays(" in body
+    assert body.rstrip().count("raise") >= 1 and "raise\n" in body
+    # The ledger points the 8e run must carry, each emitted from the path that reaches them.
+    build = inspect.getsource(s1_5.build_probe_state)
+    for where in ("post_encode_time_free", "post_state_creation", "post_restore", "post_moment_drop"):
+        assert f'log_memory("{where}"' in build, where
+    assert 'log_memory("post_dead_weight_free"' in source
+    assert 'warn_if_no_headroom("pre_replay"' in inspect.getsource(s1_5.state_report)
+    # ...and none of it reaches the immutable artifact, for the same reason the timings do not.
+    assert "mem" not in s1_5.s1_5_artifact(
+        SimpleNamespace(run_name="r", checkpoint_dir="", train_data_dir="", model_manifest_path="", seed=0),
+        state_label="checkpoint",
+        checkpoint_step=10000,
+        report={},
+    )

@@ -870,11 +870,16 @@ def build_probe_state(config, trainer, pipeline, mesh, *, state_label: str):
     """
     plan = S1_5_STATE_PLAN[state_label]
     context_table = trainer._build_context_table(pipeline, mesh)
-    for attr in ("vae", "vae_cache", "text_encoder", "tokenizer"):
-        if hasattr(pipeline, attr):
-            delattr(pipeline, attr)
+    # The encode-time models die with the line above: the table is built, and S1.5 decodes no pixels
+    # and encodes no text ever again.
+    free_encode_time_models(pipeline)
+    log_memory("post_encode_time_free", state_label=state_label)
     with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
         graphdef, params, rest = nnx.split(pipeline.transformer, nnx.Param, ...)
+    # ...and the pipeline's own handle on the transformer dies HERE, with the split: the state owns
+    # the parameters from this line on, and after the restore below the pipeline's copy would be a
+    # second ~5B tree that nothing reads.
+    free_pipeline_transformer(pipeline)
     tx, _ = trainer._build_optimizer(config.max_train_steps)
     state = Overfit100TrainState.create(
         apply_fn=graphdef.apply,
@@ -887,6 +892,7 @@ def build_probe_state(config, trainer, pipeline, mesh, *, state_label: str):
     if jax.process_index() == 0:
         max_logging.log(f"[exp03_s1_5] trainable params: {adapter_param_count(params) / 1e9:.2f}B")
     state, state_shardings = trainer._shard_state(mesh, state)
+    log_memory("post_state_creation", state_label=state_label)
 
     directory = config.checkpoint_dir if state_label == "checkpoint" else _empty_checkpoint_dir(config)
     manager = trainer._build_checkpoint_manager(directory)
@@ -898,11 +904,170 @@ def build_probe_state(config, trainer, pipeline, mesh, *, state_label: str):
             f"{int(required)}. Tier 1 is about the step-10,000 checkpoint and Tier 2 about the untouched init; "
             f"a state that is neither would answer a question nobody asked."
         )
+    log_memory("post_restore", state_label=state_label)
     # AFTER the exact-step restore and its check, never before: the restore needs the optimizer tree
     # as its target structure, and the step contract is what makes this the right state at all.
     state = drop_optimizer_moments(state)
     release()  # the moment buffers are unreachable now; collect BEFORE anything measures memory
+    # Whether the moments were REALLY reclaimed on the device is not something a toy test can show;
+    # this line against the one above it is the on-hardware answer.
+    log_memory("post_moment_drop", state_label=state_label)
     return state, state_shardings, int(start_step)
+
+
+# ------------------------------------------------------- the dead weight, and the on-hardware ledger
+
+# Everything the pipeline loads that a LATENT-SPACE probe never touches once the context table
+# exists. ``vae_cache`` is dropped BEFORE ``vae`` deliberately: ``AutoencoderKLWanCache.__init__``
+# keeps its own strong reference (``self.module = module``), so dropping ``vae`` alone frees nothing.
+PIPELINE_ENCODE_TIME_ATTRS = (
+    "vae_cache",
+    "vae",
+    "text_encoder",
+    "tokenizer",
+    "image_encoder",
+    "image_processor",
+    "video_processor",
+)
+MEM_LEDGER_TAG = "[exp03][mem]"
+HEADROOM_BUDGET_BYTES = 8 * 1024**3  # per chip, before the first 5B replay
+
+
+def free_encode_time_models(pipeline) -> list:
+    """Drop the encode/decode-time models and COLLECT.
+
+    S1.5 reads cached latents and scores gradients: after ``_build_context_table`` it encodes no
+    text and it decodes no pixels anywhere, so the VAE and the text encoder are dead weight from
+    that line on. The training loop drops the same set; the probe additionally has to collect,
+    because these are Python objects in reference cycles and a ``delattr`` alone only makes them
+    unreachable, not freed.
+
+    What must SURVIVE: ``scheduler``/``scheduler_state`` (every objective uses them), ``mesh``,
+    ``devices_array`` and ``config`` -- metadata the whole probe runs on.
+    """
+    dropped = []
+    for attr in PIPELINE_ENCODE_TIME_ATTRS:
+        if getattr(pipeline, attr, None) is not None:
+            delattr(pipeline, attr)
+            dropped.append(attr)
+    release()
+    if dropped and jax.process_index() == 0:
+        max_logging.log(f"[exp03_s1_5] freed encode-time models: {dropped}")
+    return dropped
+
+
+def free_pipeline_transformer(pipeline) -> bool:
+    """Drop the pipeline's own handle on the ~5B transformer, once the state owns the parameters.
+
+    ``nnx.split`` does not copy: immediately after it, the pipeline's module and the state's params
+    are the same buffers, so this frees nothing yet. It matters at the RESTORE -- Orbax returns
+    brand-new arrays and the pipeline is left holding the pre-restore tree, a second ~5B copy that
+    nothing will ever read. The training loop survives that by accident (its train step declares
+    ``donate_argnums`` and the buffers are donated away on step 0); a probe that applies no updates
+    donates nothing and must drop them itself.
+    """
+    if getattr(pipeline, "transformer", None) is None:
+        return False
+    delattr(pipeline, "transformer")
+    release()
+    return True
+
+
+def memory_snapshot() -> dict:
+    """``bytes_in_use`` / ``peak_bytes_in_use`` / ``bytes_limit`` for this process's first device.
+
+    Empty on any backend that reports nothing -- CPU returns ``None`` -- so every caller treats the
+    result as optional rather than assuming the keys are there.
+    """
+    try:
+        devices = jax.local_devices()
+        stats = devices[0].memory_stats() if devices else None
+    except Exception:  # pragma: no cover - backend-dependent
+        stats = None
+    if not stats:
+        return {}
+    return {key: int(stats[key]) for key in ("bytes_in_use", "peak_bytes_in_use", "bytes_limit") if key in stats}
+
+
+def log_memory(where: str, *, state_label: str = "") -> dict:
+    """ONE stdout line at a named point — the ledger a job that dies leaves behind.
+
+    Job 8d died loading a compiled program (E0101, 15.11G of scratch against 9.50G free) before any
+    artifact was written, so everything the probe knew about its own residency died with it. These
+    lines survive that: they go to the log, never into the artifact, for the same reason compile
+    timings do not -- the artifact is compare-or-refuse immutable and these numbers are machine
+    state, not measurements of the objectives.
+    """
+    stats = memory_snapshot()
+    prefix = f"{MEM_LEDGER_TAG} where={where}" + (f" state={state_label}" if state_label else "")
+    if not stats:
+        max_logging.log(f"{prefix} (no device memory stats on this backend)")
+        return stats
+    gib = 1024**3
+    max_logging.log(
+        f"{prefix} in_use={stats.get('bytes_in_use', 0) / gib:.2f}G "
+        f"peak={stats.get('peak_bytes_in_use', 0) / gib:.2f}G "
+        f"limit={stats.get('bytes_limit', 0) / gib:.2f}G"
+    )
+    return stats
+
+
+def largest_live_arrays(limit: int = 10) -> list:
+    """The biggest live arrays by LOCAL bytes — what is actually holding this chip's memory.
+
+    Local, not global: ``bytes_in_use`` is per device, so a sharded 5B tree must be compared at its
+    per-chip size or the two numbers cannot be reconciled. Reuses the residency gauge's physical
+    allocation view, so the two instruments cannot disagree about what a byte is.
+    """
+    rows = []
+    for array in jax.live_arrays():
+        if getattr(array, "is_deleted", lambda: False)():
+            continue
+        allocations, _ = buffer_shards(array)
+        rows.append(
+            {
+                "local_bytes": int(sum(allocations.values())),
+                "global_bytes": int(array.nbytes),
+                "shape": tuple(array.shape),
+                "dtype": str(array.dtype),
+            }
+        )
+    rows.sort(key=lambda row: row["local_bytes"], reverse=True)
+    return rows[:limit]
+
+
+def log_largest_live_arrays(reason: str, *, limit: int = 10) -> list:
+    """Name the residue, in the log, at the moment it matters."""
+    rows = largest_live_arrays(limit)
+    gib = 1024**3
+    max_logging.log(f"{MEM_LEDGER_TAG} {reason}: the {len(rows)} largest live arrays on this chip are")
+    for index, row in enumerate(rows):
+        max_logging.log(
+            f"{MEM_LEDGER_TAG}   #{index + 1} local={row['local_bytes'] / gib:.3f}G "
+            f"global={row['global_bytes'] / gib:.3f}G {row['dtype']}{list(row['shape'])}"
+        )
+    return rows
+
+
+def warn_if_no_headroom(where: str, *, state_label: str = "", budget_bytes: int = HEADROOM_BUDGET_BYTES) -> bool:
+    """SOFT check before the heavy phase: name the residue rather than die on an opaque E0101.
+
+    Deliberately not a refusal. The budget is generous and approximate (params plus a couple of
+    gradients), and a probe that stops itself on a heuristic would be worse than one that runs and
+    says why it failed. What it buys is that the next allocation failure arrives with the ten
+    largest live arrays printed next to it.
+    """
+    stats = log_memory(where, state_label=state_label)
+    in_use = int(stats.get("bytes_in_use", 0))
+    if not stats or in_use <= int(budget_bytes):
+        return False
+    gib = 1024**3
+    max_logging.log(
+        f"{MEM_LEDGER_TAG} WARNING {in_use / gib:.2f}G already in use at {where} "
+        f"(budget {int(budget_bytes) / gib:.2f}G) -- a 5B replay and its program scratch need the rest"
+    )
+    log_largest_live_arrays("WARNING residue")
+    return True
 
 
 EMPTY_OPT_STATE = ()  # a valid, leafless pytree: the state stays a TrainState, minus the moments
@@ -984,6 +1149,9 @@ def state_report(
     witness = RampWitness()
     gauge = LiveBufferGauge(state.params)
     gauge.sample("baseline")  # the state alone, before any gradient exists
+    # The last cheap moment before the first 5B forward/backward: if anything is still resident that
+    # should not be, this is where it can still be named.
+    warn_if_no_headroom("pre_replay", state_label=state_label)
     view = state_view(config, state_label)
 
     def call_grad(tag: str, compiled, batch, batch_rng, global_step):
@@ -1381,8 +1549,14 @@ def log_compile_costs(census: dict) -> None:
 def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
     """One state, start to finish, in its own frame so its locals die when it returns."""
     pipeline = trainer._load_wan_pipeline()
-    mesh = pipeline.mesh
+    mesh = pipeline.mesh  # metadata, and the ONE thing from the pipeline that outlives it here
     state, _, checkpoint_step = build_probe_state(config, trainer, pipeline, mesh, state_label=state_label)
+    # The pipeline's weights were dropped inside ``build_probe_state``; the object itself goes here.
+    # Nothing below reads it -- the sigma trace works from the state already in memory -- and a name
+    # still bound to it is a name that can pin whatever it is later given.
+    del pipeline
+    release()
+    log_memory("post_dead_weight_free", state_label=state_label)
     before = params_fingerprint(state.params)
     iterator = trainer._load_dataset(mesh, is_training=True, seed=config.seed + checkpoint_step)
     # THE call the training loop makes, from the module that actually defines it
@@ -1390,20 +1564,28 @@ def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
     # first hardware attempt died here on ``gen.load_next_batch`` -- a name the eval module has
     # never had -- because the batches in the tests were built rather than pulled.
     batches = [load_next_batch(iterator, None, config) for _ in range(S1_5_NUM_BATCHES)]
-    with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-        report = state_report(
-            state,
-            batches,
-            jax.random.key(config.seed + 1),
-            config,
-            scheduler,
-            state_label=state_label,
-            checkpoint_step=checkpoint_step,
-            support_salts=S1_5_SUPPORT_SALTS,
-        )
-        trace_rows = trace_in_memory_state(
-            state, pipeline, config, scheduler, state_label=state_label, checkpoint_step=checkpoint_step
-        )
+    try:
+        with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
+            report = state_report(
+                state,
+                batches,
+                jax.random.key(config.seed + 1),
+                config,
+                scheduler,
+                state_label=state_label,
+                checkpoint_step=checkpoint_step,
+                support_salts=S1_5_SUPPORT_SALTS,
+            )
+            trace_rows = trace_in_memory_state(
+                state, config, scheduler, state_label=state_label, checkpoint_step=checkpoint_step
+            )
+    except Exception as failure:
+        # The heavy phase is where the memory goes and where Job 8d died. Whatever killed it, the
+        # ledger and the residue are printed BEFORE the traceback -- then the failure is re-raised
+        # untouched, because a probe that swallows an OOM is worse than one that dies loudly.
+        log_memory("failure", state_label=state_label)
+        log_largest_live_arrays(f"failure ({type(failure).__name__})")
+        raise
     assert_no_update(before, params_fingerprint(state.params))
     payload = {}
     if jax.process_index() == 0:
@@ -1419,7 +1601,7 @@ def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
         write_s1_5_artifact(path, payload)
         log_summary(payload)
         max_logging.log(f"[exp03_s1_5] wrote {path}")
-    release(state, batches, report, pipeline, iterator)
+    release(state, batches, report, iterator)  # the pipeline is already gone, by name and by weight
     return payload
 
 
@@ -1437,8 +1619,13 @@ def assert_commit_is_pinned() -> None:
         )
 
 
-def trace_in_memory_state(state, pipeline, config, scheduler, *, state_label: str, checkpoint_step: int) -> dict:
-    """Mechanism-B sigma trace of the state in memory (no second restore, no second 5B load)."""
+def trace_in_memory_state(state, config, scheduler, *, state_label: str, checkpoint_step: int) -> dict:
+    """Mechanism-B sigma trace of the state in memory (no second restore, no second 5B load).
+
+    It never took anything from the pipeline -- the transformer is rebuilt from the state's own
+    graphdef -- and the ``pipeline`` parameter it used to accept was a false dependency that kept a
+    ~5B module reachable across the heaviest phase of the probe. It is gone.
+    """
     cohort = trace.trace_cohort(
         str(getattr(config, "model_manifest_path", "")), seed=trace.TRACE_SEED, num_windows=trace.TRACE_NUM_WINDOWS
     )
