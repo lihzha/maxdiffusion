@@ -564,3 +564,20 @@ Per the Job-47 (option-a) approval, established pattern (Jobs 42/43, 45/46):
   canonical, seed 0, correct (takes no TRAIN_COMMIT). Line check: predicted SSIM = 0.9885 − 1.201 ×
   (Job-48's 20,000 loss); sixth independent test of the law, first at 1e-4.
 
+### Jobs 48–49 outcome (2026-08-04T~05:30Z) — the option-(a) answer
+
+- **Job 48 (instrument):** 17,500 anchor **0.0347633288 reproduced exactly** (copied checkpoint
+  validated). 20,000 = **0.03320** (n=1,629, stderr 0.00128). Segment gain **−0.00156** — about a
+  THIRD of the last 5e-5 segment's −0.0045 and far from pace restoration. For reference, a ÷4.7
+  extrapolation of 5e-5's own decay projected ≈−0.001 for its next segment: 1e-4 is marginally above
+  that projection and firmly inside the flat regime. **No divergence** (loss still fell; stable
+  at 1e-4 even 20k steps deep in memorization).
+- **Job 49 (SSIM @20,000):** canonical seed-0 mean **0.9536** (from 0.9508), **67/100 ≥ 0.95** (from
+  62), median 0.9584, max 0.9793, min 0.8721. Line check: predicted 0.9486, actual +0.0047 above —
+  **the loss→SSIM law held for the SIXTH time**, first time at 1e-4.
+- **Predeclared reading: LR is no longer the binding lever.** The option-(a) question is answered
+  in the negative — the 5e-5 echo plateau is not LR-curable at this depth. The remaining gap to
+  90/100 ≥ 0.95 shrinks at ~+5 windows/segment and decelerating; the law says the intercept (0.9885)
+  clears the bar and the slope (compounding rollout price) is what stands in the way — which is
+  exactly exp_03's target.
+
