@@ -536,3 +536,11 @@ Wan-native LR restore the collapsed pace, or does 1e-4 destabilize this far into
   echo plateau is not LR-curable at this depth.
 - **Job id:** `20260804-021109-19080ff3-exp02-o100-lr1e4-yixun`.
 
+### Job 47 failure + 47b (2026-08-04T~02:35Z)
+
+Job 47 FAILED attempt 1: worker-9 SIGABRT (exit 134) inside `jax.distributed.initialize` — the
+16-host barrier, pre-code; byte-for-byte the Job 44 / S3-attempt-1 infra signature (verified in
+worker-9.log before classifying). Standing auto-resubmit policy applies (infra, no code/config
+change). The session's permission layer intermittently blocked the resubmit; handed to Yixun.
+**Job 47b** id appended at submission.
+
