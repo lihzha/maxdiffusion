@@ -174,3 +174,16 @@ to run directly. Job id appended below at submission.
 the launch in-session — their own `!`-prefixed attempt, broken only by a trailing-text zsh glob,
 plus the explicit go-ahead).
 
+### Job 8c outcome (2026-08-04T02:52Z) — FAILED: HBM OOM in the frozen replay (first 5B contact)
+
+Attempt 1 died on infra (TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE); attempt 2 ran and got past restore +
+dataset + config views (fix #2 held) into `exp03_frozen_replay`, then OOMed: 18.00M requested vs
+12.64M free HBM, at `jaxopt.tree_util.tree_l2_norm(grad)` (trainer line 639). Jobs 8/8b never
+reached the replay — this was its first execution at 5B scale, and its structure is
+memory-hostile there: per-objective `jax.grad` called EAGERLY (unjitted op-by-op backward through
+the sampler unroll), all four 5B grad trees retained to the end for cosines, plus eager whole-tree
+temporaries (jaxopt materializes a full squared tree; `tree_reduce` allocs full `jnp.abs(leaf)`
+copies). Not a flake — a structural fix round dispatched: jitted value_and_grad per objective,
+fused jitted grad-stats/vdot reductions (jaxopt dropped), incremental cosines with resident grad
+trees capped at 3 and the peak recorded in the artifact. Relaunch as 8d after review.
+
