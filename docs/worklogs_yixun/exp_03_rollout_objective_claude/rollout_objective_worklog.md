@@ -514,3 +514,33 @@
 - **MINOR 5** — empty-tree `max_abs` is deliberately 0 (the old `-1.0` fold seed is not a magnitude);
   commented at the source and asserted in the test.
 - **Result** — suite 1503 passed / 2 skipped (+5).
+
+## 2026-08-04T06:30:00Z — Round 3: the evidence layer made to bite
+
+- **B2-Welford — my alias theory was WRONG, and is withdrawn.** A Python alias does not inhibit JAX
+  donation; donation is declared at the jit boundary and a surviving reference raises on later use
+  rather than silently declining. The local-variable dance is reverted. The exception bug the
+  reviewer spotted is fixed: `count` now advances only after the call returns (transactional).
+  **True double-mean story:** the accumulator's honest floor is TWO grad-shaped trees at the entry
+  of each draw — the running mean plus the buffer the donated update just produced. It is documented
+  and counted in the budget rather than explained away.
+- **Stale-loop-variable sweep** — `_draws` (the previous draw's gradient stayed bound while the next
+  reverse pass ran): FIXED with `del` after the yield. Isolation loop (the final `grad` survived into
+  the parity phase): FIXED. Parity trio: already released last round. Forced loop: already `del`s per
+  iteration. Replay: incremental release, unchanged.
+- **B3 gauge redesigned** — counts GRAD-SHAPED live buffers (shape+dtype matching a param leaf,
+  excluding the params themselves) from `jax.live_arrays()`, divided by leaf count → resident
+  gradient trees, assertable identically at toy and 5B scale. Sample points: `baseline`,
+  `replay_{control,a,b,c}` (inside the replay, right after each grad lands), `variance_draw_entry`,
+  `variance_draw`, `isolation_peak`, `parity_peak` (before release), `forced_peak`,
+  `after_release`. Baseline and all readings are recorded in the artifact.
+- **M4** — compilation counting now reads each jitted wrapper's own `_cache_size()` (probe grads,
+  replay grads, and the helpers `grad_stats`, `tree_vdot`, `welford_update/first`, `relative_gap`,
+  `observed_p_ss`), asserting exactly 1 specialization per probe wrapper across BOTH states.
+- **P1** — the collision pin now reads `p_ss_from_threaded_origin`, computed by a jitted function fed
+  the same traced origin the cache-served gradients receive. The old pin read replay rows, which
+  never had the collision.
+- **Mutations, all three now FAIL as required** (all three SURVIVED first): forcing every probe call
+  to origin 10000 → collision pin fails; removing the `_draws` `del` → gauge entry-sample assertion
+  fails; eager fallback in the probe grads → `_cache_size` assertion fails.
+- **B6** — first-call wall time logged per jitted tag, so the 8d run measures its own compile cost.
