@@ -182,3 +182,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — Review saved (`null_adapter_codex_code_gates-module_review.md`); reviewer's empirical probes (missing-SSIM pass, k-set estimand flip, duplicate-JSON bypass, seed swap) all now killed; G3 imputation/percentiles/boundary/nanmean confirmed independently. **246 passed in 16.94s**; F1–F14 zero survivors.
 - **Result** — `passed`. R5 committed with this entry. Gates API surface: convention-derived k-sets, table-consuming select_target, strict-JSON verdicts — the runner (R6) consumes exactly this.
 - **Next** — R6 `runner-capacity-core`: pure orchestration of arms A0/A1/A1-probe/A2/A2-0/A2-probe + adequacy probe + gates-table emission + record building under the two carried writer contracts (cast→replay→record with its mutation test; PRODUCTION geometry assertions). Entrypoint/pyconfig wiring deferred to R10.
+
+## 2026-08-05T08:10:00Z — Coder handoff: fresh Opus agent for R6 after two infra stalls
+
+- **Goal** — Continue R6 after the persistent Coder agent stalled twice (stream-watchdog 600s timeouts).
+- **Analysis** — **Infrastructure, not a bug**: the single Coder agent had accumulated ~680k transcript tokens across R1–R5; the stalls began immediately after the R6 handover, coinciding with a transient model-availability error in the harness. Worktree verified clean (no partial R6 files). Mitigation: retire that agent; hand R6 to a FRESH Opus Coder with a self-contained brief pointing at the committed code + review files for conventions (per the SOP's handoff-recording rule).
+- **Result** — `fix_ready` (handoff recorded; fresh agent dispatched with the unchanged R6 scope).
+- **Next** — R6 write → review → strengthen → commit, as planned.
