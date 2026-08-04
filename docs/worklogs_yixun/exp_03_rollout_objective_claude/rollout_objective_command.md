@@ -159,3 +159,13 @@ Fix round dispatched (view builder from `config.get_keys()`, fail-loud emptiness
 that EXECUTES `pyconfig.initialize` with the real exp03 YAML). Relaunch after review per the Job 8→8b
 protocol under the Query-4 grant.
 
+### Job 8c — S1.5 relaunch #2: GO received, launch pending (2026-08-04T~00:15Z)
+
+Fix #2 series closed: `2b9177d` (view builder via `get_keys()`, fail-loud guards, real-pyconfig
+closure tests) REQUEST-REVISION on one BLOCKER (namespace-shaped e2e blind to the reversion) →
+`994af9b` (proxy-shaped e2e; reversion now kills 4 tests at the view-construction guard) →
+**APPROVE, "Relaunch: GO"**. Suite 1,489 passed / 2 skipped. Same probe spec as Jobs 8/8b,
+COMMIT=eb18336 (tip incl. review record). Launch attempt from the session was blocked by the local
+permission layer (not by policy or approval state — the Query-4 grant covers it); handed to Yixun
+to run directly. Job id to be appended at submission.
+
