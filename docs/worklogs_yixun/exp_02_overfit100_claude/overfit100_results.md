@@ -431,3 +431,8 @@ the 0.95-per-window bar is the compounding rollout price the law's slope measure
 - **(d) stop here** — leave exp_02's headline as "mean 0.9536, 67/100 at 20k; LR axis closed" and
   let exp_03 carry the objective-mismatch question; formal verdict machinery stays available.
 
+## Decision: Yixun chose (b) — 2026-08-04
+
+"use (b)" — formal verdict at 20,000. Jobs 50–51 launched (segment-final 3×3 + full-set); verdict
+CLI recomputation follows their landing.
+
