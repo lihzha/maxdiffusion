@@ -16,3 +16,18 @@
 - "null embedding computation" = the `null_inversion` mode (inversion trajectory + per-step null-embedding optimization), operating on the already-cached latents (no VAE encode needed for inversion itself; VAE decode needed only for pixel metrics/videos).
 - "train the adapter" = an action-conditioned module that predicts the per-step null embeddings from (z_i0, actions) — exact architecture/target format to be fixed in the plan after auditing the existing PyTorch adaptor line in `third_party/Wan2.2/scripts/`.
 - "visualize" = HTML report(s) per SOP artifact 12: bounds ladder (VAE-ceiling / null-text reconstruction / DDIM-inv-only), per-step loss curves, rollout videos + SSIM/MSE vs the existing side_adapter / pre_context baselines.
+
+## Query 2 — 2026-08-04T15:18Z (plan approval + exp_05 directive)
+
+**Verbatim:**
+
+> Yes to all, but what I actually want is to get text token from inverse DDIM, and use pre_context structure to learn the text token (the positive text embedding and use loss function to constrain adapter to do that). You can treat what I am proposing here as exp_05, please design the plan for exp_05 and parallel run exp_04 and exp_05.
+
+**Grants recorded for exp_04 (per the approval package's decision points 1–5):**
+1. **Plan v5 APPROVED.** **J0 approved** (manifest build, host-only, capped). **J1 approved conditional on**: P0 tests complete + parity audit clean — per the package wording "once P0 tests + the parity audit are done"; no re-ask needed when those conditions are met (announcement 02 conditional-grant rule). J1b–J5 remain gated and will be asked separately.
+2. Cohorts DEV-64 / TEST-64 / TRAINFIT-16 / TRAIN-2000 approved.
+3. L_null = 16 approved (ablation diagnostic-only).
+4. A2 `noise=global` fallback deployment convention approved.
+5. Pilot scope acknowledged.
+
+**Scope note:** the second sentence defines a NEW experiment (exp_05 `pos_context`): per-step POSITIVE text embeddings from DDIM inversion + a pre_context-structure adapter trained with a regression loss to those embeddings, run in parallel with exp_04. Recorded in `exp_05_pos_context_claude/pos_context_yixun_query.md`; exp_04's scope is unchanged.
