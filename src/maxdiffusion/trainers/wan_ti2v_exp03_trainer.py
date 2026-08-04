@@ -684,12 +684,18 @@ def _timed_first_call(tag: str, compiled, *, state_label: str = "run"):
     return _wrapper
 
 
-def _loss_and_grad_fn(name: str, loss_fn, config, scheduler):
+def _loss_and_grad_fn(name: str, loss_fn, config, scheduler, grad_shardings=None):
     """A jitted ``value_and_grad`` per objective, cached.
 
     THE fix for Job 8c: the backward pass runs as one compiled graph instead of op by op, so XLA
     schedules and frees it. The value comes from the same call as the gradient -- the previous shape
     ran the whole 5B forward twice per objective, once for the loss and once inside ``jax.grad``.
+
+    ``grad_shardings`` is THE fix for Job 8e. With no ``out_shardings`` the gradient's layout is
+    XLA's to choose, and on the 5B graph it chose REPLICATION: the ledger caught 11.07 GB of arrays
+    per chip where ~2.9 GB was expected, because every chip held the whole gradient instead of its
+    FSDP shard, and the next program could not find 15.11 GB of contiguous space to reserve. It
+    defaults to ``None`` so any caller that does not know the layout behaves exactly as before.
     """
     key = (name, id(config), id(scheduler))
     if key not in _LOSS_AND_GRAD_CACHE:
@@ -704,7 +710,12 @@ def _loss_and_grad_fn(name: str, loss_fn, config, scheduler):
         _LOSS_AND_GRAD_CACHE[key] = (
             _timed_first_call(
                 f"replay_{name}",
-                jax.jit(jax.value_and_grad(_call, has_aux=True)),
+                jax.jit(
+                    jax.value_and_grad(_call, has_aux=True),
+                    # ``((value, aux), grad)``: the value and the loss's aux are scalars and stay
+                    # unspecified; the gradient is pinned to the parameters' own layout.
+                    out_shardings=None if grad_shardings is None else ((None, None), grad_shardings),
+                ),
                 state_label=str(getattr(config, "exp03_state_label", "run")),
             ),
             jax.jit(_call),
@@ -739,6 +750,9 @@ def exp03_frozen_replay(
     """
     out: dict[str, float] = {"global_step": float(global_step)}
     resident = ResidentTrees()
+    # The gradient tree has the parameters' structure and shapes, so the parameters carry the layout
+    # it must come back in. Left to XLA it came back REPLICATED (Job 8e).
+    grad_shardings = jax.tree_util.tree_map(lambda leaf: leaf.sharding, state.params)
     objectives = [("a", _corrective_ss_loss), ("b", _rollout_loss), ("c", _combined_loss)]
     if include_control:
         # The plain objective is the reference every cosine is taken against, so it is replayed here
@@ -750,7 +764,7 @@ def exp03_frozen_replay(
     a_grad = None
     a_sq = None
     for name, loss_fn in objectives:
-        compiled_grad, compiled_value = _loss_and_grad_fn(name, loss_fn, config, scheduler)
+        compiled_grad, compiled_value = _loss_and_grad_fn(name, loss_fn, config, scheduler, grad_shardings)
         if with_gradients:
             (value, aux), grad = compiled_grad(state.params, state, data, rng, global_step)
             resident.acquire()

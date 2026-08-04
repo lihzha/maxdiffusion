@@ -1307,16 +1307,20 @@ def test_the_welford_update_is_compiled_and_matches_a_plain_reference():
     assert np.allclose(np.asarray(accumulator.mean["w"], dtype=np.float64), reference_mean, atol=1e-5)
     assert accumulator.m2 == pytest.approx(reference_m2, rel=1e-4)
     assert accumulator.population_variance() == pytest.approx(reference_m2 / len(stream), rel=1e-4)
-    # ...and it goes through the compiled update with a donated carry.
-    import ast
-
-    tree = ast.parse(Path(s1_5.__file__).read_text())
-    welford = next(
-        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_welford_update"
-    )
-    decorators = [ast.unparse(node) for node in welford.decorator_list]
-    assert any("jax.jit" in text and "donate_argnums" in text for text in decorators), decorators
+    # ...and it goes through the compiled update with a donated carry AND a pinned carry sharding.
+    # The decorator moved into ``welford_fns`` when the accumulators had to be pinned: an unpinned
+    # float32 parameter-shaped carry is ~20 GB per chip at 5B if XLA replicates it, which is what it
+    # did to the gradients in Job 8e.
+    builder = inspect.getsource(s1_5.welford_fns)
+    assert "donate_argnums=(0,)" in builder, builder
+    assert "out_shardings=(shardings, None)" in builder, builder
+    assert "out_shardings=shardings" in builder, builder
     assert "_welford_update(" in inspect.getsource(s1_5._TreeWelford.update)
+    # The compiled pair really is jitted, and really is keyed by the sharding tree.
+    first, update = s1_5.welford_fns(s1_5.tree_shardings({"w": jnp.zeros((2,), jnp.float32)}))
+    assert s1_5.jit_cache_size(first) >= 0 and s1_5.jit_cache_size(update) >= 0
+    again = s1_5.welford_fns(s1_5.tree_shardings({"w": jnp.zeros((2,), jnp.float32)}))
+    assert again[0] is first and again[1] is update  # cached per sharding tree, not per accumulator
 
 
 def test_no_eager_whole_tree_gradient_remains_in_the_probe_or_replay():
@@ -1335,7 +1339,10 @@ def test_no_eager_whole_tree_gradient_remains_in_the_probe_or_replay():
         ]
         assert not bare, (module.__name__, bare)
     source = inspect.getsource(exp03._loss_and_grad_fn)
-    assert "jax.jit(jax.value_and_grad(_call, has_aux=True))" in source
+    assert "jax.value_and_grad(_call, has_aux=True)" in source
+    assert "jax.jit(" in source
+    # ...and the gradient's LAYOUT is pinned, not left to XLA (Job 8e).
+    assert "out_shardings=None if grad_shardings is None else ((None, None), grad_shardings)" in source
     assert "_LOSS_AND_GRAD_CACHE" in source
 
 
@@ -1448,8 +1455,8 @@ def _force_origin_inside_cache_served_calls(monkeypatch, forced: int = 10000):
     """
     original = s1_5._jitted_grad
 
-    def _mutated(tag, builder, *, static_key=()):
-        compiled = original(tag, builder, static_key=static_key)
+    def _mutated(tag, builder, *, static_key=(), grad_shardings=None):
+        compiled = original(tag, builder, static_key=static_key, grad_shardings=grad_shardings)
 
         def _forced(params, state, data, rng, global_step, ramp_origin):
             del ramp_origin
@@ -1503,6 +1510,7 @@ def test_the_probe_compiles_each_function_once_across_both_states():
     s1_5.PROBE_COMPILATIONS.clear()
     s1_5._RELEASED_SPECIALIZATIONS.clear()
     s1_5._RELEASED_REPLAY_NAMES.clear()
+    _reset_welford_jit()  # pairs built by earlier tests carry other trees' shardings and counts
     exp03._LOSS_AND_GRAD_CACHE.clear()
     exp03.COMPILE_TIMINGS.clear()
     # The helpers are module-level and their XLA caches outlive any single run, so the rest of this
@@ -1585,7 +1593,7 @@ def test_the_probe_compiles_each_function_once_across_both_states():
 
 def test_an_eager_wrapper_cannot_pass_as_a_compiled_one():
     # The census is only evidence if it refuses to count something that is not jitted at all.
-    assert s1_5.jit_cache_size(s1_5._welford_first) >= 0
+    assert s1_5.jit_cache_size(s1_5.welford_fns()[0]) >= 0
     with pytest.raises(TypeError):
         s1_5.jit_cache_size(lambda x: x)
 
@@ -1650,6 +1658,7 @@ def test_the_welford_update_is_transactional_and_correct():
     source = inspect.getsource(s1_5._TreeWelford.update)
     assert "mean, self.mean = self.mean, None" not in source  # the dance is gone
     assert source.index("_welford_update(") < source.index("self.count = next_count")
+    assert "welford_fns(tree_shardings(tree))" in source  # ...and the carry is pinned, not inferred
 
     accumulator = s1_5._TreeWelford()
     accumulator.update({"w": jnp.asarray([1.0], dtype=jnp.float32)})
@@ -1730,7 +1739,10 @@ def test_float32_welford_buffers_over_bfloat16_params_are_counted():
     gauge.sample("baseline")
     old_rule_matches = {(tuple(leaf.shape), str(leaf.dtype)) for leaf in jax.tree_util.tree_leaves(params)}
 
-    welford_mean = s1_5._welford_first({"w": jnp.ones((16, 16), jnp.bfloat16), "b": jnp.ones((16,), jnp.bfloat16)})
+    # The shardings come from the PARAMS (already alive at baseline); the tree being absorbed is a
+    # temporary, so only the float32 accumulator it produces is new when the gauge samples.
+    welford_first = s1_5.welford_fns(s1_5.tree_shardings(params))[0]
+    welford_mean = welford_first({"w": jnp.ones((16, 16), jnp.bfloat16), "b": jnp.ones((16,), jnp.bfloat16)})
     leaves = jax.tree_util.tree_leaves(welford_mean)
     assert {str(leaf.dtype) for leaf in leaves} == {"float32"}  # the accumulator really is wider
     assert not any((tuple(leaf.shape), str(leaf.dtype)) in old_rule_matches for leaf in leaves), "the old rule would"
@@ -1837,6 +1849,7 @@ def test_the_production_dtype_mix_splits_three_helpers():
     # comment. Production parameters are bfloat16 while every accumulator is float32, and the mix
     # reaches THREE helpers, not one. This models the production call pattern at toy size: the
     # variance decomposition over bfloat16 gradients, then the statistics the replay takes on them.
+    _reset_welford_jit()  # so the counts below are this test's, not the whole file's
     for helper in s1_5.probe_jit_helpers().values():
         helper.clear_cache()
 
@@ -2191,6 +2204,20 @@ def test_the_heavy_phase_logs_the_ledger_before_re_raising():
 # =============================================================================================
 
 
+def _reset_welford_jit():
+    """Drop the compiled Welford pair AND the cache it shares with every other pair.
+
+    jax keys its pjit cache by the wrapped FUNCTION rather than by the wrapper: two
+    ``jax.jit(_welford_first_impl)`` share entries, and clearing either clears both. Dropping the
+    cache dict alone would leave a freshly built pair reporting earlier tests' specializations.
+    """
+    s1_5._WELFORD_JIT.clear()
+    first, update = s1_5.welford_fns(s1_5.tree_shardings({"w": jnp.zeros((1,), jnp.float32)}))
+    first.clear_cache()
+    update.clear_cache()
+    s1_5._WELFORD_JIT.clear()
+
+
 def test_the_walk_order_does_not_change_a_single_number():
     # The premise of ANY reordering of the replay walk: the per-(batch, objective) losses and
     # gradients must not depend on the order the loops are nested in. They do not -- every RNG the
@@ -2363,3 +2390,153 @@ def test_the_failure_diagnostics_can_never_replace_the_failure(monkeypatch):
     # The real thing does not raise either, with no monkeypatching at all.
     monkeypatch.undo()
     s1_5.log_diagnostics_best_effort("failure (smoke)")
+
+
+# =============================================================================================
+# 15. THE Job 8e defect: an unpinned jitted gradient comes back REPLICATED. The ledger caught it on
+# hardware -- post_replay_control read arrays 11.07G per chip where ~2.9G was expected, with the
+# failure top-10 naming weight-shaped arrays whose local size equalled their global size. Every
+# chip was holding the whole ~9.5G gradient instead of its 1.25G FSDP shard.
+# =============================================================================================
+
+# Run in a subprocess for the same reason as the dedupe inversion: the device count is fixed when
+# the backend initialises. The loss shape here is the toy stub's own -- a scalar gain broadcast over
+# the input (``jnp.mean(gain) * tanh(x)``) -- which is exactly the shape whose gradient XLA chooses
+# to replicate, so the defect is reproduced rather than imagined.
+_PIN_SCRIPT = """
+import json, sys, types
+
+_grain = types.ModuleType("grain")
+_grain_python = types.ModuleType("grain.python")
+_grain_python.MapTransform = type("MapTransform", (), {})
+_grain_python.RandomAccessDataSource = type("RandomAccessDataSource", (), {})
+_grain.python = _grain_python
+sys.modules["grain"] = _grain
+sys.modules["grain.python"] = _grain_python
+
+import jax
+import jax.numpy as jnp
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+
+import maxdiffusion.probe_exp03_s1_5 as s1_5
+
+assert jax.device_count() == 8, jax.device_count()
+mesh = Mesh(jax.devices(), ("fsdp",))
+sharded = NamedSharding(mesh, PartitionSpec("fsdp"))
+params = {"w": jax.device_put(jnp.ones((64, 8), jnp.float32), sharded)}
+data = jax.device_put(jnp.ones((64, 8), jnp.float32), sharded)
+
+
+def loss(p, d):
+    # THE toy stub's shape: a scalar gain broadcast over the input.
+    return jnp.sum(jnp.mean(p["w"]) * jnp.tanh(d)), {"p_ss_used": jnp.float32(0.5)}
+
+
+def local0(array):
+    key = str(jax.devices()[0])
+    return sum(int(s.data.nbytes) for s in array.addressable_shards if str(s.device) == key)
+
+
+shardings = s1_5.tree_shardings(params)
+vg = jax.value_and_grad(loss, has_aux=True)
+(_, _), unpinned = jax.jit(vg)(params, data)
+(_, _), pinned = jax.jit(vg, out_shardings=((None, None), shardings))(params, data)
+
+# The residency gauge's own reading of each, from a baseline taken before either existed.
+def tree_equivalents(tree):
+    gauge = s1_5.LiveBufferGauge(params)
+    held = jax.tree_util.tree_map(lambda x: x + 0.0, tree)  # a fresh copy, made after the baseline
+    reading = gauge.sample("grad")
+    del held
+    return reading["grad_tree_equivalents"]
+
+print("RESULT " + json.dumps({
+    "devices": jax.device_count(),
+    "param_global": int(params["w"].nbytes),
+    "param_local0": local0(params["w"]),
+    "unpinned_global": int(unpinned["w"].nbytes),
+    "unpinned_local0": local0(unpinned["w"]),
+    "unpinned_spec": str(unpinned["w"].sharding.spec),
+    "pinned_global": int(pinned["w"].nbytes),
+    "pinned_local0": local0(pinned["w"]),
+    "pinned_spec": str(pinned["w"].sharding.spec),
+    "welford_local0": local0(s1_5.welford_fns(shardings)[0](pinned)["w"]),
+}))
+"""
+
+
+def test_an_unpinned_gradient_replicates_and_the_pin_is_what_stops_it():
+    import os
+
+    env = dict(os.environ)
+    env["XLA_FLAGS"] = env.get("XLA_FLAGS", "") + " --xla_force_host_platform_device_count=8"
+    env["JAX_PLATFORMS"] = "cpu"
+    env["PYTHONPATH"] = str(_REPO / "src")
+    proc = subprocess.run([sys.executable, "-c", _PIN_SCRIPT], capture_output=True, text=True, timeout=600, env=env)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    result = json.loads(next(l for l in proc.stdout.splitlines() if l.startswith("RESULT "))[len("RESULT ") :])
+
+    assert result["devices"] == 8, result
+    # The parameters are sharded: one eighth of the tree on this chip.
+    assert result["param_global"] == 64 * 8 * 4 and result["param_local0"] == result["param_global"] // 8, result
+    # WITHOUT the pin the gradient comes back REPLICATED -- local equals global, the exact signature
+    # the 8e failure top-10 showed (fp32[3072,18432] with local == global).
+    assert result["unpinned_local0"] == result["unpinned_global"], result
+    assert result["unpinned_spec"] == "P()", result  # replicated: no axis mentioned at all
+    # WITH the pin it is one shard, eight times smaller on this chip, and the values are unchanged
+    # (a sharding is a layout, not a computation -- the walk-order test pins the values).
+    assert result["pinned_local0"] == result["pinned_global"] // 8, result
+    assert result["pinned_spec"] == "P('fsdp',)", result
+    assert result["pinned_local0"] * 8 == result["unpinned_local0"], result
+    # ...and the Welford accumulator built from the pinned gradient inherits the same one-eighth.
+    assert result["welford_local0"] == result["pinned_local0"], result
+
+
+def test_the_context_table_is_a_replicated_input_and_is_not_duplicated_per_call():
+    # The third array in the 8e failure top-10, bf16[100, 512, 4096] at 0.391G, is the CONTEXT
+    # TABLE: num_text_slots(100) x wan_max_sequence_length(512) x text_dim(4096) x 2 bytes =
+    # 419,430,400 = 0.390625 GiB exactly. It is replicated ON PURPOSE -- every device gathers
+    # arbitrary rows of it -- and it is an INPUT, so unlike the gradients it is neither an output
+    # XLA got to lay out nor something a pin belongs on. What must be true is that it is not
+    # re-materialised on every call.
+    assert 100 * 512 * 4096 * 2 == 419430400  # the arithmetic that identifies it
+    config_text = _CONFIG.read_text()
+    assert "num_text_slots: 100" in config_text and "text_dim: 4096" in config_text
+    assert "wan_max_sequence_length: 512" in config_text
+    # Replication is a deliberate, documented choice in the state shardings, not an accident.
+    shardings_source = inspect.getsource(parent._overfit100_state_shardings)
+    assert "replace(context_table=replicated)" in shardings_source
+    assert "replicating the ~5B" in shardings_source  # the reason params are NOT replicated
+
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    table_pairs = set(s1_5.buffer_shards(state.context_table)[0])
+    assert table_pairs
+
+    gauge = s1_5.LiveBufferGauge(state.params)  # baseline taken WITH the table alive
+    gauge.sample("baseline")
+    view = s1_5.state_view(config, "checkpoint")
+    for index in range(2):
+        row = exp03.exp03_frozen_replay(
+            state,
+            batches[index],
+            jax.random.fold_in(jax.random.key(1), index),
+            view,
+            scheduler,
+            global_step=jnp.asarray(10000 + index, jnp.int32),
+            include_control=True,
+        )
+        assert row["loss_control"] == row["loss_control"]  # finite, i.e. the call really ran
+    # The table's own buffers are untouched: same physical allocations, still live.
+    live = set()
+    for array in jax.live_arrays():
+        live |= set(s1_5.buffer_shards(array)[0])
+    assert table_pairs <= live, "the context table was re-materialised"
+    # ...and nothing of its shape was allocated beside it: exactly one such array is live.
+    extra = [row for row in s1_5.largest_live_arrays(limit=20) if row["shape"] == tuple(state.context_table.shape)]
+    assert len(extra) == 1, extra
+    assert extra[0]["global_bytes"] == int(state.context_table.nbytes)
+
+    # It is not in the gradient tree either: gradients are taken with respect to params alone.
+    grad_shardings = s1_5.tree_shardings(state.params)
+    assert jax.tree_util.tree_structure(grad_shardings) == jax.tree_util.tree_structure(state.params)
+    assert "context_table" not in str(jax.tree_util.tree_structure(state.params))

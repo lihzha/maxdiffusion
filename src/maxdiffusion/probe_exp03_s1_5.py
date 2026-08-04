@@ -44,7 +44,6 @@ video. It scores gradients, not pixels.
 
 from __future__ import annotations
 
-import functools
 import gc
 import hashlib
 import re
@@ -168,14 +167,27 @@ def assert_no_update(before: Sequence[str], after: Sequence[str]) -> None:
 # ------------------------------------------------------------------------ support-variance (D2)
 
 
-@jax.jit
-def _welford_first(tree):
+def tree_shardings(tree):
+    """A tree of each leaf's own ``Sharding`` — what an output must be PINNED to.
+
+    Job 8e's failure, in one line: a jitted ``value_and_grad`` with no ``out_shardings`` lets XLA
+    choose the gradient's layout, and for the real 5B graph it chose REPLICATION. Every chip then
+    held the whole ~9.5 GB gradient instead of its 1.25 GB FSDP shard, and the program that came
+    next could not find a contiguous 15.11 GB to reserve.
+
+    The parameters already carry the right answer -- the gradient has their tree structure and their
+    shapes by construction -- so the pin is derived rather than declared, and cannot drift from the
+    state it belongs to.
+    """
+    return jax.tree_util.tree_map(lambda leaf: leaf.sharding, tree)
+
+
+def _welford_first_impl(tree):
     """The first observation becomes the running mean (in float32)."""
     return jax.tree_util.tree_map(lambda leaf: leaf.astype(jnp.float32), tree)
 
 
-@functools.partial(jax.jit, donate_argnums=(0,))
-def _welford_update(mean, tree, count):
+def _welford_update_impl(mean, tree, count):
     """One compiled Welford step; the mean buffer is DONATED so it is updated in place.
 
     Eagerly this was three whole-tree traversals plus a dot, each materializing its own tree -- the
@@ -188,6 +200,37 @@ def _welford_update(mean, tree, count):
         jnp.sum(x * y) for x, y in zip(jax.tree_util.tree_leaves(delta), jax.tree_util.tree_leaves(delta2))
     )
     return new_mean, increment
+
+
+# The compiled Welford pair, one per distinct sharding tree. Cached rather than built per
+# accumulator: ``variance_decomposition`` makes K+1 of them per objective and each would otherwise
+# be its own compilation.
+_WELFORD_JIT: dict = {}
+
+
+def welford_fns(shardings=None):
+    """``(first, update)`` compiled with the ACCUMULATOR pinned to the gradients' own shardings.
+
+    The carries are parameter-shaped float32 trees. Left unpinned and replicated at 5B they would be
+    ~20 GB per chip each -- two of them live at once in the between/within decomposition -- so the
+    phase that follows the replay would have OOM'd next even after the gradients were fixed. The
+    shardings come from the tree being absorbed, so the accumulator is sharded exactly like the
+    thing it accumulates and no caller has to plumb anything.
+
+    Note for anyone reading the census: jax keys its pjit cache by the wrapped FUNCTION, not by the
+    wrapper, so every pair built here shares one cache for ``_welford_first_impl`` and one for
+    ``_welford_update_impl``. The census therefore counts specializations of the implementation,
+    which is the number that matters, and a second pair does not double-count them.
+    """
+    leaves, treedef = jax.tree_util.tree_flatten(shardings)
+    key = (treedef, tuple(leaves))
+    if key not in _WELFORD_JIT:
+        _WELFORD_JIT[key] = (
+            jax.jit(_welford_first_impl, out_shardings=shardings),
+            # The increment is a scalar and is deliberately left unpinned; the carry is not.
+            jax.jit(_welford_update_impl, donate_argnums=(0,), out_shardings=(shardings, None)),
+        )
+    return _WELFORD_JIT[key]
 
 
 def buffer_shards(array) -> tuple[dict, bool]:
@@ -390,6 +433,9 @@ class _TreeWelford:
         holds the gradient being absorbed. Two trees is the floor for a streaming mean, and the
         budget counts it as such.
         """
+        # PINNED to the incoming tree's own shardings, so the accumulator is sharded exactly like
+        # the gradients it absorbs rather than however XLA felt about the output layout.
+        _welford_first, _welford_update = welford_fns(tree_shardings(tree))
         if self.mean is None:
             self.mean = _welford_first(tree)
             self.count += 1
@@ -614,7 +660,7 @@ def variance_tag(objective: str, salt) -> str:
     return f"variance_{objective}_salt{int(salt)}"
 
 
-def _jitted_grad(tag: str, builder, *, static_key=()):
+def _jitted_grad(tag: str, builder, *, static_key=(), grad_shardings=None):
     """A cached, JITTED value-and-gradient whose per-state knob is a TRACED argument.
 
     Two things this shape fixes. First the memory one (Job 8c): an unjitted backward through a 5B
@@ -631,6 +677,11 @@ def _jitted_grad(tag: str, builder, *, static_key=()):
 
     ``builder(ramp_origin)`` returns the loss callable for that origin; it is invoked at trace time
     with the tracer, so the config view it builds carries the traced origin.
+
+    ``grad_shardings`` PINS the gradient output to the parameters' own layout. Without it XLA picks,
+    and on the 5B graph it picked replication: Job 8e's ledger caught every chip holding the whole
+    ~9.5 GB gradient instead of its 1.25 GB shard. The value/aux half is left unspecified -- it is
+    two scalars, and constraining them buys nothing.
     """
     key = (tag, tuple(static_key))
     if key not in _PROBE_GRAD_CACHE:
@@ -638,7 +689,10 @@ def _jitted_grad(tag: str, builder, *, static_key=()):
         def _call(params, state, data, rng, global_step, ramp_origin, make=builder):
             return make(ramp_origin)(params, state, data, rng, global_step)
 
-        compiled = jax.jit(jax.value_and_grad(_call, has_aux=True))
+        compiled = jax.jit(
+            jax.value_and_grad(_call, has_aux=True),
+            out_shardings=None if grad_shardings is None else ((None, None), grad_shardings),
+        )
         _PROBE_GRAD_CACHE[key] = compiled
         PROBE_COMPILATIONS.append(key)
     return _PROBE_GRAD_CACHE[key]
@@ -659,13 +713,24 @@ def traced_view(config, base_label: str, ramp_origin, **overrides):
 # The jitted helpers that are not gradient functions. Named here rather than in the test, so the
 # census the artifact carries and the count the test asserts come from ONE list.
 def probe_jit_helpers() -> dict:
-    return {
+    """The non-gradient jitted helpers, including the Welford pair actually in use.
+
+    The Welford pair is built per sharding tree rather than at import, so it is enumerated from the
+    cache. One run has one parameter layout and therefore one pair; if a process ever built more
+    (two different meshes, i.e. a test file) each is reported under its own suffix rather than one
+    silently standing in for the other.
+    """
+    helpers = {
         "grad_stats": exp03._jit_grad_stats,
         "tree_vdot": exp03._jit_tree_vdot,
-        "welford_update": _welford_update,
-        "welford_first": _welford_first,
         "relative_gap": _jit_relative_gap,
     }
+    pairs = list(_WELFORD_JIT.values())
+    for index, (first, update) in enumerate(pairs):
+        suffix = "" if len(pairs) == 1 else f"#{index + 1}"
+        helpers[f"welford_first{suffix}"] = first
+        helpers[f"welford_update{suffix}"] = update
+    return helpers
 
 
 def jit_cache_size(fn) -> int:
@@ -1302,6 +1367,16 @@ def state_report(
     # The per-state knob, threaded as a TRACED value rather than captured in a closure: this is what
     # makes one compilation correct for both states instead of silently reusing the other's.
     ramp_origin = jnp.asarray(plan["ramp_origin"], jnp.int32)
+    # THE pin, derived once from the state that owns the parameters and threaded into every jitted
+    # gradient producer below. Job 8e died for the want of it: with the gradient's layout left to
+    # XLA, every chip carried the whole ~9.5 GB tree instead of its 1.25 GB shard.
+    #
+    # What the 8f ledger should therefore read, per chip: ``pre_replay`` ~1.59G (parameters 1.25 +
+    # the replicated context table 0.39 + change), and ``post_replay_control`` ~2.9G -- pre_replay
+    # plus ONE gradient shard (~1.25G) plus small aux -- against the 11.35G of 8e. The three-tree
+    # cap then costs 3.75G rather than 28.5G, which is the first time the residency design and the
+    # hardware have agreed.
+    grad_shardings = tree_shardings(state.params)
     witness = RampWitness()
     gauge = LiveBufferGauge(state.params)
     gauge.sample("baseline")  # the state alone, before any gradient exists
@@ -1388,7 +1463,7 @@ def state_report(
                 # compilation, and a tag shared across the M salts timed one of them and left the
                 # other M-1 -- twelve of sixteen compilations per state -- with no entry at all.
                 tag = variance_tag(objective, salt)
-                compiled = _jitted_grad(tag, _build, static_key=(objective, int(salt)))
+                compiled = _jitted_grad(tag, _build, static_key=(objective, int(salt)), grad_shardings=grad_shardings)
                 _, gradient = call_grad(tag, compiled, batch, batch_rng, global_step)
                 # SAMPLE INSIDE the peak window, and at the discriminating moment: this gradient is
                 # live alongside Welford's mean AND anything the previous iteration failed to drop.
@@ -1445,6 +1520,7 @@ def state_report(
                 f"isolation_{label}",
                 _build_isolation,
                 static_key=("p_ss_max=1.0", "ramp=0", f"same_eps={flag}"),
+                grad_shardings=grad_shardings,
             ),
             batch,
             batch_rng,
@@ -1489,7 +1565,9 @@ def state_report(
 
     trial_loss, trial_grad = call_grad(
         "parity_trial",
-        _jitted_grad("parity_trial", _build_parity_trial, static_key=("p_ss_max=0.0", "ramp=0")),
+        _jitted_grad(
+            "parity_trial", _build_parity_trial, static_key=("p_ss_max=0.0", "ramp=0"), grad_shardings=grad_shardings
+        ),
         batch,
         batch_rng,
         global_step,
@@ -1497,7 +1575,12 @@ def state_report(
     release_probe_programs("parity_trial")  # the gradient outlives the program that produced it
     comparator_loss, comparator_grad = call_grad(
         "parity_comparator",
-        _jitted_grad("parity_comparator", _build_parity_comparator, static_key=("p_ss_max=0.0", "ramp=0")),
+        _jitted_grad(
+            "parity_comparator",
+            _build_parity_comparator,
+            static_key=("p_ss_max=0.0", "ramp=0"),
+            grad_shardings=grad_shardings,
+        ),
         batch,
         batch_rng,
         global_step,
@@ -1508,7 +1591,7 @@ def state_report(
     )
     production_loss, production_grad = call_grad(
         "parity_production_control",
-        _jitted_grad("parity_production_control", _build_production_control),
+        _jitted_grad("parity_production_control", _build_production_control, grad_shardings=grad_shardings),
         batch,
         batch_rng,
         global_step,
@@ -1543,7 +1626,12 @@ def state_report(
 
         loss, grad = call_grad(
             f"forced_{objective}",
-            _jitted_grad(f"forced_{objective}", _build_forced, static_key=(objective, "p_ss_max=1.0", "ramp=0")),
+            _jitted_grad(
+                f"forced_{objective}",
+                _build_forced,
+                static_key=(objective, "p_ss_max=1.0", "ramp=0"),
+                grad_shardings=grad_shardings,
+            ),
             batch,
             batch_rng,
             global_step,
