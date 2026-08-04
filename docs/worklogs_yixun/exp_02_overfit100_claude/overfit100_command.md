@@ -581,3 +581,21 @@ Per the Job-47 (option-a) approval, established pattern (Jobs 42/43, 45/46):
   clears the bar and the slope (compounding rollout price) is what stands in the way — which is
   exactly exp_03's target.
 
+## Jobs 50–51 — FORMAL VERDICT PASSES @ lr1e4-20,000 — launched 2026-08-04T15:29Z
+
+**Approved by Yixun ("use (b)")** — formalize the verdict at the best checkpoint. D11 structure
+(Jobs 27–28 precedent), run `wan-overfit100-s3ext-lr1e4-20260804`, step 20,000, v6e-8, eval code
+byte-identical lineage; COMMIT=632d44f5db216c6d8ed26f53c669328cb4e96aef (tip at submission).
+- **Job 50 (segment-final 3×3):** `20260804-152857-5b1ec01e-exp02-o100-final20k-yixun` —
+  canonical 100, ROLLOUT_SEEDS=0,1,2, CONTEXT_MODES=correct,null,shuffled (~2–3 h; resume staging ON).
+- **Job 51 (full-set):** `20260804-152913-840b3465-exp02-o100-fullset20k-yixun` — all 1,629, seed 0,
+  correct (~4–5 h; resume staging ON).
+- **Then:** the verdict CLI recomputes the two-tier claim locally over the admitted artifacts at this
+  eval commit (one-verdict-per-eval-commit; the seed-0 correct cells must reproduce Job 49's
+  mean 0.9536 / 67 ≥ 0.95 as a validity check).
+- **Read:** two-tier D11 at 20,000 — canonical bar count across 3 seeds + full-set ≥0.90 fraction;
+  text-conditioning gap (correct vs shuffled/null) at the memorization-strong checkpoint.
+
+Parallel-tracks note (Yixun, same message): exp_02 and exp_03 have no sequential dependency — both
+run concurrently; exp_03's round-4 fix work continues independently.
+
