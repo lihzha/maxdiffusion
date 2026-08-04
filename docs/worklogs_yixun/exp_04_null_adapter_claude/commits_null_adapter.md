@@ -7,3 +7,4 @@
 - `af47c13` — feat(exp_04): R4a replay-operator — CFG Euler deployment replay (TDD, 115 tests)
 - `b5a8bf5` — feat(exp_04): R4b record-schema-io — self-contained artifact records (TDD, 166 tests)
 - `f7903e3` — feat(exp_04): R4c verify-replay — pair-consuming artifact verifier (TDD, 187 tests)
+- `03ca198` — feat(exp_04): R5 gates-module — deterministic gate statistics (TDD, 246 tests)
