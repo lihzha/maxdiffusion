@@ -243,3 +243,91 @@ All pass-2 items **accepted**; plan v3 implements them:
 - **N9 accepted:** relabeled "serialized-target replay (reference point)" under keyed deployment; achieved per-example oracle only under global(0) with A2 targets.
 
 Material revision ⇒ re-review pass 3 dispatched.
+
+---
+
+## Re-review pass 3 (plan v3 @ `7bead68`)
+
+Reviewer: Codex `gpt-5.6-sol` xhigh, session 019fcad9-8634-7640-8bb0-d0751856e055, read-only, exp_04 worktree.
+
+### Reviewer output (verbatim)
+
+Context loaded:
+
+- `docs/worklogs_yixun/experiment_SOP.md` — full file.
+- `docs/worklogs_yixun/announcement/01_status_block_every_reply.md` and `02_tpu_run_requires_approval.md` — full files.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_yixun_query.md` — full file.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/plan_null_adapter.md` — full v3 at `7bead68`; also the relevant v2 text at `58c14dd` and the v2→v3 diff.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_codex_plan_review.md` — full file: both reviews and both resolution records.
+- `docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_worklog.md` — full file.
+- `docs/worklogs_yixun/master_experiment_tracker.md`, `exp_02_overfit100_claude/overfit100_analysis.md`, and `exp_03_rollout_objective_claude/plan_rollout_objective.md` — full files.
+- Wan2.2 submodule object `f370228`: targeted null-inversion/optimization/replay/artifact sections of `scripts/embedding_search.py`; full `scripts/verify_reconstruction_from_null.py`.
+- `src/maxdiffusion/trainers/wan_ti2v_side_adapter_trainer.py` — relevant null-context, RNG, sharding, checkpoint, restore, and training sections.
+- `src/maxdiffusion/models/wan/side_adapter_wan.py` — relevant adapter, pinning, timestep, forward-dispatch, and sigma sections.
+- `src/maxdiffusion/generate_wan_side_adapter.py` — relevant sample-reading, rollout, restore, sequential-RNG, metrics, and aggregation sections.
+- `src/maxdiffusion/configs/base_wan_5b_side_adapter.yml` — full file.
+- Repository state: clean worktree, HEAD `7bead6893d2d393d1f74cbd7677b215bd0a0c356`; Wan2.2 worktree uninitialized, reference read from its local Git object store.
+
+Pass-2 item verification:
+
+- **F1 — PARTIALLY-RESOLVED:** Gradient traces and full-DEV rerun were added, but the adoption rule does not deterministically select among multiple qualifying recipes or define the median’s aggregation.
+- **F5 — RESOLVED:** A1/A2 transfer probes now use fixed keyed seeds `{0,1,2}` with declared per-example seed reduction.
+- **F6 — RESOLVED:** G2 has a CI floor, G3 fixes its seeds/reduction, and invalid-pair calculations now have executable semantics.
+- **F9 — RESOLVED:** Architecture, initialization, seeds, parameter count, P3a budget/override, and clean J3 restart are pinned.
+- **F10 — PARTIALLY-RESOLVED:** Same-start parity is now numerical, but A2 is selected and trained at `global(0)` while deployment G3 averages `global(0..2)`.
+- **F11 — RESOLVED:** Compile/update/OOM stops and the four-hour projected J1b limit provide an executable measurement gate.
+- **F14 — RESOLVED:** `expected_final_latent` and its hash are authoritative artifact fields consumed by the independent verifier.
+- **F15 — PARTIALLY-RESOLVED:** Typed/legacy restore and same-input parity are planned, but the exact effective pre_context restore configuration is not pinned.
+- **F17 — PARTIALLY-RESOLVED:** Rounds are materially smaller, but R6/R7 and trainer dispatch still lack clearly mapped dedicated test names; this is non-blocking process polish.
+
+- **N1 — RESOLVED:** A1 selection requires G1, the relative transfer threshold, and absolute SSIM ≥0.70.
+- **N2 — PARTIALLY-RESOLVED:** J0 and TRAIN-2000 exist, but the claimed hard train-scan cap has no numeric value and exact DEV/TEST allocation was dropped.
+- **N3 — PARTIALLY-RESOLVED:** Conventions are named and persisted, but the hash-to-key expression is not a valid canonical JAX contract and global evaluation conflicts with the fixed-ε₀ fallback.
+- **N4 — PARTIALLY-RESOLVED:** The module/tests/statistics exist, but v3 permits up to 10% invalid pairs rather than implementing the accepted fail-on-any-invalid rule.
+- **N5 — RESOLVED:** The ablation is diagnostic-only and P2/P3 are fixed to `L_null=16`.
+- **N6 — RESOLVED:** Module details, seeds, P3a budget, and clean-restart behavior are pinned.
+- **N7 — PARTIALLY-RESOLVED:** Structure/fingerprint/step/parity checks exist, but the legacy checkpoint URI and complete effective pre_context config remain unspecified.
+- **N8 — PARTIALLY-RESOLVED:** Expected latent, worst-example thresholds, and tests were added, but the schema hardcodes fp16 while the failure branch says to store fp32 without defining which fields change dtype.
+- **N9 — RESOLVED:** Keyed replay is correctly labeled a reference point; oracle language is limited to the matching `global(0)` A2 start.
+
+New findings:
+
+1. **M1 — MAJOR — §3 Noise conventions:** `int.from_bytes(sha256(name)[:8])` neither defines UTF-8/digest/byte order nor respects `jax.random.fold_in`’s 32-bit data contract. Define an exact mapping—e.g. UTF-8 SHA-256 digest split into two big-endian `uint32` words, each folded in—and pin golden key/noise fingerprints.
+
+2. **M2 — MAJOR — §§3, 4/P1, 4/P3 Eval:** A2 targets and G2 are based only on `global(0)`, while G3 averages `global(0..2)` even though approval decision 4 defines the fallback as one canonical noise. Either evaluate A2 deployment only at `k={0}`, or gate global-seed transfer and cache/define targets for every evaluated `k`.
+
+3. **M3 — MAJOR — §4/P1 Adequacy probe:** “If any recipe improves ≥2×, adopt it” is non-decidable when several recipes qualify and does not define whether the median pools steps, examples, or per-example summaries. Specify the statistic, deterministic argmin/tie-break, and worst-case J1 rerun budget.
+
+4. **M4 — MAJOR — §4/J0:** “Never a full 330-GiB pass” is not enforced because the risk section’s hard shard-count cap has no value; v3 also omits v2’s first-64/next-64 DEV/TEST assignment. Pin a maximum shard/byte count with fail-before-next-shard behavior and the exact cohort slicing rules.
+
+5. **M5 — MAJOR — §4/P2:** The fp16 fallback is internally contradictory: `z_start` and `expected_final_latent` are declared fp16 and `nulls` has no dtype, yet failure says “store fp32.” Add an artifact dtype field and declare exactly which replay-defining tensors switch to fp32, with reader/verifier rejection of inconsistent byte lengths.
+
+6. **M6 — MAJOR — §4/P3 Legacy restore:** The cited base YAML currently defaults to `action_adapter_type: side_adapter` and `max_train_steps: 10000`, whereas the baseline is pre_context@30k. Pin the checkpoint URI plus the complete effective configuration/overrides—or an immutable saved-config hash—used to construct the legacy parameter tree.
+
+7. **M7 — MAJOR — §3 Gates:** Excluding as many as six invalid TEST-64 pairs from mean/CI can let an absolute-quality gate pass after its hardest failures disappear. Implement the accepted fail-on-any-invalid-primary-metric rule, or conservatively impute the metric’s worst value in every mean/CI.
+
+8. **M8 — NIT — header/worklog:** Pass 2 had nine partial F-items, not seven; correct the v3 header, resolution heading, and worklog count.
+
+## Status
+
+- No subprocesses or jobs are running; this read-only pass is complete.
+- Earliest steer: now; revising these plan contracts is safe before any approval or implementation.
+
+REQUEST-REVISION — v3 closes most prior gaps, but its key derivation, A2 deployment estimand, recipe adoption, bounded scan, artifact fallback, legacy restore, and invalid-pair rules still leave conclusions or execution materially underdetermined.
+
+
+### Planner resolutions (plan v3 → v4)
+
+All pass-3 items **accepted**; plan v4 implements them:
+
+- **M1:** exact derivation pinned — UTF-8 sha256 digest, bytes [0:4]/[4:8] as big-endian uint32 words, folded in sequence with a domain constant and k; golden key/noise fingerprints hardcoded in `test_null_adapter_noise.py`.
+- **M2:** A2 deployment estimand = the single canonical ε₀: under `global` convention J4/J5 evaluate exactly k={0} (targets exist only for ε₀); keyed convention keeps k∈{0,1,2}; A2-probe remains the reported transfer diagnostic. (Closes F10.)
+- **M3:** adoption statistic = median over 8 examples of per-example mean-over-steps final tracking loss; adopt the lowest-scoring recipe among those ≤ 0.5× default, ties → lower J then lower lr; none qualifies → keep default; worst-case DEV rerun budget +2 h, exceeded → stop and surface. (Closes F1.)
+- **M4:** J0 hard caps — max 200 shards AND 60 GiB, checked before each next shard, fail-closed with nothing written; DEV-64/TEST-64 slicing restored explicitly (first 64 / next 64 val episodes by ascending hex sha256(episode_id)); TRAIN-2000 = 1,000 episodes × ≤2 lowest-ordinal windows after TRAINFIT-16. (Closes N2.)
+- **M5:** `latent_dtype` field added; fp32 fallback scoped to exactly {nulls, z_start, expected_final_latent}; z_i0/z_video stay source-fp16; readers/verifier derive byte lengths from the field and reject inconsistencies. (Closes N8.)
+- **M6:** legacy checkpoint URI pinned (wan-pre_context-v6e64-full-gbs512-fresh-20260629-034110, step 30000); effective config = base YAML + pinned override set {action_adapter_type: pre_context, side_adapter_noise_mode: fresh} with the base-YAML defaults that must NOT apply called out; eval_shape structure guard fail-closed; fingerprint sidecar also hashes the effective-config JSON; override-set rejection test added. (Closes F15/N7.)
+- **M7:** invalid pairs are worst-value imputed into every mean/CI (SSIM←0.0, MSE←max finite observed, ratio←1.0), counted not-improved, never excluded; >10% invalid still auto-fails; imputation branch unit-tested. (Closes N4.)
+- **M8:** pass-2 partial count corrected to nine in the v4 header and in the worklog entry recording this pass.
+- **F17 residue:** R6/R7/R13 now have named dedicated tests (`test_null_adapter_runner_capacity.py`, `test_null_adapter_runner_decode.py`, `test_null_adapter_dispatch.py`).
+
+Material revision ⇒ re-review pass 4 dispatched.
