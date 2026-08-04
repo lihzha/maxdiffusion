@@ -599,3 +599,21 @@ byte-identical lineage; COMMIT=632d44f5db216c6d8ed26f53c669328cb4e96aef (tip at 
 Parallel-tracks note (Yixun, same message): exp_02 and exp_03 have no sequential dependency — both
 run concurrently; exp_03's round-4 fix work continues independently.
 
+### Jobs 50–51 outcome + FORMAL VERDICT at 20,000 (2026-08-04T~21:30Z)
+
+Both SUCCEEDED through heavy spot weather (a5/a5; resume staging did its job). Validity held:
+segment-final seed-0 correct reproduces Job 49 exactly (0.9536 / 67). Seeds are remarkably stable
+(correct means 0.9536 / 0.9537 / 0.9536; ≥0.95 counts 67 / 69 / 69).
+
+**Verdict CLI (`verdict_lr1e4_step20000_complete.json`, one-verdict-per-eval-commit, coverage
+complete 1,629/1,629): `partial`.**
+- Headline (canonical, median-of-3-seeds m_corr ≥ 0.95): fraction **0.69** < 0.90 — NOT established.
+- Full-set gate at c*=20000: fraction **0.9932** ≥ 0.90 — numerically passes, but the two-tier claim
+  requires the headline, so "full-set memorization" is correctly not claimed.
+- Ablation (300 paired rows each): correct−null gap **+0.0974**, correct−shuffled **+0.1233** —
+  the text-conditioning gap more than DOUBLED from 10k (0.053), and wrong context is now worse
+  than no context: the model actively follows the instruction.
+
+Arc of the formal statistic across the experiment: 10k verdict "none" (0/100 at 0.95; full-set
+14.1%) → 20k verdict "partial" (69/100 at 0.95; full-set 99.3%).
+
