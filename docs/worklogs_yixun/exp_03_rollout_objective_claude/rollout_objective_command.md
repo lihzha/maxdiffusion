@@ -187,3 +187,14 @@ copies). Not a flake — a structural fix round dispatched: jitted value_and_gra
 fused jitted grad-stats/vdot reductions (jaxopt dropped), incremental cosines with resident grad
 trees capped at 3 and the peak recorded in the artifact. Relaunch as 8d after review.
 
+## Job 8d — v6e-8 S1.5 RELAUNCH #3 — launched 2026-08-04T17:08Z
+
+**Under the Query-4 grant; fix-#3 series CLOSED at `2ef9b8a` (APPROVE + "Relaunch: GO" after 5
+rounds).** What changed since 8c, cumulatively: jitted value_and_grad everywhere (the eager
+double-forward is gone); jaxopt dropped; incremental cosines; AdamW moments dropped post-restore
+(~40 GB HBM freed — more than the entire 8c deficit); collision-proof traced ramp origin with
+cache-served aux evidence; physical-allocation residency gauge (dedup by (device, pointer, bytes));
+specialization census (production expect 39) + per-(tag, salt, state) compile timings logged.
+Same probe spec as 8/8b/8c. Suite 1,511 / 2.
+- **Job 8d:** `20260804-170835-735ed465-exp03-s15-probe4-yixun` (COMMIT=86aaf1cf61973f2eb7dc8a1e0a7510b3966339fa, tip at submission; code = APPROVED 2ef9b8a + docs).
+
