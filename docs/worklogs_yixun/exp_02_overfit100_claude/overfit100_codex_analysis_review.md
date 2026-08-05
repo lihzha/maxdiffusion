@@ -184,3 +184,27 @@ seeds 7/8/9 at ≥0.90 with zero ≥0.95; m_corr-vs-seed0 label discrepancy ≤0
 **Reviewer's "most important thing right"** — the fail-closed provenance discipline and the two-verdict
 structure. **"Most important thing wrong"** — asserting an identified cause where the evidence supports a
 leading hypothesis. v3 fixes the latter without weakening the former.
+
+## v5 review (2026-08-05, xhigh, account #3) — SOUND-WITH-REVISIONS → v5.1
+
+Reviewer independently reproduced the formal verdict (seed cells 0.953635/67, 0.953701/69,
+0.953574/69; median-of-3 69/100 at 0.95, 98/100 at 0.90; full-set 1,618/1,629 = 99.3247%; ablation
+gaps exact; seed span 0.000128). Five findings, ALL ACCEPTED and applied as v5.1:
+1. **MAJOR — "LR axis closed" overclaim** → "tested fixed-LR escalations through 1e-4 fail to
+   restore pace" (no contemporaneous 5e-5 control at 17.5k→20k; schedules/optimizers untested);
+   pace factors corrected (2.89×, then 4.74× vs predecessor; 1e-4 recovered 34.7%).
+2. **MODERATE — two §9 SSIMs were line-predictions printed as measurements** (0.9174/0.9427 →
+   measured 0.9159/0.9451); residuals recomputed (+0.00019/+0.00380/+0.00404/+0.00501); the
+   propagated values corrected in `_results.md` (with a correction note) and the tracker.
+3. **MAJOR — §10 intercept/slope causal-extrapolative overreach** → in-range MEAN forecaster; the
+   observed 20k point (not the intercept) shows the mean can exceed 0.95; a mean law is silent on
+   the per-window 90/100 criterion; "six independent checkpoints" → five held-out evaluations,
+   sequential checkpoints not independent.
+4. **MODERATE — "actively follows the instruction"** violated §6's preserved non-license →
+   dependence strengthened; semantic-vs-identifier still indistinguishable.
+5. **MAJOR — §12 "fully resolved" / "dynamical, not representational"** → hypothesis space
+   *updated*; compounding = LEADING MECHANISM, not an exclusion; the tail (31/100 windows) not
+   identified as non-representational; capacity at the margin unexcluded.
+Citation guidance recorded: cite `partial`, 69/100, 99.3247% confidently; describe LR as "tested
+through 1e-4 without pace restoration"; treat the law as an in-range aggregate predictor.
+
