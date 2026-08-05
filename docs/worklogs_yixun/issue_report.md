@@ -75,6 +75,10 @@ Last updated: 2026-08-05 ~19:10Z
 - **Fix (exp_04, commit `925ee17`):** `optional_config_value(config, key, default)` — resolves via `config.get_keys()`, then Mapping, then getattr guarded on AttributeError AND ValueError — for genuinely-optional keys; YAML-declared keys read directly (missing ⇒ loud failure); AST tests forbid three-arg config-getattr in the entrypoint and pin every direct read as YAML-declared.
 - **Status:** FIXED within exp_04's entrypoint; the pattern likely exists elsewhere in the repo (a repo-wide audit is out of exp_04 scope — flag when touched). Rule: never use three-arg `getattr` on a pyconfig `HyperParameters` object.
 
+### 12. Null launcher's secrets-sourcing force-enables xtrace on TPU hosts (real bug, exp_04-owned, LOW)
+- **Symptom:** `bash_scripts/run_wan_null_inversion.sh:23-27` does `set +x; source secrets.env; set -x` — the trailing `set -x` unconditionally ENABLES xtrace whenever the secrets file exists (every real TPU host), so every later expansion — including any use of sourced secret values on a command line — is sprayed into the teed log. Found by the exp_05 S10a Coder while mirroring the launcher (exp_05's copy saves and restores `$-` instead). Related note: exp_04 R11's watchdog `"${WATCHDOG[@]}"` under `set -u` with an empty array is fatal on macOS bash 3.2 (Linux TPU hosts on bash ≥4.4 unaffected) — makes that launcher untestable-by-execution on this machine.
+- **Status:** OPEN, LOW urgency (logs live in the project's own GCS; no external exposure). Fix belongs to an exp_04 round (the launcher is settled code under review discipline); do NOT hotfix outside a cycle. Until then, treat teed TPU logs as potentially containing expanded secret values when auditing/sharing them.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
