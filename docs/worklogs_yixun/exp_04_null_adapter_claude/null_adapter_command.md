@@ -23,7 +23,7 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 - Same command as J0-1; log: `null_adapter_2026-08-05_14:59:41.log`
 
 
-## J1-1 — P1 capacity study + basin probe (2026-08-06, LAUNCHED)
+## J1-1 — P1 capacity study + basin probe (2026-08-06, **FAILED — REAL BUG**: HyperParameters getattr at run_wan_null_inversion.py:611; smoke-phase crash after a successful pipeline load; fix cycle + J1-2 relaunch per worklog)
 
 - Queue job: `20260805-181744-61377ea2-exp04-j1-null-yixun` (v6e-8, worker0-only); authoritative record confirmed PENDING at `gs://v6_east1d/tpu-job-queue/jobs/20260805-181744-61377ea2-exp04-j1-null-yixun/status.json` (created 2026-08-05T18:17:48Z). The CLI's initial "not found" was a CLI-side quirk; the GCS record rules (issue-#2 discipline).
 - Submitted tip: `3616a94` (docs-only delta over the parity-audited `f06dfc1` — `src/` + `bash_scripts/` byte-identical; COMMIT env carries the full submitted SHA).
