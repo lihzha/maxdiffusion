@@ -60,3 +60,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed`. exp_05 implementation unblocked; S1 `truncate-pad-parity` dispatched to the Coder.
 - **Analysis** — K1's remaining conditions: P0' green (S-rounds), exp_05 parity audit, J0 published (currently blocked on an ADC reauth on the exp_04 side — infra, issue #6 class).
 - **Next** — S1 write → review → strengthen → commit.
+
+## 2026-08-05T06:10:00Z — S1 `truncate-pad-parity` write phase complete; review dispatched
+
+- **Goal** — S1: the deployment-matching 8-token context construction + the two parity tests.
+- **Change** — `pos_context_inversion_wan.py` (32 exec LOC construction layer; 223 total with the parity harness) + `test_pos_context_truncate_pad.py` (33 tests). exp_04's modules untouched (verified).
+- **Command / Validation** — red evidenced; **643 passed** (610 inherited + 33); ruff/black/py_compile clean. **12 mutants, 0 survivors** (M6 equal-length fp32-laundering was a real gap, closed; M11 kills removal of the deployed dtype cast; M12 kills a forced re-projection).
+- **Result** — `passed` (write). **Three load-bearing findings:** (1) the two call idioms are literally the same call at inference values — bitwise parity confirmed and documented as the guarantee; (2) **the deployed path casts C to the activation dtype (`side_adapter_wan.py:767`) — at bf16 this is NOT a no-op (max |Δ| 3.1e-2 measured); S3's replay operator MUST cast C to the transformer activation dtype — pinned by test, carried as an S3 contract**; (3) `frame_positions` is dropped from the deployed final re-run (`:768-774` vs the feature path) — harmless at frame_positions=None (exp_05's entire scope) but added to the deviations register; any fix edits a shared deployed file ⇒ a decision, never silent. Bonus: cross-attention row-permutation invariance measured (9.5e-7 vs 3.4 for re-projection), empirically corroborating plan F9. **Planner acceptances:** l_pos kwarg on the constructor (ablation uses one constructor); LOC overage (parity harness); rank-3-unit squeeze; two extra fail-closed checks.
+- **Next** — S1 review (exp_05's first code review) → strengthen → commit → S2 `optimize-positives`.
