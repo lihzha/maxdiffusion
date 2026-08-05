@@ -262,3 +262,14 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — Full trail in `null_adapter_codex_code_manifests_review.md` (review → strengthening → follow-up verdict → final fixes). Identity rule independently verified by the reviewer; N8/M5 survivors ratified; gsutil field-level parsing ratified. **610 passed in 39.6s**; 56 mutants; suite from 246 (R5 close) → 610.
 - **Result** — `passed`. R9 committed with this entry.
 - **Next** — (1) **J0 execution** (approved; acceptance criteria + `_command.md` entry at launch); (2) **exp_05 merge-1 + S1** (R9 boundary reached); (3) R10 `launchers-config` → R11 → parity audit → J1 package.
+
+## 2026-08-05T04:50:00Z — J0 LAUNCH: cohort-manifest build (approved; conditional grant, Query 2)
+
+*(Timestamp correction note: several preceding entries this session carry UTC stamps drifted a few hours forward of real time; ordering is correct throughout. Real UTC resumes here.)*
+
+- **Goal** — Execute J0: build the immutable DEV-64/TEST-64/TRAINFIT-16/TRAIN-2000 manifests from the published dataset.
+- **Acceptance criteria (predeclared):** (1) runs at commit `7199feb99514d5c4e460e84629b133566f6624d7`, clean worktree, host-only; (2) VAL scan = exactly 14,636 records over the 8 val shards; (3) TRAIN scan reaches ≥5,000 distinct episodes within the 200-shard/60-GiB caps; (4) staged publication completes (data first, `_COMPLETE` last) into `docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/`; (5) `load_manifests` re-validates the published artifacts (64/64/16/2000, disjointness, ordering, bindings); (6) zero reauth-poisoned bindings — any binding failure aborts with nothing written (issue-#6 rule); (7) afterwards: mirror to `gs://v6_east1d/datasets/droid_wan_null_adapter/manifests/j0/` and commit the manifests.
+- **Command / Validation** — `null_adapter_command.md` entry J0-1; log `null_adapter_2026-08-05_04:48:27.log`.
+- **Result** — `launched`.
+- **Analysis** — Auth verified live immediately before launch. Triage rule: reauth/network ⇒ infra (re-run); count/target mismatch ⇒ surface to Yixun (plan-constant vs dataset disagreement is a plan question, not a retry).
+- **Next** — On success: mirror + commit manifests; exp_05 merge-1/S1 in parallel; R10 opens.
