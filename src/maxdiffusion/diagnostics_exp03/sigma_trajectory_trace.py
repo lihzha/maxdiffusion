@@ -174,6 +174,77 @@ def sigma_trace(
     return errors
 
 
+def batch_replicas(config, mesh=None) -> int:
+    """How many identical rows ONE trace forward needs for the batch axis to divide evenly.
+
+    Derived from the run's own ``logical_axis_rules`` -- the mesh axes that ``batch`` maps to --
+    rather than guessed: on the v6e-8 probe that is ``data x fsdp = 8``. Falls back to the device
+    count when the rule is absent, and returns 1 on a single-device host, which is what makes this a
+    no-op there and leaves any trace already taken byte-identical.
+    """
+    axes: tuple = ()
+    for rule in getattr(config, "logical_axis_rules", ()) or ():
+        if len(rule) == 2 and rule[0] == "batch":
+            axes = tuple(rule[1]) if isinstance(rule[1], (list, tuple)) else (rule[1],)
+            break
+    if mesh is None or not axes:
+        return max(1, int(jax.device_count()))
+    size = 1
+    for axis in axes:
+        size *= int(dict(mesh.shape).get(axis, 1))
+    return max(1, size)
+
+
+def _tile_rows(array, replicas: int):
+    """``array`` with its single leading row repeated ``replicas`` times."""
+    if array is None or int(array.shape[0]) != 1 or replicas <= 1:
+        return array
+    return jnp.broadcast_to(array, (replicas,) + tuple(array.shape[1:]))
+
+
+def tiled_velocity_fn(transformer, *, replicas: int = 1):
+    """The trace's ONE-WINDOW forward, run as ``replicas`` identical rows, reading row 0.
+
+    THE Job 8f failure. Every other phase of S1.5 runs the global batch -- eight examples, one per
+    chip -- but the sigma trace is inherently one window at a time, and the transformer annotates
+    its activations with ``P(('data','fsdp'), 'context', 'tensor')``. A batch of 1 cannot be split
+    eight ways, so the first trace forward the probe ever reached raised ``IndivisibleError`` at
+    ``transformer_wan.py:401`` -- with the entire checkpoint-state report already computed behind it.
+
+    Tiling rather than re-annotating: the constraint is production's and is right for production,
+    and a diagnostic has no business relaxing the sharding of the model it exists to measure.
+
+    Reading row 0 is EXACT because nothing in this transformer mixes information across batch rows,
+    which was verified in the code rather than assumed: the normalizations are ``FP32LayerNorm`` and
+    ``RMSNorm`` reducing over the FEATURE axis (per token -- there are no batch statistics anywhere);
+    attention folds heads into the leading axis and its einsums contract over sequence and head-dim
+    only, with the softmax over one example's own keys; rotary embeddings are a batch-1 broadcast;
+    dropout is configured to 0.0 and the probe passes ``deterministic=True`` besides; and the only
+    collectives in the attention module ride the ``context`` (sequence) axis, inside kernels this
+    540-token path does not take. The one caveat is arithmetic rather than semantics: XLA may
+    schedule reductions differently for a different batch shape, so row 0 can differ from a batch-1
+    reference in the last bits. The test measures which of the two it is and reports it.
+    """
+
+    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+        if replicas <= 1 or int(hidden_states.shape[0]) != 1:
+            return transformer(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                deterministic=True,
+            )
+        out = transformer(
+            hidden_states=_tile_rows(hidden_states, replicas),
+            timestep=_tile_rows(timestep, replicas),
+            encoder_hidden_states=_tile_rows(encoder_hidden_states, replicas),
+            deterministic=True,
+        )
+        return out[:1]  # ...and the sampler goes on seeing the single window it handed us
+
+    return velocity_fn
+
+
 def oracle_velocity_fn(z_gt: jax.Array, eps: jax.Array):
     """The PERFECT velocity ``eps - z_gt``, in the latents' own dtype.
 
@@ -358,14 +429,9 @@ def run_trace(config) -> dict:
     replicated = NamedSharding(mesh, P())
     weights_dtype = gen._dtype(config.weights_dtype)
     transformer = gen.nnx.merge(state.graphdef, state.params, state.rest_of_state)
-
-    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
-        return transformer(
-            hidden_states=hidden_states,
-            timestep=timestep,
-            encoder_hidden_states=encoder_hidden_states,
-            deterministic=True,
-        )
+    # One window is one row of a mesh-sized batch: the standalone entry point has the same
+    # batch-1 forward the probe's does, and would hit the same IndivisibleError on the same mesh.
+    velocity_fn = tiled_velocity_fn(transformer, replicas=batch_replicas(config, mesh))
 
     samples = gen.read_overfit100_samples(config, cohort)
     if jax.process_index() == 0:

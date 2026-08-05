@@ -1845,7 +1845,7 @@ def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
                 support_salts=S1_5_SUPPORT_SALTS,
             )
             trace_rows = trace_in_memory_state(
-                state, config, scheduler, state_label=state_label, checkpoint_step=checkpoint_step
+                state, config, scheduler, mesh=mesh, state_label=state_label, checkpoint_step=checkpoint_step
             )
     except Exception as failure:
         # The heavy phase is where the memory goes and where Job 8d died. Whatever killed it, the
@@ -1888,12 +1888,15 @@ def assert_commit_is_pinned() -> None:
         )
 
 
-def trace_in_memory_state(state, config, scheduler, *, state_label: str, checkpoint_step: int) -> dict:
+def trace_in_memory_state(state, config, scheduler, *, mesh=None, state_label: str, checkpoint_step: int) -> dict:
     """Mechanism-B sigma trace of the state in memory (no second restore, no second 5B load).
 
     It never took anything from the pipeline -- the transformer is rebuilt from the state's own
     graphdef -- and the ``pipeline`` parameter it used to accept was a false dependency that kept a
     ~5B module reachable across the heaviest phase of the probe. It is gone.
+
+    ``mesh`` is here for one reason: it says how many ways the batch axis is split, which is what
+    the trace's single window has to be tiled to.
     """
     cohort = trace.trace_cohort(
         str(getattr(config, "model_manifest_path", "")), seed=trace.TRACE_SEED, num_windows=trace.TRACE_NUM_WINDOWS
@@ -1907,14 +1910,13 @@ def trace_in_memory_state(state, config, scheduler, *, state_label: str, checkpo
     )
     weights_dtype = gen._dtype(config.weights_dtype)
     transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
-
-    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
-        return transformer(
-            hidden_states=hidden_states,
-            timestep=timestep,
-            encoder_hidden_states=encoder_hidden_states,
-            deterministic=True,
-        )
+    # ONE window per forward, but a MESH-SIZED batch. The trace is the only batch-1 forward in the
+    # probe, and on v6e-8 a batch of 1 cannot be split eight ways; Job 8f reached this line with the
+    # whole checkpoint-state report already computed behind it and died here.
+    replicas = trace.batch_replicas(config, mesh)
+    velocity_fn = trace.tiled_velocity_fn(transformer, replicas=replicas)
+    if jax.process_index() == 0:
+        max_logging.log(f"[exp03_s1_5] sigma trace: {replicas} row(s) per forward, reading row 0")
 
     samples = gen.read_overfit100_samples(config, cohort)
     rows = []

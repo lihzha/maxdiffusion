@@ -2540,3 +2540,172 @@ def test_the_context_table_is_a_replicated_input_and_is_not_duplicated_per_call(
     grad_shardings = s1_5.tree_shardings(state.params)
     assert jax.tree_util.tree_structure(grad_shardings) == jax.tree_util.tree_structure(state.params)
     assert "context_table" not in str(jax.tree_util.tree_structure(state.params))
+
+
+# =============================================================================================
+# 16. THE Job 8f failure: the sigma trace is the only batch-1 forward in the probe, and the
+# transformer partitions its activations over ('data','fsdp') = 8. One row cannot be split eight
+# ways. Every other phase runs the global batch (eight, one per chip) and 8f proved them at 5B --
+# this was simply the first launch ever to reach the trace.
+# =============================================================================================
+
+_TRACE_TILING_SCRIPT = '''
+import json, sys, types
+
+_grain = types.ModuleType("grain")
+_grain_python = types.ModuleType("grain.python")
+_grain_python.MapTransform = type("MapTransform", (), {})
+_grain_python.RandomAccessDataSource = type("RandomAccessDataSource", (), {})
+_grain.python = _grain_python
+sys.modules["grain"] = _grain
+sys.modules["grain.python"] = _grain_python
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+
+from maxdiffusion.diagnostics_exp03 import sigma_trajectory_trace as trace
+
+assert jax.device_count() == 8, jax.device_count()
+mesh = Mesh(jax.devices(), ("fsdp",))
+batch_spec = NamedSharding(mesh, PartitionSpec("fsdp", None, None))
+
+WEIGHT = jax.device_put(jnp.linspace(-1.0, 1.0, 3072 * 8, dtype=jnp.float32).reshape(3072, 8), NamedSharding(mesh, PartitionSpec()))
+
+
+class _Toy:
+    """A stand-in for the transformer's shape: a per-token constraint that splits the BATCH axis.
+
+    It reproduces the failure exactly -- ``with_sharding_constraint`` on an (batch, tokens, dim)
+    activation whose leading axis is partitioned eight ways -- and it does per-token arithmetic with
+    a feature-axis reduction, so a cross-batch mistake would show up in row 0.
+    """
+
+    def __call__(self, *, hidden_states, timestep, encoder_hidden_states, deterministic):
+        x = hidden_states.astype(jnp.float32)
+        x = jax.lax.with_sharding_constraint(x, batch_spec)   # <- the 8f line, in miniature
+        x = x + timestep.astype(jnp.float32)[..., None]
+        x = x / (jnp.sqrt(jnp.mean(x ** 2, axis=-1, keepdims=True)) + 1e-6)  # per-token, like RMSNorm
+        x = jnp.einsum("btd,de->bte", x, WEIGHT[: x.shape[-1], :])
+        x = x + jnp.mean(encoder_hidden_states.astype(jnp.float32), axis=-1, keepdims=True)
+        return jax.lax.with_sharding_constraint(x, batch_spec)
+
+
+toy = _Toy()
+one = jnp.asarray(np.random.default_rng(0).normal(size=(1, 16, 8)), jnp.float32)
+timestep = jnp.asarray(np.random.default_rng(1).normal(size=(1, 16)), jnp.float32)
+context = jnp.asarray(np.random.default_rng(2).normal(size=(1, 16, 4)), jnp.float32)
+
+result = {"devices": jax.device_count()}
+
+# 1. THE DEFECT, reproduced: the untiled batch-1 forward against an 8-way batch split.
+try:
+    trace.tiled_velocity_fn(toy, replicas=1)(one, timestep, context)
+    result["untiled_error"] = None
+except Exception as exc:
+    result["untiled_error"] = type(exc).__name__
+
+# 2. THE FIX: eight identical rows, row 0 read back.
+replicas = trace.batch_replicas(
+    type("C", (), {"logical_axis_rules": [["batch", ["fsdp"]], ["embed", ["tensor"]]]})(), mesh
+)
+result["replicas"] = replicas
+tiled_out = trace.tiled_velocity_fn(toy, replicas=replicas)(one, timestep, context)
+result["tiled_shape"] = list(tiled_out.shape)
+
+# 3. THE REFERENCE: the same window on ONE device, unsharded, batch 1.
+with jax.default_device(jax.devices()[0]):
+    plain = jnp.einsum(
+        "btd,de->bte",
+        (lambda x: x / (jnp.sqrt(jnp.mean(x ** 2, axis=-1, keepdims=True)) + 1e-6))(
+            one.astype(jnp.float32) + timestep.astype(jnp.float32)[..., None]
+        ),
+        np.asarray(WEIGHT)[: one.shape[-1], :],
+    ) + jnp.mean(context.astype(jnp.float32), axis=-1, keepdims=True)
+
+left = np.asarray(tiled_out, np.float64)
+right = np.asarray(plain, np.float64)
+result["bitwise_equal"] = bool(np.array_equal(np.asarray(tiled_out), np.asarray(plain)))
+result["max_abs_diff"] = float(np.max(np.abs(left - right)))
+result["max_rel_diff"] = float(np.max(np.abs(left - right) / (np.abs(right) + 1e-30)))
+# ...and every tiled row is the same row, which is what makes reading row 0 meaningful.
+full = trace.tiled_velocity_fn(toy, replicas=replicas)
+raw = toy(hidden_states=jnp.broadcast_to(one, (replicas,) + one.shape[1:]),
+          timestep=jnp.broadcast_to(timestep, (replicas,) + timestep.shape[1:]),
+          encoder_hidden_states=jnp.broadcast_to(context, (replicas,) + context.shape[1:]),
+          deterministic=True)
+result["rows_identical"] = bool(np.array_equal(np.asarray(raw[0]), np.asarray(raw[replicas - 1])))
+print("RESULT " + json.dumps(result))
+'''
+
+
+def test_the_trace_forward_is_tiled_to_the_mesh_and_row_zero_is_the_answer():
+    # EXECUTED on the forced 8-device mesh: the defect reproduced, the fix applied, and row 0
+    # checked against an unsharded batch-1 reference.
+    import os
+
+    env = dict(os.environ)
+    env["XLA_FLAGS"] = env.get("XLA_FLAGS", "") + " --xla_force_host_platform_device_count=8"
+    env["JAX_PLATFORMS"] = "cpu"
+    env["PYTHONPATH"] = str(_REPO / "src")
+    proc = subprocess.run(
+        [sys.executable, "-c", _TRACE_TILING_SCRIPT], capture_output=True, text=True, timeout=600, env=env
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    result = json.loads(next(l for l in proc.stdout.splitlines() if l.startswith("RESULT "))[len("RESULT ") :])
+
+    assert result["devices"] == 8, result
+    # 1. The defect is REAL and reproduced: batch 1 against an 8-way batch split raises.
+    assert result["untiled_error"] is not None, result
+    assert "Indivisible" in result["untiled_error"] or "Sharding" in result["untiled_error"], result
+    # 2. The fix runs, and hands the sampler back the single row it passed in.
+    assert result["replicas"] == 8, result
+    assert result["tiled_shape"][0] == 1, result
+    # 3. Row 0 IS the batch-1 answer. Measured rather than assumed: the tolerance below is what the
+    # 8-device run actually produced against an unsharded reference, and the assertion records
+    # whether it was bitwise or merely floating-point equal.
+    assert result["rows_identical"], result  # the tiled rows really are copies of one another
+    assert result["max_abs_diff"] <= 1e-5, result
+    assert result["max_rel_diff"] <= 1e-5, result
+    # MEASURED: on this backend it is not merely within tolerance, it is bitwise. Asserted so that a
+    # future XLA that schedules the batch-8 reductions differently announces itself here rather than
+    # drifting a diagnostic silently; if that day comes, the tolerance above is the real contract and
+    # this line is the one to loosen, deliberately.
+    assert result["bitwise_equal"] is True, result
+
+
+def test_the_replica_count_comes_from_the_runs_own_axis_rules():
+    # Derived, not guessed: the mesh axes that 'batch' maps to, multiplied out. A single-device host
+    # gets 1, which is what keeps this a no-op off the TPU and leaves earlier traces untouched.
+    config = SimpleNamespace(logical_axis_rules=[["batch", ["data", "fsdp"]], ["embed", ["tensor"]]])
+    assert s1_5.trace.batch_replicas(config, None) == max(1, jax.device_count())
+
+    class _Mesh:
+        shape = {"data": 2, "fsdp": 4, "tensor": 8}
+
+    assert s1_5.trace.batch_replicas(config, _Mesh()) == 8  # data x fsdp, and NOT tensor
+    # An axis the mesh does not have contributes 1 rather than exploding.
+    assert s1_5.trace.batch_replicas(SimpleNamespace(logical_axis_rules=[["batch", ["nope"]]]), _Mesh()) == 1
+    # No rule at all: fall back to the device count rather than silently to 1.
+    assert s1_5.trace.batch_replicas(SimpleNamespace(logical_axis_rules=[]), _Mesh()) == max(1, jax.device_count())
+    # The real config's rule is the one this was built for.
+    assert "['batch', ['data', 'fsdp']]" in _CONFIG.read_text().replace('"', "'")
+
+
+def test_the_probe_hands_the_mesh_to_the_trace():
+    # The failure was reached with the whole report already computed; the wiring that prevents it is
+    # the mesh reaching the trace, so it is pinned structurally as well as executed above.
+    per_state = inspect.getsource(s1_5._run_one_state)
+    assert "trace_in_memory_state(\n" in per_state and "mesh=mesh" in per_state
+    tracer = inspect.getsource(s1_5.trace_in_memory_state)
+    assert "trace.batch_replicas(config, mesh)" in tracer
+    assert "trace.tiled_velocity_fn(transformer, replicas=replicas)" in tracer
+    # ...and the standalone entry point got the same fix, since it has the same batch-1 forward.
+    standalone = inspect.getsource(s1_5.trace.run_trace)
+    assert "tiled_velocity_fn(transformer, replicas=batch_replicas(config, mesh))" in standalone
+    # REGRESSION GUARD: neither call site may build its own bare forward again. A hand-rolled
+    # ``velocity_fn`` here is precisely what ran at batch 1 for four rounds without anyone noticing,
+    # because no launch had ever reached the trace.
+    assert "def velocity_fn" not in tracer, tracer
+    assert "def velocity_fn" not in standalone, standalone
