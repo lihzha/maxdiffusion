@@ -890,7 +890,8 @@ def _merge_pos_tables(tables: Sequence[Mapping[str, Mapping]]) -> dict[str, dict
 def pos_execute(
     mode: str, plan: Mapping[str, Any], backend: Backend, sinks: Sinks, **kwargs
 ) -> tuple[dict[str, Any], int]:
-    """Dispatch one positive-slot mode. Only ``capacity`` (K1) is wired in S4; the rest say so."""
+    """Dispatch one positive-slot mode. S4 wires ``capacity`` and ``adequacy_probe`` (the K1 pair);
+    the rest say so rather than falling through to the null slot."""
     if mode == "capacity":
         return run_capacity_positive(plan, backend, sinks, **kwargs), 0
     if mode == "adequacy_probe":

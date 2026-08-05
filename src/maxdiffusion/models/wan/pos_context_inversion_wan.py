@@ -44,8 +44,10 @@ one implementation serves optimize, replay and deployment alike.
   operator + casting-closure composition, and *unequal* without the cast). Both evaluate the deployed
   forward on exactly the ``(z, timestep)`` the operator's own conditional call received.
 * **S4 MUST** add a closure test over the runner-built ``velocity_fn`` showing it casts BOTH branches
-  at bf16. **STILL OPEN** -- and the only part of the rule still unpinned: the S2/S3 tests prove the
-  operators do *not* cast, which is exactly why nothing yet proves the wiring *does*.
+  at bf16. **DISCHARGED in S4**: ``casting_velocity_fn`` (``pos_context_modes.py``) is that closure,
+  pinned at bf16 for both branches in ``test_pos_context_runner.py`` (cast-dropped and one-branch-only
+  mutants killed). The cast rule is closed end-to-end: S2/S3 prove the operators do not cast, S4
+  proves the wiring does.
 """
 
 from __future__ import annotations
