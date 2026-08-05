@@ -1,8 +1,9 @@
 """Positive-context inversion helpers for the frozen WAN TI2V backbone (exp_05).
 
-S1 built the context-construction layer and S2 adds ``optimize_positive_embeddings``; the replay
-operator (S3) lands later. Shared primitives come from exp_04's ``null_inversion_wan`` **by import**
--- per plan §5/F6 exp_05 lives entirely in this module and never edits exp_04's settled ones.
+S1 built the context-construction layer, S2 added ``optimize_positive_embeddings`` and S3
+``replay_with_positive``; the inversion side of exp_05 is complete here. Shared primitives come from
+exp_04's ``null_inversion_wan`` **by import** -- per plan §5/F6 exp_05 lives entirely in this module
+and never edits exp_04's settled ones.
 
 **The 8-token convention (plan §3), which is the load-bearing design.** exp_04 optimizes the leading
 rows of a 512-row T5 context and splices them back in, because the null branch must keep the padding
@@ -33,13 +34,18 @@ velocity) and the same one upstream uses (inside ``_dit_velocity``'s autocast,
 "the replay operator must cast": the obligation did not disappear, it moved to ``velocity_fn``, where
 one implementation serves optimize, replay and deployment alike.
 
-**Carry-forward contracts this rule creates** (S2 review, finding 2 -- neither is dischargeable here):
+**Carry-forward contracts this rule creates** (S2 review, finding 2):
 
 * **S3 MUST** re-run S1's conditional-velocity parity fixture through the ACTUAL
   ``replay_with_positive`` operator, not against a direct transformer call as S1 could only do.
+  **DISCHARGED in S3** by ``test_pos_context_replay.py`` --
+  ``test_the_deployed_forward_is_the_replay_operator_s_own_v_cond`` (fp32, bitwise) and
+  ``test_parity_at_bf16_holds_for_the_operator_plus_casting_velocity_fn`` (bf16, bitwise for the
+  operator + casting-closure composition, and *unequal* without the cast). Both evaluate the deployed
+  forward on exactly the ``(z, timestep)`` the operator's own conditional call received.
 * **S4 MUST** add a closure test over the runner-built ``velocity_fn`` showing it casts BOTH branches
-  at bf16 -- the S2/S3 tests can only prove that the operators do *not* cast, never that the wiring
-  does.
+  at bf16. **STILL OPEN** -- and the only part of the rule still unpinned: the S2/S3 tests prove the
+  operators do *not* cast, which is exactly why nothing yet proves the wiring *does*.
 """
 
 from __future__ import annotations
@@ -303,3 +309,119 @@ def optimize_positive_embeddings(
     # rather than sliced off by a downstream reader who might forget (S2 review, finding 1).
     z_bar_states = jnp.concatenate([z_bar_0[None], z_next[:-1]], axis=0)
     return pos_embeds, z_bar_states, z_next[-1], losses, grad_norms
+
+
+def replay_with_positive(
+    velocity_fn: Callable[[jax.Array, jax.Array, jax.Array], jax.Array],
+    z_start: jax.Array,
+    z_i0: jax.Array,
+    sigmas: jax.Array,
+    pos_embeds: jax.Array,
+    base_context: jax.Array,
+    *,
+    guide_scale: float,
+    return_trajectory: bool = False,
+):
+    """Deployment CFG replay from ``z_start`` under per-step positive contexts (plan §3 step 3).
+
+    ``z_0 = pin(z_start)`` and, for i = 0 .. N-1::
+
+        z_{i+1} = pin(z_i + (sigma_{i+1} - sigma_i) * [v_unc + w * (v_cond(C_i) - v_unc)])
+
+    with ``C_i`` passed **directly** as the whole ``encoder_hidden_states`` (8 rows, the deployed
+    convention) and the unconditional branch on the frozen full-length T5("") context. Ported from
+    ``regenerate_with_positive_embeds`` (``third_party/Wan2.2/scripts/embedding_search.py:822-853``,
+    submodule pin f370228).
+
+    **Both velocities are fresh at every step -- the same symmetry exp_04's ``replay_with_nulls`` has,
+    and for the same reason.** Neither branch can be hoisted out of the loop: replay *moves* ``z``
+    after every step and both branches are evaluated at the current ``z_i``, so a cached velocity
+    would be a stale-latent correctness bug, not a saving. (``optimize_positive_embeddings`` caches
+    ``v_unc`` only because it holds ``z_bar_i`` fixed across its inner loop -- the one thing replay
+    never does. Which branch carries the optimized tensor differs between the two operators; the
+    freshness rule does not.)
+
+    **The B0 control is an ACTIVE-CFG control, unlike exp_04's A0.** Passing
+    ``pos_context_from_t5(base_context)`` at every step gives the frozen-context arm -- but it does
+    *not* collapse CFG. exp_04's A0 works because base-row nulls make the two branches the identical
+    forward; here they are different forwards at different sequence lengths (``POS_L`` vs ``S``), so
+    ``v_cond != v_unc`` and B0's output genuinely depends on ``w``. Plan §4 calls B0 "the matched
+    control under the active-CFG convention" for exactly this reason; it is not an unguided sampler.
+    Pinned in ``test_pos_context_replay.py``.
+
+    **The cast seam:** per the module docstring's one rule this operator passes the fp32 contexts to
+    ``velocity_fn`` **unchanged** -- both branches -- and the runner-built real-backbone
+    ``velocity_fn`` performs the activation-dtype cast. **The S3 MUST contract is DISCHARGED** by
+    ``test_pos_context_replay.py``, which re-runs S1's conditional-velocity parity fixture through
+    this operator: fp32 bitwise, plus bf16 bitwise for the operator + casting-closure composition.
+
+    Args:
+      velocity_fn: ``(latents, timestep_2d, encoder_hidden_states) -> v``, the R3/R4a seam.
+      z_start: ``[B, C, F, H, W]`` starting latents (an inversion endpoint, or fresh noise).
+      z_i0: ``[B, C, 1, H, W]`` (or ``[B, C, F, H, W]``) first-frame condition.
+      sigmas: the ``N+1`` descending grid ending at 0.0; validated eagerly, so it must be concrete.
+      pos_embeds: ``[N, B, L, D]`` per-step per-example contexts, or ``[N, L, D]`` to share one context
+        per step across the batch.
+      base_context: ``[S, D]`` or ``[1, S, D]`` frozen T5("") context for the unconditional branch.
+      guide_scale: deployment CFG weight ``w``.
+      return_trajectory: also return the ``[N+1, B, C, F, H, W]`` trajectory ``z_0 .. z_N``.
+
+    Returns:
+      ``z_final`` ``[B, C, F, H, W]`` float32, or ``(z_final, trajectory)``.
+    """
+    _validate_sigmas(sigmas)
+    if not np.isfinite(guide_scale):
+        raise ValueError(f"guide_scale must be finite, got {guide_scale}")
+
+    sigmas = jnp.asarray(sigmas, dtype=jnp.float32)
+    z_start = jnp.asarray(z_start).astype(jnp.float32)
+    z_i0 = jnp.asarray(z_i0).astype(jnp.float32)
+    pos_embeds = jnp.asarray(pos_embeds).astype(jnp.float32)
+    base_context = _normalized_base_context(base_context)
+    steps = sigmas.shape[0] - 1
+
+    if z_start.ndim != 5:
+        raise ValueError(f"z_start must be [B, C, F, H, W], got shape {z_start.shape}")
+    batch, channels, f_lat, h_lat, w_lat = z_start.shape
+    if z_i0.ndim != 5 or (z_i0.shape[0], z_i0.shape[1], z_i0.shape[3:]) != (batch, channels, (h_lat, w_lat)):
+        raise ValueError(f"z_i0 shape {z_i0.shape} is inconsistent with z_start shape {z_start.shape}")
+    if z_i0.shape[2] not in (1, f_lat):
+        raise ValueError(f"z_i0 must carry 1 or {f_lat} latent frames, got {z_i0.shape[2]}")
+    if pos_embeds.ndim == 3:
+        pos_embeds = jnp.broadcast_to(pos_embeds[:, None], (pos_embeds.shape[0], batch, *pos_embeds.shape[1:]))
+    if pos_embeds.ndim != 4:
+        raise ValueError(f"pos_embeds must be [N, L, D] or [N, B, L, D], got shape {pos_embeds.shape}")
+    if pos_embeds.shape[0] != steps:
+        raise ValueError(
+            f"pos_embeds must carry one entry per sampler step: got {pos_embeds.shape[0]}, expected {steps}"
+        )
+    if pos_embeds.shape[1] != batch:
+        # Checked separately from the width clause below so neither can mask the other: a rank-4
+        # [N, 1, L, D] tensor at B > 1 would otherwise drive the whole batch with example 0's context
+        # while the velocity seam's own guard still saw v.shape == z.shape (exp_04 R4a's lesson).
+        raise ValueError(f"pos_embeds batch {pos_embeds.shape[1]} does not match z_start batch {batch}")
+    if pos_embeds.shape[3] != base_context.shape[1]:
+        raise ValueError(f"pos_embeds shape {pos_embeds.shape} is inconsistent with base_context {base_context.shape}")
+    if pos_embeds.shape[2] < 1:
+        raise ValueError(f"pos_embeds must carry at least one row, got shape {pos_embeds.shape}")
+
+    timesteps = rollout_timesteps_from_sigmas(sigmas, NUM_TRAIN_TIMESTEPS)
+    uncond_context = jnp.broadcast_to(base_context, (batch, *base_context.shape))
+    weight = jnp.asarray(guide_scale, dtype=jnp.float32)
+
+    def body(current, i):
+        step_t = jnp.broadcast_to(timesteps[i], (batch,))
+        timestep_2d = _build_per_token_timestep(step_t, f_lat, h_lat, w_lat, n_hist=N_HIST_FRAMES)
+        # Both fresh, in the reference's order: the conditional branch on this step's C_i, the
+        # unconditional on the frozen context -- both at the CURRENT latent.
+        v_cond = _checked_velocity(velocity_fn, current, timestep_2d, pos_embeds[i])
+        v_unc = _checked_velocity(velocity_fn, current, timestep_2d, uncond_context)
+        v_cfg = v_unc + weight * (v_cond - v_unc)
+        filled = apply_first_frame_pin(current + (sigmas[i + 1] - sigmas[i]) * v_cfg, z_i0)
+        return filled, filled
+
+    start = apply_first_frame_pin(z_start, z_i0)
+    z_final, stepped = lax.scan(body, start, jnp.arange(steps))
+    if return_trajectory:
+        return z_final, jnp.concatenate([start[None], stepped], axis=0)
+    return z_final
