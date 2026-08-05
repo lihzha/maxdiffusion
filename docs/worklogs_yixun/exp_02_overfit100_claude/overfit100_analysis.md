@@ -1,5 +1,10 @@
 # exp_02 `overfit100` — Analysis (Planner)
 
+**v5, written 2026-08-05** — adds §§9–12 covering everything after v4: the Yixun-directed LR sweep
+(which overturned §1's plain answer), the 5e-5 extension arc, the loss→SSIM law's six holds, the
+1e-4 probe that closed the LR axis, and the formal `partial` verdict at 20,000. Per this document's
+convention, §§1–8 are preserved as written; where a v4 claim is superseded, §12 says so explicitly.
+
 **v4, written 2026-08-01** — adds §5b with the three Yixun-approved diagnostics (D1/D2/D3), which resolve
 H5, H6 and H7 and replace the qualitative "leading explanation" with a quantitative mechanism. v3's text is
 otherwise preserved; where the diagnostics change a claim, §5b says so explicitly.
@@ -256,3 +261,81 @@ expectations; any direct adapter comparison needs a matched experiment.
   answer is *not established*, so the default is to leave code on the branch with docs on `yixun-dev`, matching
   the exp_01 precedent), and the **exp_03 direction** per §7 — including whether to run the three cheap
   diagnostics first.
+
+## 9. The LR axis: the 10k plateau was an artifact, and the axis is now closed (v5)
+
+§5's H5 caveat — that the "practical plateau ≈0.84–0.85" was measured under a single, locked
+LR of 1e-5 and might be an optimization floor rather than a model property — was tested directly
+at Yixun's direction and **vindicated**:
+
+| segment (2,500 steps) | LR | one-step loss gain | canonical SSIM | ≥0.95 |
+| --- | --- | --- | --- | --- |
+| 10,000→12,500 (control) | 1e-5 | −0.0022 | — | — |
+| 10,000→12,500 | 2e-5 | −0.0243 | 0.8709 (line-predicted) | — |
+| 10,000→12,500 | 5e-5 | **−0.0617 (27.5× control)** | 0.9174 | 11 |
+| 12,500→15,000 | 5e-5 | −0.0213 | 0.9427 | 51 |
+| 15,000→17,500 | 5e-5 | −0.0045 | 0.9508 | 62 |
+| 17,500→20,000 | 1e-4 | **−0.00156** | 0.9536 | 67 |
+
+Two facts close the axis. First, 5e-5 rewrote the outcome: the mean crossed the 0.95 bar and the
+bar count went 0 → 67. Second, the 5e-5 trajectory itself flattened ~4.7× per segment (an "echo
+plateau"), and raising to Wan's own pretraining LR (1e-4, stable, no divergence 20k steps into
+memorization) recovered only a third of even the last 5e-5 segment's gain. LR was the binding
+lever at 10k; it no longer is at 20k. Anchors reproduced bit-exact at every handoff
+(0.12227 → 0.06061 → 0.03927 → 0.03476), so the segments form one auditable chain.
+
+## 10. The loss→SSIM law — six holds, and what it licenses (v5)
+
+The central quantitative finding: canonical mean SSIM tracks the fixed-RNG one-step val loss as
+
+    SSIM ≈ 0.9885 − 1.201 × loss    (r = −0.9994)
+
+now held on **six** independent checkpoints across three LRs and two run lineages (path
+independence): predicted vs actual residuals +0.004 to +0.005 at the last three points, all on the
+same side (the line slightly underpredicts late — worth remembering, not yet modelling). What it
+licenses: one-step loss is a cheap, deterministic *forecaster* of rollout SSIM under this recipe,
+and the intercept (0.9885) sits above the 0.95 bar — so the *objective* does not cap this task;
+the slope (−1.201) prices what 25-step compounding costs per unit of one-step error. What it does
+NOT license: extrapolation beyond the measured loss range, transfer to other datasets/models, or a
+causal reading (it is a correlation across checkpoints of one training family).
+
+## 11. The formal verdict at 20,000: `partial` (v5)
+
+§2 reported two verdict generations; there are now three, still one-per-eval-commit by
+construction. The 20,000 verdict (Jobs 50–51, coverage complete, seed-0 cells reproducing the
+intermediate pass exactly):
+
+| tier | rule | result | established |
+| --- | --- | --- | --- |
+| headline (canonical) | median-of-3-seeds m_corr ≥ 0.95 for ≥ 90/100 | 69/100 | **no** |
+| full-set | SSIM ≥ 0.90 for ≥ 90% of 1,629 (seed 0, at c\*) | **99.32%** | numerically yes; claim withheld pending the headline |
+
+Verdict: **`partial`** — the 0.90-threshold canonical claim holds; the strict 0.95 headline does
+not. Seed stability is extreme (three seed means within 0.0001), so the 69/100 is a real
+per-window tail, not noise. The ablation gap **doubled** from 10k: correct−shuffled +0.1233,
+correct−null +0.0974, and wrong context is now *worse* than no context — §6's narrowed claim
+("dependence on the correct context grows with training") is reinforced and strengthened: at 20k
+the model actively follows the instruction.
+
+## 12. Revised synthesis — what supersedes what (v5)
+
+- **§1's plain answer is superseded.** v4: "No — at the tested budget and recipe." v5: **"Nearly —
+  at a corrected LR schedule: 99.3% of all windows reach 0.90, the canonical mean crosses 0.95,
+  and the formal verdict is `partial`; the strict per-window 0.95 headline is not met."**
+- **§5's hypothesis space is now fully resolved.** H5 (optimization floor): real at 10k (the LR
+  artifact), re-closed at 20k (1e-4 probe); H6 (weighting): refuted (D3, r=−0.09); H7 (metric
+  scope): quantified (D1, pinned frame +0.006); sampler: excluded upward (probe) and the
+  train/eval objective mismatch remains as the priced residual — the law's slope IS that price.
+- **The remaining question is exp_03's.** What separates 0.9536 from the bar is compounding
+  rollout error under a one-step training objective. exp_03's A/B/C losses attack exactly this;
+  its update-matched design inherits exp_02's instrument, cohorts, and the law as baseline
+  expectations.
+- **Capacity is NOT excluded** at the margin (nothing here bounds what 90/100 ≥ 0.95 requires of
+  the architecture), but no evidence points at it: the law says the objective clears the bar in
+  expectation; the tail is dynamical, not representational, on current evidence.
+
+**Standing state (v5):** exp_02 formally closed at verdict `partial` (20,000); LR axis closed;
+instrument + law + fail-closed verdict machinery handed to exp_03. Checkpoints: s3 run (250…10k),
+lr5e5 run (…17,500), lr1e4 run (17,500 seed + 20,000). All artifacts under
+`overfit100_s3_artifacts/`; verdict JSON `verdict_lr1e4_step20000_complete.json`.
+
