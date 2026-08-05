@@ -132,3 +132,9 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — Trail in `pos_context_codex_code_schema-states-fidelity_review.md`; the F7 science is now stated at verified precision in plan + module + tests. **769 passed**; 15 mutants, 0 survivors.
 - **Result** — `passed`. S5 committed with this entry. **The K2-facing storage layer is done**: schema, integrity, fidelity policy, exact storage arithmetic.
 - **Next** — merge-interim: one-way exp_04 (R10 boundary, 2ebaaad+) → exp_05 per the amended matrix; then S4 `runner-slot-arms`.
+
+## 2026-08-05T22:40:00Z — merge-interim executed (exp_04 R10 boundary); S4 dispatched
+
+- **Version Control** — merge commit `8695fac`: one-way exp_04 @ `cdd4653` → this branch. One content conflict (exp_04's own commit ledger — class (a), exp_04's side). Post-merge acceptance: **full combined suite 1003 passed in 90s** (exp_04's 844 ⊕ exp_05's additions).
+- **Result** — `passed`. S4 unblocked: the runner/modes files exp_05 extends now exist here. S4's edits to `run_wan_null_inversion.py`/`null_adapter_modes.py` are class-(c) dual-touch — they MUST be additive (the merge-2 additive-union rule depends on it), and the ProvenanceHeader l_pos decision lands in S4 per the S5 flag.
+- **Next** — S4 write → review → strengthen → commit.
