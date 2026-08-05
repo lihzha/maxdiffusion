@@ -480,6 +480,24 @@ class CtrlWorldTrainer:
             label=f"svd ctrl_world LOADED WEIGHTS from {self.config.pretrained_model_name_or_path}",
             top_n=15,
         )
+        # Stop here if the weights themselves are bad. The forward table would
+        # otherwise report a "FIRST non-finite stage" that is pure consequence —
+        # 05_action_hidden simply because the encoder's own kernels are NaN — and
+        # that reads exactly like a data or conditioning bug. The only stage that
+        # touches no parameter (06c_encoder_hidden_states, tiled text) staying
+        # finite is the tell, which is far too subtle to rely on.
+        if float(np.asarray(param_stats)[:, 0].sum()) > 0:
+            max_logging.log(
+                "[nan-probe] the WEIGHTS are already non-finite, so every forward stage "
+                "downstream of a parameter would be too — the forward table is skipped "
+                "because it would only report a consequence. This state came off disk: a "
+                "fresh init cannot produce it (the action encoder's linear_3 and the adaln "
+                "projector's bias are zero-init). Clear the checkpoint directory or bump "
+                "run_name, and relaunch from a snapshot that includes the finite-checks in "
+                "_maybe_restore/_save_checkpoint so a diverged state cannot be written or "
+                "restored again."
+            )
+            return "loaded_weights"
 
         # ── 2. forward only. No value_and_grad, so no backward buffers. ──────────
         def fwd_probe(params, batch, rng):

@@ -142,7 +142,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     stats_path=$STATS_PATH \
     attention=flash \
     weights_dtype=float32 \
-    activations_dtype=bfloat16 \
+    activations_dtype=float32 \
     remat_policy=MATMUL_WITHOUT_BATCH \
     ici_fsdp_parallelism=-1 \
     ici_data_parallelism=1 \
