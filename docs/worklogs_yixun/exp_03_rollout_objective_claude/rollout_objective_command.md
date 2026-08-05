@@ -276,5 +276,11 @@ forward per state (row-0 sliced outside jit; timed/censused/released), release-l
 guard. Suite 1,534 / 2 (probe file 111). Expected new one-time cost: the trace forward's compile
 (~40–90s/state, own COMPILE_TIMINGS line). Acceptance beyond completion: trace finite with
 index-0 exact-zero; ledger post_trace_release shows the executable gone.
-- **Job 8g:** `20260805-152557-13848e19-exp03-s15-probe7-yixun` (COMMIT=428557e, tip at submission; code = APPROVED 7da7a66 + docs).
+- **First submission STILLBORN (disclosed):** the 15:25Z attempt printed id `20260805-152557-13848e19…`
+  but the code-archive upload failed on a transient auth hiccup — NO job record was created; the id
+  was recorded without reading the rest of the submission output (the Job-43 lesson, violated;
+  caught by Yixun's empty `tpu list`). The watch monitor also looped silently on the missing record
+  (UNREADABLE branch) — both monitors now alarm on 3× unreadable as well as 3× reauth.
+- **Job 8g (real):** `20260805-164829-8734c767-exp03-s15-probe7-yixun` (record verified on GCS:
+  code.tar.gz + spec.json + status.json present; COMMIT=428557e, code = APPROVED 7da7a66 + docs).
 
