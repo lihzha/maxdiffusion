@@ -101,3 +101,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — Trail in `pos_context_codex_code_optimize-positives_review.md`. **689 passed**; 12 mutants, 0 survivors. The K2-facing state schema is now explicit (`z_bar_states [N]` + `z_final`), and the cast rule is single-sourced with MUST contracts for S3/S4.
 - **Result** — `passed`. S2 committed with this entry.
 - **Next** — S3 `replay-state-capture`.
+
+## 2026-08-05T15:55:00Z — S3 `replay-state-capture` write phase complete; review dispatched
+
+- **Goal** — S3: the positive-slot replay operator + the first MUST contract.
+- **Change** — `replay_with_positive` (+58 exec LOC) + `test_pos_context_replay.py` (26 tests).
+- **Command / Validation** — red evidenced; **715 passed** (689 + 26); ruff/py_compile/diff-check clean. **7 mutants, 0 survivors** — incl. N6 (operator-casts violation) killed three ways, and N7 (hoisted v_unc) pinning the round's freshness-symmetry claim.
+- **Result** — `passed` (write). **MUST-1 DISCHARGED:** S1's parity fixture re-run through the ACTUAL operator (bitwise at fp32; operator+casting-velocity_fn ≡ deployment bitwise at bf16; non-casting closure demonstrably fails). **B0 semantics pinned as a deliberate inversion of exp_04's A0 test:** frozen-C ACTIVE-CFG control, w=1-vs-w=5 structural separation measured at 7.9e+1. Planner acceptances: test-side LOC overage (precedent); [N,1,L,D]-at-B>1 rejected not broadcast (R4a lesson); the extra N7 mutant. S4's MUST (runner closure casts both branches at bf16) remains open, recorded.
+- **Next** — S3 review → strengthen → commit → S4 `runner-slot-arms`.
