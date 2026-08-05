@@ -245,3 +245,12 @@ code defect with a quantitative fit prediction (post-control ≈2.9G; A's 15.11G
 dispatched; after review APPROVE+GO the intent is ONE 8f attempt on v6e-8 under the standing
 grant — Yixun is informed and can redirect to v6e-64 before it launches.
 
+## Job 8f — v6e-8 S1.5 RELAUNCH (out_shardings fix) — launched 2026-08-05T02:49Z
+
+**Under the Query-4 grant; round 8 CLOSED at `6dab9b1` (APPROVE + GO on the new Codex account after
+the quota block; Yixun: "continue with both experiments").** The 8e ledger's root cause fixed:
+every jitted gradient producer + the Welford accumulators pin out_shardings to the params' own
+layout (executed 8-device evidence: unpinned local==global spec P(); pinned exactly 1/8).
+Acceptance test: `post_replay_control ≈ 2.9G` (8e read 11.35G). Mem fraction 0.95. Suite 1,525 / 2.
+- **Job 8f:** `20260805-024910-5f1e9e11-exp03-s15-probe6-yixun` (COMMIT=e9b642f, tip at submission; code = APPROVED 6dab9b1 + docs).
+
