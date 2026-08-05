@@ -57,6 +57,7 @@ Numpy-only, like its sibling: record IO must not need jax. ``ml_dtypes`` supplie
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import io
 import json
 import math
@@ -79,6 +80,7 @@ from maxdiffusion.null_adapter_records import (
     _zip_arrays,
     sha256_of_array,
 )
+
 
 POS_LATENT_SCOPED_FIELDS = ("pos_embeds", "z_start", "expected_final_latent", "z_bar_states")
 POS_ARRAY_FIELDS = (*SOURCE_DTYPES, *POS_LATENT_SCOPED_FIELDS, "per_step_final_losses")
@@ -123,6 +125,90 @@ class _PosGeometry:
 
 
 PRODUCTION_POS_GEOMETRY = _PosGeometry()
+EMBEDDING_SLOT = "positive"
+
+
+@dataclasses.dataclass(frozen=True)
+class PosProvenanceHeader:
+    """What every positive-slot record in a shard was produced by (S4's l_pos decision).
+
+    **Why this exists instead of exp_04's ``ProvenanceHeader``.** That header's ninth field is
+    ``l_null`` -- the number of optimized rows in the *null* slot. The positive slot optimizes 8 rows
+    of a conditional context, which is the same *quantity* under a name that would be read as a
+    different *claim*: a reader (or the S9 evaluator) seeing ``l_null=8`` in a shard would reasonably
+    conclude it was looking at a 512-row null-slot artifact whose leading 8 rows were optimized, which
+    is not what these records are. Reusing the field would make every positive shard's provenance
+    quietly wrong, so the field is named ``l_pos`` and the header additionally states its
+    ``embedding_slot`` outright -- a reader never has to infer the slot from a field name.
+
+    Everything else matches exp_04's header field for field, deliberately, so the two artifact
+    families stay diff-able and the shared verifier can be extended additively later.
+    """
+
+    manifest_hash: str
+    code_sha: str
+    model_revision: str
+    sigma_vector: np.ndarray
+    guide_scale: float
+    base_context_fingerprint: str
+    optimization_config: dict[str, Any]
+    dtype_policy: str
+    l_pos: int
+    embedding_slot: str = EMBEDDING_SLOT
+    schema_version: int = SCHEMA_VERSION
+
+
+def _validate_pos_header(header: PosProvenanceHeader) -> np.ndarray:
+    """Shared by writer and reader; returns the canonical sigma vector (exp_04's rules, plus the slot)."""
+    if not _is_integral(header.schema_version) or int(header.schema_version) != SCHEMA_VERSION:
+        raise ValueError(f"unsupported header schema_version {header.schema_version!r}, expected {SCHEMA_VERSION}")
+    if header.embedding_slot != EMBEDDING_SLOT:
+        raise ValueError(
+            f"embedding_slot must be {EMBEDDING_SLOT!r} in a positive-slot header, got {header.embedding_slot!r}"
+        )
+    sigma = np.ascontiguousarray(np.asarray(header.sigma_vector).astype(np.dtype("<f4")))
+    if sigma.ndim != 1 or sigma.shape[0] != PRODUCTION_POS_GEOMETRY.pos_embeds[0] + 1:
+        raise ValueError(
+            f"sigma_vector must be 1-D with {PRODUCTION_POS_GEOMETRY.pos_embeds[0] + 1} entries, got {sigma.shape}"
+        )
+    if not np.all(np.isfinite(sigma)):
+        raise ValueError("sigma_vector must be finite")
+    if not np.isfinite(header.guide_scale):
+        raise ValueError(f"guide_scale must be finite, got {header.guide_scale}")
+    if header.dtype_policy not in LATENT_DTYPES:
+        raise ValueError(f"dtype_policy must be one of {sorted(LATENT_DTYPES)}, got {header.dtype_policy!r}")
+    if not _is_integral(header.l_pos) or int(header.l_pos) < 1:
+        raise ValueError(
+            f"l_pos must be a positive integer -- the optimized context's row count, got {header.l_pos!r}"
+        )
+    if not isinstance(header.optimization_config, dict):
+        raise ValueError(f"optimization_config must be a dict, got {type(header.optimization_config)}")
+    for key, value in header.optimization_config.items():
+        if not isinstance(key, str) or not (value is None or isinstance(value, (str, bool, int, float))):
+            raise ValueError("optimization_config must be flat: values must be str, int, float, bool or None")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"optimization_config[{key!r}] must be finite, got {value}")
+    return sigma
+
+
+def pos_header_to_json(header: PosProvenanceHeader) -> str:
+    """Deterministic JSON: sorted keys, sigma vector as exact float32 values."""
+    sigma = _validate_pos_header(header)
+    payload = {**dataclasses.asdict(header), "sigma_vector": [float(v) for v in sigma]}
+    return json.dumps(payload, sort_keys=True)
+
+
+def pos_header_from_json(text: str) -> PosProvenanceHeader:
+    """Parse a positive-slot header under exactly the writer's contract."""
+    payload = json.loads(text)
+    _check_namespace(payload, [f.name for f in dataclasses.fields(PosProvenanceHeader)], "header fields")
+    header = PosProvenanceHeader(**payload)
+    return dataclasses.replace(header, sigma_vector=_validate_pos_header(header))
+
+
+def pos_header_fingerprint(header: PosProvenanceHeader) -> str:
+    """The one digest a positive shard is bound to (exp_04's ``header_fingerprint`` rule)."""
+    return hashlib.sha256(pos_header_to_json(header).encode("utf-8")).hexdigest()
 
 
 @dataclasses.dataclass(frozen=True)

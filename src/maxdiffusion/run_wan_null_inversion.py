@@ -63,6 +63,9 @@ from maxdiffusion.null_adapter_records import PRODUCTION_GEOMETRY, SOURCE_DTYPES
 
 
 NULL_MODES = ("capacity", "cache", "verify_replay", "adequacy_probe")
+# exp_05 S4, additive: which embedding slot a run optimizes. ``null`` is exp_04's behavior and the
+# default, so every existing config and launch keeps running exactly the path it ran before.
+EMBEDDING_SLOTS = ("null", "positive")
 # Plan §4-P2 fixes the fp16 decision to the first eight DEV examples whatever cohort is being cached,
 # so a cache run reads from two manifests rather than one.
 FIDELITY_COHORT = "dev64"
@@ -87,6 +90,46 @@ def resolve_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in NULL_MODES:
         raise ValueError(f"null_mode must be one of {list(NULL_MODES)}, got {mode!r}")
     return mode
+
+
+def optional_config_value(config: Any, key: str, default: Any) -> Any:
+    """Read a key an older config may not declare, without assuming how it says "absent".
+
+    **``getattr(config, key, default)`` does not work here.** MaxDiffusion's ``HyperParameters``
+    raises ``ValueError`` -- not ``AttributeError`` -- for an undeclared key (``pyconfig.py:316``), so
+    the three-argument ``getattr`` never reaches its default, and an exp_04 YAML, which has no
+    ``embedding_slot``, would crash a **null** launch before ``plan_run`` ever ran (S4 review,
+    finding 1: the additive-union protection this dual-touch file rests on was syntactic only).
+
+    ``get_keys()`` is the class's own declared-key mapping, so it answers "is this declared?" without
+    tripping the exception; plain mappings and ordinary objects fall back in that order.
+    """
+    keys = config.get_keys() if callable(getattr(config, "get_keys", None)) else None
+    if isinstance(keys, Mapping):
+        return keys.get(key, default)
+    if isinstance(config, Mapping):
+        return config.get(key, default)
+    try:
+        value = getattr(config, key)
+    except (AttributeError, ValueError):
+        return default
+    return default if value is None else value
+
+
+def resolve_embedding_slot(config: Any) -> str:
+    """Which slot this run optimizes (exp_05 S4; additive -- the default is exp_04's behavior).
+
+    ``null`` is the default and is exactly what this driver did before exp_05 existed: a config that
+    does not declare ``embedding_slot`` at all -- every exp_04 YAML -- resolves to it, as do an empty
+    string and ``None``, so no null-slot launch, config or test is affected. ``positive`` routes the
+    modes to ``pos_context_modes``, whose B-arms optimize the deployed 8-token conditional context.
+    A typo is refused rather than defaulted, because the two slots produce differently-shaped
+    artifacts from the same cohort and the same config.
+    """
+    slot = optional_config_value(config, "embedding_slot", "") or EMBEDDING_SLOTS[0]
+    if not isinstance(slot, str) or slot not in EMBEDDING_SLOTS:
+        raise ValueError(f"embedding_slot must be one of {list(EMBEDDING_SLOTS)}, got {slot!r}")
+    return slot
 
 
 def batching_plan(names: Sequence[str], batch_size: int) -> tuple[tuple[str, ...], ...]:
@@ -641,6 +684,8 @@ def main(
     sinks: Any = None,
     shards_for: Callable[[str], tuple[str, ...]] | None = None,
     artifact_exists: Callable[[str], bool] | None = None,
+    sweep: Callable[[str], tuple[str, ...]] | None = None,
+    free_space: Callable[[str, int], int] | None = None,
 ) -> int:
     """Compose a J1 launch and run it. Every seam is injectable, so this path has real tests.
 
@@ -654,10 +699,31 @@ def main(
     from maxdiffusion.null_adapter_modes import Backend, default_sinks, execute
 
     config = (configure or _configure)(argv)
-    check_free_space(str(config.null_artifact_dir), int(config.null_min_free_bytes))
-    sweep_stale_staging(str(config.null_staging_dir))
+    # exp_05 S4, additive: at the default slot every line below is byte-for-byte exp_04's path.
+    slot = resolve_embedding_slot(config)
+    positive = None
+    if slot == "positive":
+        from maxdiffusion.pos_context_modes import (
+            casting_velocity_fn,
+            pos_adoption,
+            pos_default_sinks,
+            pos_execute,
+            positive_plan,
+            positive_roots,
+        )
+
+        execute, default_sinks, positive = pos_execute, pos_default_sinks, positive_plan
+        # Resolved and validated BEFORE any storage operation: a positive run must free-space check
+        # and sweep ITS OWN roots, and must never inspect or mutate the null slot's (follow-up 1).
+        artifact_root, staging_root = positive_roots(config)
+    else:
+        artifact_root, staging_root = str(config.null_artifact_dir), str(config.null_staging_dir)
+    (free_space or check_free_space)(artifact_root, int(config.null_min_free_bytes))
+    (sweep or sweep_stale_staging)(staging_root)
     manifests = (load_manifests or _load_manifests)(str(config.null_manifest_dir))
     plan = plan_run(config, manifests)
+    if positive is not None:  # exp_05 S4: l_pos, its ablation and the slot-isolated artifact roots
+        plan = positive(config, plan)
     rows = reader_rows(manifests, plan)
     print(
         f"[null-inversion] mode={plan['mode']} cohort={plan['cohort']} examples={len(plan['names'])} "
@@ -674,15 +740,49 @@ def main(
         base_context=backend["base_context"],
         model_revision=revision,
     )
+    if positive is not None:
+        # exp_05 S4 MUST: the runner-built closure -- the one the modes actually call -- is what casts
+        # both branches' contexts to the activation dtype (S4 review, finding 6: the wrapper had no
+        # call site). Idempotent over ``_load_backend``'s own cast.
+        import dataclasses as _dataclasses
+
+        from maxdiffusion.models.wan.side_adapter_wan import _dtype
+
+        seams = _dataclasses.replace(
+            seams,
+            velocity_fn=casting_velocity_fn(
+                backend["velocity_fn"], _dtype(str(optional_config_value(config, "activations_dtype", "bfloat16")))
+            ),
+        )
     active_sinks = sinks or default_sinks()
-    adoption = load_adoption(
-        str(getattr(config, "null_adequacy_uri", "")),
-        exists=artifact_exists or _artifact_exists,
-        read_json=active_sinks.read_json,
+    # exp_05 S4: a positive run must not adopt a recipe from the null slot's adequacy artifact
+    # (review, finding 3). The null branch is exp_04's expression verbatim.
+    adequacy_uri = (
+        str(optional_config_value(config, "pos_adequacy_uri", ""))
+        if positive is not None
+        else str(getattr(config, "null_adequacy_uri", ""))
+    )
+    adoption = (
+        pos_adoption(
+            adequacy_uri,
+            plan,
+            exists=artifact_exists or _artifact_exists,
+            read_json=active_sinks.read_json,
+            manifest_hash=manifest_digest(manifests, plan["cohort"]),
+        )
+        if positive is not None
+        else load_adoption(
+            adequacy_uri,
+            exists=artifact_exists or _artifact_exists,
+            read_json=active_sinks.read_json,
+        )
     )
     if adoption:
         print(f"[null-inversion] adopted recipe from the adequacy artifact: {adoption}")
     kwargs = mode_kwargs(config, plan, manifests, shards_for=shards_for or published_shards, adoption=adoption)
+    if positive is not None:  # every positive artifact lands under the positive slot's own roots
+        kwargs.update(artifact_dir=plan["artifact_dir"], staging_dir=plan["staging_dir"])
+        kwargs.setdefault("manifest_hash", manifest_digest(manifests, plan["cohort"]))
     report, code = execute(plan["mode"], plan, seams, active_sinks, **kwargs)
     print(f"[null-inversion] {json.dumps(report, sort_keys=True, default=str)[:2000]}")
     return code

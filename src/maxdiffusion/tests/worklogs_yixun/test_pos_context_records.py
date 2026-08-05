@@ -50,6 +50,7 @@ from maxdiffusion.pos_context_records import (
     to_bfloat16,
 )
 
+
 # A tiny geometry with every axis distinct, exercising the same validation path as production.
 _TINY = _PosGeometry(
     z_video=(2, 3, 2, 2),

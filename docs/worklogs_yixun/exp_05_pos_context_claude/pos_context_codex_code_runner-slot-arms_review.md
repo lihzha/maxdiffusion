@@ -121,3 +121,14 @@ NEW findings at K1-blocking severity:
 - **K1-BLOCKER — the L_pos diagnostic ignores the adopted recipe/selected arm.** Run it with the recipe and arm that the main K1 study actually adopts/selects, and persist those bindings in its evidence.
 
 Final verdict: **REQUEST-REVISION — four fixes are substantively closed, but slot-safe production preflight/adoption and the plan-mandated adopted-recipe L_pos ablation still block K1.**
+
+---
+
+## Final-fix record (the follow-up's 3 residual K1-blockers) + Planner closure
+
+1. **(storage preflight) — FIXED.** `positive_roots` (required, normalized, collision-rejected incl. trailing-slash both directions); positive-root free-space + positive-staging sweep; null roots never touched on a positive run (root-observation probe); the checked-in pos YAML now enters main. Two new injectable seams (sweep/free_space) per the file's design.
+2. **(adoption binding) — FIXED.** `pos_adoption` validates slot/mode/cohort/l_pos/guide_scale/manifest binding before applying; the null-slot-payload probe is a rejection; `run_pos_adequacy` records `manifest_hash`.
+3. **(ablation binding) — FIXED.** Ablation runs at the ADOPTED recipe and the mirrored arm, both persisted in evidence; the forced-(50,0.03) probe is the regression.
+Finding-5 claim narrowed to the exact semantics (first-shard failure ⇒ empty root; later-shard ⇒ immutable partials + resume-not-republish per R8; run-JSONs never describe incomplete record sets).
+
+Suite **1063 passed**; cumulative S4 battery **28 mutants, 0 survivors** (V+W+X series). Dual-touch delta +106/−6 — the six deletions are slot-relocated call sites with exp_04's expressions preserved verbatim on the null branch; the null-path characterization (real-HyperParameters, complete-report) pins behavioral identity — recorded as within the class-(c) additive-union spirit. Round S4 closed (two sittings + follow-up + finals); committed with this record.
