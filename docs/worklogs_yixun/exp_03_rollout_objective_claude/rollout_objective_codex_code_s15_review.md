@@ -417,3 +417,13 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   dispatched (del-before-release; census refresh post-trace + trace_total in the budget;
   callee-identity or runtime-seam guard with extended bite evidence).
 
+- **`adfdd3b` (round 11) verify (xhigh): REQUEST-REVISION** — findings 1 (release-ledger truth) and
+  2 (post-trace census + trace_total budget) **CLOSED**; no new production defect. Finding 3 (the
+  hand-rolling regression guard) still OPEN: reviewer executed evasions (positional, **kwargs,
+  partial, renamed top-level helper, indirect attribute) against `_nested_callables`, and the
+  runtime seam test executes neither entry point. **Relaunch: NO-GO** on the guard alone.
+  Guard micro-round dispatched to a fresh Coder (the incumbent stalls each turn at ~680k transcript
+  tokens): execution-based frame-inspection guard through BOTH entry points, test-only change.
+  (Round 11 itself was committed by the Planner after the Coder finished the work but could not
+  complete its turn — disclosed in the commit message.)
+
