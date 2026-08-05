@@ -14,3 +14,4 @@
 - `8695fac` — merge(exp_05): merge-interim — exp_04 R10 boundary (cdd4653); combined suite 1003 green
 - `c107973` — feat(exp_05): S4 runner-slot-arms (TDD, 1063 tests)
 - `8ab68dc` — docs(exp_05): parity audit CLEAN + docstring corrections + S10a amendment
+- `102ae84` — feat(exp_05): S10a pos-launcher (K1 path; 1139 tests; adoption cross-cohort fix)
