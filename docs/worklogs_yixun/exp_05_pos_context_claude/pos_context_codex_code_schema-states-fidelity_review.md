@@ -67,3 +67,14 @@ Status:
 
 - No subprocesses are running; review is complete.
 - Earliest steer: now; it is safe to begin S5 strengthening.
+
+---
+
+## Strengthening record (Coder, same round; all four items closed, none rejected)
+
+1. **BLOCKER (claims) — FIXED.** All three overstatements retracted and replaced with the verified statements (6.217–6.27% by sample size; 1-ulp scoped to fp16-normal inputs BY CONSTRUCTION in the fixture; inf at ≥65,520; zero at ≤2⁻²⁵); deterministic subnormal witnesses added (4 / 64 / 13,056 bf16 ulps with region guards and the absolute-vs-relative-grid mechanism); a second self-caught fixture error corrected; honest nuance recorded — subnormal absolute error stays <~6e-8, hence max_abs_delta reported beside max_ulp_delta, overflow fatal / underflow deliberately not.
+2. **MAJOR (gate) — FIXED.** Subset derived internally (FIDELITY_SUBSET_SIZE imported from exp_04's cache policy — cross-experiment drift impossible); exact evidence coverage; production geometry per pair; empty/dtype/shape/nonfinite-input rejections; the 70000.0 probe verbatim on its own nonfinite-serialization path; fp32 default preserved.
+3. **MINOR (namespaces) — FIXED.** Four R4b-style tampering cases with matched errors.
+4. **MINOR (launch table)** — plan-side, done by the Planner.
+
+Suite **769 passed** (749 + 20); **15 mutants, 0 survivors** (Q1's module-side witness-guard interpretation accepted). Round S5 closed; committed with this record.
