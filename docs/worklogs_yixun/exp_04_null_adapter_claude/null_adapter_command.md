@@ -17,7 +17,7 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 # <venv> = /private/tmp/claude-501/-Users-yixunhu-Home-maxdiffusion/800fed95-7c3f-418d-b779-9914ed8480b4/scratchpad/venv
 ```
 
-## J0-2 — cohort-manifest build re-run (2026-08-05_14:59:41Z, PENDING — held at launch check: ADC refreshed but the gsutil credential expired in the interim (issue #6); J0's shard-binding fail-closes on gsutil reauth. Launches when both credentials are live.)
+## J0-2 — cohort-manifest build re-run (2026-08-05_14:59:41Z, LAUNCHED at 2026-08-05_15:27:35Z — both credentials verified live (gsutil listing + Generation stat; ADC refreshed earlier). Same driver as J0-1; log: null_adapter_2026-08-05_15:27:35.log)
 
 - Commit: `7199feb99514d5c4e460e84629b133566f6624d7` (J0 runs the committed builder; working tree carries only uncommitted R10 files not touched by J0)
 - Same command as J0-1; log: `null_adapter_2026-08-05_14:59:41.log`
