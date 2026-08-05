@@ -330,3 +330,23 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 
 - **Result** — `passed`. R11 committed with this entry (the A3 module + the J1/J1b wiring across modes/entrypoint/config/launcher). Suite: 246 (R5 era) → **936**. Eleven rounds + three splits, every commit through closed review cycles; ~470 mutants killed cumulatively; 6 ratified defence-in-depth survivors.
 - **Next** — **THE PARITY AUDIT** (Planner, plan §8, recorded here before J1), then the J1 pre-launch package (params_set_up + command entry + acceptance criteria + pushed SHA) under Yixun's standing conditional grant.
+
+## 2026-08-06T03:00:00Z — PARITY AUDIT (plan §8) — CLEAN; recorded before J1 per the SOP
+
+Component-by-component against `third_party/Wan2.2/scripts/embedding_search.py` @ pinned `f370228`, citing where each is pinned (test + independent reviewer verification):
+
+1. **Inversion recurrence** (:522-572 — indices, signs, evaluation point, pin points incl. the pinned clean pivot): R2's constant/analytic-oracle + scan≡literal-loop tests; R2 review independently verified; the reversed-dsigma class killed AGAIN at R11 via the bitwise oracle against the reviewed replay.
+2. **Per-step null optimization** (:575-678 — fresh Adam per step, v_cond cached once, locked-∅ advance with one extra forward, warm start): R3's call-count (N cond / N·(J+1) unc), composition (tail-rerun), and locked-advance tests; R3 review's empirical probes; the Adam recipe literal-pinned (eps-sensitive fixture; eps_root=0.0 explicit; the reviewer's own torch-vs-optax fixed-gradient check at 7.15e-7).
+3. **CFG combine + w=5**: R3/R4a analytic tests (w=1 zero-∅-grad; w=5 algebra); the A0 guide-scale-invariance contract (R4a) with the measured ULP-mechanism provenance.
+4. **Pin discipline** (init / each candidate / each step / advance): mutants across R2/R3/R4a/R11 (dropped-pin variants all killed).
+5. **Per-token timestep ≡ temp_ts** (:488-500): R2's captured-timestep content tests (frame-0 zeros, σ·1000 elsewhere, n_hist=1); R3's every-forward test; R7's independently-confirmed latent→pixel frame mapping.
+6. **Dtype boundaries** (bf16 model fwd; fp32 latents/∅/Adam): R1's bitwise-bf16 branch equality at the exact cast; R3 fp32 pins; R7's strict [0,1] decode contract with the R10-verified pipeline trace.
+7. **σ grid**: R1's hardcoded-value characterization incl. the 0.1724 tail; **documented deviation** σ₀=1.0 vs the PyTorch 0.999 (no cross-repo artifact exchange; every in-repo baseline uses ours).
+8. **Optimization loss** = full-tensor MSE (pinned frame inert, matching `F.mse_loss`) with future-frame reporting split: R3's convention + R6/R7's metric separation.
+9. **Replay ≡ regenerate_with_null_embeds** (:791-819): R4a review's line-by-line confirmation; R11's endpoint+trajectory bitwise oracle at four guide scales.
+10. **Verifier ≡ verify_reconstruction_from_null spirit** (loads no GT, no trajectory): R4c's hostile-proxy must-not-read enforcement + pair-level provenance; tamper detection beyond reader hashes.
+11. **Deviations register (all ratified in reviews):** empty positive branch (no captions exist); ∅ optimized as 16 rows inside the padded-512 context ({L_nat,16} ablation is diagnostic, in-J1); σ₀ above; batched execution with per-example independence (bitwise B-tests throughout); optax-vs-torch Adam (recipe-pinned); JAX threefry noise (golden-pinned incl. non-ASCII, one on-device golden asserted by the launcher before arms).
+
+**Numeric-recipe defaults cross-check (SOP):** J=10, lr=1e-2, w=5.0, inversion w=1.0, Adam (0.9, 0.999, 1e-8, eps_root 0), σ-shift 5.0, 25 steps — all as the reference/plan; config values pinned by the R10 config-drift tests. **Data parity:** R9's dual-source episode identity independently re-derived by its reviewer; real producer-TFRecord fixtures in the manifest tests; J0's published cohorts re-validated by the fail-closed loader.
+
+**Verdict: PARITY AUDIT CLEAN.** Launch precondition (P0 + audit) for the conditionally-granted J1 is now MET on the code side; the J1 package (params, command, acceptance criteria, smoke-first runbook) follows at the launch action.
