@@ -300,15 +300,71 @@ def test_the_variance_table_is_the_per_step_population_variance_of_the_targets()
     assert np.allclose(table, [1.0, 4.0, 9.0])
 
 
+def _float32_chan(blocks: np.ndarray) -> np.ndarray:
+    """The module's own algorithm with a float32 accumulator -- the variant this round rejects.
+
+    Kept here rather than described in prose: a tolerance is only as honest as the wrong answer it
+    actually excludes, and this is the wrong answer.
+    """
+    count, means, m2 = 0, np.zeros(0, np.float32), np.zeros(0, np.float32)
+    for raw in blocks:
+        block = raw.astype(np.float32)
+        block_count = block.shape[1] * block.shape[2]
+        block_mean = block.mean(axis=(1, 2))
+        block_m2 = ((block - block_mean[:, None, None]) ** 2).sum(axis=(1, 2))
+        if count == 0:
+            means, m2 = block_mean, block_m2
+        else:
+            delta = block_mean - means
+            total = count + block_count
+            means = (means + delta * np.float32(block_count / total)).astype(np.float32)
+            m2 = (m2 + block_m2 + delta**2 * np.float32(count * block_count / total)).astype(np.float32)
+        count += block_count
+    return (m2 / count).astype(np.float64)
+
+
 def test_the_streaming_table_matches_a_direct_variance_over_the_whole_cache():
-    """One pass over a 17 GiB cache, so the accumulation is streaming -- and must still be the number
-    a two-pass computation would give."""
+    """One pass over a ~15 GiB cache, so the accumulation is streaming -- and must still be the number
+    a two-pass computation gives.
+
+    ``rtol`` is not a taste: a correctly accumulated float64 result, returned as fp32, can differ from
+    the float64 oracle by at most half an fp32 ulp (5.96e-8). Anything looser stops distinguishing
+    this implementation from a float32 accumulator, which lands 1.55e-7 out on this very fixture.
+    """
     cache = [_record(seed=seed) for seed in range(5)]
+    stacked = np.stack([np.asarray(record.pos_embeds, np.float64) for record in cache])
+    oracle = stacked.var(axis=(0, 2, 3))
 
     table = target_variance_table(cache)
-    stacked = np.stack([np.asarray(record.pos_embeds, np.float64) for record in cache])
 
-    assert np.allclose(table, stacked.var(axis=(0, 2, 3)), rtol=1e-6, atol=1e-9)
+    assert np.allclose(table, oracle, rtol=1e-7, atol=0.0)
+    assert np.max(np.abs(_float32_chan(stacked) - oracle) / oracle) > 1e-7  # what the bound excludes
+
+
+def _offset_record(offset, seed, geometry=_TINY):
+    """A cache block far from zero with a spread only a few float32 ulps wide, stored exactly."""
+    unit = np.spacing(np.float32(offset))
+    deviations = np.random.default_rng(seed).integers(-8, 9, geometry.shapes()["pos_embeds"])
+    return _record(geometry, seed, pos_embeds=(np.float32(offset) + deviations.astype(np.float32) * unit))
+
+
+def test_the_table_holds_on_a_cache_where_float32_accumulation_visibly_fails():
+    """**Why float64.** The estimator subtracts a large mean from large numbers. At an offset of 2**20
+    the float32 spacing is 0.125 -- a sixth of this fixture's spread -- so a float32 accumulator's
+    running mean carries a rounding error the size of the deviations it is measuring, and the variance
+    comes out ~7% wrong. The float64 pass reproduces the two-pass oracle to within half an fp32 ulp.
+
+    This is not a hypothetical regime: a step whose targets barely move is exactly where normalized
+    MSE is most sensitive, and it is the number the S7 stop rule divides by.
+    """
+    cache = [_offset_record(2.0**20, seed) for seed in range(6)]
+    stacked = np.stack([np.asarray(record.pos_embeds, np.float64) for record in cache])
+    oracle = stacked.var(axis=(0, 2, 3))
+
+    table = target_variance_table(cache)
+
+    assert np.allclose(table, oracle, rtol=1e-7, atol=0.0)
+    assert np.max(np.abs(_float32_chan(stacked) - oracle) / oracle) > 1e-2  # the same data, off by %
 
 
 def test_the_table_does_not_depend_on_the_order_the_cache_is_read_in():
