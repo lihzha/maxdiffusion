@@ -2,7 +2,7 @@
 
 Open issues, recurring failures, and standing workarounds. Each entry: symptom, infra-vs-bug classification, workaround/fix, status. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`.
 
-Last updated: 2026-08-03
+Last updated: 2026-08-05 ~19:10Z
 
 ## OPEN / STANDING
 
@@ -64,6 +64,16 @@ Last updated: 2026-08-03
 - **RESOLVED (again) 2026-08-04 ~17:20Z** — Yixun purchased credits (“continue with both experiments”); exp_04 R1 code review + exp_05 plan review dispatched in parallel immediately.
 - **RECURRENCE (4th) 2026-08-05 ~15:10Z (BLOCKING):** the second credit purchase is exhausted — since the refill: 3 exp_05-plan passes + 9 exp_04 code-review passes (R1, R2, R3, R4a, R4b, R4c, R5, R6, R7), each ~120–230k tokens. The R8 review dispatch failed ("try again at Aug 7th, 2026 11:35 PM"). **Blocked:** R8 review → R9 → parity audit → J0/J1 (one round from the launch gate) and exp_05's merge-1. **Not blocked/lost:** R8's write phase (443 tests green) parked uncommitted in the worktree; all R1–R7 commits pushed. Budget math for sizing: ~12 xhigh passes per refill at this cadence; the two-experiment pipeline consumes ~2 passes/round (review + occasional re-verify) across ~10 remaining rounds (R8–R15 + exp_05 S1–S10 + merges) ⇒ a larger purchase or the Aug 7 reset covers it. Options: (a) purchase again; (b) wait (~2 days — stalls both experiments at the highest-momentum point); (c) approved substitute reviewer (recorded per SOP).
 - **RESOLVED (again) 2026-08-05 ~15:40Z** — Yixun logged the CLI into a NEW Codex account (“continue with both experiments”); first call 401'd transiently during token refresh, second call verified working. R8 review re-dispatched immediately. Note for the record: third account/quota pool this week.
+
+### 10. Auto-mode permission classifier blocks `tpu create` from the Claude session (infra/process, OPEN)
+- **Symptom:** 2026-08-05 ~19:00Z — exp_04's J1-2 relaunch (`bash submit_j1.sh`, the same script that submitted J1-1 successfully) was denied by the Claude Code auto-mode classifier before execution. Not an auth or queue failure; the session itself cannot run the submission.
+- **Workaround:** hand Yixun the exact submit command to run via the `!` prefix in the prompt (output lands in the conversation), or Yixun adds a Bash permission rule for `tpu create` in Claude settings. Command entries in `_command.md` are written by the session either way.
+- **Status:** OPEN, standing until a permission rule exists. Interacts with announcement 02 harmlessly (the launch gate already routes approval through Yixun).
+
+### 11. `getattr(config, key, default)` never falls back on `HyperParameters` (real bug class, fixed in exp_04 scope)
+- **Symptom:** exp_04 J1 attempt 1 crashed at `run_wan_null_inversion.py:611`: `HyperParameters.__getattr__` raises **ValueError** (pyconfig.py:316-319), not AttributeError, so three-arg `getattr` propagates instead of returning the default. The same pattern also silently masked a drifted test fixture (defaults swallowed a missing-key signal).
+- **Fix (exp_04, commit `925ee17`):** `optional_config_value(config, key, default)` — resolves via `config.get_keys()`, then Mapping, then getattr guarded on AttributeError AND ValueError — for genuinely-optional keys; YAML-declared keys read directly (missing ⇒ loud failure); AST tests forbid three-arg config-getattr in the entrypoint and pin every direct read as YAML-declared.
+- **Status:** FIXED within exp_04's entrypoint; the pattern likely exists elsewhere in the repo (a repo-wide audit is out of exp_04 scope — flag when touched). Rule: never use three-arg `getattr` on a pyconfig `HyperParameters` object.
 
 ## RESOLVED (kept for the record)
 
