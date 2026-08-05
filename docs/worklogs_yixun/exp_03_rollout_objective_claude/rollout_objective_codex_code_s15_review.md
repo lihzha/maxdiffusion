@@ -427,3 +427,13 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   (Round 11 itself was committed by the Planner after the Coder finished the work but could not
   complete its turn — disclosed in the commit message.)
 
+- **`7da7a66` (guard micro-round, fresh Coder, test-only) micro-verify (xhigh): APPROVE —
+  "Relaunch: GO — finding 3 is closed."** All four items CLOSED: the class-level frame seam
+  intercepts direct merge, repeated merge and graphdef.apply while thread/generator/exec routes
+  cannot forge the required blessed + entry-point frames; both entry-point mutants execute their
+  real bodies (≥25 recorded calls, anti-vacuity held); blessed set = exactly `_forward` with the
+  secondary assertion preventing silent growth; no production defect. Probe file 111 passed.
+  **The S1.5 fix campaign is CLOSED end-to-end** (rounds/commits: e2249e1 → 2b9177d/994af9b →
+  46b43c5/7241030/99b5529/ce6717d/2ef9b8a → 6dab9b1 → c052c91/f049f16/adfdd3b/7da7a66; suite
+  1,007 → 1,534+... probe-file-count basis 111).
+
