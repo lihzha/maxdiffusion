@@ -205,6 +205,38 @@ def published_shards(artifact_dir: str, *, lister: Callable[[str], Iterable[str]
     return tuple(sorted(posixpath.dirname(path) for path in markers))
 
 
+def optional_config_value(config: Any, key: str, default: Any = None) -> Any:
+    """Read a config key that may legitimately not exist, on every config object this driver sees.
+
+    **The three-argument ``getattr`` does not work here.** ``pyconfig.HyperParameters.__getattr__``
+    raises ``ValueError`` for an unknown key (``pyconfig.py:316-319``), and ``getattr``'s default
+    only swallows ``AttributeError`` -- so the fallback never runs, it propagates. J1's smoke died
+    exactly there, at ``code_sha``, after the 5B model was already loaded and its revision resolved.
+
+    Resolution order: the object's own key mapping (``get_keys()``, which is what ``HyperParameters``
+    exposes and the only *declared* way to ask it what it has), then a plain ``Mapping``, then
+    attribute access guarded against **both** exception types.
+
+    This is for genuinely optional keys. A key the YAML declares is required, and is read directly:
+    the config ships in the same tarball as this file, so a missing one is a broken deployment that
+    should say so loudly rather than silently take a default.
+    """
+    getter = getattr(type(config), "get_keys", None)
+    if callable(getter):
+        try:
+            keys = config.get_keys()
+        except Exception:  # noqa: BLE001 -- an uninitialized config must not break an optional read
+            keys = None
+        if isinstance(keys, Mapping):
+            return keys.get(key, default)
+    if isinstance(config, Mapping):
+        return config.get(key, default)
+    try:
+        return getattr(config, key)
+    except (AttributeError, ValueError):
+        return default
+
+
 def resolved_code_sha(value: Any) -> str:
     """The 40-hex commit every published record is stamped with.
 
@@ -304,7 +336,7 @@ def _parse_grid(spec: str) -> tuple[tuple[int, float], ...]:
 
 
 def _smoke_limit(config: Any) -> int:
-    limit = getattr(config, "null_smoke_examples", 0)
+    limit = config.null_smoke_examples
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
         raise ValueError(f"null_smoke_examples must be a non-negative integer, got {limit!r}")
     return limit
@@ -320,13 +352,13 @@ def plan_run(config: Any, manifests: Mapping[str, Any]) -> dict[str, Any]:
     a manifest with 62 holes and call the resulting coverage failure a result (review, finding 2).
     Zero -- the default -- means the full cohort.
     """
-    mode = resolve_mode(getattr(config, "null_mode", None))
-    cohort = str(getattr(config, "null_cohort", ""))
+    mode = resolve_mode(config.null_mode)
+    cohort = str(config.null_cohort)
     names = cohort_names(manifests, cohort)
     smoke = _smoke_limit(config)
     if smoke:
         names = names[:smoke]
-    batches = batching_plan(names, int(getattr(config, "null_batch_size", 8)))
+    batches = batching_plan(names, int(config.null_batch_size))
     plan = {
         "mode": mode,
         "cohort": cohort,
@@ -343,7 +375,7 @@ def plan_run(config: Any, manifests: Mapping[str, Any]) -> dict[str, Any]:
         "latent_dtype": str(config.null_latent_dtype),
         "eval_seed": int(config.null_eval_seed),
         "decode_subset": tuple(names[: int(config.null_decode_subset)]),
-        "decode_batch_size": int(getattr(config, "null_decode_batch_size", 8)),
+        "decode_batch_size": int(config.null_decode_batch_size),
     }
     if mode == "adequacy_probe":
         plan["grid"] = _parse_grid(config.null_adequacy_grid)
@@ -608,20 +640,20 @@ def mode_kwargs(
         common.update(
             staging_dir=str(config.null_staging_dir),
             manifest_hash=manifest_digest(manifests, plan["cohort"]),
-            code_sha=resolved_code_sha(getattr(config, "code_sha", "") or os.environ.get("COMMIT")),
+            code_sha=resolved_code_sha(optional_config_value(config, "code_sha", "") or os.environ.get("COMMIT")),
         )
     if plan["mode"] == "capacity":
         common.update(
             decode_batch_size=int(plan["decode_batch_size"]),
             adopted_recipe=adoption,
-            a3_measure=bool(getattr(config, "null_a3_measure", False)),
+            a3_measure=bool(config.null_a3_measure),
         )
     # J1b: separately approved, so it takes only what it needs and stamps what it writes.
     if plan["mode"] == "direct_opt":
         common.update(
             manifest_hash=manifest_digest(manifests, plan["cohort"]),
-            code_sha=resolved_code_sha(getattr(config, "code_sha", "") or os.environ.get("COMMIT")),
-            iters=int(getattr(config, "null_a3_iters", 300)),
+            code_sha=resolved_code_sha(optional_config_value(config, "code_sha", "") or os.environ.get("COMMIT")),
+            iters=int(config.null_a3_iters),
         )
     # The selection was made on DEV-64, so that is the digest it is bound to -- not the digest of
     # whatever cohort this job happens to be caching.
@@ -687,7 +719,7 @@ def main(
     )
     active_sinks = sinks or default_sinks()
     adoption = load_adoption(
-        str(getattr(config, "null_adequacy_uri", "")),
+        str(config.null_adequacy_uri),
         exists=artifact_exists or _artifact_exists,
         read_json=active_sinks.read_json,
     )

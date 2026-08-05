@@ -151,6 +151,15 @@ def _config(**overrides):
         "null_verify_atol": 0.01,
         "null_selection_uri": "",
         "null_adequacy_uri": "",
+        "null_a3_measure": False,
+        "null_a3_iters": 300,
+        # Read only inside ``_load_backend``, which every test here injects -- carried anyway so the
+        # fake is a faithful stand-in for a real config rather than only for the paths we happen to
+        # exercise today.
+        "null_pixel_convention": "unit",
+        "activations_dtype": "bfloat16",
+        "logical_axis_rules": [],
+        "wan_max_sequence_length": 512,
         "pretrained_model_name_or_path": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
         "code_sha": "a" * 40,
         **overrides,
@@ -1368,3 +1377,28 @@ def test_the_config_carries_the_a3_keys():
 
     assert config["null_a3_measure"] is False and config["null_a3_iters"] == 300
     assert "direct_opt" in config["null_mode"] or config["null_mode"] in NULL_MODES
+
+
+def test_the_fake_config_declares_every_key_the_driver_reads_directly():
+    """The fixture drifted from the YAML and a three-argument ``getattr`` hid it -- which is the same
+    shape of bug J1 hit, one layer down. Required keys are read directly now, so the fake has to
+    carry them or the test lies about what a launch does."""
+    import ast as _ast
+
+    source = _source(_ENTRYPOINT_PATH)
+    tree = _ast.parse(source)
+    called = {
+        node.func for node in _ast.walk(tree) if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute)
+    }
+    read = {
+        node.attr
+        for node in _ast.walk(tree)
+        if isinstance(node, _ast.Attribute)
+        and isinstance(node.value, _ast.Name)
+        and node.value.id == "config"
+        and node not in called
+    }
+
+    fake = _config()
+    missing = sorted(key for key in read if not hasattr(fake, key))
+    assert missing == [], f"the fake config is missing keys the driver reads: {missing}"
