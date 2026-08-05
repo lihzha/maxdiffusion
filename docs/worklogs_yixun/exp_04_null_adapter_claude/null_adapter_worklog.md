@@ -288,3 +288,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — reds evidenced; **690 passed in 52s** (676 → 690; pre-R10 610 unchanged); ruff/black/bash -n/diff-check clean. **38 mutants across R10, 0 survivors.** **Decode-range finding:** the pipeline emits [0,1] clamped float32 (traced: wan_pipeline.py:663-671 → video_processor:99-113 → image_processor denormalize+clamp :185-189) — R7's strict contract holds; the wrapper DECLARES the convention (`null_pixel_convention`) rather than sniffing.
 - **Result** — `passed` (write). Planner ratifications: modes-module split; declared-convention wrapper; `null_verify_atol=1e-2` and 100-GiB floor as defaults; `# pragma: no cover` confined to `_load_backend`'s literal pipeline calls + one glob (the smoke rung's residue).
 - **Next** — R10 review → strengthen → commit → R11 `a3-direct-opt` → parity audit → J0 re-run (pending ADC) → J1 package.
+
+## 2026-08-05T10:30:00Z — Coder handoff #2: fresh agent for the R10 revision (context exhaustion, self-declared)
+
+- **Goal** — Execute the R10 strengthen (BLOCKER + 8 MAJOR + 2 MINOR).
+- **Analysis** — The R6-onward Coder (10 rounds, ~830k transcript tokens) HALTED before starting rather than half-delivering: "half-written code and an unrun battery in a round whose entire subject is fail-closed integrity is the one failure mode this experiment cannot afford." Verified clean state handed over (six untracked write-phase files byte-identical to the 690-green state; HEAD `1e64eb9`) plus a five-item trap list (modes↔entrypoint import cycle; the load-bearing divergence-inside-quarantine seam; findings 2+5 must be done together — publication resequencing changes shard numbering; keep ffmpeg local + gfile copy; black-vs-mutant-pattern interactions). Classified: infra/agent-lifecycle, exemplary honesty — the SOP's report-outcomes-faithfully norm working as intended.
+- **Result** — `fix_ready` (fresh Coder dispatched with the review + trap list embedded).
+- **Next** — R10 revision (findings 1–6 priority, 2+5 together) → battery → follow-up review → commit.
