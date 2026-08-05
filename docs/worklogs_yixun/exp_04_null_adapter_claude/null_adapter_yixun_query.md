@@ -31,3 +31,11 @@
 5. Pilot scope acknowledged.
 
 **Scope note:** the second sentence defines a NEW experiment (exp_05 `pos_context`): per-step POSITIVE text embeddings from DDIM inversion + a pre_context-structure adapter trained with a regression loss to those embeddings, run in parallel with exp_04. Recorded in `exp_05_pos_context_claude/pos_context_yixun_query.md`; exp_04's scope is unchanged.
+
+## Grant (2026-08-05T20:26Z) — J1-2b supplement pre-approved
+
+Context: status report recording the J1 runbook's missing TRAINFIT-16 capacity half (worklog 2026-08-05T20:40Z entry) and the prepared `submit_j1b_trainfit.sh` remediation, gated on J1-2 completing (its adequacy artifact is J1-2b's input).
+
+**Yixun, verbatim:** "Yes to all, continue with both experiments"
+
+Planner reading: J1-2b launches via Yixun's `!` once J1-2 is terminal-success; if J1-2 fails on infra, auto-resubmit first per the standing policy.
