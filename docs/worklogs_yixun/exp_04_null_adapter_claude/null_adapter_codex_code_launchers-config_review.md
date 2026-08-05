@@ -103,3 +103,46 @@ A3 is intentionally R11 scope and is not counted against this verdict.
 **REQUEST-REVISION — R10 is not J1-launchable because the real backend cannot construct, and the capacity, cache, and verification bodies do not yet preserve the approved execution, provenance, and exit contracts.**
 
 **Status:** No subprocesses or jobs are running; review is complete, and Yixun can steer now.
+
+---
+
+## Follow-up pass (R10 strengthen @ working tree on `5763adb`)
+
+### Reviewer output (verbatim)
+
+## Context loaded:
+
+- HEAD `5763adb`; exact 10-file uncommitted state and full deltas.
+- [R10 review](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_codex_code_launchers-config_review.md) and [R10-strengthen worklog](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/docs/worklogs_yixun/exp_04_null_adapter_claude/null_adapter_worklog.md).
+- Plan P1/P2, R6 runner review, R8 shard/resume review, all R10 implementation and test files, and the 66-mutant harness.
+- Composed TI2V pipeline/trainer, record codec, verifier, gates, cache policy, and shard boundary.
+- Validation: 37 focused tests passed; real `main`→capacity fake-backend probe reached all six arms and published A1/A2 shards; `bash -n`, AST parsing, whitespace checks passed. Filesystem tests requiring `tmp_path` could not initialize in the read-only environment, so quarantine and `gs://` routing were rerun with in-memory seams.
+
+## Finding verification
+
+1. **RESOLVED** — TI2V subclass/axis-rules/reader seams landed; the real composed `main` path reached all six arms on a fake backend and returned 0.
+2. **RESOLVED** — bounded decode→fill→gate→selection precedes immutable shards, smoke truncates the declared cohort, and gates retain declared coverage.
+3. **PARTIALLY RESOLVED** — adequacy preflight and evidence persistence landed, but production never loads or passes the resulting `adopted` payload into `run_capacity`; the +2-hour stop and adopted rerun exist only behind an unused optional kwarg.
+4. **PARTIALLY RESOLVED** — selection, fidelity-before-write, dtype propagation, and selected-arm-only execution landed, but non-DEV cache launches cannot read the mandatory DEV fidelity subset and selection provenance is not validated.
+5. **RESOLVED** — canonical full-header fingerprint, collision-free next index, successful-retry supersession, and duplicate-coverage refusal all passed.
+6. **PARTIALLY RESOLVED** — empty/partial/duplicate/quarantined inputs now fail, but the first shard’s records are still read before validation: observed order was `read_shard → validate_shard`.
+7. **RESOLVED** — COMMIT, resolved snapshot, canonical manifest digest, and corrected manifest URI are threaded.
+8. **RESOLVED** — the `gs://` probe encoded to a local path, staged to `.partial`, then renamed remotely; no local `gs:` path was used.
+9. **RESOLVED** — exclusions are confined to literal glue and the composed `main` path is exercised.
+10. **RESOLVED** — production decode is pinned to `unit` with zero tolerance.
+11. **RESOLVED** — early tee, executable ffmpeg check, TI2V preflight, and on-device R1 golden landed.
+
+## Rulings
+
+1. **Settled-module deltas: ADDITIVE AND SOUND; no separate mini-review cycle required.** `arms=` preserves full-study defaults while correctly pruning cache computation; `header_fingerprint`, `next_shard_index`, and `ResumePlan.superseded` preserve the R8 boundary. The remaining defects are caller/orchestration defects.
+2. **R8 reversal: RE-RATIFIED.** Later validated coverage supersedes earlier quarantine history; repeated quarantine remains retry history; duplicate validated coverage remains a hard corruption error.
+3. **Static/AST class proof: SUFFICIENT for the specific BLOCKER fix to commit.** It pins the only class with `from_pretrained`, its import, and axis-rules construction; J1 is the appropriate first executable proof. This ruling does not make the aggregate R10 delta commit-ready.
+
+## NEW findings
+
+1. **BLOCKER — J2 cache deterministically fails for TRAIN-2000 or TEST.** `main` constructs `read_batch` from only the selected cohort’s rows at [run_wan_null_inversion.py:597](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/run_wan_null_inversion.py:597), while fidelity requests eight DEV names at [null_adapter_modes.py:604](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/null_adapter_modes.py:604). The production-seam probe failed with `ValueError: these names are not in the cohort manifest: ['dev0', …, 'dev7']`.
+2. **MAJOR — a stale or smoke selection can authorize the production cache.** The artifact publishes `cohort` and `manifest`, but [selected_arm](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/null_adapter_modes.py:257) checks only `target/arm/label`; it accepts an artifact with no cohort or manifest, allowing a two-example or foreign selection to choose the full cache arm.
+
+## Final verdict
+
+**REQUEST-REVISION — findings 3, 4, and 6 remain partial, with the primary non-DEV J2 cache path launch-blocked and its selection evidence unbound.**
