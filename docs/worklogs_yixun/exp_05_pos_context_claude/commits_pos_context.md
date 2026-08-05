@@ -10,3 +10,4 @@
 - `d6673aa` — feat(exp_05): S1 truncate-pad-parity (TDD, 649 tests)
 - `b837004` — feat(exp_05): S2 optimize-positives (TDD, 689 tests)
 - `50175c7` — feat(exp_05): S3 replay-state-capture (TDD, 715 tests)
+- `6c2508f` — feat(exp_05): S5 schema-states-fidelity (TDD, 769 tests)
