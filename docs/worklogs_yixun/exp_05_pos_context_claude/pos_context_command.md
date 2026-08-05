@@ -1,0 +1,8 @@
+
+## K1-1 — P1' positive reconstruction study + basin probe (2026-08-05T20:33Z, LAUNCHED — submitted by Yixun via `!`, issue #10; grant recorded verbatim in the query doc)
+
+- Queue job: `20260805-203303-d3a02688-exp05-k1-pos-yixun` (v6e-8, worker0-only); authoritative record confirmed PENDING at `gs://v6_east1d/tpu-job-queue/jobs/20260805-203303-d3a02688-exp05-k1-pos-yixun/status.json` (created 2026-08-05T20:33:17Z).
+- Submitted tip: `9d326e8b222c6f9b8c53cbc8790bf642684a256c` (= the S10a ledger commit; `src/` + `bash_scripts/` identical to the reviewed S10a round `102ae84`; COMMIT env carries the full SHA).
+- Submission: `submit_k1.sh` (archived alongside this file; reproduced in the job record above) — FOUR sequential phases in one job via the S10a launcher `run_wan_pos_inversion.sh`: (1) SMOKE capacity POS_SMOKE_EXAMPLES=2 → `gs://v6_east1d/datasets/droid_wan_pos_context/k1/smoke`; (2) adequacy_probe (first-8 DEV, approved grid) → `…/k1/adequacy`; (3) full capacity POS_COHORT=dev64, six B-arms + L_pos∈{1,8} ablation, DEV adequacy adopted → `…/k1/capacity`; (4) full capacity POS_COHORT=trainfit16, SAME DEV adequacy adopted → `…/k1/capacity_trainfit` (distinct root per the follow-up reviewer's operational note). Remaining knobs at launcher defaults = the audited plan values.
+- Acceptance criteria: predeclared in the worklog's K1-package entry (2026-08-05T20:35Z, criteria 1–8; criterion 1's tip = this SHA). Failure triage per SOP: infra ⇒ auto-resubmit unchanged (standing policy); real bug ⇒ fix cycle.
+- Monitoring: status.json poll every 10 min from the session (reauth-in-stderr = ALARM); `tpu status/logs 20260805-203303-d3a02688-exp05-k1-pos-yixun`.
