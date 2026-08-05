@@ -11,3 +11,4 @@
 - `72986cb` — feat(exp_04): R6 runner-capacity-core — P1 arm orchestration (TDD, 336 tests)
 - `9f4955f` — feat(exp_04): R7 runner-decode-videos — pixel metrics + comparison videos (TDD, 392 tests)
 - `1fb780a` — feat(exp_04): R8 runner-cache-resume — fail-closed shard storage + cache policy (TDD, 523 tests)
+- `c3401e4` — feat(exp_04): R9 manifests — pinned J0 cohort builder (TDD, 610 tests)
