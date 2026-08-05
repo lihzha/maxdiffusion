@@ -415,8 +415,8 @@ motivation (the residual as the compounding term).
 
 | segment | LR | loss gain | SSIM (canonical seed-0) | ≥0.95 |
 | --- | --- | --- | --- | --- |
-| 10,000→12,500 | 5e-5 | −0.0617 | 0.9174 | 11 |
-| 12,500→15,000 | 5e-5 | −0.0213 | 0.9427 | 51 |
+| 10,000→12,500 | 5e-5 | −0.0617 | 0.9159 | 11 |
+| 12,500→15,000 | 5e-5 | −0.0213 | 0.9451 | 51 |
 | 15,000→17,500 | 5e-5 | −0.0045 | 0.9508 | 62 |
 | **17,500→20,000** | **1e-4** | **−0.00156** | **0.9536** | **67** |
 
@@ -453,4 +453,8 @@ reproduce Job 49 bit-consistent; artifact coverage complete; c* = 20000.
 0.95, but the strict per-window 0.95 bar stops at ~69/100 under an LR-closed, law-governed
 optimization (loss→SSIM law held 6×; intercept 0.9885 above the bar; the shortfall is the
 compounding rollout price — exp_03's objective).
+
+> Correction (v5.1 analysis review, 2026-08-05): the 12,500 and 15,000 SSIM means in the table
+> above were transcribed from line-PREDICTED values in earlier summaries; the measured aggregation
+> values are 0.9159 and 0.9451 (now shown). No count or verdict is affected.
 
