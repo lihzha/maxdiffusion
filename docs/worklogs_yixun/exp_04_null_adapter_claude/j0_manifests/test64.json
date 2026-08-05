@@ -1,0 +1,582 @@
+{
+  "cohort": "test64",
+  "rows": [
+    {
+      "episode": "61399",
+      "name": "ep61399_v0_s00000",
+      "ordinal": 9051,
+      "shard_generation": "1781339217137809",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00004-of-00008.tfrecord",
+      "shard_size": 475192017,
+      "split": "test64"
+    },
+    {
+      "episode": "15599",
+      "name": "ep15599_v0_s00000",
+      "ordinal": 756,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "36999",
+      "name": "ep36999_v0_s00000",
+      "ordinal": 4696,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "82699",
+      "name": "ep82699_v0_s00000",
+      "ordinal": 12449,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "17999",
+      "name": "ep17999_v0_s00000",
+      "ordinal": 1172,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "20799",
+      "name": "ep20799_v0_s00000",
+      "ordinal": 1778,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "35099",
+      "name": "ep35099_v0_s00000",
+      "ordinal": 4352,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "7599",
+      "name": "ep7599_v0_s00000",
+      "ordinal": 11319,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "34399",
+      "name": "ep34399_v0_s00000",
+      "ordinal": 4226,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "32099",
+      "name": "ep32099_v0_s00000",
+      "ordinal": 3805,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "40999",
+      "name": "ep40999_v0_s00000",
+      "ordinal": 5456,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "20999",
+      "name": "ep20999_v0_s00000",
+      "ordinal": 1792,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "35399",
+      "name": "ep35399_v0_s00008",
+      "ordinal": 4363,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "48799",
+      "name": "ep48799_v0_s00000",
+      "ordinal": 6751,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "599",
+      "name": "ep599_v0_s00000",
+      "ordinal": 8863,
+      "shard_generation": "1781339217137809",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00004-of-00008.tfrecord",
+      "shard_size": 475192017,
+      "split": "test64"
+    },
+    {
+      "episode": "71399",
+      "name": "ep71399_v0_s00000",
+      "ordinal": 10583,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "50999",
+      "name": "ep50999_v0_s00000",
+      "ordinal": 7085,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "53499",
+      "name": "ep53499_v0_s00000",
+      "ordinal": 7487,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "93199",
+      "name": "ep93199_v0_s00000",
+      "ordinal": 14271,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "45699",
+      "name": "ep45699_v0_s00028",
+      "ordinal": 6168,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "2099",
+      "name": "ep2099_v0_s00000",
+      "ordinal": 1800,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "8699",
+      "name": "ep8699_v0_s00000",
+      "ordinal": 13300,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "53599",
+      "name": "ep53599_v0_s00000",
+      "ordinal": 7491,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "23399",
+      "name": "ep23399_v0_s00000",
+      "ordinal": 2234,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "48399",
+      "name": "ep48399_v0_s00000",
+      "ordinal": 6684,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "91599",
+      "name": "ep91599_v0_s00000",
+      "ordinal": 14088,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "31999",
+      "name": "ep31999_v0_s00000",
+      "ordinal": 3793,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "25599",
+      "name": "ep25599_v0_s00000",
+      "ordinal": 2616,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "86999",
+      "name": "ep86999_v0_s00000",
+      "ordinal": 13251,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "43799",
+      "name": "ep43799_v0_s00000",
+      "ordinal": 5868,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "44199",
+      "name": "ep44199_v0_s00000",
+      "ordinal": 5917,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "38399",
+      "name": "ep38399_v0_s00000",
+      "ordinal": 4969,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "29799",
+      "name": "ep29799_v0_s00000",
+      "ordinal": 3410,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "71799",
+      "name": "ep71799_v0_s00000",
+      "ordinal": 10650,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "24399",
+      "name": "ep24399_v0_s00000",
+      "ordinal": 2412,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "32799",
+      "name": "ep32799_v0_s00000",
+      "ordinal": 3942,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "82499",
+      "name": "ep82499_v0_s00000",
+      "ordinal": 12432,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "72199",
+      "name": "ep72199_v0_s00000",
+      "ordinal": 10744,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "33799",
+      "name": "ep33799_v0_s00000",
+      "ordinal": 4112,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "60299",
+      "name": "ep60299_v0_s00000",
+      "ordinal": 8899,
+      "shard_generation": "1781339217137809",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00004-of-00008.tfrecord",
+      "shard_size": 475192017,
+      "split": "test64"
+    },
+    {
+      "episode": "89499",
+      "name": "ep89499_v0_s00000",
+      "ordinal": 13666,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "51999",
+      "name": "ep51999_v0_s00000",
+      "ordinal": 7246,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "3499",
+      "name": "ep3499_v0_s00000",
+      "ordinal": 4312,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "87099",
+      "name": "ep87099_v0_s00000",
+      "ordinal": 13322,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "79999",
+      "name": "ep79999_v0_s00000",
+      "ordinal": 12014,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "50499",
+      "name": "ep50499_v0_s00000",
+      "ordinal": 7017,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "5799",
+      "name": "ep5799_v0_s00000",
+      "ordinal": 8476,
+      "shard_generation": "1781339217137809",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00004-of-00008.tfrecord",
+      "shard_size": 475192017,
+      "split": "test64"
+    },
+    {
+      "episode": "39599",
+      "name": "ep39599_v0_s00000",
+      "ordinal": 5217,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "2499",
+      "name": "ep2499_v0_s00000",
+      "ordinal": 2495,
+      "shard_generation": "1781339197401838",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00001-of-00008.tfrecord",
+      "shard_size": 475192596,
+      "split": "test64"
+    },
+    {
+      "episode": "43899",
+      "name": "ep43899_v0_s00000",
+      "ordinal": 5881,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "9699",
+      "name": "ep9699_v0_s00000",
+      "ordinal": 14542,
+      "shard_generation": "1781339232528224",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00007-of-00008.tfrecord",
+      "shard_size": 69607713,
+      "split": "test64"
+    },
+    {
+      "episode": "13499",
+      "name": "ep13499_v0_s00000",
+      "ordinal": 385,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "38199",
+      "name": "ep38199_v0_s00000",
+      "ordinal": 4944,
+      "shard_generation": "1781339203558910",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00002-of-00008.tfrecord",
+      "shard_size": 475192144,
+      "split": "test64"
+    },
+    {
+      "episode": "56399",
+      "name": "ep56399_v0_s00000",
+      "ordinal": 8253,
+      "shard_generation": "1781339217137809",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00004-of-00008.tfrecord",
+      "shard_size": 475192017,
+      "split": "test64"
+    },
+    {
+      "episode": "14699",
+      "name": "ep14699_v0_s00000",
+      "ordinal": 551,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "52299",
+      "name": "ep52299_v0_s00000",
+      "ordinal": 7348,
+      "shard_generation": "1781339210104359",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00003-of-00008.tfrecord",
+      "shard_size": 475192990,
+      "split": "test64"
+    },
+    {
+      "episode": "78399",
+      "name": "ep78399_v0_s00012",
+      "ordinal": 11725,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "21399",
+      "name": "ep21399_v0_s00000",
+      "ordinal": 1882,
+      "shard_generation": "1781339190151453",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00000-of-00008.tfrecord",
+      "shard_size": 475192035,
+      "split": "test64"
+    },
+    {
+      "episode": "94699",
+      "name": "ep94699_v0_s00000",
+      "ordinal": 14424,
+      "shard_generation": "1781339232528224",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00007-of-00008.tfrecord",
+      "shard_size": 69607713,
+      "split": "test64"
+    },
+    {
+      "episode": "82599",
+      "name": "ep82599_v0_s00000",
+      "ordinal": 12445,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "74499",
+      "name": "ep74499_v0_s00000",
+      "ordinal": 11017,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "8199",
+      "name": "ep8199_v0_s00000",
+      "ordinal": 12359,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    },
+    {
+      "episode": "74599",
+      "name": "ep74599_v0_s00000",
+      "ordinal": 11062,
+      "shard_generation": "1781339225149750",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00005-of-00008.tfrecord",
+      "shard_size": 475192046,
+      "split": "test64"
+    },
+    {
+      "episode": "89299",
+      "name": "ep89299_v0_s00000",
+      "ordinal": 13631,
+      "shard_generation": "1781339229702182",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/val/val-00006-of-00008.tfrecord",
+      "shard_size": 475192062,
+      "split": "test64"
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,150 @@
+{
+  "cohort": "trainfit16",
+  "rows": [
+    {
+      "episode": "1039",
+      "name": "ep1039_v0_s00000",
+      "ordinal": 6564,
+      "shard_generation": "1781339970778040",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00003-of-00704.tfrecord",
+      "shard_size": 475199176,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "12823",
+      "name": "ep12823_v0_s00000",
+      "ordinal": 46191,
+      "shard_generation": "1781340093294994",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00022-of-00704.tfrecord",
+      "shard_size": 475201918,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "14034",
+      "name": "ep14034_v0_s00000",
+      "ordinal": 66001,
+      "shard_generation": "1781340412711892",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00032-of-00704.tfrecord",
+      "shard_size": 475201925,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "10998",
+      "name": "ep10998_v0_s00000",
+      "ordinal": 15863,
+      "shard_generation": "1781339999681394",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00007-of-00704.tfrecord",
+      "shard_size": 475200425,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "1467",
+      "name": "ep1467_v0_s00000",
+      "ordinal": 77143,
+      "shard_generation": "1781340445171778",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00037-of-00704.tfrecord",
+      "shard_size": 475202390,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "11408",
+      "name": "ep11408_v0_s00000",
+      "ordinal": 22846,
+      "shard_generation": "1781340023608057",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00011-of-00704.tfrecord",
+      "shard_size": 475202041,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "1064",
+      "name": "ep1064_v0_s00000",
+      "ordinal": 10133,
+      "shard_generation": "1781339978424355",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00004-of-00704.tfrecord",
+      "shard_size": 475199847,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "11837",
+      "name": "ep11837_v0_s00000",
+      "ordinal": 29436,
+      "shard_generation": "1781340039348334",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00014-of-00704.tfrecord",
+      "shard_size": 475202814,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "10164",
+      "name": "ep10164_v0_s00000",
+      "ordinal": 2633,
+      "shard_generation": "1781339956042777",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00001-of-00704.tfrecord",
+      "shard_size": 475200548,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "10567",
+      "name": "ep10567_v0_s00000",
+      "ordinal": 8827,
+      "shard_generation": "1781339978424355",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00004-of-00704.tfrecord",
+      "shard_size": 475199847,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "13897",
+      "name": "ep13897_v0_s00000",
+      "ordinal": 63903,
+      "shard_generation": "1781340161184693",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00031-of-00704.tfrecord",
+      "shard_size": 475202398,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "11728",
+      "name": "ep11728_v0_s00000",
+      "ordinal": 27658,
+      "shard_generation": "1781340034673813",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00013-of-00704.tfrecord",
+      "shard_size": 475202014,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "11665",
+      "name": "ep11665_v0_s00000",
+      "ordinal": 26726,
+      "shard_generation": "1781340034673813",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00013-of-00704.tfrecord",
+      "shard_size": 475202014,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "10038",
+      "name": "ep10038_v0_s00000",
+      "ordinal": 585,
+      "shard_generation": "1781339949179164",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00000-of-00704.tfrecord",
+      "shard_size": 475199802,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "12950",
+      "name": "ep12950_v0_s00000",
+      "ordinal": 48083,
+      "shard_generation": "1781340100909887",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00023-of-00704.tfrecord",
+      "shard_size": 475202317,
+      "split": "trainfit16"
+    },
+    {
+      "episode": "11966",
+      "name": "ep11966_v0_s00000",
+      "ordinal": 31491,
+      "shard_generation": "1781340044013441",
+      "shard_path": "gs://v6_east1d/datasets/droid_wan_side_adapter/train/train-00015-of-00704.tfrecord",
+      "shard_size": 475201799,
+      "split": "trainfit16"
+    }
+  ],
+  "schema_version": 1
+}
