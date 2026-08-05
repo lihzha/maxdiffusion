@@ -999,3 +999,64 @@ def test_the_adequacy_probe_enforces_the_same_geometry():
         run_adequacy_probe(
             _forbidden_velocity, batch, _BASE_CONTEXT, ((1, 0.01),), guide_scale=_GUIDE_SCALE, l_null=_L
         )
+
+
+def test_a_restricted_run_computes_exactly_the_arms_it_was_asked_for():
+    """P2 caches one arm; the other five cost a second null optimization plus eight replays a batch."""
+    batch, params = _batch(), _params()
+
+    restricted = run_capacity_example_batch(_velocity_fn, batch, _BASE_CONTEXT, params, arms=("a1",))
+
+    assert sorted(restricted.final_latents) == ["a1"] and sorted(restricted.metrics) == ["a1"]
+    # The record-arm dictionaries follow: asking for A1 and then reading A2 is a KeyError, not the
+    # other arm's array.
+    for keyed in (restricted.nulls, restricted.z_start, restricted.per_step_final_losses, restricted.diagnostics):
+        assert sorted(keyed) == ["a1"]
+    with pytest.raises(KeyError):
+        _ = restricted.nulls["a2"]
+
+
+def test_a_restricted_arm_is_numerically_identical_to_its_slice_of_the_full_study():
+    """Restricting must drop work, never change it -- otherwise a cached target is not the gated one."""
+    batch, params, full = _cached_run()
+
+    restricted = run_capacity_example_batch(_velocity_fn, batch, _BASE_CONTEXT, params, arms=("a2",))
+
+    np.testing.assert_array_equal(restricted.final_latents["a2"], full.final_latents["a2"])
+    np.testing.assert_array_equal(restricted.nulls["a2"], full.nulls["a2"])
+    np.testing.assert_array_equal(restricted.z_start["a2"], full.z_start["a2"])
+    assert restricted.metrics["a2"] == full.metrics["a2"]
+    assert restricted.batch_fingerprint == full.batch_fingerprint
+
+
+def test_the_probe_arm_carries_its_own_optimization_when_asked_for_alone():
+    batch, params, full = _cached_run()
+
+    restricted = run_capacity_example_batch(_velocity_fn, batch, _BASE_CONTEXT, params, arms=("a1_probe",))
+
+    assert sorted(restricted.final_latents) == ["a1_probe"] and sorted(restricted.nulls) == ["a1"]
+    np.testing.assert_array_equal(restricted.final_latents["a1_probe"], full.final_latents["a1_probe"])
+
+
+def test_arms_default_to_the_whole_study():
+    _, _, full = _cached_run()
+
+    assert sorted(full.final_latents) == sorted(METHODS)
+    assert sorted(full.nulls) == ["a1", "a2"]
+
+
+@pytest.mark.parametrize("arms", [(), ("a3",), ("a1", "nope"), ("A1",)])
+def test_an_unknown_arm_selection_is_refused_before_any_forward(arms):
+    with pytest.raises(ValueError, match="arms must be a non-empty subset"):
+        run_capacity_example_batch(_forbidden_velocity, _batch(), _BASE_CONTEXT, _params(), arms=arms)
+
+
+def test_a_restricted_run_still_binds_to_its_recipe_and_context():
+    """The record writer's guards read these; a cheap run must not become an unbound one."""
+    batch, params = _batch(), _params()
+
+    restricted = run_capacity_example_batch(_velocity_fn, batch, _BASE_CONTEXT, params, arms=("a1",))
+
+    assert restricted.params == params
+    assert restricted.base_context_fingerprint == base_context_fingerprint(_BASE_CONTEXT)
+    assert restricted.batch_fingerprint == batch_fingerprint(batch.names, batch.z_i0, batch.z_video)

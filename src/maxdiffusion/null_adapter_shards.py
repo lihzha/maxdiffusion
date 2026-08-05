@@ -65,7 +65,9 @@ RECORD_TEMPLATE = "record_{:05d}.npz"
 STAGING_SUFFIX = ".staging"
 REQUIRED_OPTIMIZATION_KEYS = ("inner_iters", "lr")  # exactly these -- the R6 carried contract
 MAX_SHARD_BYTES = 8 * 2**30  # a declared ceiling; the runner owns the free-space floor (SOP)
+SHARD_DIR_TEMPLATE = "shard_{:05d}"
 _RECORD_FILENAME = re.compile(r"record_\d{5}\.npz\Z")
+_SHARD_DIRNAME = re.compile(r"shard_(\d{5})\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -101,15 +103,40 @@ class ShardReport:
 
 @dataclasses.dataclass(frozen=True)
 class ResumePlan:
+    """What is left to do, what is already published, and what the run still owes an explanation for.
+
+    ``quarantined`` is the *current* gap -- names a validated shard recorded as lost and that no later
+    shard has since published. ``superseded`` names the retries that succeeded: they were quarantined
+    once, are covered now, and must not be counted in both totals (R10 review, finding 5).
+    """
+
     todo: tuple[str, ...]
     covered: tuple[str, ...]
     quarantined: dict[str, str]
     shards: tuple[ShardReport, ...]
+    superseded: tuple[str, ...] = ()
 
 
 def canonical_files(names: Sequence[str]) -> dict[str, str]:
     """The only legal name-to-file mapping: sorted position decides the filename."""
     return {name: RECORD_TEMPLATE.format(position) for position, name in enumerate(sorted(names))}
+
+
+def next_shard_index(existing_paths: Sequence[str]) -> int:
+    """One past the highest ``shard_NNNNN`` already on disk, so a resume cannot reuse an identity.
+
+    Counting the shards a resume *found* is not enough: an attempt that published ``shard_00000`` and
+    ``shard_00001`` and then lost the first to a validation failure would hand the next attempt a
+    count of one, and ``shard_00001`` is immutable -- the write fails and the rest of the cohort never
+    lands. The identity therefore comes from the paths themselves, and a path that is not a shard
+    directory is ignored rather than silently renumbering everything after it.
+    """
+    indices = [
+        int(match.group(1))
+        for match in (_SHARD_DIRNAME.search(posixpath.basename(str(path).rstrip("/"))) for path in existing_paths)
+        if match
+    ]
+    return max(indices) + 1 if indices else 0
 
 
 def _reject_duplicate_keys(pairs: Sequence[tuple[str, Any]]) -> dict:
@@ -236,8 +263,19 @@ def _staging_path(shard_path: str, staging_prefix: str) -> str:
     )
 
 
-def _header_fingerprint(header: ProvenanceHeader) -> str:
+def header_fingerprint(header: ProvenanceHeader) -> str:
+    """The one digest a shard is bound to: sha256 of the header's canonical JSON, whole.
+
+    Public because it is what a *caller* must pass to ``validate_shard``/``resume_plan``, and the
+    obvious near-miss -- ``header.base_context_fingerprint``, which is only one of its nine fields --
+    is a 64-hex string too, so it satisfies every type check on the way in and then rejects every
+    valid shard as belonging to another run (R10 review, finding 5). There is exactly one way to
+    compute this, and it lives here.
+    """
     return hashlib.sha256(header_to_json(header).encode("utf-8")).hexdigest()
+
+
+_header_fingerprint = header_fingerprint  # the private spelling R8 shipped; kept for its callers
 
 
 def _validate_write(records: Sequence[NullAdapterRecord], header: ProvenanceHeader, quarantined: Mapping[str, str]):
@@ -444,8 +482,16 @@ def resume_plan(
 
     Quarantined names are not covered: they come back in ``todo`` and are listed in ``quarantined``,
     so a caller either re-attempts them or accepts the gap in writing. Every name a validated shard
-    mentions -- published or quarantined -- must belong to the manifest and must be mentioned only
-    once across shards; either violation means the wrong cohort is being resumed.
+    mentions -- published or quarantined -- must belong to the manifest.
+
+    **Duplication is forbidden for coverage and expected for quarantine.** Two validated shards
+    publishing the same name is a real corruption: the shards are immutable, so there is no way to
+    tell which copy the cohort means. But an earlier quarantine followed by a later success is the
+    normal shape of a retry, and R8's first cut raised on it -- the retry's own shard turned the run
+    into a duplicate-name error on the *next* resume, so a job could only ever be retried once, and
+    the report meanwhile counted the name as both covered and lost (R10 review, finding 5). A name
+    that is covered anywhere is therefore covered: its quarantine history moves to ``superseded`` and
+    leaves the current gap.
     """
     manifest = tuple(manifest)
     if len(set(manifest)) != len(manifest):
@@ -460,18 +506,23 @@ def resume_plan(
         )
         for path in shard_paths
     )
-    seen: dict[str, str] = {}
-    covered: set[str] = set()
+    published: dict[str, str] = {}
     quarantined: dict[str, str] = {}
     for report in reports:
-        for name in (*report.names, *report.quarantined):
-            if name in seen:
-                raise ValueError(f"{name!r} appears in more than one validated shard: {seen[name]} and {report.path}")
-            seen[name] = report.path
-        covered.update(report.names)
+        for name in report.names:
+            if name in published:
+                raise ValueError(
+                    f"{name!r} is published by more than one validated shard: {published[name]} and {report.path}"
+                )
+            published[name] = report.path
         quarantined.update(report.quarantined)
 
-    strangers = sorted(set(seen) - set(manifest))
+    covered = set(published)
+    superseded = tuple(sorted(set(quarantined) & covered))
+    for name in superseded:
+        del quarantined[name]
+
+    strangers = sorted((covered | set(quarantined) | set(superseded)) - set(manifest))
     if strangers:
         raise ValueError(f"validated shards mention names outside the manifest: {strangers}")
     return ResumePlan(
@@ -479,4 +530,5 @@ def resume_plan(
         covered=tuple(sorted(covered)),
         quarantined=quarantined,
         shards=reports,
+        superseded=superseded,
     )

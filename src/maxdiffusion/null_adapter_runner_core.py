@@ -293,13 +293,26 @@ def _keyed_batch(names: Sequence[str], k: int) -> jnp.ndarray:
     return jnp.stack([keyed_noise(name, k) for name in names])
 
 
+def _requested_methods(arms: Sequence[str] | None) -> tuple[str, ...]:
+    """Which of ``METHODS`` to compute, in ``METHODS`` order; ``None`` means the whole §4-P1 study."""
+    if arms is None:
+        return METHODS
+    requested = tuple(arms)
+    unknown = sorted(set(requested) - set(METHODS))
+    if not requested or unknown:
+        raise ValueError(f"arms must be a non-empty subset of {list(METHODS)}, got {list(requested)}")
+    return tuple(method for method in METHODS if method in set(requested))
+
+
 def run_capacity_example_batch(
     velocity_fn: Callable[..., jnp.ndarray],
     batch: CapacityBatch,
     base_context: Any,
     params: CapacityParams = CapacityParams(),
+    *,
+    arms: Sequence[str] | None = None,
 ) -> ArmResults:
-    """Run every plan §4-P1 arm on one batch, inverting exactly once.
+    """Run the plan §4-P1 arms on one batch, inverting exactly once.
 
     Args:
       velocity_fn: ``(latents, timestep_2d, encoder_hidden_states) -> v``, the R3/R4a seam. Inversion
@@ -308,19 +321,26 @@ def run_capacity_example_batch(
       batch: names plus ``z_i0`` ``[B, 48, 1, 12, 20]`` and ``z_video`` ``[B, 48, 9, 12, 20]``.
       base_context: the ``[512, 4096]`` T5("") context.
       params: the shared recipe (J, lr, w, L_null).
+      arms: which of ``METHODS`` to compute, defaulting to all six. **The capacity study wants all
+        six** -- the gates compare them against each other. P2's caching job wants exactly one, and
+        running the other five there buys a second full null optimization plus eight replays per
+        batch for outputs nothing reads (R10 review, finding 4). Only what a requested arm needs is
+        computed: the inversion is always paid for, ``eps_0``, the frozen nulls and either
+        optimization are not.
 
     Returns:
       ``ArmResults`` -- metric tables in the gates' schema plus the artifacts records are built from.
+      Every per-arm dictionary carries exactly the requested arms, so a caller that asks for one arm
+      and then reads another gets a ``KeyError`` rather than a stale array from somewhere else.
     """
+    methods = _requested_methods(arms)
     names, z_i0, z_video, context = _validate(batch, base_context, params)
     sigmas = jnp.asarray(canonical_sigmas())
     steps = sigmas.shape[0] - 1
     null_init = context[: params.l_null]
-    frozen = jnp.broadcast_to(null_init, (steps, params.l_null, context.shape[1]))
     cond = jnp.broadcast_to(context, (len(names), *context.shape))
 
     traj = invert_trajectory(lambda z, t: velocity_fn(z, t, cond), z_video, z_i0, sigmas)
-    eps_0 = jnp.broadcast_to(global_noise(0), (len(names), *PRODUCTION_GEOMETRY.z_video))
 
     # One recipe object for both optimized arms: A1 and A2 must differ only in where they start, or
     # the G2 comparison would be confounded by the hyperparameters as well as by the basin.
@@ -339,25 +359,40 @@ def run_capacity_example_batch(
         }
         return nulls, traces, _checked_trace(_tracking_losses(z_bar, traj), "per_step_final_losses")
 
-    nulls_a1, traces_a1, losses_a1 = optimize(traj)
-    # Same targets, eps_0 as the starting pivot.
-    nulls_a2, traces_a2, losses_a2 = optimize(traj.at[0].set(eps_0))
-    latents = {
-        "a0": replay(traj[0], frozen),
-        "a1": replay(traj[0], nulls_a1),
-        "a2": replay(eps_0, nulls_a2),
-        "a2_0": replay(eps_0, frozen),
-        "a1_probe": jnp.stack([replay(_keyed_batch(names, k), nulls_a1) for k in PROBE_K_SET]),
-        "a2_probe": jnp.stack([replay(_keyed_batch(names, k), nulls_a2) for k in PROBE_K_SET]),
+    wanted = set(methods)
+    frozen = jnp.broadcast_to(null_init, (steps, params.l_null, context.shape[1])) if {"a0", "a2_0"} & wanted else None
+    eps_0 = (
+        jnp.broadcast_to(global_noise(0), (len(names), *PRODUCTION_GEOMETRY.z_video))
+        if {"a2", "a2_0", "a2_probe"} & wanted
+        else None
+    )
+
+    nulls, z_start, per_step, diagnostics = {}, {}, {}, {}
+    if {"a1", "a1_probe"} & wanted:
+        nulls["a1"], diagnostics["a1"], per_step["a1"] = optimize(traj)
+        z_start["a1"] = traj[0]
+    if {"a2", "a2_probe"} & wanted:  # both are in eps_0's trigger set, so it exists here
+        # Same targets, eps_0 as the starting pivot.
+        nulls["a2"], diagnostics["a2"], per_step["a2"] = optimize(traj.at[0].set(eps_0))
+        z_start["a2"] = eps_0
+
+    builders = {
+        "a0": lambda: replay(traj[0], frozen),
+        "a1": lambda: replay(traj[0], nulls["a1"]),
+        "a2": lambda: replay(z_start["a2"], nulls["a2"]),
+        "a2_0": lambda: replay(eps_0, frozen),
+        "a1_probe": lambda: jnp.stack([replay(_keyed_batch(names, k), nulls["a1"]) for k in PROBE_K_SET]),
+        "a2_probe": lambda: jnp.stack([replay(_keyed_batch(names, k), nulls["a2"]) for k in PROBE_K_SET]),
     }
+    latents = {method: builders[method]() for method in methods}
     return ArmResults(
         names=names,
         metrics=_metric_tables(names, latents, z_video),
         final_latents={method: np.asarray(value) for method, value in latents.items()},
-        nulls={"a1": np.asarray(nulls_a1), "a2": np.asarray(nulls_a2)},
-        z_start={"a1": np.asarray(traj[0]), "a2": np.asarray(eps_0)},
-        per_step_final_losses={"a1": losses_a1, "a2": losses_a2},
-        diagnostics={"a1": traces_a1, "a2": traces_a2},
+        nulls={arm: np.asarray(value) for arm, value in nulls.items()},
+        z_start={arm: np.asarray(value) for arm, value in z_start.items()},
+        per_step_final_losses=per_step,
+        diagnostics=diagnostics,
         params=params,
         base_context_fingerprint=base_context_fingerprint(context),
         batch_fingerprint=batch_fingerprint(names, z_i0, z_video),
