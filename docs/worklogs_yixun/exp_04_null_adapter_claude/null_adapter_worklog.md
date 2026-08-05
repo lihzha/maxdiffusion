@@ -366,3 +366,8 @@ Component-by-component against `third_party/Wan2.2/scripts/embedding_search.py` 
 ## 2026-08-06T06:40:00Z — Fix round CLOSED first-pass (APPROVE, zero findings) → commit → J1-2 relaunch
 
 - **Result** — `passed`: **954 tests**; 11/11 mutants; the reviewer independently confirmed the repro, the 10-site audit, and the AST pins. Committed with this entry. J1-2 relaunches at this SHA (grant conditions re-met: suite green incl. the new real-class regressions; parity audit unchanged — the fix touches config access, not any audited component; Yixun's veto window was offered and stands open until launch).
+
+## 2026-08-05T19:05:00Z — Timestamp correction (append-only) + J1-2 submission handed to Yixun
+
+- **Correction:** the previous worklog entry is stamped `2026-08-06T06:40:00Z` and the J1-1 command-ledger header says `2026-08-06` — both wrong by one day. Actual times: fix-round close/commit ≈ **2026-08-05T18:55Z**; J1-1 submission **2026-08-05T18:17:48Z** (as the queue job id `20260805-181744-…` itself records). Content unaffected.
+- **J1-2 status:** artifact root `gs://…/droid_wan_null_adapter/j1` confirmed EMPTY (J1-1 failed closed — nothing written), so the verbatim relaunch has no collision surface. The session's attempt to run `submit_j1.sh` was denied by the auto-mode permission classifier (issue #10, new) — submission handed to Yixun to run via `!`; the J1-2 command entry will be written at actual launch. Grant reading unchanged (conditions re-met at `9338c7b`; veto window stands).
