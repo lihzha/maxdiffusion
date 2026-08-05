@@ -215,6 +215,14 @@ def jitted_tiled_forward(state, *, replicas: int = 1):
     Tiling rather than re-annotating: the constraint is production's, it is right for production,
     and a diagnostic has no business relaxing the sharding of the model it exists to measure.
 
+    And compiling does NOT make the tiling redundant, which is the subtler half of why it stays.
+    Inside one jit the batch-1 constraint stops raising -- GSPMD satisfies it by replicating a
+    size-1 dimension -- so an untiled compiled trace would run perfectly happily under PARTIAL
+    REPLICATION. That is a different sharding regime from the genuinely batch-partitioned one
+    production runs under: the trace would be measuring the model through an execution the
+    experiment never uses, and saying nothing about it. Tiling puts one real row on each chip, which
+    is the regime the numbers are meant to describe.
+
     COMPILED, not eager, and that is the second half of the fix. The trace is ~750 model forwards
     per state, each traversing 40 ``nnx.remat``-wrapped blocks; run op by op that is a dispatch
     storm of unbounded duration with no way to size a retry. Compiled once and reused for every step

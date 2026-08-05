@@ -2759,65 +2759,136 @@ def test_the_probe_hands_the_mesh_to_the_trace():
     assert "velocity_fn_for(forward, state)" in standalone
 
 
-def _transformer_calling_closures(function) -> list:
-    """Every nested function in ``function`` whose body CALLS a transformer-shaped forward.
+def _nested_callables(function) -> list:
+    """Every callable DEFINED inside ``function`` — def, async def or lambda.
 
-    Structural, by AST, because the string ``def velocity_fn`` catches only one spelling of the
-    mistake: a lambda, a rename, or a direct ``transformer(...)`` at the call site all evade it.
-    What actually matters is that no call site builds its own forward -- so this looks for the
-    SHAPE of one: a nested callable that calls something with ``hidden_states=`` and
-    ``deterministic=``, which is how this transformer is invoked everywhere.
+    Syntax-independent by construction, which the previous guard was not: it matched the string
+    ``def velocity_fn`` and then the AST shape ``hidden_states=`` + ``deterministic=``, so a rename,
+    a positional call, ``**kwargs`` or a ``functools.partial`` all walked straight past it. The rule
+    here does not care how a forward is spelled. Neither trace entry point needs a closure of any
+    kind, so the honest structural statement is that it may not define one at all -- and you cannot
+    hand-roll a forward you cannot define.
     """
     import ast
     import textwrap
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
-    offenders = []
+    nested = []
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            continue
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function.__name__:
-            continue  # the function itself, not a closure inside it
-        for inner in ast.walk(node):
-            if isinstance(inner, ast.Call):
-                keywords = {keyword.arg for keyword in inner.keywords}
-                if "hidden_states" in keywords and "deterministic" in keywords:
-                    offenders.append(getattr(node, "name", "<lambda>"))
-    return offenders
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != function.__name__:
+            nested.append(node.name)
+        elif isinstance(node, ast.Lambda):
+            nested.append("<lambda>")
+    return nested
 
 
-def test_no_call_site_builds_its_own_transformer_forward():
-    # THE structural guard. Both entry points must obtain their forward from the ONE shared helper;
-    # a hand-rolled forward is what ran at batch 1, eagerly, for four rounds without being noticed,
-    # because no launch had ever reached the trace.
+def test_neither_trace_entry_point_defines_a_callable_of_its_own():
+    # The static half of the guard, and it is about DEFINITION rather than spelling.
     for owner in (s1_5.trace_in_memory_state, s1_5.trace.run_trace):
-        assert _transformer_calling_closures(owner) == [], (owner.__name__, _transformer_calling_closures(owner))
-    # ...and the helper that IS allowed to build one is the only place the shape appears.
-    assert _transformer_calling_closures(s1_5.trace.jitted_tiled_forward) == ["_forward"]
+        assert _nested_callables(owner) == [], (owner.__name__, _nested_callables(owner))
+    # The helper that IS allowed to build one defines exactly the one.
+    assert _nested_callables(s1_5.trace.jitted_tiled_forward) == ["_forward"]
+    assert _nested_callables(s1_5.trace.velocity_fn_for) == ["velocity_fn"]
 
-    # The guard is not vacuous: it catches the exact defect it exists for.
-    def _reintroduced_defect(transformer):
-        def velocity_fn(hidden_states, timestep, encoder_hidden_states):
-            return transformer(
-                hidden_states=hidden_states,
-                timestep=timestep,
-                encoder_hidden_states=encoder_hidden_states,
-                deterministic=True,
-            )
-
-        return velocity_fn
-
-    assert _transformer_calling_closures(_reintroduced_defect) == ["velocity_fn"]
-
-    # ...and equally when it is spelled as a lambda or under another name.
+    # ...and the rule bites on every spelling the old shape-matcher missed.
     def _renamed(transformer):
-        return lambda h, t, c: transformer(hidden_states=h, timestep=t, encoder_hidden_states=c, deterministic=True)
+        def _compute_step(h, t, c):
+            return transformer(hidden_states=h, timestep=t, encoder_hidden_states=c, deterministic=True)
 
-    assert _transformer_calling_closures(_renamed) == ["<lambda>"]
+        return _compute_step
 
-    # Identity, not just shape: both entry points resolve to the same shared helper object.
-    assert s1_5.trace.jitted_tiled_forward is sys.modules[s1_5.trace.__name__].jitted_tiled_forward
-    assert s1_5.trace.velocity_fn_for is sys.modules[s1_5.trace.__name__].velocity_fn_for
+    def _positional(transformer):
+        return lambda h, t, c: transformer(h, t, c, True)
+
+    def _via_partial(transformer):
+        import functools
+
+        def _bound(h, t, c):
+            return functools.partial(transformer, deterministic=True)(h, timestep=t, encoder_hidden_states=c)
+
+        return _bound
+
+    assert _nested_callables(_renamed) == ["_compute_step"]
+    assert _nested_callables(_positional) == ["<lambda>"]
+    assert _nested_callables(_via_partial) == ["_bound"]
+
+
+def test_only_the_blessed_helper_ever_reaches_the_transformer(monkeypatch):
+    # THE execution-based half, immune to spelling entirely: whatever the source looks like, the
+    # transformer object records who called it. A hand-rolled forward -- positional, **kwargs,
+    # functools.partial, any name -- shows up as a different calling frame.
+    reached: list = []
+
+    class _Recording:
+        """Stands in for the merged transformer and names its caller."""
+
+        def __call__(self, *args, **kwargs):
+            reached.append(inspect.stack()[1].function)
+            hidden = kwargs.get("hidden_states", args[0] if args else None)
+            return hidden
+
+    monkeypatch.setattr(s1_5.trace.gen.nnx, "merge", lambda *a, **k: _Recording())
+
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    hidden = batches[0]["z_video"][:1]
+    timestep = jnp.zeros((1, 4), jnp.float32)
+    context = state.context_table[:1]
+
+    forward = s1_5.trace.jitted_tiled_forward(state, replicas=1)
+    s1_5.trace.velocity_fn_for(forward, state)(hidden, timestep, context)
+    # The ONLY frame that ever reaches the transformer is the blessed helper's own inner function.
+    assert reached, "the transformer was never reached -- the seam is not measuring anything"
+    assert set(reached) == {"_forward"}, reached
+
+    # BITE, executed, in the three spellings the AST guard could not see. Each one reaches the same
+    # transformer and is caught by its calling frame, not by how the call is written.
+    import functools
+
+    def _renamed_hand_rolled(t):
+        def _compute_step(h, ts, c):
+            return t(hidden_states=h, timestep=ts, encoder_hidden_states=c, deterministic=True)
+
+        return _compute_step
+
+    def _positional_hand_rolled(t):
+        return lambda h, ts, c: t(h, ts, c, True)
+
+    def _partial_hand_rolled(t):
+        def _bound(h, ts, c):
+            return functools.partial(t, deterministic=True)(hidden_states=h, timestep=ts, encoder_hidden_states=c)
+
+        return _bound
+
+    transformer = _Recording()
+    for builder, expected in (
+        (_renamed_hand_rolled, "_compute_step"),
+        (_positional_hand_rolled, "<lambda>"),
+        (_partial_hand_rolled, "_bound"),
+    ):
+        reached.clear()
+        builder(transformer)(hidden, timestep, context)
+        assert reached == [expected], (builder.__name__, reached)
+        assert reached != ["_forward"], builder.__name__
+
+
+def test_the_probe_takes_its_trace_forward_from_the_shared_helper(monkeypatch):
+    # DISCRIMINATING, where the previous identity check compared an attribute with itself and could
+    # not fail: patch the shared helper and prove the probe's own path is what calls it.
+    calls: list = []
+    sentinel = object()
+
+    def _fake_builder(state, *, replicas):
+        calls.append(int(replicas))
+        return sentinel
+
+    monkeypatch.setattr(s1_5.trace, "jitted_tiled_forward", _fake_builder)
+    s1_5._TRACE_FORWARD_CACHE.clear()
+    state, _, _, _ = _toy_state_and_batches(config_shape="proxy")
+
+    wrapper = s1_5.trace_forward_for(state, replicas=8, state_label="checkpoint")
+    assert calls == [8], calls  # the probe asked the SHARED helper, with the mesh's replica count
+    assert getattr(wrapper, "jitted", None) is sentinel  # ...and wrapped exactly what it returned
+    s1_5._TRACE_FORWARD_CACHE.clear()
 
 
 def test_the_trace_forward_compiles_once_per_state_and_is_released():
@@ -2859,3 +2930,58 @@ def test_the_trace_forward_compiles_once_per_state_and_is_released():
     tracer = inspect.getsource(s1_5.trace_in_memory_state)
     assert tracer.index("trace.trace_rows(") < tracer.index("release_trace_programs()")
     assert 'log_memory("post_trace_release"' in tracer
+
+
+def test_the_trace_release_actually_releases_because_the_locals_go_first():
+    # RELEASE TRUTH. Dropping the cache entry frees nothing while any name still holds the compiled
+    # object: velocity_fn closes over the timing wrapper, and the wrapper closes over the compiled
+    # function. Before this, post_trace_release logged a release that had not happened.
+    import gc
+    import weakref
+
+    s1_5._TRACE_FORWARD_CACHE.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
+    state, _, _, _ = _toy_state_and_batches(config_shape="proxy")
+
+    # 1. THE DEFECT, executed: hold the locals across the release and the executable survives it.
+    wrapper = s1_5.trace_forward_for(state, replicas=1, state_label="checkpoint")
+    velocity_fn = s1_5.trace.velocity_fn_for(wrapper, state)
+    reference = weakref.ref(wrapper.jitted)
+    s1_5.release_trace_programs()
+    gc.collect()
+    assert reference() is not None, "the retained locals should still be pinning it -- test is vacuous otherwise"
+    assert velocity_fn is not None
+
+    # 2. THE FIX: drop the locals FIRST, exactly as trace_in_memory_state now does, and it goes.
+    del velocity_fn, wrapper
+    gc.collect()
+    assert reference() is None, "the compiled forward is still reachable after its last name was dropped"
+
+    # ...and the code really does it in that order, before the ledger line that reports it.
+    tracer = inspect.getsource(s1_5.trace_in_memory_state)
+    assert tracer.index("del velocity_fn, forward") < tracer.index("release_trace_programs()")
+    assert tracer.index("release_trace_programs()") < tracer.index('log_memory("post_trace_release"')
+
+
+def test_the_persisted_census_is_refreshed_after_the_trace_phase():
+    # The artifact's census used to be whatever state_report captured -- BEFORE the trace compiled
+    # anything -- so the trace section reached the JSON empty. It is recomputed after the phase.
+    source = inspect.getsource(s1_5._run_one_state)
+    assert source.index("trace_in_memory_state(") < source.index('report["specializations"] = specialization_census()')
+    assert source.index('report["specializations"] = specialization_census()') < source.index("s1_5_artifact(")
+
+    # The logged census names the trace family too, and the runtime budget assertion covers it.
+    assert "trace {census['trace_total']}" in inspect.getsource(s1_5.log_compile_costs)
+    census = s1_5.specialization_census()
+    for key in ("trace", "trace_total"):
+        assert key in census, sorted(census)
+    assert (
+        census["total"]
+        == census["probe_total"] + census["replay_total"] + census["trace_total"] + census["helper_total"]
+    )
+    # A trace program compiled more often than there are states is a release-discipline failure, and
+    # the driver refuses it exactly as it does for the gradient tags.
+    s1_5.assert_specializations_within_release_budget(census)
+    with pytest.raises(RuntimeError) as excinfo:
+        s1_5.assert_specializations_within_release_budget({**census, "trace": {"('trace_forward', 8)": 3}})
+    assert "trace_forward" in str(excinfo.value)

@@ -904,12 +904,17 @@ def assert_specializations_within_release_budget(census: dict, *, states: int = 
     legitimate specialization. A production job runs the driver once, which is where the number
     means what it says.
     """
-    offenders = {tag: size for tag, size in census["probe"].items() if size > int(states)}
+    offenders = {
+        f"{section}:{tag}": size
+        for section in ("probe", "trace")
+        for tag, size in census.get(section, {}).items()
+        if size > int(states)
+    }
     if offenders:
         raise RuntimeError(
-            f"probe gradient tags compiled more than once per state (states={int(states)}): {offenders}. Either a "
-            f"released program was called again -- the release discipline is wrong -- or a state-specific value was "
-            f"captured in a closure instead of being threaded as a traced argument."
+            f"compiled tags built more than once per state (states={int(states)}): {offenders}. Either a released "
+            f"program was called again -- the release discipline is wrong -- or a state-specific value was captured "
+            f"in a closure instead of being threaded as a traced argument."
         )
 
 
@@ -1847,7 +1852,7 @@ def log_compile_costs(census: dict) -> None:
     max_logging.log(
         f"[exp03_s1_5] specializations: total={census['total']} "
         f"(probe {census['probe_total']} over {len(census['probe'])} tags, replay {census['replay_total']}, "
-        f"helpers {census['helper_total']})"
+        f"trace {census['trace_total']}, helpers {census['helper_total']})"
     )
     for (tag, state_label), seconds in sorted(exp03.COMPILE_TIMINGS.items()):
         max_logging.log(f"[exp03_s1_5]   first call {tag} [{state_label}]: {seconds:.1f}s")
@@ -1886,6 +1891,10 @@ def _run_one_state(config, trainer, scheduler, state_label: str) -> dict:
             trace_rows = trace_in_memory_state(
                 state, config, scheduler, mesh=mesh, state_label=state_label, checkpoint_step=checkpoint_step
             )
+            # REFRESHED after the trace, not left as ``state_report`` captured it: the trace compiles
+            # a program of its own, and a census taken before that phase reports the artifact's own
+            # run as having compiled something it did not. This is the number that gets written.
+            report["specializations"] = specialization_census()
     except Exception as failure:
         # The heavy phase is where the memory goes and where Job 8d died. Whatever killed it, the
         # ledger and the residue are printed BEFORE the traceback -- then the failure is re-raised
@@ -1983,8 +1992,11 @@ def trace_in_memory_state(state, config, scheduler, *, mesh=None, state_label: s
                 ),
             }
         )
-    # The trace phase is over: its one program is dropped like every other, and the ledger line says
-    # whether the executable actually went.
+    # The trace phase is over. The LOCALS go first and that is not tidiness: ``velocity_fn`` closes
+    # over ``forward``, and ``forward`` is the timing wrapper that closes over the compiled function
+    # -- so dropping the cache entry while either name is still bound releases nothing and the ledger
+    # line below would report a release that never happened. Same discipline as the gradient trees.
+    del velocity_fn, forward
     release_trace_programs()
     log_memory("post_trace_release", state_label=state_label)
     return {
