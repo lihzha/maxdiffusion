@@ -151,3 +151,9 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 
 - **Result** — `partial` (as instructed — honest split): findings 1 (semantic additivity — real-HyperParameters resolution + the new `base_wan_5b_pos_inversion.yml` + AST-extracted-class characterization), 5 (S4b folded in — `pos_write_shard` on the S5 codec with the full R8 discipline; run-JSONs publish only after all shards; a failing writer leaves ZERO artifacts), and 6 (cast wiring main-observed) FIXED; finding 4 partially (l_pos threaded to all four consumers; adequacy/ablation runner pending); finding 3 partially (slot roots isolated + probed; selection payload pending); finding 2 (record-provenance preflight) pending. **1028 passed**; 8/8 mutants. A latent import bug caught by the new real-filesystem writer test (invisible to fakes). Battery incident: a timeout left one mutant on disk mid-run — detected, removed, re-verified; scripts now write disk backups first.
 - **Next** — Sitting 2: findings 2, 3-residue, 4-residue → follow-up review → commit.
+
+## 2026-08-06T05:30:00Z — S4 cycle CLOSED (1063 green, 28/28 mutants) → commit — ALL K1-PATH CODE COMPLETE
+
+- **Result** — `passed`. S4 committed with this entry (pos modes incl. the folded S4b writer, PosProvenanceHeader, the pos YAML, the slot dispatch). exp_05 suite contribution: 219 tests over S1–S5; combined 1063.
+- **Analysis** — K1's code path is structurally complete: slot-isolated storage, provenance-bound records/selection/adoption, the deployment-matching 8-token convention pinned end-to-end (cast rule closed), the B-arms + adequacy + diagnostic ablation wired. Remaining K1 conditions: exp_05 parity audit (next) — merge-1 ✓, P0' green ✓ (the S-suite), J0 published ✓.
+- **Next** — exp_05 PARITY AUDIT → the K1 package under the standing grant. S6+ (trainer path) proceeds after K1 is in flight.
