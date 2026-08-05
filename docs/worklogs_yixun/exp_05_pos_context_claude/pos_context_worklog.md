@@ -117,3 +117,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed`. S3 committed with this entry.
 - **Analysis** — **Sequencing amendment (scope-neutral, Planner):** the plan's dependency matrix placed S4 `runner-slot-arms` in the merge-1-only block, but the runner file (`run_wan_null_inversion.py`) was CREATED by exp_04's R10 — which is in its strengthen cycle right now. S4 therefore factually depends on exp_04-R10 closing + an interim one-way merge (same policy as merge-1/2). **S5 `schema-states-fidelity` proceeds first** (own pos-records module importing exp_04 primitives; no runner dependency); S4 follows the merge. Matrix corrected in spirit; plan text untouched beyond this record.
 - **Next** — S5 write → review → strengthen → commit; S4 after exp_04-R10 + merge.
+
+## 2026-08-05T19:40:00Z — S5 write phase complete: THE F7 PREMISE IS FALSE (measured); plan expectation amended; review dispatched
+
+- **Goal** — S5: the positive-slot record schema + states fidelity policy.
+- **Change** — `pos_context_records.py` (258 exec LOC, numpy-only, `_PosGeometry` rebuilt locally per F6 with two extra invariants; schema-independent primitives imported from the sibling) + `test_pos_context_records.py` (34 tests). **Plan §4-P2' amended (scope-neutral):** the S5 measurement disproved the fp16→bf16 value-preservation premise — 6.2% of latent-like elements diverge by exactly 1 bf16 ulp via double rounding (witness constructed), so the feature-tolerance path is load-bearing and the gate conservatively selects fp32 absent feature deltas; storage corrected to exact 7.12 MiB/record / 14.80 GiB fp16.
+- **Command / Validation** — red evidenced; **749 passed** (715 + 34); ruff/py_compile clean. **8 mutants: 7 killed, 1 proven equivalent** (P7 — geometry enforced at two layers; investigated with a direct probe, the stronger layer kept, the misleading comment corrected).
+- **Result** — `passed` (write). **Open item flagged for S4:** whether the runner reuses exp_04's ProvenanceHeader (carrying l_null) or needs an l_pos variant — a runner-level decision. `ml_dtypes` used (numpy-family, not jax) with a bitwise pin against jnp.bfloat16.
+- **Next** — S5 review → strengthen → commit. S4 still gated on exp_04-R10 + merge.
