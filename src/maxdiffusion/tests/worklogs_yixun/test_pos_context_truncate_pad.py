@@ -24,8 +24,15 @@ The velocity-parity tests below record what that investigation actually found: t
 are the *same call* (the deployed one only spells out ``deterministic``/``rngs`` at their defaults),
 but the deployed path additionally casts the head output to the activation dtype
 (``side_adapter_wan.py:767``). At the deployed bf16 activation dtype that cast is **not** a no-op --
-so parity holds against ``C.astype(activation_dtype)`` and fails against fp32 ``C``. S3's replay
-operator has to perform that cast.
+so parity holds against ``C.astype(activation_dtype)`` and fails against fp32 ``C``.
+
+**Who performs that cast (S2 review, finding 2 -- this supersedes S1's original phrasing).** One
+rule, stated in full in ``pos_context_inversion_wan``'s module docstring: the optimizer (S2) and the
+replay operator (S3) pass the fp32 context through **unchanged**, and the runner-built real-backbone
+``velocity_fn`` casts to the activation dtype immediately before the transformer call, for both the
+conditional and the unconditional branch. S1 phrased the obligation as "S3's replay operator must
+cast"; it is unchanged in substance but belongs to ``velocity_fn`` -- the one component shared by
+optimize, replay and deployment. S4 must pin that wiring with a closure test at bf16.
 """
 
 from __future__ import annotations
@@ -364,8 +371,10 @@ def test_each_example_is_conditioned_on_its_own_context():
 
 def test_parity_at_the_deployed_activation_dtype_requires_the_head_s_cast():
     """The one argument-level difference: the deployed path casts C to the activation dtype
-    (``side_adapter_wan.py:767``). At bf16 that cast is NOT a no-op, so S3's replay operator must
-    perform it -- an fp32 C reaches the frozen transformer as a different conditioning."""
+    (``side_adapter_wan.py:767``). At bf16 that cast is NOT a no-op -- an fp32 C reaches the frozen
+    transformer as a different conditioning -- so somebody must perform it, and per the one rule
+    (S2 review, finding 2) that somebody is the runner-built ``velocity_fn``, not the S2 optimizer and
+    not the S3 replay operator, both of which pass the fp32 context through unchanged."""
     contexts = _eight_token_contexts()
 
     deployed, seam_cast = _paths(jnp.bfloat16, contexts, contexts.astype(jnp.bfloat16))

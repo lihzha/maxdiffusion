@@ -30,3 +30,12 @@ Status:
 
 - No subprocesses are running; the S2 review is complete.
 - Earliest steering point: now, before strengthening and committing S2; interruption is safe.
+
+---
+
+## Strengthening record (Coder, same round; both findings closed, none rejected)
+
+1. **MAJOR (state cardinality) — FIXED.** 5-tuple return: `z_bar_states [N,...]` (the K2 schema, 1:1 with contexts) + `z_final` split by name at the return site; the 1:1 consumer-zip test verifies pairing semantics (each state advances to the next under its paired context via the CFG Euler step); schema mutant M12 killed by 6 tests.
+2. **MAJOR (cast-seam handoff) — FIXED.** One rule in the module docstring (operators pass fp32 unchanged; the runner-built velocity_fn casts both branches immediately before the transformer), referenced elsewhere; S1's phrasing explicitly retired in the S1 test file's docs; MUST carry-forwards pinned for S3 (parity through the actual replay operator) and S4 (bf16 both-branch closure test); repo-wide grep confirms only superseding quotes remain. Worklog correction was the Planner's (96c5379).
+
+Suite **689 passed** (688 + 1); **12 mutants, 0 survivors** re-run in full. Behavior beyond findings: none. Round S2 closed; committed with this record.
