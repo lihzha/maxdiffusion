@@ -13,3 +13,4 @@
 - `6c2508f` — feat(exp_05): S5 schema-states-fidelity (TDD, 769 tests)
 - `8695fac` — merge(exp_05): merge-interim — exp_04 R10 boundary (cdd4653); combined suite 1003 green
 - `c107973` — feat(exp_05): S4 runner-slot-arms (TDD, 1063 tests)
+- `8ab68dc` — docs(exp_05): parity audit CLEAN + docstring corrections + S10a amendment
