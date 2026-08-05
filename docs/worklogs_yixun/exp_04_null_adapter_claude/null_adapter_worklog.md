@@ -317,3 +317,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed`. R10 committed with this entry: config (208 keys), entrypoint (620 exec LOC), modes module (878), launcher (242), 2 test files; additive deltas to runner_core (`arms=`) and shards (`header_fingerprint`/`next_shard_index`/supersede — reviewer-ratified, incl. the R8-semantics reversal re-ratification). Suite 690 → **844**.
 - **Analysis** — J1 is now launchable in structure: config → backend (TI2V class, statically pinned; first executed proof = smoke) → capacity with gates and provenance-bound artifacts. Remaining before the J1 package: R11 (A3 measurement module) + the parity audit.
 - **Next** — R11 `a3-direct-opt`; exp_05 merge-2-interim (R10 boundary) unblocks S4.
+
+## 2026-08-05T23:20:00Z — R11 `a3-direct-opt` write phase complete (the final exp_04 code round); review dispatched
+
+- **Goal** — R11: the A3 joint optimizer + the J1b measurement helper.
+- **Change** — `null_direct_opt_wan.py` (184 exec LOC: differentiable remat'd rollout, endpoint future-MSE, single-Adam joint optimization, `measure_single_update` with structured budget verdicts and the ≤4h projection rule) + 41 tests.
+- **Command / Validation** — red evidenced; **885 passed** (844 + 41); ruff/diff-check clean. **28 mutants, 0 survivors** (4 first-pass survivors were test gaps, closed).
+- **Result** — `passed` (write). **Two load-bearing test-design findings recorded for the experiment's method notes:** (1) Adam scale-invariance masks Σ-vs-mean objective mutants at the parameter level — the batching contract must be asserted on UNNORMALIZED grad norms; (2) a stop_gradient'd v_cond is forward-bit-identical and survives all self-referential comparisons — the CENTRAL-FINITE-DIFFERENCE test is the actual proof of end-to-end differentiation. Remat: numerically unobservable (bit-identical grads, measured) but structurally pinned via jaxpr inspection — tested, not documented away. verdict-vs-fits_budget separation ("measurement worked" ≠ "job affordable") accepted.
+- **Next** — R11 review (the last exp_04 code review) → commit → **PARITY AUDIT** → the J1 pre-launch package.
