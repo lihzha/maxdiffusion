@@ -86,3 +86,56 @@ Identity-rule verification verdict:
 Final verdict: **REQUEST-REVISION — the selector itself is sound, but missing production-level scan pins, mid-shard overshoot, poisonable provenance, and permissive artifact validation can silently redefine or misbind every experimental cohort.**
 
 Status: No subprocesses are running; review is complete, and it is safe to steer now.
+
+---
+
+## Strengthening record + follow-up pass + final fixes (all findings closed)
+
+Strengthening (Coder): IO/validation split (`null_adapter_manifest_io.py`); pinned `build_j0_manifests` (14,636 VAL exact / 5,000-episode mandatory target / 200-shard + 60-GiB caps / all-or-nothing staged publication); record-granular early stop; internal domain-separated ordered-listing checksum; fail-closed bindings (reauth-poison refusal per issue #6, before/after scan equality, local content-sha identity); strict loader; malformed-meta rejection. **601 → 610 passed**; **56 mutants, 1 ratified survivor** (N8 preimage redundancy — KEEP).
+
+### Follow-up reviewer verdict (verbatim)
+
+## 1. Context loaded:
+
+- HEAD `082cd2d`, the saved R9 review, plan v5 §4-J0 contract, and all three uncommitted files.
+- Full 78-test suite and the authorized IO-module split.
+- Exact pytest command: blocked by the known read-only temp-directory issue. With capture disabled, **38 passed; 40 errored only during `tmp_path` setup**.
+- Independent in-memory probes for J0, overshoot/caps, listing provenance, both poison cases, staged publication/loading, corruption samples, and malformed metadata.
+
+## 2. Finding verification
+
+1. **RESOLVED — executable J0 contract.** Constants are pinned at 14,636 / 5,000 / 200 / 60 GiB. My synthetic build produced exactly 14,636 VAL records and 5,000 TRAIN episodes from sorted listings; a 4,999-episode run raised before calling the publisher.
+
+2. **RESOLVED — record-granular stopping and cap order.** The 10-record/6-episode probe returned 6 windows after exactly 6 reader yields and 2 binder calls. At the shard cap, shard three was never bound; at the byte cap it was bound once for sizing and never opened.
+
+3. **RESOLVED — ordered-listing provenance.** The checksum is internal, domain-separated, stored with both ordered listings, and re-derived by the loader. Reversing a listing changed the digest.
+
+4. **RESOLVED — bindings.** Both poison probes were refused. Duplicate/malformed target fields are rejected, before/after bindings are compared, and local identity is streamed SHA-256.
+
+5. **NOT RESOLVED — strict loading.** Staged publication and refusal of unmarked directories work, and sampled corruptions such as Boolean schema versions, duplicate names, negative sizes, and missing listings were rejected. However, the explicit prior corruption case “duplicate episodes within DEV” is neither tested nor enforced: changing DEV row 2’s episode to row 1’s episode was accepted, silently reducing DEV-64 to 63 distinct episodes. The loader checks paired-cohort disjointness and the TRAIN-2000 cap, but not per-episode uniqueness for DEV, TEST, or TRAINFIT at [null_adapter_manifest_io.py:289](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/null_adapter_manifest_io.py:289).
+
+6. **NOT RESOLVED — malformed metadata.** `b"not json"` and negative IDs are now refused, but empty bytes, whitespace-only bytes, and invalid UTF-8 such as `b'{"episode_i\\xff":8}'` are accepted as episode 7. The truthiness shortcut and replacement decoding at [build_null_adapter_manifests.py:121](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/build_null_adapter_manifests.py:121) still let a corrupted second source disappear, contrary to the rule that only valid JSON lacking `episode_id` permits name-only identity.
+
+The authorized split loses no behavior by itself: imports, publication, round-trip loading, checksum derivation, and marker enforcement worked through the new module.
+
+## 3. Rulings
+
+- **N8: KEEP.** Ordinal position is redundant given ordered streaming and NUL framing; the surviving mutation is equivalent, not a coverage gap.
+- **gsutil parsing: ACCEPT the field-level interpretation.** Unknown metadata lines may be ignored because `gsutil stat` output evolves, provided exit status is zero, stderr is empty, both streams are scanned for reauthentication, and exactly one decimal `Generation` and `Content-Length` are required. The “refuses anything it does not fully understand” docstring should be softened, but that is non-blocking.
+
+## 4. New findings
+
+- **MAJOR — row identity is not validated.** Replacing one DEV row’s name with the unique string `corrupted-window-name` was accepted. At [null_adapter_manifest_io.py:231](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/null_adapter_manifest_io.py:231), names are checked only for nonempty strings, not producer syntax or agreement with the stored episode. A one-field artifact corruption can therefore silently change the selected window.
+- No separate unsafe-publication defect was found in the staging/marker mechanism.
+
+## 5. Final verdict
+
+**REQUEST-REVISION — duplicate within-cohort episodes, malformed metadata edge cases, and unbound row names still permit silent cohort-identity corruption.**
+
+
+### Final fixes (Coder; the follow-up's three residual items)
+
+1. Per-episode window caps enforced at load per cohort (1 for DEV/TEST/TRAINFIT, 2 for TRAIN-2000); the reviewer's 63-distinct-episodes case parametrized over all three single-window cohorts.
+2. `_meta_payload` with `ABSENT_META = b"{}"` as the ONLY absent spelling; strict UTF-8; `b""`/`b"   "`/invalid-UTF-8 all reject; the `b'{"episode_i\xff":8}'` probe is a regression.
+3. Loaded row names re-derived through `episode_id_for` (one rule, no second copy): producer grammar + name-vs-stored-episode agreement; both reviewer cases tested.
+Plus the non-blocking gsutil docstring softening. Mutants P1–P5 killed; all 51 prior mutants re-verified. **610 passed in 39.6s.** Round R9 closed; committed with this record.
