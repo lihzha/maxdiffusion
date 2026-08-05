@@ -407,3 +407,13 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   boundary. Strengthen the hand-rolling guard structurally (string match evadable). Design (a)
   ruled NOT required. **Relaunch: NO-GO** pending the jit wrap. Round-10 dispatched.
 
+- **`f049f16` (round 10, jitted trace forward) verify (xhigh): REQUEST-REVISION** — jit core PASS
+  (params traced, merge-inside, cache/timing/snapshot-before-drop sound); tiling RATIFIED with a
+  sharper reason (untiled jit = silent partial replication, a different regime from production's
+  batch-partitioned layout); GSPMD size-1 measurement accepted. Integration defects: stale local
+  `forward`/`velocity_fn` refs make the post_trace_release ledger line false; persisted census
+  captured pre-trace (trace section missing from the artifact); the AST guard remains evadable
+  (positional/kwargs/partial; tautological identity assertions). **Relaunch: NO-GO.** Round-11
+  dispatched (del-before-release; census refresh post-trace + trace_total in the budget;
+  callee-identity or runtime-seam guard with extended bite evidence).
+
