@@ -12,3 +12,4 @@
 - `50175c7` — feat(exp_05): S3 replay-state-capture (TDD, 715 tests)
 - `6c2508f` — feat(exp_05): S5 schema-states-fidelity (TDD, 769 tests)
 - `8695fac` — merge(exp_05): merge-interim — exp_04 R10 boundary (cdd4653); combined suite 1003 green
+- `c107973` — feat(exp_05): S4 runner-slot-arms (TDD, 1063 tests)
