@@ -384,3 +384,11 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   mem fraction; **stop-rule: if the control→A OOM repeats, do NOT spend another v6e-8 attempt** —
   take the ledger to Yixun for v6e-64 approval. Suite 1,523 / 2.
 
+- **`6dab9b1` (round 8, out_shardings pin) review (xhigh, account #3 after the quota block):
+  APPROVE — "Relaunch: GO".** Pins complete (4 replay + 23 probe producers; aux scalar-only; hook
+  produces no arrays); Welford donation+pinning compatible, structural sharding-tree cache key
+  clean, wrapped-function cache-keying handled in census/reset; context table concurred as an
+  intentional replicated input (single physical allocation). 8f prediction "quantitatively
+  credible" — retain 0.95 mem fraction, acceptance = `post_replay_control ≈ 2.9G`; v6e-64 only if
+  the ledger contradicts sharded residency. Suite 1,525 / 2.
+
