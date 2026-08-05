@@ -54,7 +54,11 @@ Last updated: 2026-08-03
   across BOTH parallel Claude sessions (exp_02/03: ~12 xhigh passes this cycle incl. a 7-pass
   hardware-failure series; exp_04/05: ~10 passes). exp_03's Job-8f relaunch is review-gated and
   therefore BLOCKED pending Yixun: purchase again / wait for the reset / explicitly authorize a
-  substitute or waiver (recorded per the SOP).
+  substitute or waiver (recorded per the SOP). **RESOLVED 2026-08-05 ~02:00Z: Yixun logged into a
+  NEW Codex account** ("continue with both experiments") — same reviewer model/effort, different
+  billing account (account rotation, not a reviewer substitution); the `6dab9b1` review re-dispatched
+  immediately. Account history: yixunhu21@gmail (exhausted) → yh4742@princeton (exhausted) →
+  purchased credits (exhausted) → account #3.
 - **Status:** RESOLVED (again) 2026-08-03 ~15:25Z — Yixun purchased credits; verified working; the blocked S1-fix review of `76ff476` dispatched immediately. Running tally for budgeting: ~35 xhigh review passes across exp_02/exp_03 have now exhausted two accounts' standard quotas in one week — worth sizing future credit purchases against ~2–3 passes per code round.
 - **RECURRENCE 2026-08-04 ~16:10Z (BLOCKING again):** the purchased credits are exhausted — exp_04's plan review consumed 5 xhigh passes (~200k tokens each; trail in `exp_04_null_adapter_claude/null_adapter_codex_plan_review.md`, ending APPROVE-PLAN) plus one pass-sized exp_03 usage earlier; the exp_05 plan-review dispatch failed with "usage limit … try again at Aug 7th, 2026 11:35 PM". **Blocked:** exp_05 plan review; exp_04 code-round reviews (R1's review is next once the Coder's write phase lands). Not blocked: exp_04 R1 write phase (in flight), docs/worklog work. Options (Yixun): (a) purchase credits; (b) wait for Aug 7 reset; (c) explicitly approve a substitute reviewer for the interim (recorded in every affected review file per the SOP). Budget lesson: plan reviews for a from-zero experiment ran 5 passes, not 2–3 — size purchases accordingly or cap plan-review depth by standing directive.
 - **RESOLVED (again) 2026-08-04 ~17:20Z** — Yixun purchased credits (“continue with both experiments”); exp_04 R1 code review + exp_05 plan review dispatched in parallel immediately.
