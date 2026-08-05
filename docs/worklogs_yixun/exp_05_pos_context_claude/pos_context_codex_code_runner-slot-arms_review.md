@@ -74,3 +74,50 @@ Context loaded:
 - **No-videos deferral:** **not K1-blocking**. The gates depend on full-cohort decoded metric tables, not comparison MP4s; videos may remain diagnostic/P4 work, provided the successful slot-isolated report and tables exist.
 
 Final verdict: **REQUEST-REVISION — semantic additivity is broken, and the positive route is not K1-safe until provenance binding, slot isolation, adequacy/`L_pos`, cast wiring evidence, and S4b publication are corrected.**
+
+---
+
+## Follow-up pass (S4 two-sitting strengthen @ working tree on `41d2e20`)
+
+### Reviewer output (verbatim)
+
+Context loaded:
+
+- S4 review at [pos_context_codex_code_runner-slot-arms_review.md](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context/docs/worklogs_yixun/exp_05_pos_context_claude/pos_context_codex_code_runner-slot-arms_review.md).
+- Plan P1′, gate definitions, L_pos ablation, and H1 interpretation note in [plan_pos_context.md](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context/docs/worklogs_yixun/exp_05_pos_context_claude/plan_pos_context.md:40).
+- Worklog through the banked sitting-1 entry in [pos_context_worklog.md](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context/docs/worklogs_yixun/exp_05_pos_context_claude/pos_context_worklog.md:150); sitting-2 claims came from the briefing because no second entry is present on disk.
+- HEAD `41d2e20`, complete uncommitted delta, new positive YAML, and inherited exp_04 runner/shard/gate implementations.
+- Focused 45-test suite. Exact command: 43 passed, with one failure and one error caused solely by the read-only sandbox having no usable temporary directory. With `tempfile.tempdir` preseeded and the real-filesystem writer case deselected: 44 passed, 1 deselected. The bf16 real-model test separately passed; the seven named non-filesystem probes passed together.
+
+Finding verification:
+
+1. **Finding 1 — CLOSED.** Real `HyperParameters` behavior reproduces the exact missing-key `ValueError`; `get_keys()` now resolves the legacy null slot correctly. The positive YAML is the null YAML plus only declared positive keys, and the null YAML remains unchanged.
+
+2. **Finding 2 — CLOSED.** All three previously accepted false-provenance cases are rejected before replay: recipe/guide mismatch, `l_pos` mismatch, and same names with different batch tensors. Canonical sigma, current/result context fingerprints, names, batch fingerprint, and exact example-field namespace are also checked.
+
+3. **Finding 3 — NOT CLOSED.** Published shards/JSON use the positive root and the top-level selection tuple is B-labeled with an enforcing consumer. However:
+
+   - Positive `main` still checks `null_artifact_dir` and sweeps `null_staging_dir` at [run_wan_null_inversion.py:707](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context/src/maxdiffusion/run_wan_null_inversion.py:707). The checked-in positive YAML therefore raises `FileNotFoundError` on `os.statvfs("")` before loading manifests.
+   - A populated positive run was observed checking the null artifact root and sweeping the null staging root, never the positive staging root.
+   - Root comparison is unnormalized: `pos_artifact_dir="gs://bucket/artifacts/"` is accepted beside `null_artifact_dir="gs://bucket/artifacts"`.
+   - A payload carrying `embedding_slot="null"` at `pos_adequacy_uri` was accepted and changed the positive recipe; URI separation is not consuming-side provenance validation.
+
+4. **Finding 4 — NOT CLOSED.** The `l_pos=1` probe now yields one row throughout inversion, optimizer/frozen positive contexts, results, and header. Adequacy invalid requests preflight before data/forwards, and the ablation is publication-guarded. But the ablation does not use the adopted recipe required by P1′: forcing adoption of `(50, 0.03)` produced ablation calls `(1, 0.01)` for both L=1 and L=8 at [pos_context_modes.py:505](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context/src/maxdiffusion/pos_context_modes.py:505). It is also fixed to the trajectory/B1-style calculation rather than the ultimately selected B arm.
+
+5. **Finding 5 — ORIGINAL DEFECT CLOSED, CLAIM NARROWED.** The positive writer follows staging, immutable destination, cleanup, and marker-last publication; run JSONs appear only after all shards succeed. A first-writer failure leaves no artifacts in the test. “Zero artifacts on any failure” is false, however: when B1 succeeded and B2 failed, one complete B1 shard remained and no JSONs were published. That shard is safe but makes same-root retry collide with immutable publication.
+
+6. **Finding 6 — CLOSED.** `main` wraps the actual positive-dispatch velocity function. Main-observed contexts were bf16, and the real tiny-Wan test passed for both conditional and unconditional branches.
+
+The two rulings:
+
+1. **A-worded gate reasons:** acceptable under plan §4-P1′. H1/H2 deliberately reuse `gate_g1/g2` verbatim, and the H1 interpretation note adequately scopes their meaning; relabeling reason strings is not required. The nested `gates.selection.target` also remains A-labeled, which is structural rather than a reason string, but the authoritative top-level B tuple and consumer are consistent; I do not rate that residue K1-blocking.
+
+2. **K1 readiness:** not structurally K1-launchable yet. Even before the parity audit, P0′, and K1 smoke, the checked-in positive config cannot enter `main`, positive execution touches the null storage roots, adequacy adoption is not slot-bound, and an adopted recipe is not applied to the required L_pos ablation.
+
+NEW findings at K1-blocking severity:
+
+- **K1-BLOCKER — positive storage preflight is still null-wired.** Resolve and validate normalized positive roots before storage operations; require/check `pos_artifact_dir`, require/sweep `pos_staging_dir`, and never inspect or mutate null staging during a positive run.
+- **K1-BLOCKER — adequacy adoption lacks positive-slot binding.** Validate at least `embedding_slot`, mode/cohort, `l_pos`, guide scale, and relevant manifest binding before applying an adoption.
+- **K1-BLOCKER — the L_pos diagnostic ignores the adopted recipe/selected arm.** Run it with the recipe and arm that the main K1 study actually adopts/selects, and persist those bindings in its evidence.
+
+Final verdict: **REQUEST-REVISION — four fixes are substantively closed, but slot-safe production preflight/adoption and the plan-mandated adopted-recipe L_pos ablation still block K1.**
