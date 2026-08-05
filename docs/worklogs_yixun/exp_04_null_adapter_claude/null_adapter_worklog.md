@@ -350,3 +350,9 @@ Component-by-component against `third_party/Wan2.2/scripts/embedding_search.py` 
 **Numeric-recipe defaults cross-check (SOP):** J=10, lr=1e-2, w=5.0, inversion w=1.0, Adam (0.9, 0.999, 1e-8, eps_root 0), σ-shift 5.0, 25 steps — all as the reference/plan; config values pinned by the R10 config-drift tests. **Data parity:** R9's dual-source episode identity independently re-derived by its reviewer; real producer-TFRecord fixtures in the manifest tests; J0's published cohorts re-validated by the fail-closed loader.
 
 **Verdict: PARITY AUDIT CLEAN.** Launch precondition (P0 + audit) for the conditionally-granted J1 is now MET on the code side; the J1 package (params, command, acceptance criteria, smoke-first runbook) follows at the launch action.
+
+## 2026-08-05T18:16Z — J1 LAUNCH (conditionally granted, Query 2; conditions met: P0 936-green + parity audit CLEAN)
+
+- **Acceptance criteria (predeclared, plan §9 + SOP):** (1) worker reports commit `f06dfc1`; (2) v6e-8, 8 devices, 1 host; (3) SMOKE completes: ≥1 published smoke shard whose verify_replay passes on-device + the R1 golden asserted; (4) ADEQUACY publishes the adoption artifact with full [N,J,B] evidence; (5) CAPACITY completes all six arms on DEV-64+TRAINFIT-16 with zero unexplained quarantines, full-cohort decode, gates tables + selection.json + A3 measurement published provenance-bound; (6) no OOM/NaN (trace-finiteness hard-fails count as real bugs unless per-example divergence, which quarantines); (7) gates evaluated per G1/G2 + the target-selection rule — ANY outcome is acceptance (the gates decide, not vibes). Failure triage per the SOP: infra (preemption/download/auth) ⇒ auto-resubmit unchanged; real bug ⇒ fix cycle.
+- **Command / Validation** — `null_adapter_command.md` entry J1-1 at launch time; queue job name `exp04-j1-null-yixun`.
+- **Result** — `launched`.
