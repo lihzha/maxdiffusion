@@ -239,3 +239,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `partial`: codex returned the usage-limit error before producing anything. R8's write phase (443 tests, 0/32 mutants) sits safely uncommitted in the worktree; R1–R7 are committed and pushed.
 - **Analysis** — Infrastructure (reviewer quota), not a bug. Per the SOP's no-silent-substitution rule the cycle is blocked pending Yixun: credits / wait for the Aug 7 reset / approved substitute. Logged in `issue_report.md` with per-refill budget math (~12 xhigh passes per refill at this cadence).
 - **Next** — On Yixun's decision: R8 review → R9 → parity audit → J0/J1 + exp_05 merge-1.
+
+## 2026-08-05T17:20:00Z — R8 cycle CLOSED: review (6 MAJOR + 1 MINOR, mixed ratifications) → strengthen (523 green, 1 ratified survivor) → follow-up APPROVE → commit
+
+- **Goal** — Close R8; the P2 storage/resume boundary is done.
+- **Command / Validation** — Review + strengthening + follow-up all in `null_adapter_codex_code_runner-cache-resume_review.md`. Follow-up re-ran the original probes (path escape, shuffled bijection, cross-header resume, type confusion, cherry-picked subset, generic-exception quarantine, double-writer): all refused. Rulings landed: quarantine conditionally ratified → conditions implemented (typed divergence error, survivor rerun, real-header diagnostics); S2 KEEP (defence-in-depth precedent line: R3 M11, R4c C10, R8 S2). **523 passed in 35.9s**.
+- **Result** — `passed`. R8 committed with this entry (module split recorded: shards=storage, cache_policy=judgments).
+- **Analysis** — Runner obligations carried forward to R10/J-launch docs: free-space floor + stale-attempt sweeping; the runner raises ExampleDivergenceError for per-example pathology (trace non-finiteness wrap).
+- **Next** — R9 `manifests` (the last code round before the parity audit → J0/J1 + exp_05 merge-1).

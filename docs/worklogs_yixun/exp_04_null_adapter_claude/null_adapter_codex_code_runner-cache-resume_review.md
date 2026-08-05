@@ -76,3 +76,40 @@ Ratification rulings:
 4. **One-file-per-record plus marker-last on `gs://` — CONDITIONALLY RATIFIED.** The layout and copy/delete-aware publication order are sound for a fresh immutable shard under one writer. They are not sound with the current overwrite and shared-staging concurrency semantics.
 
 Final verdict: **REQUEST-REVISION — marker path escape, optional provenance, non-total marker validation, and unsafe quarantine/concurrent publication prevent R8 from providing a fail-closed resume boundary.**
+
+---
+
+## Strengthening record + follow-up pass (all seven findings closed; ratification conditions implemented)
+
+Strengthening (Coder): module split into `null_adapter_shards.py` (storage, 321 exec LOC) + `null_adapter_cache_policy.py` (fidelity gate + quarantine, 103); canonical-bijection paths recomputed on read; mandatory resume provenance (fingerprint/arm/convention, signature-pinned); total fail-closed marker validation; manifest-derived fidelity subset; `ExampleDivergenceError`-only quarantine with survivor-batch rerun and real-header diagnostic shards (explicit-header `write_shard` signature); attempt-unique staging, no completed-shard overwrite, `discard_incomplete_shard`; streamed writes under `MAX_SHARD_BYTES`. Suite **523 passed in 35.9s** (pre-R8 392 unchanged); **47 mutants, 1 documented survivor** (S2 containment check, redundant-by-construction defence-in-depth).
+
+### Follow-up reviewer verdict (verbatim)
+
+Context loaded:
+
+- HEAD `4f99ea9`; four expected untracked files only.
+- R8 review briefing, plan §4-P2, R6–R8 worklog contracts, and SOP safe-boundary/storage rules.
+- Both implementation modules, both test files, record codec, and repository-wide call sites.
+- Validation: AST parse 4/4; 67 non-filesystem tests passed. The full pytest command could not initialize due the read-only temp directory; all requested adversarial I/O probes passed using in-memory `gfile` with the production codec.
+
+Finding verification:
+
+1. **RESOLVED** — canonical mapping is recomputed and confined; both the staging path escape and shuffled-but-consistent bijection probes are refused.
+2. **RESOLVED** — fingerprint/arm/convention are mandatory keyword-only expectations; record dtype, arm, convention, homogeneity, and quarantined manifest membership are enforced; cross-header resume excludes the foreign shard.
+3. **RESOLVED** — duplicate-key rejection and strict marker validation landed; the parser battery passes and `quarantined="x"` produces an invalid report without escaping.
+4. **RESOLVED** — `fidelity_gate` derives the first eight DEV names internally, requires exact table coverage and valid MSEs, rejects the cherry-picked subset, and correctly attributes the writer-order limitation to R6.
+5. **RESOLVED** — only `ExampleDivergenceError` is quarantined; generic failures propagate, survivor-batch results are returned, batch-only/all-example failures re-raise, and diagnostic shards carry the real header.
+6. **RESOLVED** — staging is attempt-unique, completed/incomplete destinations are protected, publication uses `overwrite=False`, and the synchronized double-writer probe produced one loser plus one valid immutable shard.
+7. **RESOLVED for the R8 storage unit** — record blobs are serialized/written one at a time, `MAX_SHARD_BYTES` is enforced, and attempt staging is cleaned in `finally`; the runner still owns the SOP free-space-floor and stale-attempt sweeping obligations.
+
+S2 ruling:
+
+**KEEP** — the containment check is deliberately redundant with the filename grammar but directly preserves the security invariant if that grammar changes; this is justified defense-in-depth consistent with R3 M11 and R4c C10.
+
+Split/signature check: **CLEAN** — the policy module is pure and loses no behavior, storage has no reverse policy dependency, repository-wide search found no stale imports, and mandatory explicit `header` on `write_shard` correctly fixes diagnostic-shard provenance.
+
+Any NEW findings:
+
+- None at invalidate-conclusions or unsafe-resume severity.
+
+Final verdict: **APPROVE — all six MAJOR findings, the MINOR storage finding within this unit, and the ratification conditions are correctly strengthened without a new blocking defect.**
