@@ -247,3 +247,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed`. R8 committed with this entry (module split recorded: shards=storage, cache_policy=judgments).
 - **Analysis** — Runner obligations carried forward to R10/J-launch docs: free-space floor + stale-attempt sweeping; the runner raises ExampleDivergenceError for per-example pathology (trace non-finiteness wrap).
 - **Next** — R9 `manifests` (the last code round before the parity audit → J0/J1 + exp_05 merge-1).
+
+## 2026-08-05T18:30:00Z — R9 `manifests` write phase complete; review dispatched
+
+- **Goal** — R9: the J0 cohort-manifest builder.
+- **Change** — `build_null_adapter_manifests.py` (280 exec LOC) + `test_null_adapter_manifests.py` (41 tests, incl. scans over REAL producer-format TFRecords written with the production module's own helpers).
+- **Command / Validation** — red evidenced; **564 passed in 35.5s** (523 inherited unchanged); ruff/black clean. **29 mutants, 1 documented no-op survivor** (M5, the literal min(2,·) clause — kept as refactor insurance, precedent line R3-M11/R4c-C10/R8-S2); one unreachable assertion deleted rather than retained (sizes validated at the artifact boundary where they can actually be wrong).
+- **Result** — `passed` (write). **The episode-identity rule (the round's load-bearing derivation):** dual-source — name format `ep{ep}_v{view}_s{start:05d}` (minted at `make_droid_window_plan.py:162`; real examples cited from exp_02's manifest) AND `meta_json["episode_id"]` (minted at `precompute_features_droid_plan.py:156`, copied verbatim by the TFRecord producer); parse both, require agreement, use either alone, refuse records with neither; canonical preimage = the decimal string of the integer id, pinned by hand-computed sha256 digests. **Planner positions:** LOC +12% accepted (boundary validators); `sizer`/`split` injection accepted (cap-before-open requires it); uniform binding shape accepted; write-time binding merge (selection stays pure) accepted; disjoint fixture namespaces accepted.
+- **Next** — R9 review → strengthen → commit → **J0 execution** (approved) + exp_05 merge-1; then R10/R11 → parity audit → J1.
