@@ -254,3 +254,16 @@ layout (executed 8-device evidence: unpinned local==global spec P(); pinned exac
 Acceptance test: `post_replay_control ≈ 2.9G` (8e read 11.35G). Mem fraction 0.95. Suite 1,525 / 2.
 - **Job 8f:** `20260805-024910-5f1e9e11-exp03-s15-probe6-yixun` (COMMIT=e9b642f, tip at submission; code = APPROVED 6dab9b1 + docs).
 
+### Job 8f outcome (2026-08-05T04:25Z) — the out_shardings fix VERIFIED on hardware; died in the last diagnostic
+
+**The entire checkpoint-state report completed at 5B** — the first time any launch has done the
+heavy phase: `post_replay_control 3.09G` (prediction ≈2.9G ✓, vs 8e's 11.35G), A/B/C replays ran
+(108.7/119.0/225.9s first-calls), the designed 3-tree moment visible (post_replay_b 6.00G),
+variance/isolation/parity/forced all released cleanly, `post_state_report in_use=1.86G peak=8.81G`
+of 31.25G. Then the LAST per-state diagnostic — `sigma_trajectory_trace` — raised
+`IndivisibleError`: its single-window (batch-1) sampler rollout violates the transformer's internal
+FSDP activation constraint (axis 0 must divide by 8; shape (1,540,3072)). The trace is the only
+batch-1 forward in the system; 8f is the first launch to reach it. No artifacts written (death
+pre-assembly). Round-9 fix dispatched (batch or tile the trace forward to divisibility, with
+executed 8-device row-0 equivalence evidence + a sweep for any other batch-indivisible forward).
+
