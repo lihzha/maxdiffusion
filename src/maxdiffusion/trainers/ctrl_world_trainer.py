@@ -433,132 +433,13 @@ class CtrlWorldTrainer:
         state = jax.tree_util.tree_map(_place_on_sharding, state, state_shardings)
         return state, state_shardings
 
-    # ── NaN localisation ───────────────────────────────────────────────────────
-
-    def _run_nan_probe(self, state, batch, rng, apply_fns, mesh, state_shardings,
-                       data_shardings):
-        """Run one forward (and, if that is clean, one backward) with per-stage
-        finiteness checks and log where the first non-finite value appears.
-
-        The periodic training log only says *that* loss went non-finite; this says
-        *which stage*, which is the difference between a data/conditioning problem
-        (an early stage), an overflow inside the UNet (19_unet_v_pred), and a
-        preconditioning problem (07_sigma..12_loss_weight). Runs once, on the first
-        batch, under the same mesh/shardings/dtypes as the real step so the numbers
-        are the ones training actually sees.
-
-        Run as three separate small programs rather than one, because a single
-        forward+backward probe needed ~25 GiB and would not load: the backward has
-        to keep (or rematerialise) activations for all 1434 leaves *and* hold the
-        gradient tree, which is strictly more than the real train step. Since a
-        forward NaN needs no gradients at all, stage 2 below is forward-only, and
-        the gradient program is compiled only when the forward turns out clean.
-        """
-        cfg = self.train_cfg
-        vae_scaling_factor = float(self.config.vae_scaling_factor)
-        weights_dtype = self.weights_dtype
-        names: dict[str, list[str]] = {"stages": [], "grads": [], "params": []}
-        rules = self.config.logical_axis_rules
-
-        def _cast(b):
-            return jax.tree_util.tree_map(
-                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, b
-            )
-
-        # ── 1. weight health: params only, no forward. Cheapest possible check. ──
-        def params_probe(params):
-            n, s = max_utils.grad_probe(params)
-            names["params"] = n
-            return s
-
-        with mesh, nn_partitioning.axis_rules(rules):
-            param_stats = jax.jit(
-                params_probe, in_shardings=(state_shardings.params,), out_shardings=None
-            )(state.params)
-        max_utils.log_probe_summary_table(
-            names["params"], param_stats,
-            label=f"svd ctrl_world LOADED WEIGHTS from {self.config.pretrained_model_name_or_path}",
-            top_n=15,
-        )
-        # Stop here if the weights themselves are bad. The forward table would
-        # otherwise report a "FIRST non-finite stage" that is pure consequence —
-        # 05_action_hidden simply because the encoder's own kernels are NaN — and
-        # that reads exactly like a data or conditioning bug. The only stage that
-        # touches no parameter (06c_encoder_hidden_states, tiled text) staying
-        # finite is the tell, which is far too subtle to rely on.
-        if float(np.asarray(param_stats)[:, 0].sum()) > 0:
-            max_logging.log(
-                "[nan-probe] the WEIGHTS are already non-finite, so every forward stage "
-                "downstream of a parameter would be too — the forward table is skipped "
-                "because it would only report a consequence. This state came off disk: a "
-                "fresh init cannot produce it (the action encoder's linear_3 and the adaln "
-                "projector's bias are zero-init). Clear the checkpoint directory or bump "
-                "run_name, and relaunch from a snapshot that includes the finite-checks in "
-                "_maybe_restore/_save_checkpoint so a diverged state cannot be written or "
-                "restored again."
-            )
-            return "loaded_weights"
-
-        # ── 2. forward only. No value_and_grad, so no backward buffers. ──────────
-        def fwd_probe(params, batch, rng):
-            probe: list = []
-            loss = action_world_train_step(
-                rng=rng, params=params, apply_fns=apply_fns, batch=_cast(batch),
-                cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=True,
-                probe=probe,
-            )
-            names["stages"] = [n for n, _ in probe]
-            return loss, max_utils.probe_stack(probe)
-
-        with mesh, nn_partitioning.axis_rules(rules):
-            loss, stats = jax.jit(
-                fwd_probe, in_shardings=(state_shardings.params, data_shardings, None),
-                out_shardings=(None, None),
-            )(state.params, batch, rng)
-
-        max_logging.log(f"[nan-probe] forward loss={float(loss)}")
-        first = max_utils.log_probe_report(names["stages"], stats, label="svd ctrl_world forward")
-        if first is not None:
-            max_logging.log(
-                "[nan-probe] forward is already non-finite, so the gradients carry no "
-                "extra information — skipping the (expensive) backward probe"
-            )
-            return first
-
-        # ── 3. Forward clean means the NaN is in the backward, so the gradient
-        #      table is the payload — but it is NOT collected here. A standalone
-        #      backward program has to keep state.params alive next to a full
-        #      gradient tree, which OOMs (RuntimeProgramAllocationFailure) even
-        #      where the real step fits, because the real step donates the state
-        #      and reuses those buffers. So the table comes from the first real
-        #      step instead: see _build_train_step(grad_stats_names=...).
-        max_logging.log(
-            "[nan-probe] forward is finite, so the NaN is in the backward — the "
-            "per-parameter gradient table is collected from the first training step "
-            "(same program, same donation) rather than a separate backward probe"
-        )
-        return first
-
     # ── Steps ──────────────────────────────────────────────────────────────────
 
-    def _build_train_step(self, apply_fns, state_shardings, data_shardings,
-                          grad_stats_names=None):
-        """Jitted train step. ``grad_stats_names`` opts into per-leaf gradient stats.
-
-        Pass a dict to get a second variant that additionally returns a
-        ``(n_leaves, 2)`` [nonfinite_count, absmax] row per gradient leaf and fills
-        the dict's ``"names"`` key during tracing. It is built with the same
-        shardings *and the same donation* as the real step, which is the whole
-        point: ``_run_nan_probe``'s standalone backward program has to keep
-        ``state.params`` alive alongside a full gradient tree and OOMs
-        (RuntimeProgramAllocationFailure) even though the real step fits, because
-        the real step donates the state and reuses those buffers. Adding two
-        scalars per leaf to the program that already fits costs nothing.
-        """
+    def _build_train_step(self, apply_fns, state_shardings, data_shardings):
+        """Jitted train step."""
         cfg = self.train_cfg
         vae_scaling_factor = float(self.config.vae_scaling_factor)
         weights_dtype = self.weights_dtype
-        want_stats = grad_stats_names is not None
 
         def loss_fn(params, batch, rng):
             return action_world_train_step(
@@ -577,10 +458,6 @@ class CtrlWorldTrainer:
                                      for g in jax.tree_util.tree_leaves(grads)))
             new_state = state.apply_gradients(grads=grads)
             metrics = {"loss": loss, "grad_norm": grad_norm}
-            if want_stats:
-                names, stats = max_utils.grad_probe(grads)
-                grad_stats_names["names"] = names
-                metrics["grad_stats"] = stats
             return new_state, metrics
 
         return jax.jit(
@@ -654,16 +531,6 @@ class CtrlWorldTrainer:
         train_step_fn = self._build_train_step(apply_fns, state_shardings, data_shardings)
         eval_step_fn = self._build_eval_step(apply_fns, state_shardings, data_shardings)
 
-        # Same step, plus per-leaf gradient stats; only compiled when the probe is
-        # on, and used for exactly one step (see the loop below).
-        grad_stats_names: dict[str, list[str]] = {}
-        probe_step_fn = (
-            self._build_train_step(apply_fns, state_shardings, data_shardings,
-                                   grad_stats_names=grad_stats_names)
-            if bool(max_utils.config_get(config, "debug_nan_probe", False))
-            else None
-        )
-
         # ── Checkpointing / resume ────────────────────────────────────────────
         # Restore *before* building the data iterator: the restored restart
         # counter is what seeds the (re)shuffle for this run.
@@ -722,36 +589,13 @@ class CtrlWorldTrainer:
         recent_grad: list[float] = []
         last_step_time = datetime.datetime.now()
 
-        probe_pending = bool(max_utils.config_get(config, "debug_nan_probe", False))
-
         for step in range(start_step, config.max_train_steps):
             batch = next(train_iter)
             rng, step_rng = jax.random.split(rng)
 
-            step_probe = probe_pending
-            if probe_pending:
-                probe_pending = False
-                self._run_nan_probe(
-                    state, batch, step_rng, apply_fns, mesh,
-                    state_shardings, data_shardings,
-                )
-
-            # On the probe step, take the variant that also reports per-leaf
-            # gradient stats. It is the same program (same donation, same
-            # shardings) so it fits wherever the real step fits, and the loss it
-            # returns is the value_and_grad primal — which is what the forward-only
-            # probe above cannot tell you.
-            step_impl = probe_step_fn if (step_probe and probe_step_fn) else train_step_fn
             with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-                state, metrics = step_impl(state, batch, step_rng)
+                state, metrics = train_step_fn(state, batch, step_rng)
                 metrics["loss"].block_until_ready()
-
-            if "grad_stats" in metrics:
-                max_utils.log_probe_summary_table(
-                    grad_stats_names.get("names", []), metrics.pop("grad_stats"),
-                    label=f"svd ctrl_world gradients by parameter (step {step})",
-                    top_n=25,
-                )
 
             loss_v = float(metrics["loss"])
             grad_v = float(metrics["grad_norm"])
@@ -1184,8 +1028,7 @@ class CtrlWorldTrainer:
                 "next periodic save puts them on disk. Every relaunch then restores NaN "
                 "and reports 'first non-finite at step 0', hiding the original cause. "
                 "Start clean — bump run_name (checkpoint_dir is output_dir/run_name/"
-                "checkpoints) or delete this directory — and rerun with "
-                "debug_nan_probe=True to catch the real first bad stage."
+                "checkpoints) or delete this directory — and rerun."
             ),
         )
         meta = dict(restored["step"])

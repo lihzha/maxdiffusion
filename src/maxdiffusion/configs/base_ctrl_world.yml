@@ -227,18 +227,12 @@ opt_skip_nonfinite_updates: True
 opt_max_consecutive_nonfinite: 100
 
 enable_profiler: False
-# One-shot forward/backward NaN + gradient-explosion localisation. On the first
-# batch, logs per-stage [nonfinite_count, absmax] through the whole forward and
-# then the same per gradient leaf, so a bad step says *which* stage rather than
-# just "loss=nan". Costs one extra step; leave off for real runs.
-debug_nan_probe: False
-
 skip_first_n_steps_for_profiler: 5
 profiler_steps: 10
 enable_jax_named_scopes: False
 
 # Ctrl-World train-step knobs (mirror CtrlWorldTrainConfig defaults).
-num_history: 6
+num_history: 7
 num_frames: 5
 action_dim: 7
 text_embed_dim: 512

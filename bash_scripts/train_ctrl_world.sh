@@ -95,7 +95,7 @@ fi
 # which would restore an old action encoder and discard the fresh init above.
 # So a genuinely fresh run needs its own tag; bump RUN_TAG (never reuse one).
 # RUN_TAG also names the W&B run (it is passed through as run_name).
-export RUN_TAG="${RUN_TAG:-ctrl-world-zeroinit-1}"
+export RUN_TAG="${RUN_TAG:-ctrl-world}"
 export OUTPUT_DIR="gs://$GCS_BUCKET/checkpoints/svd_ac"
 echo "RUN_TAG=$RUN_TAG"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
@@ -150,14 +150,14 @@ python src/maxdiffusion/train_ctrl_world.py \
     stats_path=$STATS_PATH \
     attention=flash \
     weights_dtype=float32 \
-    activations_dtype=bfloat16 \
+    activations_dtype=float32 \
     remat_policy=MATMUL_WITHOUT_BATCH \
     ici_fsdp_parallelism=-1 \
     ici_data_parallelism=1 \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=1 \
     scan_layers=True \
-    max_train_steps=101000 \
+    max_train_steps=100000 \
     learning_rate=1e-5 \
     per_device_batch_size=1.0 \
     num_history=7 \

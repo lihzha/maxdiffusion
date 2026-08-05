@@ -149,7 +149,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     ici_tensor_parallelism=1 \
     ici_context_parallelism=1 \
     scan_layers=True \
-    max_train_steps=101000 \
+    max_train_steps=100000 \
     learning_rate=1e-5 \
     per_device_batch_size=1.0 \
     num_history=7 \
@@ -166,8 +166,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=25 \
-    wandb_video_guidance_scale=2.5 \
-    debug_nan_probe=True
+    wandb_video_guidance_scale=2.5
 
 # --- 7. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
