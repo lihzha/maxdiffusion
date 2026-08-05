@@ -30,6 +30,7 @@ production ``gs://`` prefixes take -- so the code under test is the code that wi
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 
@@ -52,7 +53,9 @@ from maxdiffusion.null_adapter_shards import (
     ShardMarker,
     canonical_files,
     discard_incomplete_shard,
+    header_fingerprint,
     marker_from_json,
+    next_shard_index,
     resume_plan,
     validate_shard,
     write_shard,
@@ -637,11 +640,12 @@ def test_resume_refuses_shards_from_two_different_runs(tmp_path):
     assert plan.todo == (_NAMES[2],)  # the foreign shard covers nothing
 
 
-def test_the_same_name_in_two_valid_shards_is_a_hard_error(tmp_path):
+def test_the_same_name_published_by_two_valid_shards_is_a_hard_error(tmp_path):
+    """Shards are immutable, so two copies of one example leave no way to say which the cohort means."""
     _write(tmp_path, names=_NAMES[:2], shard="shard_00000")
     _write(tmp_path, names=_NAMES[1:], shard="shard_00001")
 
-    with pytest.raises(ValueError, match="appears in more than one validated shard"):
+    with pytest.raises(ValueError, match="is published by more than one validated shard"):
         _resume(tmp_path, _NAMES, ["shard_00000", "shard_00001"])
 
 
@@ -659,12 +663,31 @@ def test_a_quarantined_name_outside_the_manifest_is_a_hard_error(tmp_path):
         _resume(tmp_path, _NAMES, ["shard_00000"])
 
 
-def test_a_name_quarantined_in_one_shard_and_published_in_another_is_a_hard_error(tmp_path):
+def test_a_later_success_supersedes_an_earlier_quarantine(tmp_path):
+    """The normal shape of a retry: lost in one attempt, published by the next.
+
+    R8's first cut raised here, which meant a cache job could be retried exactly once -- the retry's
+    own shard turned the *next* resume into a duplicate-name error -- while the report meanwhile
+    counted the name as both covered and lost (R10 review, finding 5).
+    """
     _write(tmp_path, names=_NAMES[:2], shard="shard_00000", quarantined={_NAMES[2]: "boom"})
     _write(tmp_path, names=_NAMES[2:], shard="shard_00001")
 
-    with pytest.raises(ValueError, match="appears in more than one validated shard"):
-        _resume(tmp_path, _NAMES, ["shard_00000", "shard_00001"])
+    plan = _resume(tmp_path, _NAMES, ["shard_00000", "shard_00001"])
+
+    assert plan.covered == tuple(sorted(_NAMES))
+    assert plan.todo == ()
+    assert plan.quarantined == {}  # the gap was closed; it is not still open
+    assert plan.superseded == (_NAMES[2],)  # and the history is reported, not erased
+
+
+def test_a_quarantine_no_later_shard_closed_stays_in_the_current_gap(tmp_path):
+    _write(tmp_path, names=_NAMES[:2], shard="shard_00000", quarantined={_NAMES[2]: "boom"})
+
+    plan = _resume(tmp_path, _NAMES, ["shard_00000"])
+
+    assert plan.quarantined == {_NAMES[2]: "boom"} and plan.superseded == ()
+    assert plan.todo == (_NAMES[2],)  # a quarantined name is never covered
 
 
 def test_a_manifest_with_duplicates_is_refused(tmp_path):
@@ -875,3 +898,53 @@ def test_an_absent_shard_directory_is_simply_invalid(tmp_path):
     report = _validate(tmp_path, shard="never_written")
 
     assert not report.valid and report.names == ()
+
+
+def test_the_header_fingerprint_is_the_whole_header_not_one_of_its_fields():
+    """The near-miss R10 shipped: ``base_context_fingerprint`` is 64 hex too, so it passes every type
+    check on the way into ``resume_plan`` and then rejects every valid shard as another run's."""
+    header = _header()
+
+    assert header_fingerprint(header) == _fingerprint(header)
+    assert header_fingerprint(header) != header.base_context_fingerprint
+    # ... and it moves with any field, which is the property a resume is relying on.
+    assert header_fingerprint(dataclasses.replace(header, code_sha="d" * 40)) != header_fingerprint(header)
+
+
+def test_a_resume_handed_the_base_context_fingerprint_covers_nothing(tmp_path):
+    _write(tmp_path)
+
+    plan = _resume(tmp_path, _NAMES, ["shard_00000"], expected_header_fingerprint=_header().base_context_fingerprint)
+
+    assert plan.covered == () and plan.todo == tuple(_NAMES)
+
+
+@pytest.mark.parametrize(
+    "paths, expected",
+    [
+        ((), 0),
+        (("gs://b/run/shard_00000",), 1),
+        (("gs://b/run/shard_00000", "gs://b/run/shard_00001"), 2),
+        (("gs://b/run/shard_00007", "gs://b/run/shard_00001"), 8),  # the highest, not the count
+        (("gs://b/run/shard_00003/",), 4),  # a trailing separator is not a new identity
+        (("gs://b/run/a1/shard_00002",), 3),  # per-arm subdirectories still carry the index
+        (("gs://b/run/videos", "gs://b/run/shard_00000"), 1),  # a stranger directory is ignored
+        (("gs://b/run/shard_0001",), 0),  # not the canonical five-digit form
+    ],
+)
+def test_the_next_shard_index_comes_from_the_paths_not_from_their_count(paths, expected):
+    assert next_shard_index(paths) == expected
+
+
+def test_a_resume_that_lost_one_shard_to_validation_does_not_reuse_a_live_identity(tmp_path):
+    """Counting what a resume *found* hands the next attempt an identity that is already immutable."""
+    _write(tmp_path, names=_NAMES[:2], shard="shard_00000")
+    _write(tmp_path, names=_NAMES[2:], shard="shard_00001")
+    with open(str(tmp_path / "cache" / "shard_00000" / canonical_files(_NAMES[:2])[_NAMES[0]]), "r+b") as handle:
+        handle.write(b"\x00\x01\x02\x03")
+
+    plan = _resume(tmp_path, _NAMES, ["shard_00000", "shard_00001"])
+    published = [report.path for report in plan.shards if report.valid]
+
+    assert len(published) == 1  # only shard_00001 survived validation
+    assert next_shard_index([str(tmp_path / "cache" / s) for s in ("shard_00000", "shard_00001")]) == 2

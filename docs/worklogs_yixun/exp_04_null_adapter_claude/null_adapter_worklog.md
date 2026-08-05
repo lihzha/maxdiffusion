@@ -273,3 +273,47 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `launched`.
 - **Analysis** — Auth verified live immediately before launch. Triage rule: reauth/network ⇒ infra (re-run); count/target mismatch ⇒ surface to Yixun (plan-constant vs dataset disagreement is a plan question, not a retry).
 - **Next** — On success: mirror + commit manifests; exp_05 merge-1/S1 in parallel; R10 opens.
+
+## 2026-08-05T05:15:00Z — J0 attempt 1 FAILED (infrastructure: ADC reauth) — fail-closed, nothing written
+
+- **Goal** — J0 run per entry J0-1.
+- **Result** — `partial`: TensorFlow's GCS layer (Application Default Credentials) failed with `invalid_rapt` reauth + anonymous-caller 401 at the very first listing; `build_j0_manifests` aborted before any scan; **nothing was written** (fail-closed as designed). Log: `null_adapter_2026-08-05_04:48:27.log`.
+- **Analysis** — **Infrastructure** (issue #6 class, new sub-variant): gsutil's credential store was live (verified minutes earlier) but TF uses ADC, a separate token that had gone stale. Workaround: Yixun runs `gcloud auth application-default login` (distinct from `gcloud auth login`). No code change; the run re-executes unchanged per the auto-resubmit-on-infra rule once ADC is refreshed.
+- **Next** — Await ADC refresh → re-run J0-1 verbatim (same commit, same command; will be recorded as J0-2).
+
+## 2026-08-05T07:40:00Z — R10 `launchers-config` write phase complete (incl. mode bodies); review dispatched
+
+- **Goal** — R10: config + entrypoint + launcher + the four execution-mode bodies (extended into the round by Planner ruling — J1's smoke exercises exactly that path).
+- **Change** — `base_wan_5b_null_inversion.yml` (208 keys), `run_wan_null_inversion.py` (212 exec LOC; pure decisions + thin glue), **`null_adapter_modes.py` (new, 321 exec LOC — capacity/adequacy_probe/cache/verify_replay behind Backend+Sinks injectable seams; Coder split ratified, R8/R9 precedent)**, `bash_scripts/run_wan_null_inversion.sh` (preflight: imports + ffmpeg executable, install-or-die; HF prefetch first), 2 test files (80 tests).
+- **Command / Validation** — reds evidenced; **690 passed in 52s** (676 → 690; pre-R10 610 unchanged); ruff/black/bash -n/diff-check clean. **38 mutants across R10, 0 survivors.** **Decode-range finding:** the pipeline emits [0,1] clamped float32 (traced: wan_pipeline.py:663-671 → video_processor:99-113 → image_processor denormalize+clamp :185-189) — R7's strict contract holds; the wrapper DECLARES the convention (`null_pixel_convention`) rather than sniffing.
+- **Result** — `passed` (write). Planner ratifications: modes-module split; declared-convention wrapper; `null_verify_atol=1e-2` and 100-GiB floor as defaults; `# pragma: no cover` confined to `_load_backend`'s literal pipeline calls + one glob (the smoke rung's residue).
+- **Next** — R10 review → strengthen → commit → R11 `a3-direct-opt` → parity audit → J0 re-run (pending ADC) → J1 package.
+
+## 2026-08-05T10:30:00Z — Coder handoff #2: fresh agent for the R10 revision (context exhaustion, self-declared)
+
+- **Goal** — Execute the R10 strengthen (BLOCKER + 8 MAJOR + 2 MINOR).
+- **Analysis** — The R6-onward Coder (10 rounds, ~830k transcript tokens) HALTED before starting rather than half-delivering: "half-written code and an unrun battery in a round whose entire subject is fail-closed integrity is the one failure mode this experiment cannot afford." Verified clean state handed over (six untracked write-phase files byte-identical to the 690-green state; HEAD `1e64eb9`) plus a five-item trap list (modes↔entrypoint import cycle; the load-bearing divergence-inside-quarantine seam; findings 2+5 must be done together — publication resequencing changes shard numbering; keep ffmpeg local + gfile copy; black-vs-mutant-pattern interactions). Classified: infra/agent-lifecycle, exemplary honesty — the SOP's report-outcomes-faithfully norm working as intended.
+- **Result** — `fix_ready` (fresh Coder dispatched with the review + trap list embedded).
+- **Next** — R10 revision (findings 1–6 priority, 2+5 together) → battery → follow-up review → commit.
+
+## 2026-08-05T17:20:00Z — R10 strengthen complete (11/11 findings); follow-up review dispatched
+
+- **Goal** — Verify-and-close the R10 revision.
+- **Change** — All 11 findings implemented per the review's concrete changes: real TI2V backend under axis_rules + manifest-bound read_batch (BLOCKER); capacity resequenced (nothing immutable before decode+gating; smoke limiter); adequacy preflight + full evidence persistence + adopted-recipe threading with the +2h stop; cache requires the selection artifact + fidelity-before-caching + selected-arm-only; verify fail-closed with exit semantics; 40-hex provenance + manifest digest + corrected default URI; transactional video publish; pragmas minimized; unit-range zero-tolerance; launcher tee/X_OK/preflight/on-device golden.
+- **Command / Validation** — **812 passed** (690 → 812); ruff/bash -n/diff-check clean; 66 mutants (3 late survivors closed, all re-verified incl. the review's 4 named probes; M54 reproduced finding 8's local-`gs:`-directory bug exactly).
+- **Result** — `passed` (strengthen). **Flagged for the follow-up reviewer (mandatory pass):** (1) additive edits to two SETTLED modules — `runner_core.arms=` kwarg (finding 4's requirement) and `shards.header_fingerprint/next_shard_index/supersede` (finding 5's requirement) — settled-module deltas need explicit review; (2) R8's ratified quarantine-then-published-raises behavior OVERTURNED by finding 5's concrete change — needs explicit re-ratification; (3) the BLOCKER's class fix pinned statically via ast (transformers absent from the venv) — first executed proof is J1's smoke; (4) `natural_context_length` zero-pad assumption (diagnostic-only) unverified against the real encoder — smoke item; (5) fidelity gate = real new J2 front-cost (plan-required, sized at 8 examples); (6) venv black ≠ repo black — formatting to confirm at commit.
+- **Next** — Follow-up review → commit → R11 `a3-direct-opt` → parity audit; J0-2 running in parallel.
+
+## 2026-08-05T18:50:00Z — J0-2 SUCCEEDED — cohorts are immutable and published
+
+- **Goal** — J0 per entry J0-2.
+- **Result** — `passed`, every predeclared criterion met: (2) VAL = **exactly 14,636 records** over 8 shards; (3) TRAIN target = **5,000 distinct episodes reached in 40 shards** (caps 200/60 GiB untouched); (4) staged publication complete (`_COMPLETE.json` last); (5) `load_manifests` re-validation PASSED (sizes 64/64/16/2000, disjointness, ordering, bindings — fail-closed loader); (6) zero binding failures; (7) mirrored to `gs://v6_east1d/datasets/droid_wan_null_adapter/manifests/j0/` and committed with this entry. Listing checksum `5827f4da…0d14`. Log `null_adapter_2026-08-05_15:27:35.log` (reconstituted from the task capture — the on-disk tee entry was unlinked mid-run by an unidentified actor while tee held the inode; content preserved via the duplicate capture stream; benign, noted).
+- **Analysis** — DEV-64/TEST-64/TRAINFIT-16/TRAIN-2000 are now frozen artifacts. exp_05's K1 condition "J0 published" is MET. Wall time ~2h20m (network-bound; ~19 GiB read).
+- **Next** — exp_04: R10 follow-up verdict → commit → R11 → parity audit → J1 package. exp_05: S5 next round; K1 conditions remaining = P0' green + parity audit.
+
+## 2026-08-05T21:00:00Z — R10 cycle CLOSED (844 green, 79/79 mutants) → commit
+
+- **Goal** — Close R10 after the deepest cycle of the experiment (review 1 BLOCKER + 8 MAJOR + 2 MINOR → strengthen 11/11 → follow-up 8/11+rulings → residues 4/4).
+- **Result** — `passed`. R10 committed with this entry: config (208 keys), entrypoint (620 exec LOC), modes module (878), launcher (242), 2 test files; additive deltas to runner_core (`arms=`) and shards (`header_fingerprint`/`next_shard_index`/supersede — reviewer-ratified, incl. the R8-semantics reversal re-ratification). Suite 690 → **844**.
+- **Analysis** — J1 is now launchable in structure: config → backend (TI2V class, statically pinned; first executed proof = smoke) → capacity with gates and provenance-bound artifacts. Remaining before the J1 package: R11 (A3 measurement module) + the parity audit.
+- **Next** — R11 `a3-direct-opt`; exp_05 merge-2-interim (R10 boundary) unblocks S4.

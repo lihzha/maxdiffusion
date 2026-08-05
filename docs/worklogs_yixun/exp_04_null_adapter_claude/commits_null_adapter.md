@@ -1,8 +1,6 @@
 # commits_null_adapter — SHA ledger
 
 - `1c87a2f` — docs(exp_04): scaffold null_adapter experiment — query doc + worklog
-<<<<<<< HEAD
-=======
 - `31008f6` — feat(exp_04): R1 sigma-embed-noise — noise conventions, context embedding, sigma-grid pins (TDD, 45 tests)
 - `bd55102` — feat(exp_04): R2 invert-trajectory — reverse-Euler pivot recurrence (TDD, 73 tests)
 - `34512cd` — feat(exp_04): R3 optimize-nulls — per-step null-embedding Adam core (TDD, 96 tests)
@@ -14,4 +12,4 @@
 - `9f4955f` — feat(exp_04): R7 runner-decode-videos — pixel metrics + comparison videos (TDD, 392 tests)
 - `1fb780a` — feat(exp_04): R8 runner-cache-resume — fail-closed shard storage + cache policy (TDD, 523 tests)
 - `c3401e4` — feat(exp_04): R9 manifests — pinned J0 cohort builder (TDD, 610 tests)
->>>>>>> claude-exp_04_null_adapter-20260803
+- `2ebaaad` — feat(exp_04): R10 launchers-config (TDD, 844 tests)
