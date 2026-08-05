@@ -750,12 +750,20 @@ def jit_cache_size(fn) -> int:
 # Specializations counted BEFORE their cache entry was dropped. A released program's compilation
 # still happened, and a census that read the live caches alone would report it as never having
 # existed -- so it is snapshotted here at the moment of release and merged back in.
-_RELEASED_SPECIALIZATIONS: dict = {}
+_RELEASED_SPECIALIZATIONS: dict = {}  # (section, label) -> specializations, counted before the drop
 _RELEASED_REPLAY_NAMES: dict = {}  # name -> how many of that objective's entries have been released
+# The trace's compiled forward, one per state: ~750 sampler steps share ONE compilation.
+_TRACE_FORWARD_CACHE: dict = {}
 
 
-def _record_released(label: str, size: int) -> None:
-    _RELEASED_SPECIALIZATIONS[label] = _RELEASED_SPECIALIZATIONS.get(label, 0) + int(size)
+def _record_released(section: str, label: str, size: int) -> None:
+    """Snapshot a specialization count under the census section it belongs to.
+
+    Sectioned rather than inferred from the label's shape: the previous version guessed "replay" from
+    a ``#`` in the name, which was fragile the moment a third family of compiled functions existed.
+    """
+    key = (str(section), str(label))
+    _RELEASED_SPECIALIZATIONS[key] = _RELEASED_SPECIALIZATIONS.get(key, 0) + int(size)
 
 
 def release_probe_programs(*tags: str) -> list:
@@ -777,7 +785,7 @@ def release_probe_programs(*tags: str) -> list:
     """
     released = []
     for key in [key for key in _PROBE_GRAD_CACHE if key[0] in tags]:
-        _record_released(_probe_census_label(*key), jit_cache_size(_PROBE_GRAD_CACHE[key]))
+        _record_released("probe", _probe_census_label(*key), jit_cache_size(_PROBE_GRAD_CACHE[key]))
         del _PROBE_GRAD_CACHE[key]
         released.append(key[0])
     if released:
@@ -796,7 +804,9 @@ def release_replay_programs() -> list:
         name = key[0]
         grad_fn, value_fn = exp03._LOSS_AND_GRAD_CACHE[key]
         _RELEASED_REPLAY_NAMES[name] = _RELEASED_REPLAY_NAMES.get(name, 0) + 1
-        _record_released(f"{name}#{_RELEASED_REPLAY_NAMES[name]}", jit_cache_size(grad_fn) + jit_cache_size(value_fn))
+        _record_released(
+            "replay", f"{name}#{_RELEASED_REPLAY_NAMES[name]}", jit_cache_size(grad_fn) + jit_cache_size(value_fn)
+        )
         del exp03._LOSS_AND_GRAD_CACHE[key]
         released.append(name)
     if released:
@@ -808,13 +818,42 @@ def _probe_census_label(tag: str, static_key) -> str:
     return tag if not static_key else f"{tag}({','.join(str(part) for part in static_key)})"
 
 
+TRACE_FORWARD_TAG = "trace_forward"
+
+
+def trace_forward_for(state, *, replicas: int, state_label: str = ""):
+    """The trace's compiled forward, CACHED — one compilation for ~750 sampler steps.
+
+    Held under the same discipline as every other compiled function here: one cache entry, a first
+    call timed into ``COMPILE_TIMINGS`` under ``(probe_trace_forward, state)`` so the init state's
+    compile is its own number, a census entry, and a release once the trace phase is over. Built by
+    the shared trace module so the standalone entry point runs the identical forward.
+    """
+    key = (TRACE_FORWARD_TAG, int(replicas))
+    if key not in _TRACE_FORWARD_CACHE:
+        _TRACE_FORWARD_CACHE[key] = trace.jitted_tiled_forward(state, replicas=int(replicas))
+    return exp03._timed_first_call(f"probe_{TRACE_FORWARD_TAG}", _TRACE_FORWARD_CACHE[key], state_label=state_label)
+
+
+def release_trace_programs() -> list:
+    """Drop the trace's compiled forward once its phase is done — snapshotting the census first."""
+    released = []
+    for key in list(_TRACE_FORWARD_CACHE):
+        _record_released("trace", str(key), jit_cache_size(_TRACE_FORWARD_CACHE[key]))
+        del _TRACE_FORWARD_CACHE[key]
+        released.append(key)
+    if released:
+        release()
+    return released
+
+
 def specialization_census() -> dict:
     """Every jitted wrapper in the probe's world, with its specialization count and their TOTAL.
 
-    Three families: the probe's cached gradient functions, the replay's cached
-    ``(value_and_grad, value)`` pair per objective per state view, and the jitted helpers. Keys are
-    derived from tags and insertion order, never from ``id()``, so the census is identical across
-    runs and the artifact stays byte-reproducible.
+    Four families: the probe's cached gradient functions, the replay's cached
+    ``(value_and_grad, value)`` pair per objective per state view, the sigma trace's one compiled
+    forward per state, and the jitted helpers. Keys are derived from tags and insertion order, never
+    from ``id()``, so the census is identical across runs and the artifact stays byte-reproducible.
 
     A tag with more specializations than the number of states that ran it is the cache-collision
     regression coming back; a helper with zero is a helper that never ran.
@@ -824,26 +863,26 @@ def specialization_census() -> dict:
     caches would report the opposite of the truth -- zero -- for exactly the programs this probe
     works hardest to account for.
     """
-    probe = dict.fromkeys([], 0)
+    sections: dict = {"probe": {}, "replay": {}, "trace": {}}
     for (tag, static_key), fn in _PROBE_GRAD_CACHE.items():
-        probe[_probe_census_label(tag, static_key)] = jit_cache_size(fn)
-    replay: dict = {}
+        sections["probe"][_probe_census_label(tag, static_key)] = jit_cache_size(fn)
     seen: dict = dict(_RELEASED_REPLAY_NAMES)
     for (name, _, _), (grad_fn, value_fn) in exp03._LOSS_AND_GRAD_CACHE.items():
         seen[name] = seen.get(name, 0) + 1
-        replay[f"{name}#{seen[name]}"] = jit_cache_size(grad_fn) + jit_cache_size(value_fn)
-    for label, size in _RELEASED_SPECIALIZATIONS.items():
-        target = replay if "#" in label else probe
+        sections["replay"][f"{name}#{seen[name]}"] = jit_cache_size(grad_fn) + jit_cache_size(value_fn)
+    for label, fn in _TRACE_FORWARD_CACHE.items():
+        sections["trace"][str(label)] = jit_cache_size(fn)
+    for (section, label), size in _RELEASED_SPECIALIZATIONS.items():
+        target = sections.setdefault(section, {})
         target[label] = target.get(label, 0) + int(size)
     helpers = {name: jit_cache_size(fn) for name, fn in probe_jit_helpers().items()}
+    totals = {f"{name}_total": sum(entries.values()) for name, entries in sections.items()}
     return {
-        "probe": probe,
-        "replay": replay,
+        **sections,
         "helpers": helpers,
-        "probe_total": sum(probe.values()),
-        "replay_total": sum(replay.values()),
+        **totals,
         "helper_total": sum(helpers.values()),
-        "total": sum(probe.values()) + sum(replay.values()) + sum(helpers.values()),
+        "total": sum(totals.values()) + sum(helpers.values()),
     }
 
 
@@ -1909,14 +1948,17 @@ def trace_in_memory_state(state, config, scheduler, *, mesh=None, state_label: s
         num_train_timesteps=scheduler.config.num_train_timesteps,
     )
     weights_dtype = gen._dtype(config.weights_dtype)
-    transformer = nnx.merge(state.graphdef, state.params, state.rest_of_state)
-    # ONE window per forward, but a MESH-SIZED batch. The trace is the only batch-1 forward in the
-    # probe, and on v6e-8 a batch of 1 cannot be split eight ways; Job 8f reached this line with the
-    # whole checkpoint-state report already computed behind it and died here.
+    # ONE window per forward, a MESH-SIZED batch, and ONE compiled program for the whole phase. The
+    # trace is the only batch-1 forward in the probe -- on v6e-8 a batch of 1 cannot be split eight
+    # ways, which is where Job 8f died with the whole checkpoint-state report already behind it --
+    # and it is ~750 forwards, which is why it is compiled once rather than dispatched op by op.
     replicas = trace.batch_replicas(config, mesh)
-    velocity_fn = trace.tiled_velocity_fn(transformer, replicas=replicas)
+    forward = trace_forward_for(state, replicas=replicas, state_label=state_label)
+    velocity_fn = trace.velocity_fn_for(forward, state)
     if jax.process_index() == 0:
-        max_logging.log(f"[exp03_s1_5] sigma trace: {replicas} row(s) per forward, reading row 0")
+        max_logging.log(
+            f"[exp03_s1_5] sigma trace: {replicas} row(s) per forward, one compiled program, reading row 0"
+        )
 
     samples = gen.read_overfit100_samples(config, cohort)
     rows = []
@@ -1941,6 +1983,10 @@ def trace_in_memory_state(state, config, scheduler, *, mesh=None, state_label: s
                 ),
             }
         )
+    # The trace phase is over: its one program is dropped like every other, and the ledger line says
+    # whether the executable actually went.
+    release_trace_programs()
+    log_memory("post_trace_release", state_label=state_label)
     return {
         "state": state_label,
         "checkpoint_step": int(checkpoint_step),

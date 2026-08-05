@@ -202,45 +202,69 @@ def _tile_rows(array, replicas: int):
     return jnp.broadcast_to(array, (replicas,) + tuple(array.shape[1:]))
 
 
-def tiled_velocity_fn(transformer, *, replicas: int = 1):
-    """The trace's ONE-WINDOW forward, run as ``replicas`` identical rows, reading row 0.
+def jitted_tiled_forward(state, *, replicas: int = 1):
+    """ONE compiled forward for the whole trace: the window TILED to ``replicas`` rows.
 
-    THE Job 8f failure. Every other phase of S1.5 runs the global batch -- eight examples, one per
-    chip -- but the sigma trace is inherently one window at a time, and the transformer annotates
-    its activations with ``P(('data','fsdp'), 'context', 'tensor')``. A batch of 1 cannot be split
-    eight ways, so the first trace forward the probe ever reached raised ``IndivisibleError`` at
-    ``transformer_wan.py:401`` -- with the entire checkpoint-state report already computed behind it.
+    THE Job 8f failure, and the wall-time hazard behind it. Every other phase of S1.5 runs the
+    global batch -- eight examples, one per chip -- but the sigma trace is inherently one window at
+    a time, and the transformer annotates its activations ``P(('data','fsdp'), 'context',
+    'tensor')``. One row cannot be split eight ways, so the first trace forward the probe ever
+    reached raised ``IndivisibleError`` at ``transformer_wan.py:401`` with the entire
+    checkpoint-state report already computed behind it.
 
-    Tiling rather than re-annotating: the constraint is production's and is right for production,
+    Tiling rather than re-annotating: the constraint is production's, it is right for production,
     and a diagnostic has no business relaxing the sharding of the model it exists to measure.
 
-    Reading row 0 is EXACT because nothing in this transformer mixes information across batch rows,
-    which was verified in the code rather than assumed: the normalizations are ``FP32LayerNorm`` and
-    ``RMSNorm`` reducing over the FEATURE axis (per token -- there are no batch statistics anywhere);
-    attention folds heads into the leading axis and its einsums contract over sequence and head-dim
-    only, with the softmax over one example's own keys; rotary embeddings are a batch-1 broadcast;
-    dropout is configured to 0.0 and the probe passes ``deterministic=True`` besides; and the only
-    collectives in the attention module ride the ``context`` (sequence) axis, inside kernels this
-    540-token path does not take. The one caveat is arithmetic rather than semantics: XLA may
-    schedule reductions differently for a different batch shape, so row 0 can differ from a batch-1
-    reference in the last bits. The test measures which of the two it is and reports it.
-    """
+    COMPILED, not eager, and that is the second half of the fix. The trace is ~750 model forwards
+    per state, each traversing 40 ``nnx.remat``-wrapped blocks; run op by op that is a dispatch
+    storm of unbounded duration with no way to size a retry. Compiled once and reused for every step
+    of every window it is one compilation plus 750 executions of a graph XLA has already scheduled.
 
-    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
-        if replicas <= 1 or int(hidden_states.shape[0]) != 1:
-            return transformer(
-                hidden_states=hidden_states,
-                timestep=timestep,
-                encoder_hidden_states=encoder_hidden_states,
-                deterministic=True,
-            )
-        out = transformer(
+    The parameters are an ARGUMENT, never a closure capture: a jitted function closing over an
+    ``nnx`` module turns ~5B weights into compile-time literals. This is the shape every other
+    compiled function here uses -- ``nnx.merge(graphdef, params, rest)`` inside, ``graphdef`` static
+    and ``params`` traced -- and the inputs are fed exactly as the replay feeds them, at their
+    natural shardings, with no ``in_shardings`` of its own.
+
+    No ``out_shardings``, deliberately: unlike a gradient this output is latent-shaped -- eight rows
+    of one window, under 2 MB -- so however XLA lays it out costs nothing worth pinning.
+
+    Reading row 0 (in :func:`velocity_fn_for`, OUTSIDE this compiled boundary) is EXACT because
+    nothing in this transformer mixes information across batch rows, verified in the code rather
+    than assumed: the normalizations are ``FP32LayerNorm`` and ``RMSNorm`` reducing over the FEATURE
+    axis (per token -- there are no batch statistics anywhere); attention folds heads into the
+    leading axis and its einsums contract over sequence and head-dim only, with the softmax over one
+    example's own keys; rotary embeddings are a batch-1 broadcast; dropout is configured to 0.0 and
+    the probe passes ``deterministic=True`` besides; and the only collectives in the attention
+    module ride the ``context`` (sequence) axis, inside kernels this 540-token path does not take.
+    The remaining caveat is arithmetic rather than semantics: XLA may schedule reductions
+    differently for a different batch shape, so row 0 could in principle differ from a batch-1
+    reference in the last bits. Measured on an 8-device mesh it does not -- it is bitwise.
+    """
+    graphdef = state.graphdef
+
+    def _forward(params, st, hidden_states, timestep, encoder_hidden_states):
+        transformer = gen.nnx.merge(graphdef, params, st.rest_of_state)
+        return transformer(
             hidden_states=_tile_rows(hidden_states, replicas),
             timestep=_tile_rows(timestep, replicas),
             encoder_hidden_states=_tile_rows(encoder_hidden_states, replicas),
             deterministic=True,
         )
-        return out[:1]  # ...and the sampler goes on seeing the single window it handed us
+
+    return jax.jit(_forward)
+
+
+def velocity_fn_for(forward, state):
+    """The sampler-facing velocity: call the compiled tiled forward, take row 0 OUTSIDE it.
+
+    The slice lives here rather than inside the compiled function so that the compiled thing is
+    exactly the forward -- one graph, reused ~750 times -- while the sampler goes on receiving the
+    single window it handed in.
+    """
+
+    def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+        return forward(state.params, state, hidden_states, timestep, encoder_hidden_states)[:1]
 
     return velocity_fn
 
@@ -428,10 +452,11 @@ def run_trace(config) -> dict:
         )
     replicated = NamedSharding(mesh, P())
     weights_dtype = gen._dtype(config.weights_dtype)
-    transformer = gen.nnx.merge(state.graphdef, state.params, state.rest_of_state)
-    # One window is one row of a mesh-sized batch: the standalone entry point has the same
-    # batch-1 forward the probe's does, and would hit the same IndivisibleError on the same mesh.
-    velocity_fn = tiled_velocity_fn(transformer, replicas=batch_replicas(config, mesh))
+    # One window is one row of a mesh-sized batch, through ONE compiled forward: the standalone
+    # entry point has the same batch-1 forward the probe's does and would hit the same
+    # IndivisibleError on the same mesh, and the same dispatch storm if it were left eager.
+    forward = jitted_tiled_forward(state, replicas=batch_replicas(config, mesh))
+    velocity_fn = velocity_fn_for(forward, state)
 
     samples = gen.read_overfit100_samples(config, cohort)
     if jax.process_index() == 0:

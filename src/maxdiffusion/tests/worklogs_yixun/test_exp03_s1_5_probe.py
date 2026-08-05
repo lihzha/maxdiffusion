@@ -536,8 +536,15 @@ def test_the_sigma_trace_uses_the_state_already_in_memory():
     # ...and the standalone per-state trace JSON is written under the trace module's own rules.
     assert "trace.write_trace_artifact(trace.trace_output_path(config, checkpoint_step)" in source
     tracer = inspect.getsource(s1_5.trace_in_memory_state)
-    assert "nnx.merge(state.graphdef, state.params, state.rest_of_state)" in tracer
+    assert "trace_forward_for(state, replicas=replicas, state_label=state_label)" in tracer
     assert "_restore" not in tracer and "run_trace" not in tracer
+    # The merge moved INTO the shared compiled forward, which is the point: there the parameters are
+    # a traced ARGUMENT, where closing over the merged module would have baked ~5B weights into the
+    # executable as literals. It is still the state already in memory -- no second restore, no
+    # second load -- it is simply crossing a jit boundary now.
+    builder = inspect.getsource(s1_5.trace.jitted_tiled_forward)
+    assert "gen.nnx.merge(graphdef, params, st.rest_of_state)" in builder
+    assert "def _forward(params, st, hidden_states, timestep, encoder_hidden_states):" in builder
 
 
 def test_the_reductions_never_flatten_a_gradient_on_the_host():
@@ -2597,22 +2604,55 @@ one = jnp.asarray(np.random.default_rng(0).normal(size=(1, 16, 8)), jnp.float32)
 timestep = jnp.asarray(np.random.default_rng(1).normal(size=(1, 16)), jnp.float32)
 context = jnp.asarray(np.random.default_rng(2).normal(size=(1, 16, 4)), jnp.float32)
 
+# A state shaped like the real one: a PYTREE whose params are traced, with graphdef and
+# rest_of_state static. The forward merges them exactly as the 5B one does -- and it has to be a
+# pytree, because that is how the real state crosses the jit boundary.
+from flax import struct
+
+
+@struct.dataclass
+class _State:
+    params: dict
+    graphdef: object = struct.field(pytree_node=False, default=None)
+    rest_of_state: object = struct.field(pytree_node=False, default=None)
+
+
+state = _State(params={"unused": jnp.zeros((1,), jnp.float32)})
+trace.gen.nnx.merge = lambda graphdef, params, rest: toy  # the merge the real forward performs
+
 result = {"devices": jax.device_count()}
 
-# 1. THE DEFECT, reproduced: the untiled batch-1 forward against an 8-way batch split.
+# 1a. THE DEFECT exactly as Job 8f hit it: EAGER, batch 1, against an 8-way batch split. Eager
+# means every constraint is its own pjit, and a pjit OUTPUT sharding must divide.
 try:
-    trace.tiled_velocity_fn(toy, replicas=1)(one, timestep, context)
-    result["untiled_error"] = None
+    toy(hidden_states=one, timestep=timestep, encoder_hidden_states=context, deterministic=True)
+    result["eager_untiled_error"] = None
 except Exception as exc:
-    result["untiled_error"] = type(exc).__name__
+    result["eager_untiled_error"] = type(exc).__name__
 
-# 2. THE FIX: eight identical rows, row 0 read back.
+# 1b. ...and what the same batch-1 shape does once COMPILED. Recorded rather than assumed: inside
+# one jit the constraint is an internal annotation that GSPMD can satisfy by replicating a size-1
+# dimension, so the error goes away on its own. That is WHY the tiling is not redundant -- it is
+# what puts one real row on each chip instead of one row replicated across eight.
+try:
+    trace.velocity_fn_for(trace.jitted_tiled_forward(state, replicas=1), state)(one, timestep, context)
+    result["jitted_untiled_error"] = None
+except Exception as exc:
+    result["jitted_untiled_error"] = type(exc).__name__
+
+# 2. THE FIX: eight identical rows through ONE COMPILED forward, row 0 read back outside it.
 replicas = trace.batch_replicas(
     type("C", (), {"logical_axis_rules": [["batch", ["fsdp"]], ["embed", ["tensor"]]]})(), mesh
 )
 result["replicas"] = replicas
-tiled_out = trace.tiled_velocity_fn(toy, replicas=replicas)(one, timestep, context)
+forward = trace.jitted_tiled_forward(state, replicas=replicas)
+velocity = trace.velocity_fn_for(forward, state)
+tiled_out = velocity(one, timestep, context)
 result["tiled_shape"] = list(tiled_out.shape)
+# ...and it really is compiled, and reused rather than recompiled on every step.
+for _ in range(4):
+    velocity(one, timestep, context)
+result["forward_cache_size"] = int(forward._cache_size())
 
 # 3. THE REFERENCE: the same window on ONE device, unsharded, batch 1.
 with jax.default_device(jax.devices()[0]):
@@ -2630,11 +2670,7 @@ result["bitwise_equal"] = bool(np.array_equal(np.asarray(tiled_out), np.asarray(
 result["max_abs_diff"] = float(np.max(np.abs(left - right)))
 result["max_rel_diff"] = float(np.max(np.abs(left - right) / (np.abs(right) + 1e-30)))
 # ...and every tiled row is the same row, which is what makes reading row 0 meaningful.
-full = trace.tiled_velocity_fn(toy, replicas=replicas)
-raw = toy(hidden_states=jnp.broadcast_to(one, (replicas,) + one.shape[1:]),
-          timestep=jnp.broadcast_to(timestep, (replicas,) + timestep.shape[1:]),
-          encoder_hidden_states=jnp.broadcast_to(context, (replicas,) + context.shape[1:]),
-          deterministic=True)
+raw = forward(state.params, state, one, timestep, context)
 result["rows_identical"] = bool(np.array_equal(np.asarray(raw[0]), np.asarray(raw[replicas - 1])))
 print("RESULT " + json.dumps(result))
 '''
@@ -2643,6 +2679,13 @@ print("RESULT " + json.dumps(result))
 def test_the_trace_forward_is_tiled_to_the_mesh_and_row_zero_is_the_answer():
     # EXECUTED on the forced 8-device mesh: the defect reproduced, the fix applied, and row 0
     # checked against an unsharded batch-1 reference.
+    #
+    # WHAT THIS IS NOT. The model here is a toy with the right SHAPE -- a batch-partitioned sharding
+    # constraint and a per-token feature-axis reduction -- not the real WAN forward under real FSDP.
+    # It proves the tiling mechanism and the row-0 slice, and it reproduces the failure mode; it
+    # cannot prove that the 5B forward's row 0 is right. The real proof is the 8g run's own trace
+    # output: finite, sane, and starting at zero (the trace begins AT the interpolant by
+    # construction, so index 0 is arithmetic-free and any drift there is a broken forward).
     import os
 
     env = dict(os.environ)
@@ -2656,12 +2699,20 @@ def test_the_trace_forward_is_tiled_to_the_mesh_and_row_zero_is_the_answer():
     result = json.loads(next(l for l in proc.stdout.splitlines() if l.startswith("RESULT "))[len("RESULT ") :])
 
     assert result["devices"] == 8, result
-    # 1. The defect is REAL and reproduced: batch 1 against an 8-way batch split raises.
-    assert result["untiled_error"] is not None, result
-    assert "Indivisible" in result["untiled_error"] or "Sharding" in result["untiled_error"], result
+    # 1a. The defect is REAL and reproduced in the mode 8f ran in: EAGER batch 1 against an 8-way
+    # batch split raises IndivisibleError.
+    assert result["eager_untiled_error"] is not None, result
+    assert "Indivisible" in result["eager_untiled_error"] or "Sharding" in result["eager_untiled_error"], result
+    # 1b. MEASURED, and worth knowing: compiling alone makes the error go away, because inside one
+    # jit the constraint is an annotation GSPMD can satisfy by replicating a size-1 dimension. So
+    # the jit is what unblocks the run and the TILING is what makes the batch axis honestly
+    # divisible -- one real row per chip. If a future XLA raises here instead, this line says so.
+    assert result["jitted_untiled_error"] is None, result
     # 2. The fix runs, and hands the sampler back the single row it passed in.
     assert result["replicas"] == 8, result
     assert result["tiled_shape"][0] == 1, result
+    # ONE compilation, reused for every step -- the fix for the eager dispatch storm.
+    assert result["forward_cache_size"] == 1, result
     # 3. Row 0 IS the batch-1 answer. Measured rather than assumed: the tolerance below is what the
     # 8-device run actually produced against an unsharded reference, and the assertion records
     # whether it was bitwise or merely floating-point equal.
@@ -2700,12 +2751,111 @@ def test_the_probe_hands_the_mesh_to_the_trace():
     assert "trace_in_memory_state(\n" in per_state and "mesh=mesh" in per_state
     tracer = inspect.getsource(s1_5.trace_in_memory_state)
     assert "trace.batch_replicas(config, mesh)" in tracer
-    assert "trace.tiled_velocity_fn(transformer, replicas=replicas)" in tracer
+    assert "trace_forward_for(state, replicas=replicas, state_label=state_label)" in tracer
+    assert "trace.velocity_fn_for(forward, state)" in tracer
     # ...and the standalone entry point got the same fix, since it has the same batch-1 forward.
     standalone = inspect.getsource(s1_5.trace.run_trace)
-    assert "tiled_velocity_fn(transformer, replicas=batch_replicas(config, mesh))" in standalone
-    # REGRESSION GUARD: neither call site may build its own bare forward again. A hand-rolled
-    # ``velocity_fn`` here is precisely what ran at batch 1 for four rounds without anyone noticing,
+    assert "jitted_tiled_forward(state, replicas=batch_replicas(config, mesh))" in standalone
+    assert "velocity_fn_for(forward, state)" in standalone
+
+
+def _transformer_calling_closures(function) -> list:
+    """Every nested function in ``function`` whose body CALLS a transformer-shaped forward.
+
+    Structural, by AST, because the string ``def velocity_fn`` catches only one spelling of the
+    mistake: a lambda, a rename, or a direct ``transformer(...)`` at the call site all evade it.
+    What actually matters is that no call site builds its own forward -- so this looks for the
+    SHAPE of one: a nested callable that calls something with ``hidden_states=`` and
+    ``deterministic=``, which is how this transformer is invoked everywhere.
+    """
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function.__name__:
+            continue  # the function itself, not a closure inside it
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call):
+                keywords = {keyword.arg for keyword in inner.keywords}
+                if "hidden_states" in keywords and "deterministic" in keywords:
+                    offenders.append(getattr(node, "name", "<lambda>"))
+    return offenders
+
+
+def test_no_call_site_builds_its_own_transformer_forward():
+    # THE structural guard. Both entry points must obtain their forward from the ONE shared helper;
+    # a hand-rolled forward is what ran at batch 1, eagerly, for four rounds without being noticed,
     # because no launch had ever reached the trace.
-    assert "def velocity_fn" not in tracer, tracer
-    assert "def velocity_fn" not in standalone, standalone
+    for owner in (s1_5.trace_in_memory_state, s1_5.trace.run_trace):
+        assert _transformer_calling_closures(owner) == [], (owner.__name__, _transformer_calling_closures(owner))
+    # ...and the helper that IS allowed to build one is the only place the shape appears.
+    assert _transformer_calling_closures(s1_5.trace.jitted_tiled_forward) == ["_forward"]
+
+    # The guard is not vacuous: it catches the exact defect it exists for.
+    def _reintroduced_defect(transformer):
+        def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+            return transformer(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                deterministic=True,
+            )
+
+        return velocity_fn
+
+    assert _transformer_calling_closures(_reintroduced_defect) == ["velocity_fn"]
+
+    # ...and equally when it is spelled as a lambda or under another name.
+    def _renamed(transformer):
+        return lambda h, t, c: transformer(hidden_states=h, timestep=t, encoder_hidden_states=c, deterministic=True)
+
+    assert _transformer_calling_closures(_renamed) == ["<lambda>"]
+
+    # Identity, not just shape: both entry points resolve to the same shared helper object.
+    assert s1_5.trace.jitted_tiled_forward is sys.modules[s1_5.trace.__name__].jitted_tiled_forward
+    assert s1_5.trace.velocity_fn_for is sys.modules[s1_5.trace.__name__].velocity_fn_for
+
+
+def test_the_trace_forward_compiles_once_per_state_and_is_released():
+    # The trace runs ~750 forwards per state. ONE compilation serves all of them, it is timed under
+    # its own (tag, state) key like every other compiled function, it appears in the census, and it
+    # is released when the phase ends -- the same discipline as the gradient programs.
+    s1_5._TRACE_FORWARD_CACHE.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
+    exp03.COMPILE_TIMINGS.clear()
+    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+
+    forward = s1_5.trace_forward_for(state, replicas=1, state_label="checkpoint")
+    hidden = batches[0]["z_video"][:1]
+    timestep = jnp.zeros((1, 4), jnp.float32)
+    context = state.context_table[:1]
+    out = s1_5.trace.velocity_fn_for(forward, state)(hidden, timestep, context)
+    assert out.shape[0] == 1, out.shape  # row 0, sliced outside the compiled boundary
+
+    for _ in range(5):  # ...and every later step REUSES it rather than recompiling
+        s1_5.trace.velocity_fn_for(s1_5.trace_forward_for(state, replicas=1, state_label="checkpoint"), state)(
+            hidden, timestep, context
+        )
+    assert len(s1_5._TRACE_FORWARD_CACHE) == 1, s1_5._TRACE_FORWARD_CACHE
+    assert s1_5.jit_cache_size(forward) == 1, s1_5.jit_cache_size(forward)
+    # Timed per (tag, state), so the init state's compile is not merged into the checkpoint's.
+    assert ("probe_trace_forward", "checkpoint") in exp03.COMPILE_TIMINGS, sorted(exp03.COMPILE_TIMINGS)
+
+    census = s1_5.specialization_census()
+    assert census["trace"] == {"('trace_forward', 1)": 1}, census["trace"]
+    assert census["trace_total"] == 1
+
+    released = s1_5.release_trace_programs()
+    assert released and not s1_5._TRACE_FORWARD_CACHE
+    # ...and the census still knows it existed, which is the point of snapshotting before the drop.
+    after = s1_5.specialization_census()
+    assert after["trace_total"] == 1, after["trace"]
+    assert after["total"] == census["total"], (after["total"], census["total"])
+    # The release point is where the phase ends, and the ledger says whether the executable went.
+    tracer = inspect.getsource(s1_5.trace_in_memory_state)
+    assert tracer.index("trace.trace_rows(") < tracer.index("release_trace_programs()")
+    assert 'log_memory("post_trace_release"' in tracer
