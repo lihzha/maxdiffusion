@@ -31,3 +31,15 @@ No environment/default route selects the null YAML or passes null-root keys: the
 4. Verdict
 
 **REQUEST-REVISION — the launcher files are structurally sound, but K1 is not end-to-end launchable until DEV adequacy adoption works for the required TRAINFIT-16 capacity run.**
+
+## Strengthening record + follow-up verdict
+
+Strengthen delivered: the BLOCKER adoption fix (DEV-provenance validation + DEV-digest binding independent of the capacity cohort; run's own records stay bound to their cohort), extracted-heredoc AST tests + real-config-parser subprocess tests (the LOW), the directed rename. Suite 1123 → **1139**; battery extended to **30 mutants, 0 survivors** (M13–M20 heredoc/parser/errexit + A1–A7 adoption). The Coder agent hit its API session limit immediately after the battery completed; the record above and the battery log were assembled/verified by the Planner from disk evidence (suite re-run independently: 1139 green — also the no-live-mutant proof; sha256 restore line present in the battery log).
+
+## Follow-up reviewer output (verbatim)
+
+1. Findings: none. The exact 136-case run was blocked by the read-only sandbox’s missing temp directory; collection succeeded, and 19 strengthened adoption/heredoc/parser cases passed independently. `git diff --check` was clean.
+
+2. Verdict: **APPROVE**. The blocker is closed, the LOW-strengthening tests are load-bearing, the rename is complete, and the dual-touch delta remains additive and positive-branch-only.
+
+3. Planner reading: **Ratified.** `plan_run` selects exactly one cohort and its names per invocation at [run_wan_null_inversion.py:366](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context/src/maxdiffusion/run_wan_null_inversion.py:366); neither `positive_plan` nor either capacity runner expands that plan into another cohort. K1 therefore needs the stated four invocations, with both full-capacity jobs consuming the same DEV `POS_ADEQUACY_URI`. The same reasoning exposes exp_04 J1’s missing TRAINFIT-16 capacity half, and one supplemental `NULL_COHORT=trainfit16` job is mechanically viable because null adoption is unbound at [run_wan_null_inversion.py:779](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_05_pos_context/src/maxdiffusion/run_wan_null_inversion.py:779). No DEV run derives TRAINFIT metrics internally. Operationally, give the DEV and TRAINFIT capacity invocations distinct artifact roots/run names so the TRAINFIT job cannot overwrite the DEV-authoritative `selection.json`, tables, or shard paths.

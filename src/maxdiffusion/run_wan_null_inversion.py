@@ -704,6 +704,7 @@ def main(
     positive = None
     if slot == "positive":
         from maxdiffusion.pos_context_modes import (
+            ADEQUACY_COHORT as POS_ADEQUACY_COHORT,
             casting_velocity_fn,
             pos_adoption,
             pos_default_sinks,
@@ -768,7 +769,11 @@ def main(
             plan,
             exists=artifact_exists or _artifact_exists,
             read_json=active_sinks.read_json,
-            manifest_hash=manifest_digest(manifests, plan["cohort"]),
+            # exp_05 S10a: the DEV digest, whatever cohort is running. The positive adequacy probe is
+            # DEV-only, and K1 adopts that one measurement for BOTH capacity cohorts, so comparing it
+            # against the active cohort's digest rejected the only artifact the experiment produces
+            # (S10a review, the BLOCKER). The run's own records stay bound to their cohort below.
+            manifest_hash=manifest_digest(manifests, POS_ADEQUACY_COHORT),
         )
         if positive is not None
         else load_adoption(

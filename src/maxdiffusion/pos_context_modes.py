@@ -717,6 +717,14 @@ def pos_adoption(
     (follow-up finding 2). Everything the artifact claims about itself is therefore checked before a
     single number is applied: the slot, the mode, the cohort, ``l_pos``, the guidance weight, and the
     manifest the probe was run against.
+
+    **The cohort check is provenance, not identity (S10a review, the BLOCKER).** The probe is DEV-only
+    by construction -- ``_preflight_pos_adequacy`` refuses any other cohort -- while K1 runs capacity
+    arms on DEV-64 *and* TRAINFIT-16 off that one measurement. Requiring the artifact's cohort to equal
+    the *running* cohort rejected the only artifact K1 will ever have, on the very cohort that needs
+    it. What must hold is that the recipe was measured where the experiment says it was measured:
+    ``cohort == ADEQUACY_COHORT``. The manifest binding is checked the same way -- the caller passes
+    the DEV digest whatever cohort is running (``main``, the positive branch).
     """
     if not uri or not exists(uri):
         return None
@@ -730,8 +738,12 @@ def pos_adoption(
         )
     if payload.get("mode") != "adequacy_probe":
         raise ValueError(f"{uri} is a {payload.get('mode')!r} artifact, not an adequacy probe")
-    if payload.get("cohort") != plan["cohort"]:
-        raise ValueError(f"{uri} was probed on {payload.get('cohort')!r}, this run is on {plan['cohort']!r}")
+    if payload.get("cohort") != ADEQUACY_COHORT:
+        raise ValueError(
+            f"{uri} was probed on {payload.get('cohort')!r}, but the positive adequacy probe is defined on "
+            f"{ADEQUACY_COHORT!r}: a recipe measured anywhere else authorizes nothing (this run is on "
+            f"{plan['cohort']!r})"
+        )
     if int(payload.get("l_pos", -1)) != int(plan["params"]["l_pos"]):
         raise ValueError(
             f"{uri} was probed at l_pos={payload.get('l_pos')!r}, this run runs at "

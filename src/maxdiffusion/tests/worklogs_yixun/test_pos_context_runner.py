@@ -199,13 +199,13 @@ def _header(fake, **overrides):
     return pos_header_for(plan, fake.backend(), manifest_hash="m" * 8, code_sha=_SHA)
 
 
-def _run_main(fake, recorder, observed=None, **overrides):
+def _run_main(fake, recorder, observed=None, *, manifests=None, artifact_exists=None, sinks=None, **overrides):
     config = _config(**overrides)
     observed = {"swept": [], "free_space": []} if observed is None else observed
     return main(
         ["prog", "config.yml"],
         configure=lambda argv: config,
-        load_manifests=lambda path: _manifests(),
+        load_manifests=lambda path: manifests if manifests is not None else _manifests(),
         load_backend=lambda cfg, rows: {
             "velocity_fn": fake.velocity_fn,
             "decode_fn": fake.decode_fn,
@@ -213,9 +213,9 @@ def _run_main(fake, recorder, observed=None, **overrides):
             "base_context": _BASE_CONTEXT,
             "resolved": "",
         },
-        sinks=recorder.sinks(),
+        sinks=sinks if sinks is not None else recorder.sinks(),
         shards_for=lambda path: (),
-        artifact_exists=lambda uri: False,
+        artifact_exists=artifact_exists if artifact_exists is not None else (lambda uri: False),
         sweep=lambda root: observed["swept"].append(root) or (),
         free_space=lambda root, floor: observed["free_space"].append(root) or 0,
     )
@@ -1058,6 +1058,136 @@ def test_a_positive_run_refuses_an_adoption_artifact_that_is_not_its_own(overrid
             "gs://a/x.json", plan, exists=lambda u: True, read_json=lambda u: _adequacy_artifact(**overrides),
             manifest_hash="d" * 64,
         )
+
+
+@pytest.mark.parametrize("cohort", ["dev64", "trainfit16"])
+def test_the_one_dev_adequacy_result_authorizes_both_of_k1s_capacity_cohorts(cohort):
+    """**S10a review, the BLOCKER.** The probe is DEV-only by construction (``_preflight_pos_adequacy``
+    refuses any other cohort), but K1 runs capacity arms on DEV-64 **and** TRAINFIT-16. Requiring the
+    artifact's cohort to equal the capacity run's cohort therefore rejects the only artifact K1 has,
+    and the TRAINFIT half of the study would silently run at the default recipe -- or not at all.
+
+    What the artifact must prove is its *provenance*: probed in this slot, on DEV, at this l_pos and
+    guide scale, against this manifest set. None of that depends on which cohort is being run now.
+    """
+    from maxdiffusion.pos_context_modes import pos_adoption
+
+    plan = {"cohort": cohort, "params": {"l_pos": POS_L, "guide_scale": 5.0}}
+
+    adopted = pos_adoption(
+        "gs://a/adequacy.json",
+        plan,
+        exists=lambda u: True,
+        read_json=lambda u: _adequacy_artifact(),
+        manifest_hash="d" * 64,
+    )
+
+    assert adopted == {"inner_iters": 25, "lr": 0.03, "adopted": True, "projection_seconds_per_example": 0.1}
+
+
+def test_an_adequacy_artifact_that_was_not_probed_on_dev_is_refused_by_its_own_cohort():
+    """The other direction of the same rule: DEV provenance is *required*, not merely permitted. A
+    probe claiming trainfit16 never came from ``run_pos_adequacy`` and cannot authorize anything."""
+    from maxdiffusion.pos_context_modes import pos_adoption
+
+    plan = {"cohort": "trainfit16", "params": {"l_pos": POS_L, "guide_scale": 5.0}}
+
+    with pytest.raises(ValueError, match="was probed on"):
+        pos_adoption(
+            "gs://a/adequacy.json",
+            plan,
+            exists=lambda u: True,
+            read_json=lambda u: _adequacy_artifact(cohort="trainfit16"),
+            manifest_hash="d" * 64,
+        )
+
+
+def _two_cohort_manifests():
+    """The J0 shape K1 actually consumes: one manifest set carrying both capacity cohorts."""
+    manifests = _manifests()
+    rows = [{**row, "split": "trainfit16", "ordinal": index} for index, row in enumerate(manifests["dev64"]["rows"])]
+    return {**manifests, "trainfit16": {"rows": rows}}
+
+
+@contextlib.contextmanager
+def capture_pos_execute():
+    """Capture what ``main`` hands the positive dispatcher, without running the arms."""
+    from maxdiffusion import pos_context_modes
+
+    calls: list[dict] = []
+    original = pos_context_modes.pos_execute
+
+    def recording(mode, plan, backend, sinks, **kwargs):
+        calls.append({"mode": mode, "plan": plan, "kwargs": kwargs})
+        return {"mode": mode}, 0
+
+    pos_context_modes.pos_execute = recording
+    try:
+        yield calls
+    finally:
+        pos_context_modes.pos_execute = original
+
+
+def _adequacy_run(cohort: str, artifact: dict, manifests=None):
+    manifests = manifests if manifests is not None else _two_cohort_manifests()
+    recorder = _Recorder()
+    sinks = dataclasses.replace(recorder.sinks(), read_json=lambda path: artifact)
+    positive = {**_POSITIVE, "pos_adequacy_uri": "gs://bucket/pos-artifacts/adequacy_report.json"}
+    with capture_pos_execute() as calls:
+        code = _run_main(
+            _Fake(),
+            recorder,
+            manifests=manifests,
+            sinks=sinks,
+            artifact_exists=lambda uri: True,
+            null_cohort=cohort,
+            **positive,
+        )
+    return code, calls, manifests
+
+
+def test_a_trainfit_capacity_run_adopts_the_dev_probe_and_still_stamps_its_own_cohort():
+    """**S10a review, the BLOCKER -- at the caller.** ``main`` compared the DEV artifact's digest with
+    the digest of whatever cohort was running, so the TRAINFIT half of K1 refused the DEV probe even
+    once ``pos_adoption`` allowed it. The adoption binding is the DEV manifest; the run's OWN records
+    stay bound to the cohort that produced them."""
+    from maxdiffusion.run_wan_null_inversion import manifest_digest
+
+    manifests = _two_cohort_manifests()
+    artifact = _adequacy_artifact(manifest_hash=manifest_digest(manifests, "dev64"))
+
+    code, calls, _ = _adequacy_run("trainfit16", artifact, manifests)
+
+    assert code == 0 and len(calls) == 1
+    assert calls[0]["kwargs"]["adopted_recipe"]["inner_iters"] == 25
+    assert calls[0]["kwargs"]["manifest_hash"] == manifest_digest(manifests, "trainfit16")
+    assert calls[0]["plan"]["cohort"] == "trainfit16"
+
+
+def test_the_dev_capacity_run_adopts_the_very_same_artifact():
+    """One probe, both cohorts -- the property the K1 runbook depends on."""
+    from maxdiffusion.run_wan_null_inversion import manifest_digest
+
+    manifests = _two_cohort_manifests()
+    artifact = _adequacy_artifact(manifest_hash=manifest_digest(manifests, "dev64"))
+
+    code, calls, _ = _adequacy_run("dev64", artifact, manifests)
+
+    assert code == 0
+    assert calls[0]["kwargs"]["adopted_recipe"]["inner_iters"] == 25
+    assert calls[0]["kwargs"]["manifest_hash"] == manifest_digest(manifests, "dev64")
+
+
+def test_an_adequacy_artifact_bound_to_the_capacity_cohorts_manifest_does_not_authorize_the_run():
+    """The binding is not merely *some* digest: an artifact stamped with the TRAINFIT digest did not
+    come from the DEV probe, and adopting it would apply a recipe nobody measured."""
+    from maxdiffusion.run_wan_null_inversion import manifest_digest
+
+    manifests = _two_cohort_manifests()
+    artifact = _adequacy_artifact(manifest_hash=manifest_digest(manifests, "trainfit16"))
+
+    with pytest.raises(ValueError, match="does not authorize this job"):
+        _adequacy_run("trainfit16", artifact, manifests)
 
 
 def test_the_ablation_runs_at_the_adopted_recipe_and_the_selected_arm():
