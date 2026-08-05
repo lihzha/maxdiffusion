@@ -1,0 +1,28 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+W0000 00:00:1785905489.571390 5714283 google_auth_provider.cc:196] All attempts to get a Google authentication bearer token failed, returning an empty token. Retrieving token from files failed with "INVALID_ARGUMENT: Error executing an HTTP request: HTTP response code 400 with body '{
+  "error": "invalid_grant",
+  "error_description": "reauth related error (invalid_rapt)",
+  "error_uri": "https://support.google.com/a/answer/9368756",
+  "error_subtype": "invalid_rapt"
+}'". Retrieving token from GCE failed with "FAILED_PRECONDITION: Error executing an HTTP request: libcurl code 6 meaning 'Could not resolve hostname', error details: Could not resolve host: metadata.google.internal".
+Traceback (most recent call last):
+  File "/private/tmp/claude-501/-Users-yixunhu-Home-maxdiffusion/800fed95-7c3f-418d-b779-9914ed8480b4/scratchpad/j0_driver.py", line 7, in <module>
+    report = build_j0_manifests(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/build_null_adapter_manifests.py", line 392, in build_j0_manifests
+    val_listing = _listed(val_shard_dir, lister)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/build_null_adapter_manifests.py", line 368, in _listed
+    paths = tuple(sorted(lister(posixpath.join(shard_dir.rstrip("/"), "*.tfrecord*"))))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_04_null_adapter/src/maxdiffusion/build_null_adapter_manifests.py", line 367, in <lambda>
+    lister = lambda pattern: gfile.glob(pattern)  # noqa: E731
+                             ^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/claude-501/-Users-yixunhu-Home-maxdiffusion/800fed95-7c3f-418d-b779-9914ed8480b4/scratchpad/venv/lib/python3.11/site-packages/tensorflow/python/lib/io/file_io.py", line 441, in get_matching_files_v2
+    for matching_filename in _pywrap_file_io.GetMatchingFiles(
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tensorflow.python.framework.errors_impl.PermissionDeniedError: Error executing an HTTP request: HTTP response code 401 with body '{
+  "error": {
+    "code": 401,
+    "message": "Anonymous caller does not have storage.objects.list access to the Google Cloud Storage bucket. Permission 'storage.objects.list' denied on resource '//storage.googleapis.com/projects/_/buckets/v6_east1d' (or it may not exist). Remediate access with this Troubleshooter URL or share it with your administrator - https://console.cloud.google.com/iam-admin/troubleshooter/summary;errorId=CiQwMTlmZDA0My0yNzE4LTdhNWYtOWMxYS1mZWM0ZTJmOTUyOTISHHByb2plY3RzL18'
+	 when reading gs://v6_east1d/datasets/droid_wan_side_adapter/val

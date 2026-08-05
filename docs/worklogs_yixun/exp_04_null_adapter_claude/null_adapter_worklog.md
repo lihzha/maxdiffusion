@@ -273,3 +273,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `launched`.
 - **Analysis** — Auth verified live immediately before launch. Triage rule: reauth/network ⇒ infra (re-run); count/target mismatch ⇒ surface to Yixun (plan-constant vs dataset disagreement is a plan question, not a retry).
 - **Next** — On success: mirror + commit manifests; exp_05 merge-1/S1 in parallel; R10 opens.
+
+## 2026-08-05T05:15:00Z — J0 attempt 1 FAILED (infrastructure: ADC reauth) — fail-closed, nothing written
+
+- **Goal** — J0 run per entry J0-1.
+- **Result** — `partial`: TensorFlow's GCS layer (Application Default Credentials) failed with `invalid_rapt` reauth + anonymous-caller 401 at the very first listing; `build_j0_manifests` aborted before any scan; **nothing was written** (fail-closed as designed). Log: `null_adapter_2026-08-05_04:48:27.log`.
+- **Analysis** — **Infrastructure** (issue #6 class, new sub-variant): gsutil's credential store was live (verified minutes earlier) but TF uses ADC, a separate token that had gone stale. Workaround: Yixun runs `gcloud auth application-default login` (distinct from `gcloud auth login`). No code change; the run re-executes unchanged per the auto-resubmit-on-infra rule once ADC is refreshed.
+- **Next** — Await ADC refresh → re-run J0-1 verbatim (same commit, same command; will be recorded as J0-2).

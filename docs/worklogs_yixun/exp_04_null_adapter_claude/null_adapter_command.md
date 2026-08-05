@@ -1,6 +1,6 @@
 # null_adapter_command.md — exact reproduction commands (SOP artifact 7)
 
-## J0-1 — cohort-manifest build (2026-08-05T04:50Z, LAUNCHED)
+## J0-1 — cohort-manifest build (2026-08-05T04:50Z, **FAILED — INFRASTRUCTURE**: TF/ADC reauth `invalid_rapt`; fail-closed, nothing written; see worklog. Re-run pending ADC refresh.)
 
 - Commit: `7199feb99514d5c4e460e84629b133566f6624d7` (branch `claude-exp_04_null_adapter-20260803`, clean worktree)
 - Host: local macOS (darwin), scratchpad venv python 3.11 (tensorflow 2.21, numpy), gsutil authenticated (yh4742@princeton.edu)
