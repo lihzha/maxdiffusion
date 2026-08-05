@@ -75,3 +75,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — Review + strengthening in `pos_context_codex_code_truncate-pad-parity_review.md`; all three S1 findings independently verified by the reviewer with measurements; the bf16-cast S3 contract and the seam-vs-operator scope note both pinned in-code for S3's Coder. **649 passed**; 16 mutants, 0 survivors. (Process note: three transient API drops during strengthening — infra, work resumed each time with no loss.)
 - **Result** — `passed`. S1 committed with this entry.
 - **Next** — S2 `optimize-positives`: the branch-swap optimizer (cached v_uncond, grads through the 8-token v_cond, per-step state recording).
+
+## 2026-08-05T09:00:00Z — Coder handoff: fresh agent for S2 after repeated API drops
+
+- **Goal** — Continue S2 after the S1 Coder agent dropped on API connection errors three times consecutively with no S2 work landed (transcript ~180k tokens; the drops followed this agent while other sessions ran normally).
+- **Analysis** — Infrastructure. Worktree verified: only S1's committed state, no S2 files. Mitigation per the R6-handoff precedent: retire the agent; fresh Opus Coder with a self-contained S2 brief (conventions live in the committed code + review files).
+- **Result** — `fix_ready`.
+- **Next** — S2 write → review → strengthen → commit.
