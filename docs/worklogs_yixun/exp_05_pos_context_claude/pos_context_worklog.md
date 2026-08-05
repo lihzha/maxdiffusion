@@ -125,3 +125,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — red evidenced; **749 passed** (715 + 34); ruff/py_compile clean. **8 mutants: 7 killed, 1 proven equivalent** (P7 — geometry enforced at two layers; investigated with a direct probe, the stronger layer kept, the misleading comment corrected).
 - **Result** — `passed` (write). **Open item flagged for S4:** whether the runner reuses exp_04's ProvenanceHeader (carrying l_null) or needs an l_pos variant — a runner-level decision. `ml_dtypes` used (numpy-family, not jax) with a bitwise pin against jnp.bfloat16.
 - **Next** — S5 review → strengthen → commit. S4 still gated on exp_04-R10 + merge.
+
+## 2026-08-05T22:10:00Z — S5 cycle CLOSED (769 green, 0/15) → commit; merge-interim (exp_04 R10 boundary) next
+
+- **Goal** — Close S5; unblock S4.
+- **Command / Validation** — Trail in `pos_context_codex_code_schema-states-fidelity_review.md`; the F7 science is now stated at verified precision in plan + module + tests. **769 passed**; 15 mutants, 0 survivors.
+- **Result** — `passed`. S5 committed with this entry. **The K2-facing storage layer is done**: schema, integrity, fidelity policy, exact storage arithmetic.
+- **Next** — merge-interim: one-way exp_04 (R10 boundary, 2ebaaad+) → exp_05 per the amended matrix; then S4 `runner-slot-arms`.
