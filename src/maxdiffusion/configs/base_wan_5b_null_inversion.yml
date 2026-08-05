@@ -265,7 +265,7 @@ enable_ondemand_xprof: False
 # overridable on the command line -- pyconfig coerces overrides to the YAML
 # key's type and rejects unknown keys.
 # ---------------------------------------------------------------------------
-null_mode: 'capacity'              # capacity | cache | verify_replay | adequacy_probe
+null_mode: 'capacity'              # capacity | cache | verify_replay | adequacy_probe | direct_opt
 null_L: 16                         # L_null: how many T5("") rows the optimized nulls replace
 null_inner_iters: 10               # J: Adam steps per sampler step (plan §3 default)
 null_lr: 0.01                      # inner-loop Adam learning rate
@@ -293,3 +293,5 @@ null_verify_atol: 0.01             # verify_replay tolerance for fp16 records
 null_smoke_examples: 0             # J1 rung 1: truncate the DECLARED cohort to N examples (0 = off)
 null_selection_uri: ''             # the J1 selection artifact cache/verify read their arm from
 null_adequacy_uri: ''              # the adequacy artifact capacity adopts its recipe from
+null_a3_measure: False             # J1 §4-P1(iii): measure ONE A3 update inside the capacity run
+null_a3_iters: 300                 # J1b (direct_opt): Adam iterations over the joint null tensor

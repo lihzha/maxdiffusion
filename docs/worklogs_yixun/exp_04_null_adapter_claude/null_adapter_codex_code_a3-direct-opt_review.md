@@ -92,3 +92,13 @@ Final verdict: **REQUEST-REVISION — R11’s differentiable optimizer is mathem
 ### Status
 
 No subprocesses, tests, agents, or TPU jobs are running. Review is complete; Yixun can steer immediately.
+
+---
+
+## Strengthening + follow-up + final-fix record (all findings closed)
+
+**Strengthen (6/6 + remat ruling):** J1's config-gated A3 measurement stage + the `direct_opt` J1b mode (production-boundary preflight, canonical ε₀, fit-probe-first, post-update endpoint, exit-1 refusals, both composed through main); operand-kernel timing (lower/compile timed without executing; exactly one synchronized run; stops as verdicts + the launcher watchdog); full wall projection with validated inputs; THE bitwise recurrence oracle vs the reviewed replay (both reversed-dsigma probes killed); post-sync finiteness verdicts + type-or-word-boundary OOM; per-device disjoint-keyset memory; primitive-walker remat pin failing closed. 929 passed; 34 mutants.
+
+**Follow-up:** 5 RESOLVED, 2 partial → **final fixes:** projection = lower + compile + setup + iters × step + write allowance (a batched update is ONE update — `examples` renamed `job_batch`, multiplier removed; the reviewer's 10s-joint case now authorizes at 3,003.5s); measured `setup_seconds` (strict >0 pinned); `A3_WRITE_ALLOWANCE_SECONDS=300` declared; auditable `compute_seconds` breakdown; phase-aware watchdog default-ON for direct_opt only (38,400s ceiling) with printed honesty about what it cannot enforce. **936 passed; cumulative R11 battery 73 mutants, 0 survivors.**
+
+**Planner ruling on the flagged call:** the watchdog ceiling stays as implemented — it is hang protection, not a schedule bound; the fit probe is the authorization gate and the TPU queue timeout the job bound; deriving it from the approval envelope would conflate the two. Round R11 closed; committed with this record.

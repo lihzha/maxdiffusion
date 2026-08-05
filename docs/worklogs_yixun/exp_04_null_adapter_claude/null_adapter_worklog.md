@@ -325,3 +325,8 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — red evidenced; **885 passed** (844 + 41); ruff/diff-check clean. **28 mutants, 0 survivors** (4 first-pass survivors were test gaps, closed).
 - **Result** — `passed` (write). **Two load-bearing test-design findings recorded for the experiment's method notes:** (1) Adam scale-invariance masks Σ-vs-mean objective mutants at the parameter level — the batching contract must be asserted on UNNORMALIZED grad norms; (2) a stop_gradient'd v_cond is forward-bit-identical and survives all self-referential comparisons — the CENTRAL-FINITE-DIFFERENCE test is the actual proof of end-to-end differentiation. Remat: numerically unobservable (bit-identical grads, measured) but structurally pinned via jaxpr inspection — tested, not documented away. verdict-vs-fits_budget separation ("measurement worked" ≠ "job affordable") accepted.
 - **Next** — R11 review (the last exp_04 code review) → commit → **PARITY AUDIT** → the J1 pre-launch package.
+
+## 2026-08-06T02:40:00Z — R11 cycle CLOSED (936 green, 73/73 mutants) → commit — ALL exp_04 CODE ROUNDS COMPLETE
+
+- **Result** — `passed`. R11 committed with this entry (the A3 module + the J1/J1b wiring across modes/entrypoint/config/launcher). Suite: 246 (R5 era) → **936**. Eleven rounds + three splits, every commit through closed review cycles; ~470 mutants killed cumulatively; 6 ratified defence-in-depth survivors.
+- **Next** — **THE PARITY AUDIT** (Planner, plan §8, recorded here before J1), then the J1 pre-launch package (params_set_up + command entry + acceptance criteria + pushed SHA) under Yixun's standing conditional grant.

@@ -137,7 +137,7 @@ class _Recorder:
     def __init__(self, resume=None, selection=None, shard=None, reports=None, marker=None):
         self.marker = marker
         self.markers = []
-        self.shards, self.json, self.videos = [], {}, []
+        self.shards, self.json, self.videos, self.arrays = [], {}, [], {}
         self.resume = resume
         self.resume_calls = []
         self.selection = selection
@@ -155,6 +155,7 @@ class _Recorder:
             "validate_shard": self._validate_shard,
             "read_json": self._read_json,
             "read_marker": self._read_marker,
+            "write_arrays": self._write_arrays,
         }
         return Sinks(**{**base, **overrides})
 
@@ -194,6 +195,10 @@ class _Recorder:
         if self.selection is None:
             raise FileNotFoundError(path)
         return self.selection
+
+    def _write_arrays(self, path, **arrays):
+        self.arrays[path] = {name: np.asarray(value).shape for name, value in arrays.items()}
+        return path
 
     def _read_marker(self, path):
         self.markers.append(path)
@@ -1168,3 +1173,238 @@ def test_the_default_sinks_read_a_marker_without_reading_records():
     assert sinks.read_marker is read_marker
     assert sinks.read_marker is not read_shard
     assert sinks.read_shard is read_shard
+
+
+# --------------------------------------------------------------------------- A3 inside J1, and J1b
+
+
+def _fake_measurement(fits=True, verdict="ok", **overrides):
+    from maxdiffusion.models.wan.null_direct_opt_wan import MeasurementReport
+
+    fields = {
+        "verdict": verdict,
+        "reasons": (),
+        "lower_seconds": 0.5,
+        "compile_seconds": 3.0,
+        "step_seconds": 1.0,
+        "setup_seconds": 0.0,
+        "peak_hbm_bytes": 4096,
+        "current_hbm_bytes": 2048,
+        "device_memory": ({"device": "tpu:0", "peak_bytes": 4096, "peak_key": "peak_bytes_in_use",
+                           "current_bytes": 2048, "current_key": "bytes_in_use"},),
+        "loss": 0.25,
+        "grad_norm": 0.5,
+        "batch": 1,
+        "iters": 300,
+        "job_batch": 8,
+        "compute_seconds": 100.0,
+        "write_allowance_seconds": 0.0,
+        "projection_seconds": 100.0,
+        "projection_hours": 100.0 / 3600.0,
+        "fits_budget": fits,
+        "preliminary": True,
+        "budgets": {"compile_seconds": 1800.0, "update_seconds": 120.0, "projection_seconds": 14400.0},
+    }
+    fields.update(overrides)
+    return MeasurementReport(**fields)
+
+
+def test_capacity_runs_no_a3_measurement_unless_asked():
+    _, _, recorder = _capacity()
+
+    assert "a3_measurement.json" not in recorder.json
+
+
+def test_capacity_measures_one_a3_update_when_the_config_asks():
+    """§4-P1 item (iii): the measurement runs inside J1, on this cohort's real data."""
+    seen = {}
+
+    def measure(velocity_fn, z_start, z_i0, z_video, sigmas, null_init, base_context, **kwargs):
+        seen["batch"] = np.asarray(z_start).shape[0]
+        seen["sigmas"] = len(sigmas)
+        seen["null_init"] = np.asarray(null_init).shape
+        return _fake_measurement()
+
+    _, _, recorder = _capacity(a3_measure=True, measure=measure)
+
+    assert seen["batch"] == 1 and seen["sigmas"] == 26  # one example, the canonical 25-step grid
+    payload = recorder.json["a3_measurement.json"]
+    assert payload["verdict"] == "ok" and payload["preliminary"] is True
+    # Provenance-bound: the report names the run that produced it.
+    assert payload["provenance"]["manifest_hash"] == "m" * 64
+    assert payload["provenance"]["code_sha"] == "c" * 40
+    assert payload["provenance"]["cohort"] == "dev64"
+
+
+def test_the_a3_measurement_starts_from_the_canonical_epsilon_zero():
+    from maxdiffusion.models.wan.null_inversion_wan import global_noise
+
+    captured = {}
+
+    def measure(velocity_fn, z_start, z_i0, z_video, sigmas, null_init, base_context, **kwargs):
+        captured["z_start"] = np.asarray(z_start)
+        return _fake_measurement()
+
+    _capacity(a3_measure=True, measure=measure)
+
+    np.testing.assert_array_equal(captured["z_start"][0], np.asarray(global_noise(0), np.float32))
+
+
+def _direct_opt(recorder=None, fake=None, measure=None, names=None, **kwargs):
+    from maxdiffusion.null_adapter_modes import run_direct_opt
+
+    fake = fake or _Fake()
+    recorder = recorder or _Recorder()
+    names = names or tuple(f"ep{index}_v0_s00000" for index in range(8))
+    plan = _plan(names=names, batches=(names,), mode="direct_opt", cohort="dev64")
+    plan["params"] = {**plan["params"], "l_null": 16}
+    return (
+        run_direct_opt(
+            plan,
+            fake.backend(),
+            recorder.sinks(),
+            artifact_dir="gs://bucket/j1b",
+            manifest_hash="m" * 64,
+            code_sha="c" * 40,
+            iters=kwargs.pop("iters", 2),
+            measure=measure or (lambda *a, **k: _fake_measurement(batch=8, preliminary=False)),
+            **kwargs,
+        ),
+        recorder,
+        fake,
+    )
+
+
+def test_direct_opt_runs_the_fit_probe_before_it_commits():
+    """B=1 timing is preliminary; J1b measures one update at its OWN batch size first."""
+    probe = {}
+
+    def measure(velocity_fn, z_start, z_i0, z_video, sigmas, null_init, base_context, **kwargs):
+        probe["batch"] = np.asarray(z_start).shape[0]
+        probe["job_batch"] = kwargs["job_batch"]
+        probe["single"] = kwargs["require_single_example"]
+        probe["setup"] = kwargs["setup_seconds"]
+        return _fake_measurement(batch=8, preliminary=False)
+
+    report, recorder, _ = _direct_opt(measure=measure)
+
+    assert probe["batch"] == 8 and probe["job_batch"] == 8 and probe["single"] is False
+    # The batch is what the job runs at, never a multiplier: one joint update covers all eight.
+    # eps_0 construction plus staging eight examples' latents is real J1b wall time, so it is
+    # measured and carried -- a hard-coded zero would satisfy a non-strict bound.
+    assert probe["setup"] > 0.0
+    assert report["continued"] is True
+    assert report["fit_probe"]["fits_budget"] is True
+
+
+def test_direct_opt_stops_when_the_fit_probe_refuses():
+    report, recorder, fake = _direct_opt(measure=lambda *a, **k: _fake_measurement(fits=False, batch=8))
+
+    assert report["continued"] is False
+    assert "does not run" in report["reasons"][0]
+    assert "arrays" not in report  # nothing was optimized, so nothing is published
+    assert recorder.arrays == {}
+    assert recorder.json["a3_direct_opt.json"]["continued"] is False
+
+
+def test_a_refusing_fit_probe_is_a_non_zero_exit():
+    recorder = _Recorder()
+    names = tuple(f"ep{index}_v0_s00000" for index in range(8))
+    plan = _plan(names=names, batches=(names,), mode="direct_opt", cohort="dev64")
+    plan["params"] = {**plan["params"], "l_null": 16}
+
+    report, code = execute(
+        "direct_opt",
+        plan,
+        _Fake().backend(),
+        recorder.sinks(),
+        artifact_dir="gs://bucket/j1b",
+        manifest_hash="m" * 64,
+        code_sha="c" * 40,
+        iters=2,
+        measure=lambda *a, **k: _fake_measurement(fits=False, batch=8),
+    )
+
+    assert code == 1 and report["continued"] is False
+
+
+def test_direct_opt_publishes_its_nulls_losses_and_final_endpoint():
+    report, recorder, _ = _direct_opt(iters=2)
+
+    assert report["continued"] is True and report["iters"] == 2
+    shapes = recorder.arrays["gs://bucket/j1b/a3_nulls.npz"]
+    assert shapes["nulls"] == (25, 8, 16, 4096)
+    assert shapes["losses"] == (2, 8) and shapes["grad_norms"] == (2, 8)
+    assert shapes["final_endpoint"] == (8,)
+    # The post-update endpoint is a distinct number from the last recorded loss, which is measured
+    # BEFORE the final update.
+    assert len(report["final_endpoint"]) == 8
+    assert report["final_endpoint"] != report["final_loss"]
+    assert report["provenance"]["code_sha"] == "c" * 40
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        ({"cohort": "train2000"}, "defined on dev64"),
+        ({"names": tuple(f"ep{i}_v0_s00000" for i in range(3))}, "first 8 DEV names"),
+    ],
+)
+def test_direct_opt_enforces_its_production_boundary(overrides, message):
+    from maxdiffusion.null_adapter_modes import run_direct_opt
+
+    fake = _Fake()
+    overrides = dict(overrides)
+    names = overrides.pop("names", tuple(f"ep{i}_v0_s00000" for i in range(8)))
+    fields = {"names": names, "batches": (names,), "mode": "direct_opt", "cohort": "dev64", **overrides}
+    plan = _plan(**fields)
+    plan["params"] = {**plan["params"], "l_null": 16}
+
+    with pytest.raises(ValueError, match=message):
+        run_direct_opt(
+            plan, fake.backend(), _Recorder().sinks(),
+            artifact_dir="gs://b", manifest_hash="m" * 64, code_sha="c" * 40, iters=1,
+        )
+    assert fake.reads == []
+
+
+def test_direct_opt_refuses_an_off_production_l_null():
+    from maxdiffusion.null_adapter_modes import run_direct_opt
+
+    names = tuple(f"ep{i}_v0_s00000" for i in range(8))
+    plan = _plan(names=names, batches=(names,), mode="direct_opt", cohort="dev64")
+    plan["params"] = {**plan["params"], "l_null": 8}  # J1b is pinned to 16 whatever config says
+
+    with pytest.raises(ValueError, match="pinned L_null=16"):
+        run_direct_opt(
+            plan, _Fake().backend(), _Recorder().sinks(),
+            artifact_dir="gs://b", manifest_hash="m" * 64, code_sha="c" * 40, iters=1,
+        )
+
+
+def test_j1b_passes_its_batch_as_a_batch_not_as_a_multiplier():
+    """A joint update over eight examples is ONE update; 300 iterations is 300 of them.
+
+    Passing the count where a per-example multiplier used to go inflated a fitting 10-second update
+    into a 24,000-second refusal (R11 follow-up BLOCKER).
+    """
+    seen = {}
+
+    def measure(velocity_fn, z_start, z_i0, z_video, sigmas, null_init, base_context, **kwargs):
+        seen.update(kwargs)
+        return _fake_measurement(batch=8, preliminary=False)
+
+    _direct_opt(measure=measure, iters=300)
+
+    assert seen["job_batch"] == 8 and seen["iters"] == 300
+    assert "examples" not in seen  # the per-example multiplier is gone from the contract
+
+
+def test_the_published_measurement_carries_the_projection_breakdown():
+    _, _, recorder = _capacity(a3_measure=True, measure=lambda *a, **k: _fake_measurement())
+
+    payload = recorder.json["a3_measurement.json"]
+
+    assert payload["job_batch"] == 8
+    assert "compute_seconds" in payload and "write_allowance_seconds" in payload
+    assert "examples" not in payload
