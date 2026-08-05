@@ -1,0 +1,17 @@
+J0 REPORT:
+{
+  "shard_listing_checksum": "5827f4da8fbf34da89fc9ed7b5313a5c397b998b00282d51a4761a4e0a460d14",
+  "train_episodes": 5000,
+  "train_shards": 40,
+  "val_records": 14636,
+  "val_shards": 8,
+  "written": {
+    "dev64.json": "docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/dev64.json",
+    "header.json": "docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/header.json",
+    "test64.json": "docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/test64.json",
+    "train2000.json": "docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/train2000.json",
+    "trainfit16.json": "docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/trainfit16.json"
+  }
+}
+J0 DONE
+EXIT=0
