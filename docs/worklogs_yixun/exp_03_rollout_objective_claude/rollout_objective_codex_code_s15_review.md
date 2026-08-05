@@ -392,3 +392,18 @@ outcomes; pre-load commit pin; bidirectional drift). S1.5 series: 210e7b1 → 32
   credible" — retain 0.95 mem fraction, acceptance = `post_replay_control ≈ 2.9G`; v6e-64 only if
   the ledger contradicts sharded residency. Suite 1,525 / 2.
 
+## Rounds 9–10 (`c052c91` →) — the batch-1 sigma-trace fix (Job 8f blocker)
+
+- **8f hardware verdict first:** the entire checkpoint-state report COMPLETED at 5B — the
+  out_shardings fix verified (post_replay_control 3.09G vs predicted 2.9G; peak 8.81G/31.25G;
+  all releases clean). Death was in the last per-state diagnostic: the sigma trace's batch-1
+  rollout vs the FSDP divisibility constraint.
+- **`c052c91` (round 9) review (xhigh): REQUEST-REVISION** — tiling + row-0 readback PASS (bitwise
+  on the 8-device toy; per-row independence audited in the transformer source and CONFIRMED,
+  flash/collective paths unreachable at 540 tokens); sweep PASS (the standalone `run_trace`
+  carried the same latent defect, fixed via one shared helper). **FAIL:** the trace runs ~1,500
+  synchronized EAGER forwards through 40 nnx.remat blocks — tens of minutes to low hours,
+  unacceptable retry uncertainty → cache a jitted tiled forward, slice row 0 outside the compiled
+  boundary. Strengthen the hand-rolling guard structurally (string match evadable). Design (a)
+  ruled NOT required. **Relaunch: NO-GO** pending the jit wrap. Round-10 dispatched.
+
