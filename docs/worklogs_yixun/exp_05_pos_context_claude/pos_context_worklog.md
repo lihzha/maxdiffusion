@@ -109,3 +109,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Command / Validation** — red evidenced; **715 passed** (689 + 26); ruff/py_compile/diff-check clean. **7 mutants, 0 survivors** — incl. N6 (operator-casts violation) killed three ways, and N7 (hoisted v_unc) pinning the round's freshness-symmetry claim.
 - **Result** — `passed` (write). **MUST-1 DISCHARGED:** S1's parity fixture re-run through the ACTUAL operator (bitwise at fp32; operator+casting-velocity_fn ≡ deployment bitwise at bf16; non-casting closure demonstrably fails). **B0 semantics pinned as a deliberate inversion of exp_04's A0 test:** frozen-C ACTIVE-CFG control, w=1-vs-w=5 structural separation measured at 7.9e+1. Planner acceptances: test-side LOC overage (precedent); [N,1,L,D]-at-B>1 rejected not broadcast (R4a lesson); the extra N7 mutant. S4's MUST (runner closure casts both branches at bf16) remains open, recorded.
 - **Next** — S3 review → strengthen → commit → S4 `runner-slot-arms`.
+
+## 2026-08-05T16:40:00Z — S3 cycle CLOSED (715 green, 0/8) → commit; SEQUENCING AMENDMENT: S5 before S4
+
+- **Goal** — Close S3; set the next round.
+- **Command / Validation** — Trail in `pos_context_codex_code_replay-state-capture_review.md`; MUST-1 discharged and independently verified; H1 interpretation note added to the plan (scope-neutral). **715 passed**; 8 mutants, 0 survivors.
+- **Result** — `passed`. S3 committed with this entry.
+- **Analysis** — **Sequencing amendment (scope-neutral, Planner):** the plan's dependency matrix placed S4 `runner-slot-arms` in the merge-1-only block, but the runner file (`run_wan_null_inversion.py`) was CREATED by exp_04's R10 — which is in its strengthen cycle right now. S4 therefore factually depends on exp_04-R10 closing + an interim one-way merge (same policy as merge-1/2). **S5 `schema-states-fidelity` proceeds first** (own pos-records module importing exp_04 primitives; no runner dependency); S4 follows the merge. Matrix corrected in spirit; plan text untouched beyond this record.
+- **Next** — S5 write → review → strengthen → commit; S4 after exp_04-R10 + merge.

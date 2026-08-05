@@ -37,3 +37,12 @@ Status:
 - S3 review and all local probes are complete; no reviewer subprocesses remain.
 - J0 data job: user-reported running and untouched; ETA unknown.
 - Earliest steering point: now; interruption is safe.
+
+---
+
+## Strengthening record (Coder, same round; items 1–2 closed; item 3 was the Planner's plan amendment, landed at 58c1676)
+
+1. **MINOR (trajectory-level batch assertions) — FIXED.** Every-example full-trajectory-vs-singleton comparison (bitwise) + shared-vs-repeated full-trajectory equivalence; the new N8 collapse-to-row-0 mutant measured directly: old assertion PASSES blind (Δ=0 on example 0), new one FAILS (Δ=9.57 on example 1); killed by 5 tests.
+2. **MINOR (lifecycle text) — FIXED.** MUST-1 marked DISCHARGED naming both tests and what each proves; S4's obligation marked the only open half of the cast rule, with the reason stated.
+
+Suite **715 passed** (strengthened in place, no count change); cumulative S3 record **8 mutants, 0 survivors**. Round S3 closed; committed with this record.
