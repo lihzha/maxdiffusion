@@ -52,3 +52,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Goal** — Verify G1 closure.
 - **Result** — `passed`: **APPROVE-PLAN** ("G1 is fully closed, and the v2→v3 delta is clean"). Three-pass trail complete; all findings accepted and implemented.
 - **Next** — Surface the approval package to Yixun: plan v3, review trail, decision points (L_pos=8; pure-regression primary; K1 conditional approval; pilot scope). Implementation S1 waits on exp_04's R9 boundary (merge-1) per the dependency matrix — exp_04 is at R2 in flight.
+
+## 2026-08-05T05:05:00Z — merge-1 executed (exp_04 R9 boundary); S1 dispatched
+
+- **Goal** — Bring exp_04's shared core (R1–R9, 610 tests) onto the exp_05 branch per the plan §6 dependency matrix.
+- **Version Control** — merge commit `5f4e487`: one-way `claude-exp_04_null_adapter-20260803` @ `6fd18fc` → this branch. Conflicts: two add/add in exp_04-OWNED docs (worklog, plan — both branches carried copies via the yixun-dev sync history) — resolved class-(a), exp_04's side verbatim; NO dual-touch (class-c) files involved ⇒ no merge review required per the policy. Post-merge acceptance: **full combined suite 610 passed in 39.9s** in this worktree.
+- **Result** — `passed`. exp_05 implementation unblocked; S1 `truncate-pad-parity` dispatched to the Coder.
+- **Analysis** — K1's remaining conditions: P0' green (S-rounds), exp_05 parity audit, J0 published (currently blocked on an ADC reauth on the exp_04 side — infra, issue #6 class).
+- **Next** — S1 write → review → strengthen → commit.
