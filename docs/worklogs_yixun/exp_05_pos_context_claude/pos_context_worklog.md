@@ -82,3 +82,11 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Analysis** — Infrastructure. Worktree verified: only S1's committed state, no S2 files. Mitigation per the R6-handoff precedent: retire the agent; fresh Opus Coder with a self-contained S2 brief (conventions live in the committed code + review files).
 - **Result** — `fix_ready`.
 - **Next** — S2 write → review → strengthen → commit.
+
+## 2026-08-05T12:10:00Z — S2 `optimize-positives` write phase complete; review dispatched
+
+- **Goal** — S2: the branch-swap per-step positive-context optimizer.
+- **Change** — `optimize_positive_embeddings` (+99 exec LOC in `pos_context_inversion_wan.py`) + `test_pos_context_optimize.py` (39 tests). exp_04 modules untouched (private-import reuse of `_checked_velocity`/`_validate_sigmas` — one owner for the guards).
+- **Command / Validation** — red evidenced; **688 passed** (649 inherited + 39, re-confirmed post-battery on diff-identical source); ruff/py_compile/diff-check clean. **11 mutants, 0 survivors** — incl. C-in-uncond-slot (killed by the w=1 nonzero-grad property test: the positive slot's distinguishing physics vs the null slot) and the cast-seam violation.
+- **Result** — `passed` (write). **THE CAST-SEAM DECISION (Planner-endorsed): `velocity_fn` owns the activation-dtype cast**, the operator hands it bit-exact fp32 C — one owner across optimize/replay/deployment (deployment's cast lives at side_adapter_wan.py:767; the reference's lives in `_dit_velocity`'s autocast); **S1's "S3 must cast" obligation formally moves to the S3/S4 runner-built velocity_fn**, stated in the implementation docstring as the wiring contract. **Planner acceptances:** `pos_init=None` kwarg (required by the composition test; single entry point for the L_pos ablation; mirrors both references); relative dim validation with production geometry at the runner boundary (exp_04 precedent); test-side LOC overage (the literal reference, S1 precedent). Confirmed on the real backbone: nonzero C-grads at both w=5 AND w=1 (tiny-WanModel smoke). Process: multiple API drops + one killed battery process (mutant M5 detected on disk, restored from backup, battery re-run) — all infra, all recovered.
+- **Next** — S2 review → strengthen → commit → S3 `replay-state-capture`.
