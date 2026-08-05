@@ -2768,14 +2768,18 @@ def _nested_callables(function) -> list:
     here does not care how a forward is spelled. Neither trace entry point needs a closure of any
     kind, so the honest structural statement is that it may not define one at all -- and you cannot
     hand-roll a forward you cannot define.
+
+    Accepts SOURCE TEXT as well as a function object, so the same rule can be applied to a mutated
+    copy of an entry point (which has no source file for ``inspect`` to find).
     """
     import ast
     import textwrap
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    tree = ast.parse(textwrap.dedent(function if isinstance(function, str) else inspect.getsource(function)))
+    owner = tree.body[0].name  # the definition itself; everything else nested in it is a finding
     nested = []
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != function.__name__:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != owner:
             nested.append(node.name)
         elif isinstance(node, ast.Lambda):
             nested.append("<lambda>")
@@ -2783,7 +2787,11 @@ def _nested_callables(function) -> list:
 
 
 def test_neither_trace_entry_point_defines_a_callable_of_its_own():
-    # The static half of the guard, and it is about DEFINITION rather than spelling.
+    # THE SECONDARY, QUICK check. It is about DEFINITION rather than spelling, which is stronger
+    # than the string/AST-shape matchers it replaced -- but it is still a source rule and it is
+    # BLIND to a forward that is not defined inside the entry point at all: a renamed TOP-LEVEL
+    # helper, or an attribute reached indirectly, passes it clean (proved in the bite test below).
+    # The verdict therefore does NOT rest here; it rests on the executed seam that follows.
     for owner in (s1_5.trace_in_memory_state, s1_5.trace.run_trace):
         assert _nested_callables(owner) == [], (owner.__name__, _nested_callables(owner))
     # The helper that IS allowed to build one defines exactly the one.
@@ -2813,62 +2821,347 @@ def test_neither_trace_entry_point_defines_a_callable_of_its_own():
     assert _nested_callables(_via_partial) == ["_bound"]
 
 
-def test_only_the_blessed_helper_ever_reaches_the_transformer(monkeypatch):
-    # THE execution-based half, immune to spelling entirely: whatever the source looks like, the
-    # transformer object records who called it. A hand-rolled forward -- positional, **kwargs,
-    # functools.partial, any name -- shows up as a different calling frame.
-    reached: list = []
+# =============================================================================================
+# 12. THE EXECUTED SEAM: only the blessed helper ever reaches the transformer.
+#
+# Every earlier version of this guard was a SOURCE rule, and each one was defeated by a spelling
+# its author had not imagined -- a string match ("def velocity_fn"), then an AST shape match
+# (``hidden_states=`` + ``deterministic=``), then "the entry point may define no callable at all".
+# A positional call, a ``**kwargs`` dict, a ``functools.partial``, a renamed TOP-LEVEL helper and an
+# indirect attribute call walk past one or another of them. A source rule is a race against spelling
+# and it loses.
+#
+# What cannot be spelled around is the CALL. However a hand-rolled forward is written, it invokes
+# the transformer object, and the Python frame that invoked it either IS the blessed builder's own
+# code object or it is not. So the verdict below is: EXECUTE both entry points on the toy fixtures,
+# record the stack at every transformer call, and require the blessed frame in each. The rule reads
+# frames, never names -- and the bite test proves it fires on all five evasions.
+# =============================================================================================
 
-    class _Recording:
-        """Stands in for the merged transformer and names its caller."""
 
-        def __call__(self, *args, **kwargs):
-            reached.append(inspect.stack()[1].function)
-            hidden = kwargs.get("hidden_states", args[0] if args else None)
-            return hidden
+_TRANSFORMER_ARG_NAMES = ("hidden_states", "timestep", "encoder_hidden_states", "deterministic")
 
-    monkeypatch.setattr(s1_5.trace.gen.nnx, "merge", lambda *a, **k: _Recording())
 
-    state, batches, config, scheduler = _toy_state_and_batches(config_shape="proxy")
-    hidden = batches[0]["z_video"][:1]
-    timestep = jnp.zeros((1, 4), jnp.float32)
-    context = state.context_table[:1]
+def _blessed_forward_codes() -> set:
+    """The code objects the blessed builder DEFINES — the only frames allowed to call the model.
 
-    forward = s1_5.trace.jitted_tiled_forward(state, replicas=1)
-    s1_5.trace.velocity_fn_for(forward, state)(hidden, timestep, context)
-    # The ONLY frame that ever reaches the transformer is the blessed helper's own inner function.
-    assert reached, "the transformer was never reached -- the seam is not measuring anything"
-    assert set(reached) == {"_forward"}, reached
+    Read out of ``jitted_tiled_forward.__code__.co_consts`` rather than looked up by name, so
+    renaming ``_forward`` cannot silently empty the blessed set (it is still the helper's own code),
+    while a forward defined anywhere else — nested elsewhere, top-level, in another module — is a
+    different code object and is refused.
+    """
+    import types as _types
 
-    # BITE, executed, in the three spellings the AST guard could not see. Each one reaches the same
-    # transformer and is caught by its calling frame, not by how the call is written.
+    codes = {c for c in s1_5.trace.jitted_tiled_forward.__code__.co_consts if isinstance(c, _types.CodeType)}
+    assert codes, "the blessed builder defines no callable: the blessed set would admit nothing"
+    return codes
+
+
+def _record_transformer_calls(monkeypatch, state) -> list:
+    """Record the CALL STACK of every transformer invocation; returns the growing ledger.
+
+    The seam goes on the transformer CLASS, not on ``nnx.merge``: a hand-rolled forward need not
+    reach the model through that symbol at all (``state.apply_fn`` is ``graphdef.apply``, which
+    returns the identical module without it), and the class's own ``__call__`` is the one door every
+    route has to come through. Each ledger entry is the tuple of code objects on the stack at the
+    moment of the call, so the evidence is FRAME IDENTITY -- not a name, not a signature, not a call
+    spelling.
+    """
+    module = s1_5.trace.gen.nnx.merge(state.graphdef, state.params, state.rest_of_state)
+    original = type(module).__call__
+    calls: list = []
+
+    def _recording_call(self, *args, **kwargs):
+        frame = sys._getframe(1)
+        stack = []
+        while frame is not None:
+            stack.append(frame.f_code)
+            frame = frame.f_back
+        calls.append(tuple(stack))
+        # Accept the POSITIONAL spelling the real transformer accepts, so an evasion written that
+        # way reaches the model here too and is judged on its frame rather than bounced by a
+        # signature the toy happens to have.
+        bound = dict(zip(_TRANSFORMER_ARG_NAMES, args))
+        bound.update(kwargs)
+        return original(self, **bound)
+
+    monkeypatch.setattr(type(module), "__call__", _recording_call)
+    return calls
+
+
+def _assert_every_call_is_blessed(calls, *, what: str) -> None:
+    """THE verdict, on executed evidence: every transformer call passed through the blessed frame.
+
+    Two failures, deliberately distinct. An EMPTY ledger means the seam measured nothing and the
+    guard would have passed vacuously -- so it fails instead. A non-empty ledger with a stack that
+    never touches a blessed code object is a hand-rolled forward, whatever it is called.
+    """
+    blessed = _blessed_forward_codes()
+    assert calls, f"{what}: the transformer was never called, so this guard measured nothing"
+    offenders = [stack for stack in calls if not set(stack) & blessed]
+    assert not offenders, (what, [stack[0].co_qualname for stack in offenders])
+
+
+def _toy_trace_sample(name: str = "ep0_v0_s00000"):
+    """One window in the shape ``read_overfit100_samples`` returns, at toy latent size."""
+    return SimpleNamespace(
+        name=name,
+        episode_id=0,
+        episode_index=0,
+        window_start=0,
+        canonical=True,
+        position=0,
+        z_i0=np.asarray(jax.random.normal(jax.random.key(3), (3, 1, 4, 6), jnp.float32)),
+        z_video=np.asarray(jax.random.normal(jax.random.key(4), (3, 4, 4, 6), jnp.float32)),
+        instruction="toy",
+    )
+
+
+_TRACE_ENTRY_POINTS = {
+    "trace_in_memory_state": lambda: s1_5.trace_in_memory_state,
+    "run_trace": lambda: s1_5.trace.run_trace,
+}
+
+# The ONE line in each entry point that obtains the sampler-facing velocity from the blessed helper.
+# The mutation test swaps exactly this line for a hand-rolled forward and requires the guard to fire.
+_BLESSED_VELOCITY_LINE = {
+    "trace_in_memory_state": "velocity_fn = trace.velocity_fn_for(forward, state)",
+    "run_trace": "velocity_fn = velocity_fn_for(forward, state)",
+}
+
+
+def _install_trace_seams(monkeypatch, entry_point, *, state, config, scheduler, tmp_path) -> None:
+    """Everything an entry point needs to run at TOY scale — and nothing more.
+
+    Cohort selection, the TFRecord read and (for the standalone entry point) the ~5B restore are
+    replaced; the sampler grid, the 25-step rollout, the oracle floor, the artifact and the release
+    discipline all run for real, because those are the code paths the guard has to watch.
+    """
+    cohort = [
+        {"name": f"ep{index}_v0_s00000", "episode_id": index, "episode_index": 0, "window_start": 0}
+        for index in range(s1_5.trace.TRACE_NUM_WINDOWS)  # run_trace REFUSES any other cohort size
+    ]
+    monkeypatch.setattr(s1_5.trace, "trace_cohort", lambda *a, **k: list(cohort))
+    monkeypatch.setattr(s1_5.gen, "read_overfit100_samples", lambda config, windows: [_toy_trace_sample()])
+    monkeypatch.setattr(s1_5.max_logging, "log", lambda line: None)
+    config.get_keys()["output_dir"] = str(tmp_path)  # the proxy refuses assignment, like pyconfig
+    if entry_point == "run_trace":
+        devices = jax.devices()
+        mesh = jax.sharding.Mesh(np.asarray(devices).reshape(len(devices), 1), ("data", "fsdp"))
+        null_context = jnp.zeros((1, state.context_table.shape[1], state.context_table.shape[2]), jnp.float32)
+        monkeypatch.setattr(
+            s1_5.gen,
+            "_restore_overfit100_validation_state",
+            lambda cfg: (
+                SimpleNamespace(_create_scheduler=lambda: (scheduler, None)),
+                None,
+                mesh,
+                state,
+                None,
+                null_context,
+                10000,
+            ),
+        )
+
+
+def _invoke_trace_entry_point(entry_point, run, *, state, config, scheduler):
+    """Call one entry point — or a mutated copy of it — with its own signature."""
+    if entry_point == "trace_in_memory_state":
+        return run(state, config, scheduler, mesh=None, state_label="checkpoint", checkpoint_step=10000)
+    return run(config)
+
+
+@pytest.mark.parametrize("entry_point", sorted(_TRACE_ENTRY_POINTS))
+def test_only_the_blessed_helper_ever_reaches_the_transformer(entry_point, tmp_path, monkeypatch):
+    # EXECUTED, and executed through the ENTRY POINTS -- which is the whole correction. The previous
+    # version of this test drove ``jitted_tiled_forward`` and ``velocity_fn_for`` by hand and then
+    # concluded something about ``trace_in_memory_state`` and ``run_trace``, neither of which it ran.
+    # Here each entry point performs a real 25-step rollout over a real window, and the ledger says
+    # which frames reached the model while it did.
+    s1_5._TRACE_FORWARD_CACHE.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
+    state, _, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    _install_trace_seams(monkeypatch, entry_point, state=state, config=config, scheduler=scheduler, tmp_path=tmp_path)
+    calls = _record_transformer_calls(monkeypatch, state)
+
+    owner = _TRACE_ENTRY_POINTS[entry_point]()
+    payload = _invoke_trace_entry_point(entry_point, owner, state=state, config=config, scheduler=scheduler)
+
+    # The entry point really RAN: one window, the full pinned grid, and the floor beside each error.
+    assert len(payload["rows"]) == 1, payload["rows"]
+    assert len(payload["rows"][0]["trace"]) == s1_5.trace.TRACE_SAMPLING_STEPS + 1
+    assert payload["rows"][0]["trace"][0]["error"] == 0.0  # index 0 IS the interpolant, by construction
+    assert all("floor" in entry for entry in payload["rows"][0]["trace"])
+    # (a) the seam is not vacuous and (b) every recorded call went through the blessed frame.
+    _assert_every_call_is_blessed(calls, what=entry_point)
+    # ...and those calls belong to THIS entry point's own stack, so the evidence is about the thing
+    # under test rather than about some incidental forward elsewhere in the process.
+    assert all(owner.__code__ in stack for stack in calls), entry_point
+    s1_5._TRACE_FORWARD_CACHE.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
+
+
+def _top_level_hand_rolled_forward(transformer, hidden_states, timestep, encoder_hidden_states):
+    """A renamed TOP-LEVEL forward — the spelling a "defines no nested callable" rule cannot see."""
+    return transformer(hidden_states=hidden_states, timestep=timestep, encoder_hidden_states=encoder_hidden_states)
+
+
+def _evasion_positional(transformer):
+    return lambda hidden_states, timestep, encoder_hidden_states: transformer(
+        hidden_states, timestep, encoder_hidden_states, True
+    )
+
+
+def _evasion_kwargs_dict(transformer):
+    def _go(hidden_states, timestep, encoder_hidden_states):
+        payload = {
+            "hidden_states": hidden_states,
+            "timestep": timestep,
+            "encoder_hidden_states": encoder_hidden_states,
+            "deterministic": True,
+        }
+        return transformer(**payload)
+
+    return _go
+
+
+def _evasion_functools_partial(transformer):
     import functools
 
-    def _renamed_hand_rolled(t):
-        def _compute_step(h, ts, c):
-            return t(hidden_states=h, timestep=ts, encoder_hidden_states=c, deterministic=True)
+    bound = functools.partial(transformer, deterministic=True)
 
-        return _compute_step
+    def _bound(hidden_states, timestep, encoder_hidden_states):
+        return bound(hidden_states=hidden_states, timestep=timestep, encoder_hidden_states=encoder_hidden_states)
 
-    def _positional_hand_rolled(t):
-        return lambda h, ts, c: t(h, ts, c, True)
+    return _bound
 
-    def _partial_hand_rolled(t):
-        def _bound(h, ts, c):
-            return functools.partial(t, deterministic=True)(hidden_states=h, timestep=ts, encoder_hidden_states=c)
 
-        return _bound
+def _evasion_renamed_top_level(transformer):
+    import functools
 
-    transformer = _Recording()
-    for builder, expected in (
-        (_renamed_hand_rolled, "_compute_step"),
-        (_positional_hand_rolled, "<lambda>"),
-        (_partial_hand_rolled, "_bound"),
-    ):
-        reached.clear()
-        builder(transformer)(hidden, timestep, context)
-        assert reached == [expected], (builder.__name__, reached)
-        assert reached != ["_forward"], builder.__name__
+    # ...and JITTED, like the blessed one, so "it is compiled" is not mistaken for "it is blessed".
+    return jax.jit(functools.partial(_top_level_hand_rolled_forward, transformer))
+
+
+def _evasion_indirect_attribute(transformer):
+    holder = SimpleNamespace(net=transformer)
+
+    def _go(hidden_states, timestep, encoder_hidden_states):
+        return getattr(holder, "net")(
+            hidden_states=hidden_states, timestep=timestep, encoder_hidden_states=encoder_hidden_states
+        )
+
+    return _go
+
+
+_EVASIONS = {
+    "positional": _evasion_positional,
+    "kwargs_dict": _evasion_kwargs_dict,
+    "functools_partial": _evasion_functools_partial,
+    "renamed_top_level": _evasion_renamed_top_level,
+    "indirect_attribute": _evasion_indirect_attribute,
+}
+
+
+@pytest.mark.parametrize("spelling", sorted(_EVASIONS))
+def test_the_blessed_helper_guard_bites_a_hand_rolled_forward(spelling, monkeypatch):
+    # BITE EVIDENCE, and the five spellings are the reviewer's own. Each evasion is driven through
+    # the REAL trace loop -- ``trace.sigma_trace``, the same function both entry points reach -- with
+    # a velocity that did not come from the blessed builder, which is exactly what an entry point
+    # that hand-rolled its forward would produce. The guard's verdict function must FAIL on it.
+    state, _, _, _ = _toy_state_and_batches(config_shape="proxy")
+    calls = _record_transformer_calls(monkeypatch, state)
+    transformer = s1_5.trace.gen.nnx.merge(state.graphdef, state.params, state.rest_of_state)
+
+    sample = _toy_trace_sample()
+    z_gt = jnp.asarray(sample.z_video[None])
+    z_i0 = jnp.asarray(sample.z_i0[None])
+    eps = jax.random.normal(jax.random.key(7), z_gt.shape, jnp.float32)
+    sigmas, timesteps = s1_5.trace.overfit100_sampler_grid(
+        num_inference_steps=3, flow_shift=5.0, sigma_min=0.0, sigma_max=1.0, num_train_timesteps=1000
+    )
+    s1_5.trace.sigma_trace(
+        _EVASIONS[spelling](transformer),
+        z_gt=z_gt,
+        z_i0=z_i0,
+        eps=eps,
+        context=state.context_table[:1],
+        sigmas=sigmas,
+        timesteps=timesteps,
+    )
+
+    # The evasion DID reach the model -- so what follows is the guard catching a real call, not the
+    # ledger being empty for some unrelated reason.
+    assert calls, spelling
+    with pytest.raises(AssertionError) as excinfo:
+        _assert_every_call_is_blessed(calls, what=spelling)
+    assert spelling in str(excinfo.value), str(excinfo.value)
+    # ...and the blessed rule is not merely absent from the stack, it is absent from every frame of
+    # it: there is no ancestor through which this call could be claimed as the helper's.
+    assert not any(set(stack) & _blessed_forward_codes() for stack in calls), spelling
+
+    if spelling in ("renamed_top_level", "indirect_attribute"):
+        # THE POINT of replacing the static rule. An entry point written this way defines no
+        # callable of its own, so the secondary source check passes it clean; only the executed seam
+        # above catches it.
+        def _entry_point_that_evades(t, hidden_states, timestep, encoder_hidden_states):
+            return _EVASIONS[spelling](t)(hidden_states, timestep, encoder_hidden_states)
+
+        assert _nested_callables(_entry_point_that_evades) == [], spelling
+
+
+def _entry_point_with_a_hand_rolled_forward(owner, transformer, blessed_line: str):
+    """A COPY of ``owner``'s REAL body with its blessed-velocity line swapped for a hand-rolled one.
+
+    Mutation testing without touching production: the regression this guard exists to prevent is an
+    edit to these very functions, and the only honest way to show the guard would catch it is to
+    make that edit and run it. So the body is taken from the module, one line is replaced, and the
+    result is compiled and executed against the same seam — while the file on disk is untouched.
+
+    The globals are copied AFTER the seams are installed, because both entry points reach some of
+    their collaborators by bare module-global name.
+    """
+    import functools
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(owner))
+    mutated = source.replace(blessed_line, "velocity_fn = functools.partial(_HAND_ROLLED, _RAW)", 1)
+    assert mutated != source, (owner.__name__, blessed_line)  # the line moved: fix the constant
+    namespace = dict(vars(inspect.getmodule(owner)))
+    namespace.update(functools=functools, _HAND_ROLLED=_top_level_hand_rolled_forward, _RAW=transformer)
+    exec(compile(mutated, f"<mutated {owner.__name__}>", "exec"), namespace)  # noqa: S102
+    return namespace[owner.__name__], mutated
+
+
+@pytest.mark.parametrize("entry_point", sorted(_TRACE_ENTRY_POINTS))
+def test_the_guard_bites_the_entry_point_itself_when_its_forward_line_is_swapped(entry_point, tmp_path, monkeypatch):
+    # THE DECISIVE BITE. The evasions above prove the RULE fires; this proves it fires on the thing
+    # actually at risk -- the entry point's own body, mutated exactly the way the hardware failure
+    # was written, and then RUN. Nothing in production changes: the mutant is compiled from a copy.
+    s1_5._TRACE_FORWARD_CACHE.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
+    state, _, config, scheduler = _toy_state_and_batches(config_shape="proxy")
+    _install_trace_seams(monkeypatch, entry_point, state=state, config=config, scheduler=scheduler, tmp_path=tmp_path)
+    calls = _record_transformer_calls(monkeypatch, state)
+    transformer = s1_5.trace.gen.nnx.merge(state.graphdef, state.params, state.rest_of_state)
+
+    owner = _TRACE_ENTRY_POINTS[entry_point]()
+    mutant, mutated_source = _entry_point_with_a_hand_rolled_forward(
+        owner, transformer, _BLESSED_VELOCITY_LINE[entry_point]
+    )
+    payload = _invoke_trace_entry_point(entry_point, mutant, state=state, config=config, scheduler=scheduler)
+    assert len(payload["rows"]) == 1  # it ran to completion, so nothing but the guard is stopping it
+
+    # 1. The SECONDARY static rule is BLIND to it: the mutant defines no callable of its own, which
+    #    is exactly the reviewer's finding about a renamed top-level helper.
+    assert _nested_callables(mutated_source) == [], entry_point
+    # 2. The EXECUTED guard catches it, on every one of the ~25 forwards the rollout made.
+    assert len(calls) >= s1_5.trace.TRACE_SAMPLING_STEPS, len(calls)
+    with pytest.raises(AssertionError) as excinfo:
+        _assert_every_call_is_blessed(calls, what=entry_point)
+    assert _top_level_hand_rolled_forward.__name__ in str(excinfo.value), str(excinfo.value)
+    s1_5._TRACE_FORWARD_CACHE.clear()
+    s1_5._RELEASED_SPECIALIZATIONS.clear()
 
 
 def test_the_probe_takes_its_trace_forward_from_the_shared_helper(monkeypatch):
