@@ -310,3 +310,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed`, every predeclared criterion met: (2) VAL = **exactly 14,636 records** over 8 shards; (3) TRAIN target = **5,000 distinct episodes reached in 40 shards** (caps 200/60 GiB untouched); (4) staged publication complete (`_COMPLETE.json` last); (5) `load_manifests` re-validation PASSED (sizes 64/64/16/2000, disjointness, ordering, bindings — fail-closed loader); (6) zero binding failures; (7) mirrored to `gs://v6_east1d/datasets/droid_wan_null_adapter/manifests/j0/` and committed with this entry. Listing checksum `5827f4da…0d14`. Log `null_adapter_2026-08-05_15:27:35.log` (reconstituted from the task capture — the on-disk tee entry was unlinked mid-run by an unidentified actor while tee held the inode; content preserved via the duplicate capture stream; benign, noted).
 - **Analysis** — DEV-64/TEST-64/TRAINFIT-16/TRAIN-2000 are now frozen artifacts. exp_05's K1 condition "J0 published" is MET. Wall time ~2h20m (network-bound; ~19 GiB read).
 - **Next** — exp_04: R10 follow-up verdict → commit → R11 → parity audit → J1 package. exp_05: S5 next round; K1 conditions remaining = P0' green + parity audit.
+
+## 2026-08-05T21:00:00Z — R10 cycle CLOSED (844 green, 79/79 mutants) → commit
+
+- **Goal** — Close R10 after the deepest cycle of the experiment (review 1 BLOCKER + 8 MAJOR + 2 MINOR → strengthen 11/11 → follow-up 8/11+rulings → residues 4/4).
+- **Result** — `passed`. R10 committed with this entry: config (208 keys), entrypoint (620 exec LOC), modes module (878), launcher (242), 2 test files; additive deltas to runner_core (`arms=`) and shards (`header_fingerprint`/`next_shard_index`/supersede — reviewer-ratified, incl. the R8-semantics reversal re-ratification). Suite 690 → **844**.
+- **Analysis** — J1 is now launchable in structure: config → backend (TI2V class, statically pinned; first executed proof = smoke) → capacity with gates and provenance-bound artifacts. Remaining before the J1 package: R11 (A3 measurement module) + the parity audit.
+- **Next** — R11 `a3-direct-opt`; exp_05 merge-2-interim (R10 boundary) unblocks S4.

@@ -146,3 +146,14 @@ A3 is intentionally R11 scope and is not counted against this verdict.
 ## Final verdict
 
 **REQUEST-REVISION — findings 3, 4, and 6 remain partial, with the primary non-DEV J2 cache path launch-blocked and its selection evidence unbound.**
+
+---
+
+## Residue-fix record (Coder; the follow-up's 4 items closed) + Planner closure
+
+1. **BLOCKER (J2 cache reader) — FIXED.** `reader_rows` unions the selected cohort with the first-8 dev64 rows for cache mode (per-row bindings kept — wider read scope, never unchecked); the reviewer's TRAIN-2000-cache probe is a passing test.
+2. **MAJOR (selection provenance) — FIXED.** Selection artifacts carry cohort + canonical manifest digest + smoke flag; `selected_arm` requires cohort==dev64, digest match, and (for cache) refuses smoke artifacts; five rejection tests + two end-to-end refusals.
+3. **(adoption threading) — FIXED.** `null_adequacy_uri` config; an existing-but-unusable adoption artifact STOPS the run (no silent default-recipe fallback); threading observed end-to-end.
+4. **(verify ordering) — FIXED.** Marker-only bootstrap (`read_marker`); every shard validated before any record read; forbidden-read proof.
+
+Suite **844 passed**; follow-up battery 13 mutants (2 initial survivors were test gaps, closed) — cumulative R10 battery **79 mutants, 0 survivors**. **Planner closure:** the `allow_smoke=True`-for-verify reading ACCEPTED (verify consumes only the arm label and enforces coverage against its own plan; recorded as the standing semantics). Round R10 closed after review → strengthen → follow-up → residues; committed with this record. First executed proof of the backend load remains J1's smoke rung, per the follow-up's ruling.
