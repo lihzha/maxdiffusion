@@ -94,3 +94,10 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 ## 2026-08-05T15:10:00Z — CORRECTION (append-only): the S1 cast obligation, restated
 
 - The S1 entries said "S3's replay operator MUST cast C to the transformer activation dtype." Per the S2 cast-seam decision (reviewer-ratified as architecturally sound): **the single rule is that the optimizer and the replay operator pass fp32 context unchanged, and the runner-built real-backbone `velocity_fn` performs the cast immediately before the transformer** (matching the deployed path's cast at `side_adapter_wan.py:767` and the reference's autocast placement). The substance of S1's finding is unchanged — no fp32 C may reach the frozen transformer — but the obligation's owner is the S3/S4 runner wiring, not `replay_with_positive`. Carried contracts: S3 re-runs the parity fixture through the actual replay operator; S4 adds a bf16 both-branches closure test.
+
+## 2026-08-05T15:45:00Z — S2 cycle CLOSED: review (2 MAJOR; core empirically confirmed) → strengthen (689 green, 0/12) → commit
+
+- **Goal** — Close S2.
+- **Command / Validation** — Trail in `pos_context_codex_code_optimize-positives_review.md`. **689 passed**; 12 mutants, 0 survivors. The K2-facing state schema is now explicit (`z_bar_states [N]` + `z_final`), and the cast rule is single-sourced with MUST contracts for S3/S4.
+- **Result** — `passed`. S2 committed with this entry.
+- **Next** — S3 `replay-state-capture`.
