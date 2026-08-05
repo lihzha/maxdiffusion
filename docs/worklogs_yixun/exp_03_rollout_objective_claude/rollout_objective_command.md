@@ -267,3 +267,14 @@ batch-1 forward in the system; 8f is the first launch to reach it. No artifacts 
 pre-assembly). Round-9 fix dispatched (batch or tile the trace forward to divisibility, with
 executed 8-device row-0 equivalence evidence + a sweep for any other batch-indivisible forward).
 
+## Job 8g — v6e-8 S1.5 RELAUNCH (full fix stack) — launched 2026-08-05T15:25Z
+
+**Under the Query-4 grant; the S1.5 fix campaign CLOSED (final micro-verify APPROVE + GO at
+`7da7a66`).** Everything aboard relative to 8f: the batch-1 sigma trace is one compiled tiled
+forward per state (row-0 sliced outside jit; timed/censused/released), release-ledger truth
+(locals deleted pre-release), post-trace census with trace_total budgeted, and the execution-seam
+guard. Suite 1,534 / 2 (probe file 111). Expected new one-time cost: the trace forward's compile
+(~40–90s/state, own COMPILE_TIMINGS line). Acceptance beyond completion: trace finite with
+index-0 exact-zero; ledger post_trace_release shows the executable gone.
+- **Job 8g:** `20260805-152557-13848e19-exp03-s15-probe7-yixun` (COMMIT=428557e, tip at submission; code = APPROVED 7da7a66 + docs).
+
