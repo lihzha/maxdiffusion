@@ -41,3 +41,9 @@ Context: K1's STOP verdict presented with three options (honor / override-by-ame
 **Yixun, verbatim:** "Wait for J1-4, then give me the joint reading"
 
 Planner reading: the K2 decision is DEFERRED until exp_04's J1-4 terminal; no K2/K3 work starts; the joint P1 reading (both slots' capacity + transfer arms side by side) goes to Yixun as the next decision package. K1's STOP stands untouched in the meantime.
+
+## Decision (2026-08-06T~20:30Z) — K2 STOP honored
+
+**Yixun, verbatim:** "Honor the STOP for K2, and GO for J1b"
+
+Planner reading: the predeclared K1 selection verdict stands — K2 target caching and the K3 regression do NOT proceed. exp_05 moves to P4' (results/analysis/report of the P1' basin finding). The S1–S9 trainer stack remains built, reviewed, and committed should a future direction revive it; the S9 stall and S10's trainer launcher stay parked.
