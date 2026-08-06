@@ -34,6 +34,7 @@ import optax
 import orbax.checkpoint as ocp
 import tensorflow as tf
 
+from maxdiffusion.models.wan.pos_context_inversion_wan import POS_L
 from maxdiffusion.pos_context_regression import per_example_regression_loss, regression_loss
 from maxdiffusion.run_wan_null_inversion import optional_config_value
 
@@ -308,7 +309,7 @@ def build_selection_manager(ckpt_dir: str):
     return _manager(selection_dir(ckpt_dir), max_to_keep=1)
 
 
-def save_adapter_checkpoint(manager, state: RegressionTrainState, *, dev_metric=None, history=()) -> None:
+def save_adapter_checkpoint(manager, state: RegressionTrainState, *, dev_metric=None, history=(), l_pos=None) -> None:
     """Adapter params, its optimizer state, and the step JSON -- three items, as exp_04 settled it.
 
     The stop rule's decision state rides **inside the step item** rather than in Orbax metrics: it is
@@ -324,6 +325,10 @@ def save_adapter_checkpoint(manager, state: RegressionTrainState, *, dev_metric=
                 {
                     "step": int(state.step),
                     DEV_METRIC: None if dev_metric is None else float(dev_metric),
+                    # S9: K4 restores the SELECTION artifact and checks it against what the report
+                    # named. The row count is part of that identity -- the head's output IS the
+                    # conditioning, so another l_pos cannot drive the deployed forward.
+                    "l_pos": None if l_pos is None else int(l_pos),
                     "eval_history": [
                         [int(record.step), float(record.dev_normalized_mse), float(record.train_mse)]
                         for record in history
@@ -339,14 +344,14 @@ def read_checkpoint_json(manager, step: int) -> dict:
     return dict(manager.restore(step, args=ocp.args.Composite(step=ocp.args.JsonRestore())))["step"]
 
 
-def preserve_selection(manager, state: RegressionTrainState, *, dev_metric: float, history=()) -> bool:
+def preserve_selection(manager, state: RegressionTrainState, *, dev_metric: float, history=(), l_pos=None) -> bool:
     """Write the selection checkpoint iff ``dev_metric`` is a STRICT improvement. Ties keep the earliest."""
     incumbent = manager.latest_step()
     if incumbent is not None:
         previous = read_checkpoint_json(manager, incumbent).get(DEV_METRIC)
         if previous is not None and float(dev_metric) >= float(previous):
             return False
-    save_adapter_checkpoint(manager, state, dev_metric=dev_metric, history=history)
+    save_adapter_checkpoint(manager, state, dev_metric=dev_metric, history=history, l_pos=l_pos)
     return True
 
 
@@ -505,4 +510,10 @@ class WanPosContextRegressionTrainer:
         if self.manager is not None:
             save_adapter_checkpoint(self.manager, state, dev_metric=latest.dev_normalized_mse, history=history)
         if self.selection_manager is not None and verdict.best_step == latest.step:
-            preserve_selection(self.selection_manager, state, dev_metric=latest.dev_normalized_mse, history=history)
+            preserve_selection(
+                self.selection_manager,
+                state,
+                dev_metric=latest.dev_normalized_mse,
+                history=history,
+                l_pos=int(optional_config_value(self.config, "pre_context_tokens", POS_L)),
+            )
