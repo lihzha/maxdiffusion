@@ -905,6 +905,15 @@ def pos_execute(
     """Dispatch one positive-slot mode. S4 wires ``capacity`` and ``adequacy_probe`` (the K1 pair);
     the rest say so rather than falling through to the null slot."""
     if mode == "capacity":
+        # merge-interim-2: exp_04's R11 added A3 (``direct_opt``) to the null slot and threads its
+        # switch through every capacity call. The positive slot wires no direct-optimization stage --
+        # ``direct_opt`` is refused below -- so the knob comes off the call rather than reaching a
+        # runner that has no such stage, and a run that explicitly asks for it is told, not ignored.
+        if kwargs.pop("a3_measure", False):
+            raise ValueError(
+                "null_a3_measure is a null-slot (A3) switch and the positive slot has no direct-"
+                "optimization stage to measure: a positive run must not be launched with it set"
+            )
         return run_capacity_positive(plan, backend, sinks, **kwargs), 0
     if mode == "adequacy_probe":
         return (

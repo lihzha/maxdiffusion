@@ -42,7 +42,14 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
-from maxdiffusion.models.wan.null_inversion_wan import base_context_fingerprint
+from maxdiffusion.models.wan.null_direct_opt_wan import (
+    A3_ITERS,
+    direct_optimize_nulls,
+    direct_rollout,
+    endpoint_future_mse,
+    measure_single_update,
+)
+from maxdiffusion.models.wan.null_inversion_wan import base_context_fingerprint, global_noise
 from maxdiffusion.null_adapter_cache_policy import (
     FIDELITY_SUBSET_SIZE,
     fidelity_gate,
@@ -62,7 +69,12 @@ from maxdiffusion.null_adapter_pixels import (
     fill_pixel_metrics,
     save_video_mp4,
 )
-from maxdiffusion.null_adapter_records import ProvenanceHeader, record_from_bytes, record_to_bytes
+from maxdiffusion.null_adapter_records import (
+    PRODUCTION_GEOMETRY,
+    ProvenanceHeader,
+    record_from_bytes,
+    record_to_bytes,
+)
 from maxdiffusion.null_adapter_runner_core import (
     ADEQUACY_GRID,
     DEFAULT_RECIPE,
@@ -86,6 +98,17 @@ TABLES_NAME = "gate_tables.json"
 REPORT_NAME = "run_report.json"
 SELECTION_NAME = "selection.json"
 ADEQUACY_NAME = "adequacy_report.json"
+A3_MEASUREMENT_NAME = "a3_measurement.json"
+DIRECT_OPT_NAME = "a3_direct_opt.json"
+DIRECT_OPT_ARRAYS_NAME = "a3_nulls.npz"
+# Plan §4-P1b: J1b is A3 on the first eight DEV examples, from the canonical eps_0, at production
+# geometry. The boundary is enforced rather than assumed -- this job is separately approved, and an
+# approval is for a specific experiment.
+DIRECT_OPT_COHORT = "dev64"
+DIRECT_OPT_EXAMPLES = 8
+PRODUCTION_L_NULL = 16
+PRODUCTION_CONTEXT_DIM = 4096
+PRODUCTION_STEPS = 25
 VERIFY_NAME = "verify_report.json"
 VIDEO_FPS = 16
 # Plan §4-P1's adequacy probe is a fixed experiment: the first eight DEV examples, the six approved
@@ -127,6 +150,7 @@ class Sinks:
     validate_shard: Callable[..., Any]
     read_json: Callable[[str], Any]
     read_marker: Callable[[str], Any]
+    write_arrays: Callable[..., str]
 
 
 def header_for(plan: Mapping[str, Any], backend: Backend, *, manifest_hash: str, code_sha: str) -> ProvenanceHeader:
@@ -337,6 +361,8 @@ def run_capacity(
     code_sha: str,
     decode_batch_size: int = 8,
     adopted_recipe: Mapping[str, Any] | None = None,
+    a3_measure: bool = False,
+    measure: Callable[..., Any] = measure_single_update,
 ) -> dict[str, Any]:
     """Plan §4-P1: every arm over the cohort, decoded, gated, selected, and only then recorded."""
     started = time.time()
@@ -363,6 +389,29 @@ def run_capacity(
     pixels = decode_cohort(backend.decode_fn, backend.read_batch, latents, names, batch_size=decode_batch_size)
     filled = fill_pixel_metrics(merge_tables([emit_metric_tables(result) for result, _ in batches]), pixels)
 
+    # --- plan §4-P1 item (iii): one A3 update, measured inside J1. It is what decides whether the
+    # separately-approved J1b is proposed at all, so it runs on real data from this very cohort.
+    a3_report = None
+    if a3_measure:
+        probe_names = tuple(names[:1])
+        z_start, z_i0, z_video, null_init = a3_inputs(backend, plan, probe_names)
+        a3_report = measurement_payload(
+            measure(
+                backend.velocity_fn,
+                z_start,
+                z_i0,
+                z_video,
+                canonical_sigmas(),
+                null_init,
+                backend.base_context,
+                lr=float(plan["params"]["lr"]),
+                guide_scale=float(plan["params"]["guide_scale"]),
+            ),
+            plan,
+            header,
+            probe_names,
+        )
+
     # --- gates and selection, against the cohort the run declared rather than the one it survived.
     verdicts = evaluate_gates(filled, plan["names"])
     selection = selection_payload(verdicts, plan, manifest_hash=manifest_hash)
@@ -370,6 +419,8 @@ def run_capacity(
     # --- publication.
     sinks.write_json(posixpath.join(artifact_dir, TABLES_NAME), filled)
     sinks.write_json(posixpath.join(artifact_dir, SELECTION_NAME), selection)
+    if a3_report is not None:
+        sinks.write_json(posixpath.join(artifact_dir, A3_MEASUREMENT_NAME), a3_report)
     shards = []
     for index, (arm_results, lost) in enumerate(batches):
         batch, fields = backend.read_batch(arm_results.names)
@@ -402,6 +453,12 @@ def run_capacity(
         "quarantined": quarantined,
         "recipe": dict(plan["optimization_config"]),
         "target": selection["target"],
+        "a3_measurement": None if a3_report is None else {
+            "verdict": a3_report["verdict"],
+            "projection_hours": a3_report["projection_hours"],
+            "fits_budget": a3_report["fits_budget"],
+            "preliminary": a3_report["preliminary"],
+        },
         "gates": {name: verdicts[name].reasons for name in ("g1", "g2")},
         "shards": shards,
         "videos": sorted(videos),
@@ -612,6 +669,179 @@ def measure_fidelity(
         for index, name in enumerate(names)
     }
     return fp32, fp16
+
+
+def a3_inputs(backend: Backend, plan: Mapping[str, Any], names: Sequence[str]):
+    """The canonical A3 problem for ``names``: eps_0 as the start, the batch's own condition/target.
+
+    ``z_start`` is ``global_noise(0)`` broadcast over the batch -- plan §3's single canonical noise,
+    which is what A3 optimizes from and what A2's deployment convention deploys from. It is built
+    here rather than read from anywhere so the two arms cannot drift apart.
+    """
+    names = tuple(names)
+    batch, _ = backend.read_batch(names)
+    l_null = int(plan["params"]["l_null"])
+    z_start = np.broadcast_to(np.asarray(global_noise(0), np.float32), (len(names), *PRODUCTION_GEOMETRY.z_video))
+    return (
+        np.asarray(z_start),
+        np.asarray(batch.z_i0, np.float32),
+        np.asarray(batch.z_video, np.float32),
+        np.asarray(backend.base_context, np.float32)[:l_null],
+    )
+
+
+def measurement_payload(report: Any, plan: Mapping[str, Any], header: ProvenanceHeader, names) -> dict[str, Any]:
+    """One A3 measurement, bound to the run that produced it."""
+    return {
+        "mode": "a3_measurement",
+        "names": list(names),
+        "verdict": report.verdict,
+        "reasons": list(report.reasons),
+        "lower_seconds": report.lower_seconds,
+        "compile_seconds": report.compile_seconds,
+        "step_seconds": report.step_seconds,
+        "setup_seconds": report.setup_seconds,
+        "peak_hbm_bytes": report.peak_hbm_bytes,
+        "current_hbm_bytes": report.current_hbm_bytes,
+        "device_memory": [dict(entry) for entry in report.device_memory],
+        "loss": report.loss,
+        "grad_norm": report.grad_norm,
+        "batch": report.batch,
+        "iters": report.iters,
+        "job_batch": report.job_batch,
+        "compute_seconds": report.compute_seconds,
+        "write_allowance_seconds": report.write_allowance_seconds,
+        "projection_seconds": report.projection_seconds,
+        "projection_hours": report.projection_hours,
+        "fits_budget": report.fits_budget,
+        "preliminary": report.preliminary,
+        "budgets": dict(report.budgets),
+        "provenance": {
+            "cohort": plan["cohort"],
+            "manifest_hash": header.manifest_hash,
+            "code_sha": header.code_sha,
+            "model_revision": header.model_revision,
+            "base_context_fingerprint": header.base_context_fingerprint,
+            "guide_scale": float(header.guide_scale),
+            "l_null": int(header.l_null),
+        },
+    }
+
+
+def _preflight_direct_opt(plan: Mapping[str, Any], backend: Backend) -> tuple[str, ...]:
+    """J1b's production boundary, checked before a separately-approved job spends anything."""
+    if plan["cohort"] != DIRECT_OPT_COHORT:
+        raise ValueError(f"A3 is defined on {DIRECT_OPT_COHORT}, not {plan['cohort']!r}")
+    if len(plan["names"]) < DIRECT_OPT_EXAMPLES:
+        raise ValueError(
+            f"A3 needs the first {DIRECT_OPT_EXAMPLES} DEV names, but the cohort carries {len(plan['names'])}"
+        )
+    l_null = int(plan["params"]["l_null"])
+    if l_null != PRODUCTION_L_NULL:
+        raise ValueError(f"A3 runs at the pinned L_null={PRODUCTION_L_NULL}, got {l_null}")
+    context = np.asarray(backend.base_context)
+    if context.ndim != 2 or context.shape[1] != PRODUCTION_CONTEXT_DIM:
+        raise ValueError(f"A3 expects a [S, {PRODUCTION_CONTEXT_DIM}] context, got shape {context.shape}")
+    if len(canonical_sigmas()) - 1 != PRODUCTION_STEPS:
+        raise ValueError(f"A3 runs on the canonical {PRODUCTION_STEPS}-step grid")
+    return tuple(plan["names"][:DIRECT_OPT_EXAMPLES])
+
+
+def run_direct_opt(
+    plan: Mapping[str, Any],
+    backend: Backend,
+    sinks: Sinks,
+    *,
+    artifact_dir: str,
+    manifest_hash: str,
+    code_sha: str,
+    iters: int = A3_ITERS,
+    measure: Callable[..., Any] = measure_single_update,
+) -> dict[str, Any]:
+    """Plan §4-P1b: the separately-approved J1b job -- A3 over the first eight DEV examples.
+
+    **The fit probe comes first.** J1's measurement is B=1, which the plan and the R11 review both
+    treat as a preliminary compute estimate: B=8 has a different compile, execution, sharding and HBM
+    profile. So this job opens by measuring one update at its own batch size and continues to the
+    300 iterations only if that projection fits. A job that does not fit stops, says so, and exits
+    non-zero rather than spending four hours discovering it.
+    """
+    started = time.time()
+    names = _preflight_direct_opt(plan, backend)
+    header = header_for(plan, backend, manifest_hash=manifest_hash, code_sha=code_sha)
+    # Wall-clocked, because it is real J1b time the projection must carry: eps_0 construction plus
+    # staging eight examples' worth of latents off the manifest's shards.
+    setup_started = time.time()
+    z_start, z_i0, z_video, null_init = a3_inputs(backend, plan, names)
+    setup_seconds = time.time() - setup_started
+    sigmas = canonical_sigmas()
+    recipe = {"lr": float(plan["params"]["lr"]), "guide_scale": float(plan["params"]["guide_scale"])}
+
+    probe = measure(
+        backend.velocity_fn,
+        z_start,
+        z_i0,
+        z_video,
+        sigmas,
+        null_init,
+        backend.base_context,
+        iters=int(iters),
+        # The batch the job runs at -- not a multiplier. One joint update covers all eight examples,
+        # so 300 iterations is 300 updates.
+        job_batch=len(names),
+        setup_seconds=setup_seconds,
+        require_single_example=False,
+        **recipe,
+    )
+    payload = {
+        "mode": "direct_opt",
+        "cohort": plan["cohort"],
+        "names": list(names),
+        "iters": int(iters),
+        "fit_probe": measurement_payload(probe, plan, header, names),
+        "continued": bool(probe.fits_budget),
+        "seconds": round(time.time() - started, 3),
+    }
+    if not probe.fits_budget:
+        payload["reasons"] = [
+            f"the B={len(names)} fit probe projects {probe.projection_hours:.2f} h "
+            f"({probe.verdict}); J1b does not run"
+        ]
+        sinks.write_json(posixpath.join(artifact_dir, DIRECT_OPT_NAME), payload)
+        return payload
+
+    nulls, losses, grad_norms = direct_optimize_nulls(
+        backend.velocity_fn, z_start, z_i0, z_video, sigmas, null_init, backend.base_context,
+        iters=int(iters), **recipe,
+    )
+    # The post-update endpoint: ``losses`` records the loss BEFORE each update, so the value after
+    # the last one is not in it -- and that is the number A3 is judged on.
+    final_endpoint = endpoint_future_mse(
+        direct_rollout(
+            backend.velocity_fn, nulls, z_start, z_i0, sigmas, backend.base_context,
+            guide_scale=recipe["guide_scale"],
+        ),
+        z_video,
+    )
+    arrays = sinks.write_arrays(
+        posixpath.join(artifact_dir, DIRECT_OPT_ARRAYS_NAME),
+        nulls=np.asarray(nulls, np.float32),
+        losses=np.asarray(losses, np.float32),
+        grad_norms=np.asarray(grad_norms, np.float32),
+        final_endpoint=np.asarray(final_endpoint, np.float32),
+    )
+    payload.update(
+        arrays=arrays,
+        initial_loss=[float(value) for value in np.asarray(losses[0])],
+        final_loss=[float(value) for value in np.asarray(losses[-1])],
+        final_endpoint=[float(value) for value in np.asarray(final_endpoint)],
+        grad_norm_first=[float(value) for value in np.asarray(grad_norms[0])],
+        grad_norm_last=[float(value) for value in np.asarray(grad_norms[-1])],
+        provenance=measurement_payload(probe, plan, header, names)["provenance"],
+        seconds=round(time.time() - started, 3),
+    )
+    sinks.write_json(posixpath.join(artifact_dir, DIRECT_OPT_NAME), payload)
+    return payload
 
 
 def run_cache(
@@ -836,6 +1066,10 @@ def execute(
         return run_adequacy(plan, backend, sinks, artifact_dir=kwargs["artifact_dir"]), 0
     if mode == "cache":
         return run_cache(plan, backend, sinks, **kwargs), 0
+    if mode == "direct_opt":
+        report = run_direct_opt(plan, backend, sinks, **kwargs)
+        # A fit probe that refuses is a stop, not a result to be scrolled past.
+        return report, (0 if report["continued"] else 1)
     if mode == "verify_replay":
         report = run_verify(plan, backend, sinks, **kwargs)
         return report, (1 if report["failures"] else 0)
@@ -864,6 +1098,23 @@ def read_json(path: str) -> Any:
         raise FileNotFoundError(f"{path} does not exist: this job requires the J1 selection artifact")
     with gfile.GFile(path, "r") as handle:
         return json.loads(handle.read())
+
+
+def write_arrays(path: str, **arrays: Any) -> str:
+    """Publish A3's tensors as a single npz, staged through the same transactional upload as videos."""
+    import io
+
+    buffer = io.BytesIO()
+    np.savez(buffer, **{name: np.asarray(value) for name, value in arrays.items()})
+    gfile = _gfile()
+    gfile.makedirs(posixpath.dirname(path))
+    staged = f"{path}.partial"
+    if gfile.exists(staged):
+        gfile.remove(staged)
+    with gfile.GFile(staged, "wb") as handle:
+        handle.write(buffer.getvalue())
+    gfile.rename(staged, path, overwrite=True)
+    return path
 
 
 def read_marker(shard_path: str) -> Any:
@@ -940,4 +1191,5 @@ def default_sinks() -> Sinks:
         validate_shard=validate_shard,
         read_json=read_json,
         read_marker=read_marker,
+        write_arrays=write_arrays,
     )

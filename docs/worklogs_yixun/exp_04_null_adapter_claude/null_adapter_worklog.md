@@ -317,3 +317,57 @@ Primary agent: claude (Planner: Claude Fable 5 max; Coder: Opus 5 max subagent; 
 - **Result** — `passed`. R10 committed with this entry: config (208 keys), entrypoint (620 exec LOC), modes module (878), launcher (242), 2 test files; additive deltas to runner_core (`arms=`) and shards (`header_fingerprint`/`next_shard_index`/supersede — reviewer-ratified, incl. the R8-semantics reversal re-ratification). Suite 690 → **844**.
 - **Analysis** — J1 is now launchable in structure: config → backend (TI2V class, statically pinned; first executed proof = smoke) → capacity with gates and provenance-bound artifacts. Remaining before the J1 package: R11 (A3 measurement module) + the parity audit.
 - **Next** — R11 `a3-direct-opt`; exp_05 merge-2-interim (R10 boundary) unblocks S4.
+
+## 2026-08-05T23:20:00Z — R11 `a3-direct-opt` write phase complete (the final exp_04 code round); review dispatched
+
+- **Goal** — R11: the A3 joint optimizer + the J1b measurement helper.
+- **Change** — `null_direct_opt_wan.py` (184 exec LOC: differentiable remat'd rollout, endpoint future-MSE, single-Adam joint optimization, `measure_single_update` with structured budget verdicts and the ≤4h projection rule) + 41 tests.
+- **Command / Validation** — red evidenced; **885 passed** (844 + 41); ruff/diff-check clean. **28 mutants, 0 survivors** (4 first-pass survivors were test gaps, closed).
+- **Result** — `passed` (write). **Two load-bearing test-design findings recorded for the experiment's method notes:** (1) Adam scale-invariance masks Σ-vs-mean objective mutants at the parameter level — the batching contract must be asserted on UNNORMALIZED grad norms; (2) a stop_gradient'd v_cond is forward-bit-identical and survives all self-referential comparisons — the CENTRAL-FINITE-DIFFERENCE test is the actual proof of end-to-end differentiation. Remat: numerically unobservable (bit-identical grads, measured) but structurally pinned via jaxpr inspection — tested, not documented away. verdict-vs-fits_budget separation ("measurement worked" ≠ "job affordable") accepted.
+- **Next** — R11 review (the last exp_04 code review) → commit → **PARITY AUDIT** → the J1 pre-launch package.
+
+## 2026-08-06T02:40:00Z — R11 cycle CLOSED (936 green, 73/73 mutants) → commit — ALL exp_04 CODE ROUNDS COMPLETE
+
+- **Result** — `passed`. R11 committed with this entry (the A3 module + the J1/J1b wiring across modes/entrypoint/config/launcher). Suite: 246 (R5 era) → **936**. Eleven rounds + three splits, every commit through closed review cycles; ~470 mutants killed cumulatively; 6 ratified defence-in-depth survivors.
+- **Next** — **THE PARITY AUDIT** (Planner, plan §8, recorded here before J1), then the J1 pre-launch package (params_set_up + command entry + acceptance criteria + pushed SHA) under Yixun's standing conditional grant.
+
+## 2026-08-06T03:00:00Z — PARITY AUDIT (plan §8) — CLEAN; recorded before J1 per the SOP
+
+Component-by-component against `third_party/Wan2.2/scripts/embedding_search.py` @ pinned `f370228`, citing where each is pinned (test + independent reviewer verification):
+
+1. **Inversion recurrence** (:522-572 — indices, signs, evaluation point, pin points incl. the pinned clean pivot): R2's constant/analytic-oracle + scan≡literal-loop tests; R2 review independently verified; the reversed-dsigma class killed AGAIN at R11 via the bitwise oracle against the reviewed replay.
+2. **Per-step null optimization** (:575-678 — fresh Adam per step, v_cond cached once, locked-∅ advance with one extra forward, warm start): R3's call-count (N cond / N·(J+1) unc), composition (tail-rerun), and locked-advance tests; R3 review's empirical probes; the Adam recipe literal-pinned (eps-sensitive fixture; eps_root=0.0 explicit; the reviewer's own torch-vs-optax fixed-gradient check at 7.15e-7).
+3. **CFG combine + w=5**: R3/R4a analytic tests (w=1 zero-∅-grad; w=5 algebra); the A0 guide-scale-invariance contract (R4a) with the measured ULP-mechanism provenance.
+4. **Pin discipline** (init / each candidate / each step / advance): mutants across R2/R3/R4a/R11 (dropped-pin variants all killed).
+5. **Per-token timestep ≡ temp_ts** (:488-500): R2's captured-timestep content tests (frame-0 zeros, σ·1000 elsewhere, n_hist=1); R3's every-forward test; R7's independently-confirmed latent→pixel frame mapping.
+6. **Dtype boundaries** (bf16 model fwd; fp32 latents/∅/Adam): R1's bitwise-bf16 branch equality at the exact cast; R3 fp32 pins; R7's strict [0,1] decode contract with the R10-verified pipeline trace.
+7. **σ grid**: R1's hardcoded-value characterization incl. the 0.1724 tail; **documented deviation** σ₀=1.0 vs the PyTorch 0.999 (no cross-repo artifact exchange; every in-repo baseline uses ours).
+8. **Optimization loss** = full-tensor MSE (pinned frame inert, matching `F.mse_loss`) with future-frame reporting split: R3's convention + R6/R7's metric separation.
+9. **Replay ≡ regenerate_with_null_embeds** (:791-819): R4a review's line-by-line confirmation; R11's endpoint+trajectory bitwise oracle at four guide scales.
+10. **Verifier ≡ verify_reconstruction_from_null spirit** (loads no GT, no trajectory): R4c's hostile-proxy must-not-read enforcement + pair-level provenance; tamper detection beyond reader hashes.
+11. **Deviations register (all ratified in reviews):** empty positive branch (no captions exist); ∅ optimized as 16 rows inside the padded-512 context ({L_nat,16} ablation is diagnostic, in-J1); σ₀ above; batched execution with per-example independence (bitwise B-tests throughout); optax-vs-torch Adam (recipe-pinned); JAX threefry noise (golden-pinned incl. non-ASCII, one on-device golden asserted by the launcher before arms).
+
+**Numeric-recipe defaults cross-check (SOP):** J=10, lr=1e-2, w=5.0, inversion w=1.0, Adam (0.9, 0.999, 1e-8, eps_root 0), σ-shift 5.0, 25 steps — all as the reference/plan; config values pinned by the R10 config-drift tests. **Data parity:** R9's dual-source episode identity independently re-derived by its reviewer; real producer-TFRecord fixtures in the manifest tests; J0's published cohorts re-validated by the fail-closed loader.
+
+**Verdict: PARITY AUDIT CLEAN.** Launch precondition (P0 + audit) for the conditionally-granted J1 is now MET on the code side; the J1 package (params, command, acceptance criteria, smoke-first runbook) follows at the launch action.
+
+## 2026-08-05T18:16Z — J1 LAUNCH (conditionally granted, Query 2; conditions met: P0 936-green + parity audit CLEAN)
+
+- **Acceptance criteria (predeclared, plan §9 + SOP):** (1) worker reports commit `f06dfc1`; (2) v6e-8, 8 devices, 1 host; (3) SMOKE completes: ≥1 published smoke shard whose verify_replay passes on-device + the R1 golden asserted; (4) ADEQUACY publishes the adoption artifact with full [N,J,B] evidence; (5) CAPACITY completes all six arms on DEV-64+TRAINFIT-16 with zero unexplained quarantines, full-cohort decode, gates tables + selection.json + A3 measurement published provenance-bound; (6) no OOM/NaN (trace-finiteness hard-fails count as real bugs unless per-example divergence, which quarantines); (7) gates evaluated per G1/G2 + the target-selection rule — ANY outcome is acceptance (the gates decide, not vibes). Failure triage per the SOP: infra (preemption/download/auth) ⇒ auto-resubmit unchanged; real bug ⇒ fix cycle.
+- **Command / Validation** — `null_adapter_command.md` entry J1-1 at launch time; queue job name `exp04-j1-null-yixun`.
+- **Result** — `launched`.
+
+## 2026-08-06T05:50:00Z — J1-1 attempt 1 FAILED: REAL BUG (HyperParameters getattr) — fix cycle opened
+
+- **Result** — `partial`: job `20260805-181744-61377ea2` FAILED (APPLICATION_ERROR, worker exit 1, ~8 min into phase 1). **The smoke did its job**: the pipeline load succeeded end-to-end on first real contact (model shards loaded; revision `b8fff7315c…` resolved — the R10 BLOCKER fix held); the crash is `run_wan_null_inversion.py:611` — `getattr(config, "code_sha", "")` on `HyperParameters`, which raises `ValueError` for missing keys instead of honoring the default (`pyconfig.py:318`).
+- **Analysis** — **REAL BUG**, not infra. The exact defect class exp_05's S4 review caught in its own dual-touch code (its finding 1); exp_04's occurrence was invisible because the entrypoint tests use fake config objects. Scope: audit EVERY config-getattr-with-default in the exp_04 entry/modes/launcher-adjacent files, not just :611.
+- **Next** — Fix round (marker `hyperparameters-config-access`): a HyperParameters-safe optional-value resolution (independently implemented on this branch), full-site audit, real-HyperParameters regression tests (the AST-extraction pattern), review, commit → **J1-2 relaunch**. Grant reading recorded: Yixun's conditional grant re-evaluates at the fixed SHA (P0 green + audit intact ⇒ conditions re-met); flagged to Yixun in the status report with veto opportunity.
+
+## 2026-08-06T06:40:00Z — Fix round CLOSED first-pass (APPROVE, zero findings) → commit → J1-2 relaunch
+
+- **Result** — `passed`: **954 tests**; 11/11 mutants; the reviewer independently confirmed the repro, the 10-site audit, and the AST pins. Committed with this entry. J1-2 relaunches at this SHA (grant conditions re-met: suite green incl. the new real-class regressions; parity audit unchanged — the fix touches config access, not any audited component; Yixun's veto window was offered and stands open until launch).
+
+## 2026-08-05T19:05:00Z — Timestamp correction (append-only) + J1-2 submission handed to Yixun
+
+- **Correction:** the previous worklog entry is stamped `2026-08-06T06:40:00Z` and the J1-1 command-ledger header says `2026-08-06` — both wrong by one day. Actual times: fix-round close/commit ≈ **2026-08-05T18:55Z**; J1-1 submission **2026-08-05T18:17:48Z** (as the queue job id `20260805-181744-…` itself records). Content unaffected.
+- **J1-2 status:** artifact root `gs://…/droid_wan_null_adapter/j1` confirmed EMPTY (J1-1 failed closed — nothing written), so the verbatim relaunch has no collision surface. The session's attempt to run `submit_j1.sh` was denied by the auto-mode permission classifier (issue #10, new) — submission handed to Yixun to run via `!`; the J1-2 command entry will be written at actual launch. Grant reading unchanged (conditions re-met at `9338c7b`; veto window stands).

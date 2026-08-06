@@ -13,3 +13,5 @@
 - `1fb780a` — feat(exp_04): R8 runner-cache-resume — fail-closed shard storage + cache policy (TDD, 523 tests)
 - `c3401e4` — feat(exp_04): R9 manifests — pinned J0 cohort builder (TDD, 610 tests)
 - `2ebaaad` — feat(exp_04): R10 launchers-config (TDD, 844 tests)
+- `65bf65f` — feat(exp_04): R11 a3-direct-opt (TDD, 936 tests) — final code round
+- `925ee17` — fix(exp_04): HyperParameters config access (J1-1 crash; 954 tests)

@@ -151,6 +151,15 @@ def _config(**overrides):
         "null_verify_atol": 0.01,
         "null_selection_uri": "",
         "null_adequacy_uri": "",
+        "null_a3_measure": False,
+        "null_a3_iters": 300,
+        # Read only inside ``_load_backend``, which every test here injects -- carried anyway so the
+        # fake is a faithful stand-in for a real config rather than only for the paths we happen to
+        # exercise today.
+        "null_pixel_convention": "unit",
+        "activations_dtype": "bfloat16",
+        "logical_axis_rules": [],
+        "wan_max_sequence_length": 512,
         "pretrained_model_name_or_path": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
         "code_sha": "a" * 40,
         **overrides,
@@ -705,8 +714,10 @@ def test_capacity_gets_its_staging_provenance_and_decode_bound():
         "code_sha",
         "decode_batch_size",
         "adopted_recipe",
+        "a3_measure",
     }
     assert kwargs["adopted_recipe"] is None  # no adequacy artifact, no adoption
+    assert kwargs["a3_measure"] is False  # the A3 stage is opt-in
     assert kwargs["code_sha"] == "a" * 40 and len(kwargs["manifest_hash"]) == 64
 
 
@@ -1253,3 +1264,141 @@ def test_main_builds_a_capacity_reader_from_its_cohort_alone(monkeypatch):
     )
 
     assert set(recorder.calls[0][1]) == set(_train_names())
+
+
+# --------------------------------------------------------------------------- A3 / J1b integration
+
+
+def test_direct_opt_is_a_launchable_mode():
+    """R11's optimizer was unreachable: nothing outside its own tests imported it, and there was no
+    mode to dispatch a separately-approved J1b through (review, finding 1)."""
+    assert "direct_opt" in NULL_MODES
+    assert resolve_mode("direct_opt") == "direct_opt"
+
+
+def test_the_capacity_a3_stage_is_config_gated():
+    manifests = _manifests()
+    enabled = _config(null_mode="capacity", null_a3_measure=True)
+
+    kwargs = mode_kwargs(enabled, plan_run(enabled, manifests), manifests, shards_for=lambda root: ())
+
+    assert kwargs["a3_measure"] is True
+
+
+def test_direct_opt_gets_its_provenance_and_iteration_count():
+    manifests = _manifests()
+    config = _config(null_mode="direct_opt", null_a3_iters=17)
+
+    kwargs = mode_kwargs(config, plan_run(config, manifests), manifests, shards_for=lambda root: ())
+
+    assert kwargs["iters"] == 17
+    assert kwargs["code_sha"] == "a" * 40 and len(kwargs["manifest_hash"]) == 64
+    assert "staging_dir" not in kwargs  # J1b publishes no shards
+
+
+def test_main_composes_a_direct_opt_run(monkeypatch):
+    import maxdiffusion.null_adapter_modes as modes
+
+    seen = {}
+    monkeypatch.setattr(
+        modes, "execute", lambda mode, plan, backend, sinks, **kw: (seen.update(mode=mode, kw=kw) or ({}, 0))
+    )
+    recorder = _MainRecorder()
+
+    code = main(
+        ["run", "config.yml"],
+        configure=lambda argv: _config(null_mode="direct_opt", null_a3_iters=5),
+        load_manifests=lambda uri: _manifests(),
+        load_backend=_fake_backend(recorder, ""),
+        sinks=recorder.sinks(),
+        shards_for=lambda root: (),
+        artifact_exists=lambda uri: False,
+    )
+
+    assert code == 0 and seen["mode"] == "direct_opt" and seen["kw"]["iters"] == 5
+
+
+def test_main_propagates_a_refusing_fit_probe_as_a_non_zero_exit(monkeypatch):
+    import maxdiffusion.null_adapter_modes as modes
+
+    monkeypatch.setattr(modes, "execute", lambda *a, **k: ({"continued": False}, 1))
+
+    code = main(
+        ["run", "config.yml"],
+        configure=lambda argv: _config(null_mode="direct_opt"),
+        load_manifests=lambda uri: _manifests(),
+        load_backend=_fake_backend(_MainRecorder(), ""),
+        sinks=_MainRecorder().sinks(),
+        shards_for=lambda root: (),
+        artifact_exists=lambda uri: False,
+    )
+
+    assert code == 1
+
+
+def test_the_launcher_exposes_the_a3_keys_and_an_external_watchdog():
+    """The plan's hard stops cannot be enforced in-process: a synchronous XLA compile cannot be
+    cancelled by the code blocked inside it (review, finding 2)."""
+    source = _launcher()
+
+    assert 'null_a3_measure="${NULL_A3_MEASURE}"' in source
+    assert 'null_a3_iters="${NULL_A3_ITERS}"' in source
+    assert "NULL_A3_WATCHDOG_SECONDS" in source
+    assert "timeout --signal=TERM" in source
+    assert '"${WATCHDOG[@]}" python src/maxdiffusion/run_wan_null_inversion.py' in source
+
+
+def test_the_watchdog_is_phase_aware_and_on_by_default_for_j1b():
+    """J1b is exactly one A3 optimization, so it gets a hard ceiling derived from the plan's own
+    per-phase budgets. The capacity run does not: an A3-sized timeout around a multi-hour job would
+    kill the arms rather than the measurement, and its protection is the queue's own timeout."""
+    source = _launcher()
+
+    assert 'if [ "${NULL_MODE}" = "direct_opt" ]; then' in source
+    # ON by default for J1b: the default expands to the derived ceiling, not to 0.
+    assert "NULL_A3_WATCHDOG_SECONDS:-$((A3_COMPILE_BUDGET + NULL_A3_ITERS * A3_UPDATE_BUDGET" in source
+    # ... and OFF by default everywhere else, said out loud rather than left implicit.
+    assert 'NULL_A3_WATCHDOG_SECONDS="${NULL_A3_WATCHDOG_SECONDS:-0}"' in source
+    assert "job-level protection is the queue timeout" in source
+    assert "A3_WATCHDOG_MARGIN" in source
+
+
+def test_the_launcher_does_not_claim_the_in_capacity_stage_can_hard_stop():
+    """The stage-level numbers are verdicts; saying otherwise is the thing the review objected to."""
+    source = _launcher()
+
+    assert "only *reported* by measure_single_update" in source
+    assert "stage-level verdicts" in source
+
+
+def test_the_config_carries_the_a3_keys():
+    with open(_CONFIG_PATH, encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+
+    assert config["null_a3_measure"] is False and config["null_a3_iters"] == 300
+    assert "direct_opt" in config["null_mode"] or config["null_mode"] in NULL_MODES
+
+
+def test_the_fake_config_declares_every_key_the_driver_reads_directly():
+    """The fixture drifted from the YAML and a three-argument ``getattr`` hid it -- which is the same
+    shape of bug J1 hit, one layer down. Required keys are read directly now, so the fake has to
+    carry them or the test lies about what a launch does."""
+    import ast as _ast
+
+    source = _source(_ENTRYPOINT_PATH)
+    tree = _ast.parse(source)
+    called = {
+        node.func for node in _ast.walk(tree) if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute)
+    }
+    read = {
+        node.attr
+        for node in _ast.walk(tree)
+        if isinstance(node, _ast.Attribute)
+        and isinstance(node.value, _ast.Name)
+        and node.value.id == "config"
+        and node not in called
+    }
+
+    fake = _config()
+    missing = sorted(key for key in read if not hasattr(fake, key))
+    assert missing == [], f"the fake config is missing keys the driver reads: {missing}"

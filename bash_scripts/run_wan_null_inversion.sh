@@ -93,6 +93,8 @@ NULL_SELECTION_URI="${NULL_SELECTION_URI:-}"
 NULL_BATCH_SIZE="${NULL_BATCH_SIZE:-8}"
 NULL_DECODE_BATCH_SIZE="${NULL_DECODE_BATCH_SIZE:-8}"
 NULL_SMOKE_EXAMPLES="${NULL_SMOKE_EXAMPLES:-0}"
+NULL_A3_MEASURE="${NULL_A3_MEASURE:-False}"
+NULL_A3_ITERS="${NULL_A3_ITERS:-300}"
 NULL_INNER_ITERS="${NULL_INNER_ITERS:-10}"
 NULL_LR="${NULL_LR:-0.01}"
 NULL_GUIDE_SCALE="${NULL_GUIDE_SCALE:-5.0}"
@@ -148,6 +150,42 @@ if missing:
     sys.exit(1)
 print(f"[preflight] ok: skimage/imageio/tensorflow/TI2V pipeline importable, ffmpeg at {ffmpeg}")
 PREFLIGHT
+
+# --- A3 hard stops are the WATCHDOG's job, not the process's -------------------------------
+# A synchronous XLA compilation cannot be cancelled from inside the process blocked in it, so the
+# plan's 1800 s / 120 s stops are only *reported* by measure_single_update (R11 review, finding 2).
+# Real enforcement is an outer timeout, and it is phase-aware:
+#
+#   direct_opt (J1b)  -- ON by default. This job is exactly one A3 optimization, so a ceiling
+#                        derived from the plan's own per-phase budgets bounds it:
+#                          compile budget + iters x update budget + margin.
+#                        That ceiling (~10.5 h at the defaults) is deliberately far above the 4 h
+#                        approval envelope: it is a guarantee of termination, not a schedule. The
+#                        tighter bound remains the TPU queue's own job timeout and the fit probe,
+#                        which refuses before the first iteration if the projection does not fit.
+#   everything else   -- OFF. The capacity run is a multi-hour job whose in-run A3 stage reports
+#                        stage-level verdicts; wrapping the whole job in an A3-sized timeout would
+#                        kill the arms, not the measurement. Job-level protection there is the
+#                        queue's timeout, and this script does not pretend otherwise.
+A3_COMPILE_BUDGET=1800
+A3_UPDATE_BUDGET=120
+A3_WATCHDOG_MARGIN="${A3_WATCHDOG_MARGIN:-600}"
+if [ "${NULL_MODE}" = "direct_opt" ]; then
+  NULL_A3_WATCHDOG_SECONDS="${NULL_A3_WATCHDOG_SECONDS:-$((A3_COMPILE_BUDGET + NULL_A3_ITERS * A3_UPDATE_BUDGET + A3_WATCHDOG_MARGIN))}"
+else
+  NULL_A3_WATCHDOG_SECONDS="${NULL_A3_WATCHDOG_SECONDS:-0}"
+fi
+if [ "${NULL_A3_WATCHDOG_SECONDS}" != "0" ] && command -v timeout >/dev/null 2>&1; then
+  WATCHDOG=(timeout --signal=TERM --kill-after=60 "${NULL_A3_WATCHDOG_SECONDS}")
+  echo "A3 watchdog: ${NULL_A3_WATCHDOG_SECONDS}s external timeout armed (mode=${NULL_MODE})"
+else
+  WATCHDOG=()
+  if [ "${NULL_A3_WATCHDOG_SECONDS}" != "0" ]; then
+    echo "WARNING: NULL_A3_WATCHDOG_SECONDS set but 'timeout' is unavailable; no hard stop is armed."
+  else
+    echo "A3 watchdog: not armed for mode=${NULL_MODE}; job-level protection is the queue timeout."
+  fi
+fi
 
 # --- the R1 noise golden, ON THIS DEVICE, before a single arm runs ------------------------
 # Every cached target is bound to a noise convention; if this backend's threefry draw differs from
@@ -212,12 +250,13 @@ echo "NULL_ARTIFACT_DIR=${NULL_ARTIFACT_DIR}"
 echo "NULL_SELECTION_URI=${NULL_SELECTION_URI}"
 echo "NULL_BATCH_SIZE=${NULL_BATCH_SIZE} NULL_DECODE_BATCH_SIZE=${NULL_DECODE_BATCH_SIZE}"
 echo "NULL_SMOKE_EXAMPLES=${NULL_SMOKE_EXAMPLES}"
+echo "NULL_A3_MEASURE=${NULL_A3_MEASURE} NULL_A3_ITERS=${NULL_A3_ITERS}"
 echo "NULL_INNER_ITERS=${NULL_INNER_ITERS} NULL_LR=${NULL_LR} NULL_GUIDE_SCALE=${NULL_GUIDE_SCALE}"
 echo "NULL_NOISE_CONVENTION=${NULL_NOISE_CONVENTION} NULL_LATENT_DTYPE=${NULL_LATENT_DTYPE}"
 echo "COMMIT=${COMMIT}"
 git status --short --branch 2>/dev/null || echo "(no git checkout; running from uploaded code)"
 
-python src/maxdiffusion/run_wan_null_inversion.py \
+"${WATCHDOG[@]}" python src/maxdiffusion/run_wan_null_inversion.py \
   src/maxdiffusion/configs/base_wan_5b_null_inversion.yml \
   run_name="${RUN_NAME}" \
   pretrained_model_name_or_path="${MODEL_DIR}" \
@@ -231,6 +270,8 @@ python src/maxdiffusion/run_wan_null_inversion.py \
   null_batch_size="${NULL_BATCH_SIZE}" \
   null_decode_batch_size="${NULL_DECODE_BATCH_SIZE}" \
   null_smoke_examples="${NULL_SMOKE_EXAMPLES}" \
+  null_a3_measure="${NULL_A3_MEASURE}" \
+  null_a3_iters="${NULL_A3_ITERS}" \
   null_inner_iters="${NULL_INNER_ITERS}" \
   null_lr="${NULL_LR}" \
   null_guide_scale="${NULL_GUIDE_SCALE}" \

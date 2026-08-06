@@ -113,7 +113,7 @@ class _Recorder:
     """Fake sinks that keep what would have been published."""
 
     def __init__(self):
-        self.shards, self.json, self.json_paths = [], {}, []
+        self.shards, self.json, self.json_paths, self.arrays = [], {}, [], {}
 
     def sinks(self):
         return Sinks(
@@ -125,6 +125,10 @@ class _Recorder:
             validate_shard=lambda *a, **k: None,
             read_json=lambda path: {},
             read_marker=lambda path: None,
+            # merge-interim-2: exp_04 R11 added this seam for A3's npz tensors. No positive-slot mode
+            # writes arrays, so it is recorded exactly as exp_04's own fake does -- a positive run that
+            # ever reached it would show up here rather than crash.
+            write_arrays=self._write_arrays,
         )
 
     def _write_shard(self, records, header, shard_path, staging, *, quarantined=None):
@@ -134,6 +138,10 @@ class _Recorder:
     def _write_json(self, path, payload):
         self.json_paths.append(path)
         self.json[path.rsplit("/", 1)[-1]] = json.loads(json.dumps(payload, default=str))
+        return path
+
+    def _write_arrays(self, path, **arrays):
+        self.arrays[path] = {name: np.asarray(value).shape for name, value in arrays.items()}
         return path
 
 
@@ -172,6 +180,11 @@ def _config(**overrides):
         "null_staging_dir": "",
         "null_manifest_dir": "gs://bucket/manifests",
         "null_min_free_bytes": 0,
+        # merge-interim-2: exp_04's fix round reads these directly (they are YAML-declared), and a
+        # SimpleNamespace has no ``get_keys()`` to fall back through, so the fake must declare them.
+        "null_adequacy_uri": "",
+        "null_a3_measure": False,
+        "null_a3_iters": 300,
         "code_sha": _SHA,
         "pretrained_model_name_or_path": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
     }
