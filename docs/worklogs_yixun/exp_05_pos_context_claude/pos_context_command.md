@@ -19,3 +19,8 @@
 - Submitted tip: `bb845eaf43de2f05abbf99dfd4344a51bc2930bc` (= the merge-2 ledger commit; carries the K1-1 fix — exp_04's reviewed `optional_config_value` discipline now enforced in this branch by the AST guard; suite 1353).
 - Submission: `submit_k1.sh` VERBATIM from K1-1 (four phases: smoke → adequacy → capacity dev64 → capacity trainfit16; `…/k1` root reused — K1-1 published nothing). Acceptance criteria: the K1-package entry's 1–8 with criterion 1's tip = this SHA.
 - Monitoring: 10-min status.json poll (reauth = ALARM); `tpu status/logs 20260806-012445-20a744fe-exp05-k1-pos-yixun`.
+
+## K1-2 outcome (2026-08-06T~08:00Z, **SUCCEEDED** — all four phases; attempt 1 after one infra preemption)
+
+- Artifacts (all provenance-bound, run-level JSONs present): `…/k1/{smoke, adequacy, capacity, capacity_trainfit}` — gate_tables.json + selection.json + run_report.json + b1/b2 record shards under both capacity roots. Adequacy: `adequacy_report.json` (recipe plateau: recipe-limited; 1822s).
+- Acceptance criteria 1–8: MET (worker at the merge-2 tip; smoke published; adequacy full-evidence; both capacity cohorts complete, zero unexplained quarantines; gates evaluated; the gates' verdict IS the acceptance — outcome recorded in the worklog result entry).

@@ -259,3 +259,17 @@ Scope: the inherited exp_04 audit (recorded CLEAN 2026-08-05 in `exp_04_null_ada
 - **THE STALL (Planner ruling, reviewer-ratified):** exp_04's evaluator (`generate_wan_null_adapter.py`, rounds R14/R15) does not exist in any ref — exp_04's plan gates it on the P1 outcome J1-3 is computing now. Per plan §6's own rule, S9's rollout-wiring third STALLS AT THE MATRIX rather than authoring exp_04's deliverable (dual-touch delta this round: ZERO lines). The tripwire test fails loudly when exp_04 ships the file. **S9 reopens at merge-2/R15-boundary.**
 - **exp_05 code state:** S1–S8 + S10a complete; S9 held open (external dependency); S10's remaining launcher (`train_wan_pos_context.sh`) rides with the K3 package. Everything up to K3's trainer launch is BUILT AND REVIEWED; K2/K3 packages await K1-2's outcome; K4 awaits R14/R15 + the pre-K4 DEV gate.
 - **Next** — results-driven: K1-2 terminal → gates/selection reading → K2 package; J1-3 terminal → the shared P1 reading + exp_04's R12+ unlocking.
+
+## 2026-08-06T16:35:00Z — K1 RESULT READING (P1' primary outcome; Planner) — H1 PASS ~0.92, H2 FAIL ~0.16, TARGET = STOP on both cohorts
+
+**The headline, robust across DEV-64 and TRAINFIT-16 (full coverage, zero invalid pairs, 10k-resample CIs, seed 20260804):**
+
+| Gate / arm | DEV-64 | TRAINFIT-16 |
+|---|---|---|
+| **H1** — B1 (optimize+replay, own basin) vs B0 | **PASS**: mean SSIM **0.9227** [0.9129, 0.9314], frac_improved **1.00**, median MSE-ratio 28.6× | **PASS**: **0.9095** [0.8839, 0.9270], 1.00, 26.0× |
+| **H2** — B2 (optimize+replay from fresh ε₀) vs B2-0 | **FAIL**: mean SSIM **0.1610** [0.1358, 0.1868], frac_improved **0.00**, median ratio 0.254 (worse than control) | **FAIL**: **0.1570** [0.1076, 0.2082], 0.00, 0.196 |
+| **B1-probe** (B1's locked contexts under keyed{0,1,2}) | 0.5254 abs; **0.569 relative** (floors: 0.70 abs, 0.7× rel) | 0.4885 abs; 0.537 relative |
+| **Selection (predeclared rule)** | **STOP** | **STOP** |
+
+**Scientific statement:** (1) The deployed 8-token conditioning channel has ENORMOUS in-basin capacity — per-clip optimized contexts drive the FROZEN 5B backbone to ~0.92 SSIM reconstruction, ~3.6× the frozen-context control (~0.25) and ~3.1× the trained adapter's deployed rollout (0.2946). The adapter's bottleneck was never channel capacity. (2) That signal is strictly NOISE-BASIN-BOUND: locked contexts under foreign keyed noise collapse to ~0.5; and — the decisive arm — B2, which RE-OPTIMIZES per-step from fresh ε₀ with the same adopted recipe, lands at 0.16, WORSE than doing nothing. Even per-clip, per-step optimization cannot steer a fresh-noise trajectory onto the clip via the 8-token context. This replicates the PyTorch fork's basin problem (own-z_init 0.015 vs fresh 2.7 MSE) at n=64 with CIs, at the deployment-matched representation.
+**Consequence per the predeclared target-selection rule:** no arm qualifies → **K2 target caching does NOT proceed** on these targets. The design nuance for Yixun's decision (recorded, not decided here): K3's teacher-forced regression conditions on cached z̄_t states (a state-conditioned emitter, not a fixed context), which H2/probe do not directly measure — but B2's in-fresh-basin failure substantially weakens that bet: if direct optimization from ε₀ fails, a learned emitter of the same representation is unlikely to succeed. Options land in the status report; exp_04's J1-4 (running) answers the same transfer question for the null slot, whose CFG physics differ.
