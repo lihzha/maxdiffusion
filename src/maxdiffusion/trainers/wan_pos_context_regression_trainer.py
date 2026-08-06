@@ -415,14 +415,40 @@ class WanPosContextRegressionTrainer:
     starting over (BLOCKER 4).
     """
 
-    def __init__(self, config, *, predict_fn, params, tx, manager=None, selection_manager=None):
+    def __init__(self, config, *, predict_fn=None, params=None, tx=None, manager=None, selection_manager=None):
+        """Constructible from the config ALONE, because that is all ``train_wan.train`` has (S8).
+
+        The model and the optimizer are seams: a test (or S9's wiring) passes them, and a dispatched
+        launch does not have them yet. The checkpoint trees, in contrast, are pure config -- they come
+        from ``checkpoint_dir`` when it is set, and a run that never checkpoints simply has none.
+        """
         self.config = config
         self.schedule = TrainingSchedule.from_config(config)
         self.predict_fn = predict_fn
         self.tx = tx
-        self.manager = manager
-        self.selection_manager = selection_manager
-        self.state = RegressionTrainState(params=params, opt_state=tx.init(params), step=0)
+        checkpoint_dir = str(optional_config_value(config, "checkpoint_dir", "") or "")
+        self.manager = (
+            manager if manager is not None else (build_checkpoint_manager(checkpoint_dir) if checkpoint_dir else None)
+        )
+        if selection_manager is not None:
+            self.selection_manager = selection_manager
+        else:
+            self.selection_manager = build_selection_manager(checkpoint_dir) if checkpoint_dir else None
+        self.state = None if params is None else RegressionTrainState(params=params, opt_state=tx.init(params), step=0)
+
+    def start_training(self) -> None:
+        """The dispatch entry point (``train_wan.train`` calls this).
+
+        The loop itself is finished -- ``run`` is what K3 executes -- but its two EXTERNAL seams are
+        not: the pre_context model (transformer + adapter stack, i.e. ``build_pre_context_predict_fn``
+        against real weights) and the K2 cache iterators that feed ``gather_training_tuple``. Both land
+        in S9. Saying so precisely is the honest behavior; training on an empty seam is not.
+        """
+        raise NotImplementedError(
+            "POS_CONTEXT_TI2V dispatches to this trainer and its config resolves, but the pre_context "
+            "model and the K2 cache iterators are wired in S9. Until then a run is driven explicitly: "
+            "construct with predict_fn/params/tx and call run(make_iterator, dev_evaluator)."
+        )
 
     def run(
         self,

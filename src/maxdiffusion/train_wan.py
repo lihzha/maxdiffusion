@@ -39,6 +39,9 @@ def train(config):
   elif config.model_type == "SIDE_ADAPTER_TI2V":
     from maxdiffusion.trainers.wan_ti2v_side_adapter_trainer import WanTI2VSideAdapterTrainer
     trainer = WanTI2VSideAdapterTrainer(config)
+  elif config.model_type == "POS_CONTEXT_TI2V":
+    from maxdiffusion.trainers.wan_pos_context_regression_trainer import WanPosContextRegressionTrainer
+    trainer = WanPosContextRegressionTrainer(config)
   else:
     from maxdiffusion.trainers.wan_trainer import WanTrainer
     trainer = WanTrainer(config)
