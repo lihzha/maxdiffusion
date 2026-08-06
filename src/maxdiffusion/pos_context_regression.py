@@ -43,12 +43,18 @@ from maxdiffusion.pos_context_records import PRODUCTION_POS_GEOMETRY
 POS_STEPS = PRODUCTION_POS_GEOMETRY.pos_embeds[0]
 
 
+@jax.tree_util.register_dataclass
 @dataclasses.dataclass(frozen=True)
 class RegressionBatch:
-    """One teacher-forced regression batch: what the head is shown, and what it must reproduce."""
+    """One teacher-forced regression batch: what the head is shown, and what it must reproduce.
 
-    names: tuple[str, ...]
-    step_indices: np.ndarray  # [B] int32, host-side: the metric normalizes per example by its own t
+    Registered as a pytree (S7 review, BLOCKER 1) so a batch can cross a ``jax.jit`` boundary: the
+    tensors and the step indices are data, ``names`` is metadata -- strings are not arrays, and they
+    must not become tracers.
+    """
+
+    names: tuple[str, ...] = dataclasses.field(metadata={"static": True})
+    step_indices: np.ndarray  # [B] int32: the per-example t, which the metric normalizes by
     z_bar_t: jax.Array  # [B, C, F, H, W] fp32 -- the cached state at t, first frame already pinned
     timestep_2d: jax.Array  # [B, seq_len] fp32 -- per-token timestep of sigma_t, history zeroed
     actions: jax.Array  # [B, A, 7] fp32
