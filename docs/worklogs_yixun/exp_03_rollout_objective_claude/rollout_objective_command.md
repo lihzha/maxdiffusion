@@ -351,3 +351,8 @@ change): **Job 9b** `20260806-170229-30ca2a0d-exp03-s16-controlb-yixun`, **Job 1
 `20260806-170255-51c171e8-exp03-s16-rolloutlb-yixun` (records verified). combined (Job 11) still
 provisioning its original attempt.
 
+### Job 11 infra failure + resubmit (2026-08-06T~18:20Z)
+
+combined also died at startup with the same multi-host SIGABRT (worker 8, exit 134). Standing
+auto-resubmit: **Job 11b** `20260806-172556-1ab10360-exp03-s16-combinedb-yixun` (record verified at submission).
+
