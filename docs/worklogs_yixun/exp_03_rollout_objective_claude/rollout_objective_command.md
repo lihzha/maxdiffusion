@@ -284,3 +284,37 @@ index-0 exact-zero; ledger post_trace_release shows the executable gone.
 - **Job 8g (real):** `20260805-164829-8734c767-exp03-s15-probe7-yixun` (record verified on GCS:
   code.tar.gz + spec.json + status.json present; COMMIT=428557e, code = APPROVED 7da7a66 + docs).
 
+### Job 8g outcome (2026-08-06T01:49Z) — S1.5 DATA COMPLETE; exit-1 on the final census assertion only
+
+After 7 infra kills, attempt 8 ran the ENTIRE probe: both states (checkpoint@10000 exact-restore +
+init@0), all diagnostics, both sigma traces — **all four promised artifacts written to
+`validation_probe_sampling/`** (two state JSONs + two trace JSONs). The process then exited 1 on
+the LAST line: `assert_specializations_within_release_budget` — `trace_forward` compiled 4× (2 per
+state; budget 1/state): the trace phase's release-then-reuse pattern recompiles once per trace
+entry point. A bookkeeping/wall-time defect only — every measured number is deterministic and
+unaffected; disclosed, fix round to follow. Operational acceptance otherwise MET: traces finite
+with index-0 exactly 0.0; replay peak trees exactly 3.0; probe-wide gauge peak 4.92
+tree-equivalents, identity fallbacks 0.
+
+**S1.5 readout (headline):**
+| metric | checkpoint@10000 | init@0 |
+| --- | --- | --- |
+| losses ctrl / A / B / C | 0.1152 / 0.0955 / 0.1024 / 0.0990 | 0.664 / 0.552 / 0.691 / 0.621 |
+| grad cos vs ctrl (A/B/C) | 0.465 / 0.228 / 0.534 | 0.310 / 0.376 / 0.412 |
+| cos(A,B) | 0.165 | 0.459 |
+| support-var fraction (A/B/C) | 36% / 44% / 29% | 68% / 77% / 74% |
+| label isolation (cos, rel Δ) | 0.99891, 5.5% | 0.99732, 31.7% |
+| p_ss=0 parity | loss 8.4e-8 ✓, grad 1.55% ✗(tol 1e-5) | loss 8.9e-8 ✓, grad 0.75% ✗ |
+| grad-noise scale ctrl/A/B/C | 6.0 / 9.9 / 9.1 / 7.4 | 1.51 / 3.4 / 3.9 / 2.0 |
+| sigma-trace error idx1 → σ=0 | 6.8e-6 → 0.097 | 1.7e-4 → 3.35 |
+
+Reading: the trial gradients are genuinely different directions from the control's (B most, 0.23)
+and A⊥B-ish at the trained state (0.165) — C combines near-independent signals; support draws
+dominate trial-gradient variance at init (68–77%) but not at 10k (29–44%); the corrective label is
+nearly direction-preserving at 10k (cos 0.999, Δ5.5%) but substantially different at init (Δ32%);
+parity holds in loss to fp precision while gradients differ ~1% — the two mathematically-equal
+label expressions round differently through the backward (tolerance 1e-5 was set for an idealized
+identity; finding stands as a Tier-2 interpretation caveat, not an implementation bug, evidenced by
+the 8e-8 loss agreement). The trace quantifies Mechanism B directly: compounding error accelerates
+in the low-σ tail at both states.
+
