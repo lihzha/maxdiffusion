@@ -331,3 +331,15 @@ in the low-σ tail at both states.
 **S1.5: OPEN on (2)+(3) only — data closed. S1.6: GO** (granted, gate-chained; v6e-64 one-step
 mesh-fit at GBS 256, re-measures B 2.56× and C 3.96×/HBM budgets; no probe code on its path).
 
+## Jobs 9–11 — v6e-64 S1.6 MESH-FIT (control / rollout_loss / combined @ GBS 256) — launched 2026-08-06T16:18Z
+
+**Yixun: "launch S1.6" (grant: Query-4, gate-chained; closure review "S1.6: GO").** Three arms,
+30 steps, LOG_PERIOD=1, per_device_batch_size from YAML (4.0 → GBS 256), smoke ramp
+(EXP03_RAMP_ORIGIN=0, P_SS_RAMP_STEPS=10), SAVE_FINAL_CHECKPOINT=False, COMMIT=tip at submission.
+**Purpose:** at-scale re-measurement of the two S1 budget carries — B 2.56× (vs ≤2.5×) and C 3.96×
++ HBM headroom (vs ≤3.2×) — on the production mesh. Gates read from steady-state steps/s ratios
+(steps 10–29) vs the control arm; outcome informs the S2 package's C-budget decision.
+- **Job ids (records verified on GCS):** control → `20260806-161802-e8c9140f-exp03-s16-control-yixun`;
+  rollout_loss → `20260806-161828-49432d6c-exp03-s16-rolloutl-yixun`; combined →
+  `20260806-161853-99a5944f-exp03-s16-combined-yixun`.
+
