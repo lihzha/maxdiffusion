@@ -306,7 +306,7 @@ tree-equivalents, identity fallbacks 0.
 | label isolation (cos, rel Δ) | 0.99891, 5.5% | 0.99732, 31.7% |
 | p_ss=0 parity | loss 8.4e-8 ✓, grad 1.55% ✗(tol 1e-5) | loss 8.9e-8 ✓, grad 0.75% ✗ |
 | grad-noise scale ctrl/A/B/C | 6.0 / 9.9 / 9.1 / 7.4 | 1.51 / 3.4 / 3.9 / 2.0 |
-| sigma-trace error idx1 → σ=0 | 6.8e-6 → 0.097 | 1.7e-4 → 3.35 |
+| sigma-trace error idx1 → σ=0 (COHORT MEAN; corrected per closure review — earlier figures were row 0) | 7.0e-6 → 0.10505 | 8.0e-5 → 3.023 |
 
 Reading: the trial gradients are genuinely different directions from the control's (B most, 0.23)
 and A⊥B-ish at the trained state (0.165) — C combines near-independent signals; support draws
@@ -317,4 +317,17 @@ label expressions round differently through the backward (tolerance 1e-5 was set
 identity; finding stands as a Tier-2 interpretation caveat, not an implementation bug, evidenced by
 the 8e-8 loss agreement). The trace quantifies Mechanism B directly: compounding error accelerates
 in the low-σ tail at both states.
+
+### S1.5 closure review (2026-08-06, xhigh) — ARTIFACTS ADMISSIBLE; S1.6: GO; two targeted items open
+
+1. **Admissible, no rerun** — no measured quantity depends on compile count/wall time.
+2. **Parity: attribution required, not concluded** — the 8e-8 loss agreement does NOT rule out a
+   gradient-path bug. Prescribed discriminator: canonicalize A's p_ss=0 target to ε−z_gt inside the
+   same compiled graph and verify the grad gap collapses (or show Δgrad equals the VJP of the
+   ULP-scale target delta). Rides with the next probe-touching code round.
+3. **Census double-compile**: my release-then-reuse theory REFUTED (release is after all 30 rows) —
+   real cause TBD (first-vs-recurrent call shardings/signatures); same round.
+4. Numbers verified exact; sigma headline relabeled to cohort means (above).
+**S1.5: OPEN on (2)+(3) only — data closed. S1.6: GO** (granted, gate-chained; v6e-64 one-step
+mesh-fit at GBS 256, re-measures B 2.56× and C 3.96×/HBM budgets; no probe code on its path).
 
