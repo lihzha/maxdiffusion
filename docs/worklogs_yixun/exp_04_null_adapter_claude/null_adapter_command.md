@@ -73,3 +73,8 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 - Submission: `submit_j1b.sh` (archived in scratchpad; reproduced by this entry): NULL_MODE=direct_opt, first-8 DEV, NULL_A3_ITERS=300 (the measured recipe: projection ≈ 47 min ≪ the 4 h budget; measurement verdict ok), attempt-scoped root `…/j1r2/j1b_att-<ts>` (issue #13), launcher's phase-aware A3 watchdog armed.
 - Acceptance (plan §4-P1b): the direct_opt run publishes its optimization evidence (nulls / losses / grad-norms / final endpoint via the R11 write_arrays sink) + endpoint future-SSIM comparable against A2's 0.4973 — the greedy-vs-joint mechanism answer. Any outcome is acceptance. Failure triage per SOP.
 - Monitoring: ScheduleWakeup polls (~25 min cadence; background shells are being killed — issue noted in-session).
+
+## J1b-1 outcome (2026-08-06T~22:15Z, **SUCCEEDED** — attempt 2; two spot preemptions absorbed cleanly by the attempt-scoped design)
+
+- Authoritative root: `…/j1r2/j1b_att-0806-211405/` — `a3_direct_opt.json` (per-example losses/endpoints/grad-norms, embedded re-run fit_probe, full provenance at code_sha `db8c3dc`) + `a3_nulls.npz` (the optimized joint null tensors — the J1c input if wanted). 300 iters, 3237 s wall, fits_budget confirmed in-run (projection 0.74 h).
+- Result recorded in the worklog reading below; any outcome is acceptance.
