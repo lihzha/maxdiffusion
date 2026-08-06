@@ -33,3 +33,11 @@ Context: status report stating K1's gate set fully met (merge-1 ✓, P0' 1139-gr
 **Yixun, verbatim:** "Yes to all, continue with both experiments"
 
 Planner reading: (1) K1 launch approved under the standing conditional grant, now unconditional — the session's own `tpu create` remains classifier-blocked (issue #10, re-confirmed 20:28Z), so the submission runs via Yixun's `!`; (2) the S6+ trainer rounds proceed in parallel with K1; (3) exp_04's J1-2b supplement is approved to launch AFTER J1-2 completes (it consumes J1-2's adequacy artifact) — same `!` handover.
+
+## Decision (2026-08-06T~16:50Z) — K2 gate held pending the joint P1 reading
+
+Context: K1's STOP verdict presented with three options (honor / override-by-amendment / wait for J1-4 and read jointly).
+
+**Yixun, verbatim:** "Wait for J1-4, then give me the joint reading"
+
+Planner reading: the K2 decision is DEFERRED until exp_04's J1-4 terminal; no K2/K3 work starts; the joint P1 reading (both slots' capacity + transfer arms side by side) goes to Yixun as the next decision package. K1's STOP stands untouched in the meantime.
