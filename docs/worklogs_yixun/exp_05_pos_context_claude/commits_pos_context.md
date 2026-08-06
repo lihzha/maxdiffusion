@@ -18,3 +18,4 @@
 - `c702206` + `4181f88` — feat(exp_05): S6 regression-gather-loss (code landed in c702206 via add -A slip — see worklog 21:25Z note; close/strengthen in 4181f88; 1184 tests; 31 mutants incl. ratified pair)
 - `fcc849c` — feat(exp_05): S7 trainer core (checkpoint redesign; 1243 tests; 45 mutants)
 - `0d1f4a5` — merge(exp_05): merge-interim-2 (exp_04 fix + R11; 1353 tests; K1-1 remediation)
+- `337f570` — feat(exp_05): S8 dispatch-config (K3 YAML; 1378 tests; 21 mutants)
