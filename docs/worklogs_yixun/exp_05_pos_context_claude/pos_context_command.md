@@ -12,3 +12,10 @@
 - **Crash:** `ValueError: Requested key code_sha, not in config` at `mode_kwargs` (run_wan_null_inversion.py:654) — the EXACT J1-1 bug class (issue #11: three-arg getattr never falls back on HyperParameters). exp_05's copy of the entrypoint predates exp_04's fix round `925ee17`: the merge-interim took exp_04 at the R10 boundary, the fix landed after, and no propagation step existed. The positive-slot smoke got as far as backend load + revision resolution (the S10a launcher, preflights, prefetch, and config all worked), then died at the first shared-code code_sha read.
 - **Nothing published** (fail-closed before any artifact) — `…/k1` root is clean; K1-2 can reuse it.
 - **Remediation:** merge-interim-2 — one-way exp_04 @ `27efcd1` (the fix + docs) → this branch, reconciling the dual-touch entrypoint (fix sites + exp_05's additive positive branch), full combined suite, commit; then K1-2 relaunch at the new tip (same four-phase runbook — unaffected by the flaw class J1-2 hit: K1 has no selection-consuming phase). Sequenced AFTER S7's in-flight final fix commits (clean-worktree requirement for the merge).
+
+## K1-2 — relaunch at the merge-2 tip (2026-08-06T01:24Z, LAUNCHED — submitted by Yixun via `!`)
+
+- Queue job: `20260806-012445-20a744fe-exp05-k1-pos-yixun` (v6e-8, worker0-only); authoritative record confirmed at `gs://v6_east1d/tpu-job-queue/jobs/20260806-012445-20a744fe-exp05-k1-pos-yixun/status.json`.
+- Submitted tip: `bb845eaf43de2f05abbf99dfd4344a51bc2930bc` (= the merge-2 ledger commit; carries the K1-1 fix — exp_04's reviewed `optional_config_value` discipline now enforced in this branch by the AST guard; suite 1353).
+- Submission: `submit_k1.sh` VERBATIM from K1-1 (four phases: smoke → adequacy → capacity dev64 → capacity trainfit16; `…/k1` root reused — K1-1 published nothing). Acceptance criteria: the K1-package entry's 1–8 with criterion 1's tip = this SHA.
+- Monitoring: 10-min status.json poll (reauth = ALARM); `tpu status/logs 20260806-012445-20a744fe-exp05-k1-pos-yixun`.
