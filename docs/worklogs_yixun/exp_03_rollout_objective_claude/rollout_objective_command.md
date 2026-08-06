@@ -356,3 +356,14 @@ provisioning its original attempt.
 combined also died at startup with the same multi-host SIGABRT (worker 8, exit 134). Standing
 auto-resubmit: **Job 11b** `20260806-172556-1ab10360-exp03-s16-combinedb-yixun` (record verified at submission).
 
+### S1.6 SYSTEMATIC STARTUP FAILURES — resubmission STOPPED (2026-08-06T~18:50Z)
+
+9b and 10b ALSO died with worker SIGABRT (exit 134) at multi-host startup — that is **5/5 v6e-64
+submissions today** (all three arms, both rounds), against the Jobs-44/47 precedent of one-off
+flakes. This is systematic (v6e-64 pool weather or a startup-path regression), not per-job chance:
+auto-resubmission is STOPPED per the no-blind-retries principle. 11b (`20260806-172556-1ab10360`)
+is still queued and will serve as one more datapoint. **Next session:** if 11b also 134s, diagnose
+the abort itself (full worker log around `jax.distributed.initialize`; compare against exp_02 Job
+47b's WORKING v6e-64 startup env; check libtpu/pool advisories) before any further submission.
+S1.6 remains granted; the S2 package waits on its gate table.
+
