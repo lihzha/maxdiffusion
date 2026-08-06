@@ -343,3 +343,11 @@ mesh-fit at GBS 256, re-measures B 2.56× and C 3.96×/HBM budgets; no probe cod
   rollout_loss → `20260806-161828-49432d6c-exp03-s16-rolloutl-yixun`; combined →
   `20260806-161853-99a5944f-exp03-s16-combined-yixun`.
 
+### Jobs 9–10 infra failures + resubmits (2026-08-06T17:02Z)
+
+control and rollout_loss both died at startup with the known multi-host SIGABRT signature (worker
+6 / worker 2, exit 134, pre-training, Jobs 44/47 precedent). Standing auto-resubmit (no code/config
+change): **Job 9b** `20260806-170229-30ca2a0d-exp03-s16-controlb-yixun`, **Job 10b**
+`20260806-170255-51c171e8-exp03-s16-rolloutlb-yixun` (records verified). combined (Job 11) still
+provisioning its original attempt.
+
