@@ -19,3 +19,4 @@
 - `fcc849c` — feat(exp_05): S7 trainer core (checkpoint redesign; 1243 tests; 45 mutants)
 - `0d1f4a5` — merge(exp_05): merge-interim-2 (exp_04 fix + R11; 1353 tests; K1-1 remediation)
 - `337f570` — feat(exp_05): S8 dispatch-config (K3 YAML; 1378 tests; 21 mutants)
+- `3571df6` — feat(exp_05): S9 partial (eval restore + gate certificate; 1417 tests; held open at the matrix)
