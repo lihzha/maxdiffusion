@@ -39,3 +39,11 @@ Context: status report recording the J1 runbook's missing TRAINFIT-16 capacity h
 **Yixun, verbatim:** "Yes to all, continue with both experiments"
 
 Planner reading: J1-2b launches via Yixun's `!` once J1-2 is terminal-success; if J1-2 fails on infra, auto-resubmit first per the standing policy.
+
+## Grant (2026-08-06T~20:30Z) — J1b GO
+
+Context: the joint P1 reading (J1-4 + K1-2, both STOP; A3 measurement verdict ok/fits_budget at 300 iters × batch 8 ≈ 47 min projected).
+
+**Yixun, verbatim:** "Honor the STOP for K2, and GO for J1b"
+
+Planner reading: J1b (direct_opt, 8 DEV examples, measured recipe, attempt-scoped root per issue #13) is approved for immediate launch; exp_05's K2/K3 stand DOWN per the STOP — exp_05 proceeds to P4' analysis/report.
