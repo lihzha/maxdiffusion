@@ -66,3 +66,10 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 
 - Authoritative roots: `…/j1r2/capacity_att-0806-164625` (dev64: selection.json, gate_tables.json, run_report.json, **a3_measurement.json**, a1/ a2/ record shards, videos/) + `…/j1r2/capacity_trainfit_att-0806-164625` (trainfit16, same set minus A3). Bare `…/j1r2/capacity/` = J1-3's superseded partial (retained for the record). Adequacy adopted from the standing `…/j1r2/adequacy` artifact as designed.
 - Acceptance criteria: MET through criterion 7; criterion 8's gate outcome = **TARGET STOP on both cohorts** (the gates decide — recorded as the P1 result in the worklog).
+
+## J1b-1 — A3 direct optimization (2026-08-06T20:15Z, LAUNCHED — Yixun's GO recorded verbatim in the query doc)
+
+- Queue job: `20260806-201501-3edbb77d-exp04-j1b-a3-yixun` (v6e-8, worker0-only); record confirmed PENDING (created 20:15Z). Tip `db8c3dc4052f8482b5d8403a601da4c0a56fafeb` (docs-only deltas over the J1-4 code — `src/`+`bash_scripts/` unchanged since `27efcd1`'s executable tree).
+- Submission: `submit_j1b.sh` (archived in scratchpad; reproduced by this entry): NULL_MODE=direct_opt, first-8 DEV, NULL_A3_ITERS=300 (the measured recipe: projection ≈ 47 min ≪ the 4 h budget; measurement verdict ok), attempt-scoped root `…/j1r2/j1b_att-<ts>` (issue #13), launcher's phase-aware A3 watchdog armed.
+- Acceptance (plan §4-P1b): the direct_opt run publishes its optimization evidence (nulls / losses / grad-norms / final endpoint via the R11 write_arrays sink) + endpoint future-SSIM comparable against A2's 0.4973 — the greedy-vs-joint mechanism answer. Any outcome is acceptance. Failure triage per SOP.
+- Monitoring: ScheduleWakeup polls (~25 min cadence; background shells are being killed — issue noted in-session).
