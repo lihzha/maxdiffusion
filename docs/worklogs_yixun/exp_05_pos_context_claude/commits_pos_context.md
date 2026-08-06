@@ -16,3 +16,4 @@
 - `8ab68dc` — docs(exp_05): parity audit CLEAN + docstring corrections + S10a amendment
 - `102ae84` — feat(exp_05): S10a pos-launcher (K1 path; 1139 tests; adoption cross-cohort fix)
 - `c702206` + `4181f88` — feat(exp_05): S6 regression-gather-loss (code landed in c702206 via add -A slip — see worklog 21:25Z note; close/strengthen in 4181f88; 1184 tests; 31 mutants incl. ratified pair)
+- `fcc849c` — feat(exp_05): S7 trainer core (checkpoint redesign; 1243 tests; 45 mutants)
