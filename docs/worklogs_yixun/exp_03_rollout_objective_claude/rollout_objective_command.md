@@ -367,3 +367,15 @@ the abort itself (full worker log around `jax.distributed.initialize`; compare a
 47b's WORKING v6e-64 startup env; check libtpu/pool advisories) before any further submission.
 S1.6 remains granted; the S2 package waits on its gate table.
 
+### S1.6 DIAGNOSIS (2026-08-06T~19:20Z) — two distinct failures; C's gate ANSWERED
+
+The five SIGABRTs are the genuine Jobs-44/47 `jax.distributed.initialize` barrier abort
+(frame-verified on 9b) — probabilistic, not deterministic, PROVEN by 11b which passed startup and
+reached compilation. **11b's exit-1 is a real S1.6 result: C does NOT fit at GBS 256 on v6e-64 —
+compile-time HBM OOM, "Used 31.28G of 31.25G hbm. Exceeded by 34.32M"** (the S1-carried HBM flag,
+now measured at scale with a 34 MB margin). C's mesh-fit gate: FAIL as configured; remedies
+(remat tuning / per-device batch 2 + accumulation / drop C from Tier 1) go to Yixun in the S2
+package with this number. ctrl+B resubmitted once more under the barrier-is-probabilistic reading:
+**Job 9c** `20260806-201559-b54db5b7-exp03-s16-controlc-yixun`, **Job 10c** `20260806-201628-22f18581-exp03-s16-rolloutlc-yixun` (records at submission). Their steps/s ratios are the
+remaining S1.6 measurement.
+
