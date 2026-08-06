@@ -394,3 +394,19 @@ Component-by-component against `third_party/Wan2.2/scripts/embedding_search.py` 
 **Selection: STOP** (G1 median_ratio; probe below 0.7× and 0.70 abs; G2 mean/CI) — P2 target caching does NOT proceed per the predeclared rule. **A3 measurement: verdict `ok`, fits_budget TRUE** (compile 412s; 300 iters at job batch 8 in 2395s; peak HBM ~15.5 GB/device) — the conditional J1b direct-opt run is affordable within its ≤4 h projection budget.
 **Scientific statement:** the null slot's own-basin optimization works (0.85 from a 0.67 CFG-collapsed control — real but modest, ratio 3.6 < the G1 bar) and its FRESH-NOISE optimization shows direction-without-magnitude: 100% of examples improve, 10× median MSE ratio over the 0.14 control, but the 0.50 absolute lands far below the 0.70 floor. Locked-null transfer is catastrophic (0.17 — locked wrong-basin nulls are actively destructive, WORSE than doing nothing). Joint reading with exp_05's K1 recorded in the master tracker + status report: the noise-basin problem is slot-universal at this recipe; the slots fail with opposite geometries (positive: huge in-basin ceiling 0.92, active harm from fresh noise; null: modest in-basin gain, genuine-but-insufficient fresh-noise steering).
 **Open decisions (Yixun):** J1b GO/NO-GO (affordable; the one remaining mechanism question — whether endpoint-objective joint optimization beats the per-step-greedy A2 from fresh noise); both experiments' caching stages honor their STOPs; P4/P4' reports.
+
+## 2026-08-06T22:30:00Z — J1b RESULT READING (P1b; Planner) — the fresh-noise ceiling was SUBSTANTIALLY A GREEDY ARTIFACT
+
+**Same 8 DEV examples, same metric (latent future-MSE), all four regimes:**
+
+| Regime | mean | per-example |
+|---|---|---|
+| A2-0: base nulls, fresh ε₀ | 4.95 | 5.16, 6.30, 4.52, 4.77, 4.77, 4.74, 4.72, 4.60 |
+| A2: per-step greedy, fresh ε₀ | 0.429 | 0.50, 0.037, 0.49, 0.34, 0.45, 0.70, 0.57, 0.35 |
+| **A3: joint endpoint, fresh ε₀ (J1b)** | **0.270** | 0.68, **0.0067**, 0.24, 0.35, 0.37, **0.13**, 0.29, **0.10** |
+| A1: per-step greedy, own basin | 0.073 | 0.05, 0.004, 0.04, 0.15, 0.13, 0.05, 0.12, 0.05 |
+
+(J1b's initial_loss reproduces A2-0's per-example values to ~1% — the fresh-noise starting point is consistent across jobs. Grad norms 9–17 → 0.03–0.31: most examples converged within the 300-iter budget.)
+
+**Statement:** joint endpoint optimization through the full differentiable rollout beats the per-step greedy recipe on 6/8 examples (up to 5.6×) and — the headline — **reaches own-basin-quality reconstruction from fresh noise on 3/8 examples** (0.0067 / 0.10 / 0.13, inside A1's own range). The G2 ceiling (A2's 0.50 SSIM) was substantially an optimization-procedure artifact, not a fundamental basin wall: the null channel CAN steer a fresh basin most of the way to the clip. Convergence is uneven (ex-1 stalls at 0.68, above even A0's own-basin 0.43) and J1b measures latent MSE only (no decode ⇒ no SSIM).
+**What this does and does not revive:** it reopens the null-target program's mechanism, but two gates stand between this and any P2b/P3 revival: (1) TRANSFER — A3's nulls are optimized per-ε₀; whether they survive foreign noise (the probe question that killed A1/A2) is UNMEASURED — answerable by a tiny J1c (replay `a3_nulls.npz` under keyed{0,1,2} + decode/SSIM, ~minutes of TPU); (2) COST — at the measured recipe, A3-caching TRAIN-2000 ≈ 225 v6e-8-hours (batch scaling could cut this ~2–4×; peak HBM 13 GB/16 GB leaves room). Decision to Yixun with the P4 plan.
