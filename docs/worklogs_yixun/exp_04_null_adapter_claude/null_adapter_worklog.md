@@ -377,3 +377,20 @@ Component-by-component against `third_party/Wan2.2/scripts/embedding_search.py` 
 - **Finding (surfaced by exp_05's S10a review chain, reviewer-ratified):** cohorts are one-per-invocation (`plan_run` takes `config.null_cohort`; nothing in the production runner references `trainfit16`), so J1's phase 4 — capacity at the launcher default `NULL_COHORT=dev64` — covers only the DEV half of acceptance criterion 5 ("all six arms on DEV-64+TRAINFIT-16"). The J1-1/J1-2 runbook I authored never contained a TRAINFIT invocation; no review caught it (the R10 J1-readiness walk checked the smoke chain, not cohort coverage). Recorded as a Planner error, not a code defect: the runner supports `NULL_COHORT=trainfit16` as-is, and null adoption is cohort-unbound (`load_adoption` takes no manifest binding), so the DEV adequacy artifact is consumable by a TRAINFIT run today.
 - **Remediation — J1-2b (supplemental, single invocation):** after J1-2 completes, run capacity with `NULL_COHORT=trainfit16`, `NULL_ADEQUACY_URI` = J1-2's published adequacy artifact, artifact root `…/j1/capacity_trainfit` (DISTINCT from the DEV root so the DEV-authoritative selection.json/tables cannot be overwritten — reviewer's operational note). Script archived as `submit_j1b_trainfit.sh` (scratchpad; reproduced in the command entry at launch). Grant reading: criterion 5's TRAINFIT half was inside the approved J1 acceptance criteria, so J1-2b completes the approved scope rather than extending it; Yixun executes the submission either way (issue #10), which is the sign-off.
 - **J1-2 impact:** none — everything J1-2 is running remains required and its artifacts stay authoritative for DEV; criterion 5 is simply not fully dischargeable until J1-2b lands.
+
+## 2026-08-06T20:15:00Z — J1 RESULT READING (P1 primary outcome; Planner) — G1/G2 FAIL, probes catastrophic, TARGET = STOP both cohorts; A3 measurement OK (J1b affordable)
+
+**Per-arm mean future-SSIM (DEV-64 / TRAINFIT-16; full coverage, zero invalid pairs, 10k-resample CIs):**
+
+| Arm | DEV-64 | TRAINFIT-16 | Role |
+|---|---|---|---|
+| A0 (base nulls, inversion-endpoint replay; CFG collapses) | **0.6665** | — | control |
+| A1 (optimized ∅, own basin) | **0.8523** [0.8327, 0.8710], frac_impr 0.95, med ratio 3.605 | 0.8722 [0.8549, 0.8891], 1.00, 3.013 | **G1 FAIL (median_ratio below bar)** |
+| A1-probe (locked ∅, keyed{0,1,2}) | **0.1729** (rel 0.203) | 0.1738 (rel 0.199) | transfer FAIL, both floors |
+| A2-0 (base nulls, fresh ε₀) | 0.1423 | — | control |
+| A2 (optimized ∅, fresh ε₀) | **0.4973** [0.4697, 0.5264], frac_impr 1.00, med ratio 10.2 | 0.4563 [0.4165, 0.4973], 1.00, 9.5 | **G2 FAIL (mean_ssim, ssim_ci_low)** |
+| A2-probe | 0.2958 | — | diagnostic |
+
+**Selection: STOP** (G1 median_ratio; probe below 0.7× and 0.70 abs; G2 mean/CI) — P2 target caching does NOT proceed per the predeclared rule. **A3 measurement: verdict `ok`, fits_budget TRUE** (compile 412s; 300 iters at job batch 8 in 2395s; peak HBM ~15.5 GB/device) — the conditional J1b direct-opt run is affordable within its ≤4 h projection budget.
+**Scientific statement:** the null slot's own-basin optimization works (0.85 from a 0.67 CFG-collapsed control — real but modest, ratio 3.6 < the G1 bar) and its FRESH-NOISE optimization shows direction-without-magnitude: 100% of examples improve, 10× median MSE ratio over the 0.14 control, but the 0.50 absolute lands far below the 0.70 floor. Locked-null transfer is catastrophic (0.17 — locked wrong-basin nulls are actively destructive, WORSE than doing nothing). Joint reading with exp_05's K1 recorded in the master tracker + status report: the noise-basin problem is slot-universal at this recipe; the slots fail with opposite geometries (positive: huge in-basin ceiling 0.92, active harm from fresh noise; null: modest in-basin gain, genuine-but-insufficient fresh-noise steering).
+**Open decisions (Yixun):** J1b GO/NO-GO (affordable; the one remaining mechanism question — whether endpoint-objective joint optimization beats the per-step-greedy A2 from fresh noise); both experiments' caching stages honor their STOPs; P4/P4' reports.

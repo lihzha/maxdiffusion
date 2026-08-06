@@ -61,3 +61,8 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 - Queue job: `20260806-161812-3aeaf86f-exp04-j1-null-yixun` (v6e-8); record confirmed PENDING (created 16:18:22Z). Tip `27efcd1` (unchanged — zero code deltas across J1-2/3/4; runbook-only evolution).
 - Submission: `submit_j1_v4.sh` (reproduced in the J1-3 outcome entry): adopts the STANDING adequacy artifact (`…/j1r2/adequacy/adequacy_report.json`, verified present pre-launch; hard-fail if absent) → capacity dev64 (A3 measured) + capacity trainfit16, each under attempt-scoped roots `capacity[_trainfit]_att-<ts>` per issue #13. Authoritative attempt = roots carrying run-level JSONs.
 - Monitoring: 10-min status.json poll (reauth = ALARM; credentials refreshed by Yixun 2026-08-06 ~16:15Z).
+
+## J1-4 outcome (2026-08-06T~20:00Z, **SUCCEEDED** — attempt 0, zero preemptions; the attempt-scoped design untested by churn but the runbook completed clean)
+
+- Authoritative roots: `…/j1r2/capacity_att-0806-164625` (dev64: selection.json, gate_tables.json, run_report.json, **a3_measurement.json**, a1/ a2/ record shards, videos/) + `…/j1r2/capacity_trainfit_att-0806-164625` (trainfit16, same set minus A3). Bare `…/j1r2/capacity/` = J1-3's superseded partial (retained for the record). Adequacy adopted from the standing `…/j1r2/adequacy` artifact as designed.
+- Acceptance criteria: MET through criterion 7; criterion 8's gate outcome = **TARGET STOP on both cohorts** (the gates decide — recorded as the P1 result in the worklog).
