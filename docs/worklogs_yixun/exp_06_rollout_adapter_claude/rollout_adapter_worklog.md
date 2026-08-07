@@ -34,3 +34,9 @@
   6. **The stop-grad site is confirmed (T1-6):** `wan_ti2v_side_adapter_trainer.py:180-187` stop_gradients BOTH `z_t` into the unconditional branch AND `v_uncond` — correct for a one-step objective, gradient-truncating for a rollout one. Recorded in §3a as the site not to copy.
 - **Process note:** an interrupted battery run left one mutant applied (untracked files hide this from `git status`); the Coder detected it, hardened the harness to restore in `finally` + on SIGTERM/SIGINT, and verified every file against sha256 backups before continuing. Same class as the exp_05 S7 incident — the sha-verified-restore discipline caught it again.
 - **Next** — T1 review → strengthen if needed → commit → T2 `loss-kernels` under the rulings above.
+
+## 2026-08-07T07:10:00Z — T1 cycle CLOSED first-pass (APPROVE, zero findings; 1457 green, 15/15 mutants) → commit
+
+- **Result** — `passed`. The reviewer independently re-verified every pin (blob byte-identity, dependency-segment identity across trees, extracted-symbol AST equality, oracle independence) and accepted the M15 ratification. Committed with this entry. exp_06 now owns a pinned, characterized copy of exp_03's sampler + RNG/support primitives with ZERO inherited files touched.
+- **New T3b obligation (reviewer):** the trainer must feed the aux-key derivation the LOOP's global step, never a restored `state.step` (a resumed run would otherwise re-derive a different stream than the uninterrupted one — the same class of bug S7's integrated interrupted≡uninterrupted oracle exists to catch).
+- **Next** — T2 `loss-kernels` under the v2.2 rulings (re-home `masked_velocity_mse` with the double equivalence obligation; explicit arguments, no config reads; analytic oracles for the R-B endpoint form).
