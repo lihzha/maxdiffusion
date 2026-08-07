@@ -35,3 +35,15 @@ Reviewer: OpenAI Codex `gpt-5.6-sol` xhigh. Verdict: REQUEST-REVISION — 1 MAJO
 Validation: focused suite **18 passed in 43.49s**; lint passed. Actual reviewed HEAD was `7a09d29`—the T3a documentation commit atop the stated `649cff4`.
 
 **REQUEST-REVISION — add the branch-isolated unconditional central-FD oracle before committing T3a.**
+
+## Strengthening record + close
+
+**MAJOR closed exactly as prescribed.** `_isolated_unconditional_term` computes the closed form `(1−w)·(σ_{s+2}−σ_{s+1})·v_unc(z_1(θ))` on the non-frame-0 slice the loss reads, and the test asserts BOTH the algebraic identity (`⟨∇T,d⟩ ≈ ⟨∇L_full − ∇L_cut-uncond, d⟩`, rtol 1e-4 — so a mis-derived term fails loudly instead of silently passing) AND the autodiff-independent FD proof. **The Coder's per-seed numbers reproduce the reviewer's exactly**: ratios 13.3–107 at h_rel=3e-3 and 109.9–1038.5 at 1e-3; the test runs at 1e-3 (min ratio 109.9 vs threshold 20 ⇒ **5.50× headroom**, versus the 1.68× of the fitted whole-loss guardrail). Exact contrast retained for the conditional branch and obfuscated-mutant coverage.
+
+**Both Planner-propagated false premises corrected in the code, not merely avoided:** `jax.enable_x64()` verified present in JAX 0.10.2 (scoped, restoring: float32 → float64 inside → float32 after) and the TRUE fact added to the test module docstring so a later round inherits it; it stays unused because the isolated oracle makes it unnecessary and a global dtype flip would perturb tracing for the rest of the suite. Headroom restated honestly (the earlier "1.7–2.6×" was wrong at the bottom end: 5.03/3.0 = 1.68×, reviewer's clean run 1.66×) and the operating point is now LABELLED a fitted guardrail — chosen from the same seeds it is asserted on — with the load-bearing claim carried by the direct oracle. Battery log REGENERATED (not patched) so the S05 syntax-error entry cannot linger.
+
+**Battery 17/17, and S16 is the round's sharpest test:** the unconditional branch's gradient halved via `0.5·v + 0.5·stop_grad(v)`, `__dict__`-hidden. Because 0.5 is a power of two the forward is **bitwise unchanged** — parity, every AST guard, and (marginally) the exact contrast all pass. **Only the isolated FD oracle sees it**, and decisively. That is the strongest available evidence the new oracle is load-bearing rather than redundant.
+
+Suite **1533**. Closed WITHOUT a third Codex pass: the fix is the reviewer's own construction, and the Coder independently reproduced the reviewer's measured discrimination numbers — self-evidence a third pass would only restate. Judgment recorded per the S7/S9/T2 precedent; T3b's review may challenge it.
+
+**Carried forward (the reviewer's generalizable insight, in the Coder's words):** *when a term is swamped inside a composite loss, don't lower the precision bar — isolate the term.* Applies directly to T3b's accumulation and selection oracles.
