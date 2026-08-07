@@ -501,3 +501,14 @@ Tier-2 runs unaffected (2,500 is in the default list; ctrl0's artifacts prove it
 relaunches on 12d's landing (the queued instrument job will fail harmlessly on the missing 12500 or
 read the seed only; superseded either way). Watchlist updated.
 
+### C FITS + Jobs 19–20 (C Tier-1, C0) — 2026-08-07T~17:40Z
+
+**Job 18 (fit-smoke #2 on `af29d5a`) SUCCEEDED: the scan accumulation FITS at GBS 256** — 30/30
+finite. Measured cost: 0.299 steps/s = **5.92× control** (accumulation's doubled forwards atop C's
+inherent 3.96×); Tier-1 C ≈ 2.3 h. GBS-128 fallback unnecessary. Under the Query-6 approval
+("C/C0 launch after its review passes, no separate ask"; scan redesign APPROVEd; the 5.92× is
+REPORTED to Yixun with the ~2.3 h veto window):
+- **Job 19 (C Tier-1):** `20260807-171557-6cd5025a-exp03-s2a-combined-yixun` — seeded (23,654,557,930 B verified), CHECKPOINT_STEPS [10000,12500],
+  N=2, PDB 4.0, ramp origin 10000.
+- **Job 20 (C0):** `20260807-171624-6c499c8e-exp03-s2b-c0-yixun` — from init, 2,500 updates, N=2. Watchlist updated.
+
