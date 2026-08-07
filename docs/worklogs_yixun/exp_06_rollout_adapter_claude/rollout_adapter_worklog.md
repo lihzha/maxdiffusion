@@ -13,3 +13,9 @@
 ## 2026-08-07T05:10:00Z — Plan review CONVERGED: APPROVE-PLAN at v2.1 (3 passes: 12 findings → 2 pins → clean) → to Yixun for approval
 
 - The plan now goes to Yixun with §11's four decisions (matched-C0 cost; arm set; M3 budget class; optional compute-matched control). Plan approval authorizes NO job — T1–T7 code rounds begin on approval; M1 is the first launch request, at its own pushed SHA.
+
+## 2026-08-07T05:25:00Z — PLAN v2.1 APPROVED by Yixun (§11: 1–3 as recommended, 4 deferred) → T1 dispatched
+
+- **Plan of record:** v2.1. Decisions locked: matched-C0 required; pilot = R-B k=2 + matched-C0; M3 budget = 10k steps @ GBS 256; compute-matched control deferred. Grant verbatim in the query doc. No TPU job authorized by the approval.
+- **Coder:** a FRESH Opus subagent takes exp_06 (the exp_04/05 Coder is retired to that campaign — one persistent Coder per experiment, and its context is ~790k tokens deep).
+- **Next** — T1 `exp03-imports` (pinned-SHA blob import + characterization), then T2 `loss-kernels`.
