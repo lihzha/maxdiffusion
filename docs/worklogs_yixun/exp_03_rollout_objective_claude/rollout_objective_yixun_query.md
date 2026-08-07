@@ -50,3 +50,20 @@ passes (incl. any strengthening the reviewer requires first); (2) **S1.5** no-up
 (v6e-8) when the re-smoke is clean; (3) **S1.6** one-step mesh-fit at GBS 256 (v6e-64, ~minutes) after
 S1.5. S2a/S2b training arms remain separately approval-gated. exp_02's lr thread and exp_03 proceed in
 parallel.
+
+## Query 5 — S1.6 budget decisions (2026-08-06)
+
+Presented: B at 2.713× vs the ≤2.5× budget (accept vs trim); C misses the GBS-256 fit by 34.32MB
+(per-device batch 2 + gradient accumulation / deeper remat / drop from Tier 1).
+
+**Yixun: "B accept and C batch-2"** — verbatim. Decisions bound into the S2 package:
+- **B: ACCEPTED at 2.713×** (update-matched design unchanged; wall-clock cost ~8.5% over the
+  planning budget, knowingly carried).
+- **C: per-device batch 2 with 2× gradient accumulation** (GBS stays 256, updates stay matched;
+  the accumulation step is a config/trainer-capability check for the package — if the trainer
+  lacks native accumulation, that small addition goes through the usual code round + review
+  before the S2 launches).
+
+The S2a/S2b launches themselves remain approval-gated (announcement 02): the package goes to
+Yixun with these settings baked in.
+
