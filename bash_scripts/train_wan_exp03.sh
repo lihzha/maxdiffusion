@@ -148,6 +148,13 @@ EXP03_P_SS_MAX="${EXP03_P_SS_MAX:-0.5}"
 EXP03_P_SS_RAMP_STEPS="${EXP03_P_SS_RAMP_STEPS:-500}"
 EXP03_RAMP_ORIGIN="${EXP03_RAMP_ORIGIN:-0}"
 EXP03_SNAPSHOT_BEFORE_STEP="${EXP03_SNAPSHOT_BEFORE_STEP:--1}"
+# Microbatches per global step; 1 is off (a bit-for-bit no-op). PER_DEVICE_BATCH_SIZE is NOT
+# lowered alongside it -- the point is to keep the global batch and the update count exactly where
+# they are and shrink only the activation footprint, so an arm that needs the memory passes
+# EXP03_GRAD_ACCUMULATION=2 and leaves PER_DEVICE_BATCH_SIZE at 4.0 (GBS 256, per-device-2
+# activations, one update per step). It must divide PER_DEVICE_BATCH_SIZE, or the microbatch slice
+# stops being shard-local; the trainer refuses at startup if it does not.
+EXP03_GRAD_ACCUMULATION="${EXP03_GRAD_ACCUMULATION:-1}"
 
 echo "RUN_NAME=${RUN_NAME}"
 echo "MANIFEST_PATH=${MANIFEST_PATH}"
@@ -180,6 +187,7 @@ echo "EXP03_P_SS_MAX=${EXP03_P_SS_MAX}"
 echo "EXP03_P_SS_RAMP_STEPS=${EXP03_P_SS_RAMP_STEPS}"
 echo "EXP03_RAMP_ORIGIN=${EXP03_RAMP_ORIGIN}"
 echo "EXP03_SNAPSHOT_BEFORE_STEP=${EXP03_SNAPSHOT_BEFORE_STEP}"
+echo "EXP03_GRAD_ACCUMULATION=${EXP03_GRAD_ACCUMULATION}"
 echo "HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET}"
 echo "HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}"
 echo "HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT}"
@@ -257,4 +265,5 @@ python src/maxdiffusion/train_wan.py \
   exp03_p_ss_ramp_steps="${EXP03_P_SS_RAMP_STEPS}" \
   exp03_ramp_origin="${EXP03_RAMP_ORIGIN}" \
   exp03_snapshot_before_step="${EXP03_SNAPSHOT_BEFORE_STEP}" \
+  exp03_grad_accumulation="${EXP03_GRAD_ACCUMULATION}" \
   hardware=tpu

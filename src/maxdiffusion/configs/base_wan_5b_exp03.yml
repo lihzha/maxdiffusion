@@ -445,6 +445,16 @@ exp03_p_ss_ramp_steps: 500  # trial A: linear 0 -> p_ss_max over this many SEGME
 # 0. One expression covers both if the origin is configuration: 0 for Tier 2 (the default), 10000
 # for the Tier-1 arms. Keyed to the GLOBAL step, so the ramp survives a resume.
 exp03_ramp_origin: 0
+# Gradient accumulation: how many MICROBATCHES one global step is consumed as. 1 is off, and is a
+# bit-for-bit no-op -- the step is exactly exp_02's, which is what keeps ctrl0 a replication guard.
+# At N > 1 the delivered batch is split into N interleaved (hence shard-local) microbatches of
+# B / N examples, their gradients are summed into one tree and averaged, and ONE optimizer update is
+# applied. The GLOBAL batch and the update count are therefore unchanged; only the activation
+# footprint moves, which is the point: trial C misses the v6e-64 GBS-256 fit by 34.32 MB at
+# per-device batch 4, and N=2 runs the same GBS 256 with per-device-2 activations.
+# Must divide global_batch_size_to_train_on (correctness) AND per_device_batch_size (so the slice
+# stays shard-local); both are checked at startup.
+exp03_grad_accumulation: 1
 # Proactive frozen-state preservation for a replay: when >= 0, the run writes params/opt_state (via
 # the production checkpoint path) plus the rng key and the exact batch immediately BEFORE this
 # zero-based global step executes. -1 disables it. Detection of a non-finite step necessarily

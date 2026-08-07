@@ -55,6 +55,7 @@ from maxdiffusion.trainers.wan_ti2v_overfit100_trainer import (
     _denoising_loss,
     _make_train_step,
     _train_step,
+    resolve_grad_accumulation,
 )
 from maxdiffusion.trainers.wan_ti2v_side_adapter_trainer import _build_noise
 
@@ -148,7 +149,44 @@ def validate_exp03_config(config) -> str:
     origin = int(getattr(config, "exp03_ramp_origin", 0))
     if origin < 0:
         raise ValueError(f"exp03_ramp_origin must be non-negative; got {origin}")
+    validate_grad_accumulation(config)
     return objective
+
+
+def validate_grad_accumulation(config) -> int:
+    """Gate ``exp03_grad_accumulation`` against the batch it has to divide; return it.
+
+    Two divisibility conditions, and they are different requirements:
+
+    * ``global_batch_size_to_train_on % N == 0`` -- CORRECTNESS. The microbatches must partition the
+      batch exactly, or the mean of the microbatch means is not the full-batch mean and the
+      accumulated step is no longer the update-matched twin of the un-accumulated one.
+    * ``per_device_batch_size % N == 0`` -- COST. The interleaved slice is shard-local only while
+      every device's own rows split evenly across the microbatches (see
+      ``wan_ti2v_overfit100_trainer.microbatch_slice``). Violate it and the step still computes the
+      right answer, but it pays an all-to-all per microbatch per step -- a silent throughput
+      regression, which is exactly the kind of thing that is only ever noticed as "the run got
+      slower and nobody knows when". Refused at startup instead.
+
+    Both keys are read with ``getattr`` so a config carrying neither (the test fixtures) is gated on
+    ``N >= 1`` alone.
+    """
+    accumulation = resolve_grad_accumulation(config)
+    batch = getattr(config, "global_batch_size_to_train_on", None)
+    if batch is not None and int(batch) % accumulation:
+        raise ValueError(
+            f"exp03_grad_accumulation={accumulation} must divide global_batch_size_to_train_on={int(batch)}; "
+            "the microbatches have to partition the batch exactly or the accumulated step is not the "
+            "update-matched twin of the un-accumulated one"
+        )
+    per_device = getattr(config, "per_device_batch_size", None)
+    if per_device is not None and float(per_device) % accumulation:
+        raise ValueError(
+            f"exp03_grad_accumulation={accumulation} must divide per_device_batch_size={float(per_device)}; "
+            "otherwise the interleaved microbatch slice stops being shard-local and every microbatch "
+            "pays an all-to-all"
+        )
+    return accumulation
 
 
 # =================================================================================================
@@ -872,8 +910,22 @@ class Exp03Trainer(WanTI2VOverfit100Trainer):
     def start_training(self):
         # Fail on a bad objective/knob before the ~5B load, and say which one is running.
         objective = validate_exp03_config(self.config)
+        accumulation = resolve_grad_accumulation(self.config)
         if jax.process_index() == 0:
             max_logging.log(f"[wan_exp03] objective={objective} (model_type={self.config.model_type})")
+            if accumulation > 1:
+                # The batch recipe is the thing most likely to be misread from a log, so it is
+                # spelled out: what is delivered, what a microbatch is, and that the update count
+                # did NOT change. Logged only when it is on, so a normal arm's log is exp_02's.
+                batch = getattr(self.config, "global_batch_size_to_train_on", "?")
+                per_device = getattr(self.config, "per_device_batch_size", "?")
+                per_micro = "?" if per_device == "?" else float(per_device) / accumulation
+                max_logging.log(
+                    f"[wan_exp03] gradient accumulation: {accumulation} microbatches per step "
+                    f"(global batch {batch} unchanged, per-device {per_device} -> {per_micro} per "
+                    "microbatch); ONE optimizer update per global step, so step counts stay "
+                    "comparable to an un-accumulated arm"
+                )
             if objective == EXP03_CONTROL_OBJECTIVE:
                 max_logging.log(
                     "[wan_exp03] control arm: the parent's plain one-step objective, by identity -- "

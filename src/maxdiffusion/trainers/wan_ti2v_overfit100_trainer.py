@@ -197,6 +197,102 @@ def _denoising_loss(
     return loss, aux
 
 
+def resolve_grad_accumulation(config) -> int:
+    """``config.exp03_grad_accumulation`` as a validated positive int; 1 (the default) is OFF.
+
+    Read with ``getattr``, so every config that predates the knob -- exp_01's, exp_02's, and every
+    ``SimpleNamespace`` fixture -- resolves to 1 and takes the un-accumulated path unchanged.
+    """
+    value = getattr(config, "exp03_grad_accumulation", 1)
+    number = int(1 if value is None else value)
+    if number < 1:
+        raise ValueError(f"exp03_grad_accumulation is a microbatch COUNT and must be >= 1; got {value!r}")
+    return number
+
+
+def microbatch_slice(tree, index: int, num_microbatches: int):
+    """Microbatch ``index`` of ``num_microbatches`` — the INTERLEAVED slice ``x[index::N]``.
+
+    Interleaved rather than contiguous, and that choice is the whole reason this is cheap. The
+    training batch is a global array sharded over the batch axis: on v6e-64 at GBS 256 device ``d``
+    owns global rows ``4d .. 4d+3``. A contiguous half ``x[:128]`` re-lays those 128 rows over all
+    64 devices two-per-device, so device ``d`` would need rows ``2d, 2d+1``, which live on device
+    ``d // 2`` -- a real all-to-all, once per microbatch, on every step. The interleaved half
+    ``x[0::2]`` instead lands device ``d``'s own rows ``4d`` and ``4d+2`` at result positions ``2d``
+    and ``2d+1``, which is exactly the shard device ``d`` keeps. No row crosses a device, for any
+    ``N`` that divides the PER-DEVICE batch (hence the per-device divisibility gate in
+    ``wan_ti2v_exp03_trainer.validate_grad_accumulation``). Both halves of that claim are executed
+    on a forced 8-device mesh in ``test_exp03_grad_accumulation``.
+
+    Written as ``reshape(B // N, N, ...)[:, index]`` rather than as a strided slice because that is
+    the split-a-dimension reshape GSPMD partitions by leaving the sharding on the outer factor: the
+    microbatch axis comes out unsharded and the index is a local pick. The two are the same
+    elements -- element ``a`` of the result is row ``N * a + index`` either way.
+
+    Every leaf is sliced, including any the objective ignores; leaves must have a leading batch axis
+    divisible by ``N``, checked here at TRACE time (shapes are static), so a bad batch is a
+    compile-time error rather than a silent mis-slice.
+    """
+
+    def take(leaf):
+        array = jnp.asarray(leaf)
+        if array.ndim == 0:
+            raise ValueError("microbatch_slice: every batch leaf must have a leading batch axis; got a scalar")
+        if array.shape[0] % num_microbatches:
+            raise ValueError(
+                f"microbatch_slice: leading axis {array.shape[0]} is not divisible by "
+                f"exp03_grad_accumulation={num_microbatches}"
+            )
+        rows = array.shape[0] // num_microbatches
+        return array.reshape((rows, num_microbatches) + array.shape[1:])[:, index]
+
+    return jax.tree_util.tree_map(take, tree)
+
+
+def reduce_microbatch_aux(auxes: list[dict]) -> dict:
+    """Reduce per-microbatch aux dicts to ONE dict with the un-accumulated step's semantics.
+
+    Two rules, and the split between them is not cosmetic:
+
+    * ``*_finite`` keys reduce by **minimum**. They are a protocol, not a statistic:
+      :func:`step_finite_failures` fails a step when such a key is ``< 0.5``. Averaging them would
+      make one non-finite microbatch out of two read as exactly ``0.5`` -- which is NOT ``< 0.5``,
+      so the guard would pass and the run would keep training on a poisoned update. The minimum
+      says "some microbatch was not finite", which is what the guard is asking.
+    * everything else reduces by **mean over microbatches**. For the mean-type terms
+      (``velocity_mse``, ``sigma_mean``, ``timestep_mean``, ``z_init_anchor_mse``) this is EXACT:
+      each microbatch's value is already a mean over an equally sized microbatch, and the mean of
+      equal-weight means is the full-batch mean. For the batch-level constants the exp_03 trials
+      report (``k_a``, ``s_a``, ``e_a``, ``coin``, ``p_ss``, ``sigma_hi_*``/``sigma_lo_*``) it is
+      also exact, because those are drawn from ``exp03_aux_key(seed, global_step, purpose)`` and are
+      therefore the SAME value in every microbatch.
+      It is **not** exact, and is honestly a different statistic, for the norm-type and spread-type
+      terms: ``v_pred_l2`` / ``v_target_l2`` become the mean of the microbatch L2 norms rather than
+      the norm of the whole batch, and ``z_noisy_std`` / ``z_target_std`` become the mean of the
+      microbatch standard deviations. Both are within a constant factor of the full-batch quantity
+      and both are diagnostics, not the objective. The two headline gradient metrics are unaffected:
+      ``learning/grad_norm`` and ``learning/max_abs_grad`` are computed from the ACCUMULATED,
+      averaged gradient, so they are the full-batch gradient's own statistics.
+    """
+    if not auxes:
+        raise ValueError("reduce_microbatch_aux: nothing to reduce")
+    names = set(auxes[0])
+    for other in auxes[1:]:
+        if set(other) != names:
+            raise ValueError(
+                "reduce_microbatch_aux: microbatches reported different aux keys "
+                f"({sorted(names ^ set(other))}); an objective must report the same metrics for every microbatch"
+            )
+    reduced = {}
+    for name in auxes[0]:
+        values = [aux[name] for aux in auxes]
+        if name.endswith("_finite"):
+            reduced[name] = functools.reduce(jnp.minimum, values)
+        else:
+            reduced[name] = sum(values) / len(values)
+    return reduced
+
+
 def _make_train_step(denoising_loss):
     """Build the train step around a denoising loss — THE seam exp_03 overrides.
 
@@ -209,21 +305,95 @@ def _make_train_step(denoising_loss):
     whatever the loss. exp_02's runs are settled history and ctrl0 must replicate them, so any new
     objective's extra draws have to come from auxiliary keys (see
     ``trainers/wan_ti2v_exp03_trainer.exp03_aux_key``) rather than from this stream.
+
+    **Gradient accumulation** (``exp03_grad_accumulation: N``, default 1). At ``N == 1`` the body
+    below is EXACTLY the code above it -- same call, same rng, same single ``value_and_grad`` -- so
+    the default is a bit-for-bit no-op and ctrl0 stays a replication guard. At ``N > 1`` the step
+    consumes the delivered batch as ``N`` interleaved microbatches of ``B / N`` examples each,
+    accumulates their gradients into ONE tree, and applies ONE optimizer update. What that does and
+    does not change:
+
+    * **Updates stay matched.** One ``apply_gradients`` per global step, exactly as before, so a run
+      at ``N = 2`` has the same number of updates at the same global steps as one at ``N = 1`` and
+      the two are comparable step-for-step. The global batch is unchanged -- it is the same 256
+      examples, consumed in two halves -- so the gradient is the same estimator, not a
+      smaller-batch one.
+    * **The shared stream is untouched.** Still exactly one ``jax.random.split`` per step, and the
+      ``rng`` returned to the loop is the same one the un-accumulated step returns. Each microbatch
+      draws from ``fold_in(loss_rng, index)``, which is DERIVED rather than split off, so consuming
+      it cannot advance the stream. The fold-in is required, not cosmetic: with the same key and a
+      smaller shape the objectives' ``jax.random.normal`` would hand every microbatch the SAME
+      epsilon, and the batch halves would be noise-identical.
+    * **What does change at ``N > 1``** (stated plainly, because it is the one thing that is not
+      invariant): the per-example epsilon and per-example timestep draws are a different realization
+      from the ones a single full-batch draw would have produced. Same distribution, drawn per
+      microbatch instead of per batch. The exp_03 auxiliary draws -- the supports, ``k_A``, the
+      ``p_ss`` coin -- are keyed on ``(seed, global_step, purpose)`` and are therefore identical in
+      every microbatch and identical to the un-accumulated run, so cross-arm alignment survives.
+    * **Memory.** Only one microbatch's activations are ever live, and the accumulator is one
+      gradient tree carrying the parameters' own sharding (it is built by ``tree_map`` over the
+      per-microbatch gradients, which come back at the parameter layout). The sequencing is not left
+      to the scheduler's goodwill: each microbatch's inputs are routed through a
+      ``lax.optimization_barrier`` together with the running accumulator, so a microbatch's forward
+      cannot be hoisted above the previous microbatch's backward. Unrolled in Python rather than run
+      as a ``lax.scan``, because a scan wants its microbatches stacked on a leading axis -- which is
+      precisely the resharding transpose the interleaved slice exists to avoid -- and because ``N``
+      is small, static, and not differentiated through.
     """
 
     def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config, *, global_step=None):
         rng, loss_rng = jax.random.split(rng)
+        num_microbatches = resolve_grad_accumulation(config)
 
-        def loss_fn(params):
+        def _objective(params, batch, key):
             if global_step is None:
                 # No step threaded: call the loss with exp_02's exact 6-argument shape. Legacy
                 # callers (and the exp_02 test that spies on the loss with that signature) keep
                 # working unchanged; production always threads the step, below.
-                return denoising_loss(params, state, data, loss_rng, config, scheduler)
-            return denoising_loss(params, state, data, loss_rng, config, scheduler, global_step=global_step)
+                return denoising_loss(params, state, batch, key, config, scheduler)
+            return denoising_loss(params, state, batch, key, config, scheduler, global_step=global_step)
 
-        grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-        (loss, aux), grads = grad_fn(state.params)
+        if num_microbatches == 1:
+            # THE un-accumulated step, kept as its own branch rather than as the N == 1 case of the
+            # general one. A single-microbatch loop would still introduce a slice, a fold_in and a
+            # division by one; each is arithmetically harmless and none of them is free to assume
+            # bit-identical after XLA has fused around it. exp_02's history is settled, so the
+            # default path is the ORIGINAL code, not a special case of the new one.
+            def loss_fn(params):
+                return _objective(params, data, loss_rng)
+
+            grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+            (loss, aux), grads = grad_fn(state.params)
+        else:
+            grads = None
+            losses = []
+            auxes = []
+            for index in range(num_microbatches):
+                micro = microbatch_slice(data, index, num_microbatches)
+                if grads is not None:
+                    # SEQUENCING. Without this the unrolled microbatches are independent subgraphs
+                    # and XLA is free to interleave them, holding two microbatches' activations at
+                    # once -- which would give back exactly the HBM the accumulation is being added
+                    # to save. Routing this microbatch's inputs through a barrier with the running
+                    # accumulator makes the forward data-dependent on the previous backward.
+                    grads, micro = jax.lax.optimization_barrier((grads, micro))
+
+                def loss_fn(params, batch=micro, key=jax.random.fold_in(loss_rng, index)):
+                    return _objective(params, batch, key)
+
+                grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+                (micro_loss, micro_aux), micro_grads = grad_fn(state.params)
+                # SUM as we go, so at most two gradient trees exist at any moment (the accumulator
+                # and the one being folded into it) instead of N.
+                grads = micro_grads if grads is None else jax.tree_util.tree_map(jnp.add, grads, micro_grads)
+                del micro_grads
+                losses.append(micro_loss)
+                auxes.append(micro_aux)
+            # ONE division, at the end, of ONE tree: the mean gradient over the full batch.
+            grads = jax.tree_util.tree_map(lambda leaf: leaf / num_microbatches, grads)
+            loss = sum(losses) / num_microbatches
+            aux = reduce_microbatch_aux(auxes)
+
         grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
         max_abs_grad = jax.tree_util.tree_reduce(
             lambda m, arr: jnp.maximum(m, jnp.max(jnp.abs(arr))), grads, initializer=-1.0

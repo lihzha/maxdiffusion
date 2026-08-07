@@ -825,6 +825,7 @@ def test_the_config_is_the_overfit100_config_plus_the_exp03_keys():
         "exp03_p_ss_ramp_steps",
         "exp03_ramp_origin",
         "exp03_snapshot_before_step",
+        "exp03_grad_accumulation",
         "s1_5_num_batches",
         "s1_5_support_draws",
         "exp03_support_salt",
@@ -841,6 +842,7 @@ def test_the_config_is_the_overfit100_config_plus_the_exp03_keys():
     assert exp03_cfg["exp03_p_ss_max"] == 0.5
     assert exp03_cfg["exp03_p_ss_ramp_steps"] == 500
     assert exp03_cfg["exp03_ramp_origin"] == 0  # Tier 2 default; Tier-1 arms pass 10000
+    assert exp03_cfg["exp03_grad_accumulation"] == 1  # OFF by default -- a bit-for-bit no-op
 
 
 def test_the_config_types_survive_pyconfig_override_rules():
@@ -851,6 +853,7 @@ def test_the_config_types_survive_pyconfig_override_rules():
     assert type(cfg["exp03_k_a"]) is int and type(cfg["exp03_k_b"]) is int
     assert type(cfg["exp03_lambda"]) is float and type(cfg["exp03_p_ss_max"]) is float
     assert type(cfg["exp03_p_ss_ramp_steps"]) is int and type(cfg["exp03_ramp_origin"]) is int
+    assert type(cfg["exp03_grad_accumulation"]) is int
 
 
 def test_the_launcher_passes_every_exp03_knob_through():
@@ -866,6 +869,7 @@ def test_the_launcher_passes_every_exp03_knob_through():
         ("EXP03_P_SS_RAMP_STEPS", "exp03_p_ss_ramp_steps"),
         ("EXP03_RAMP_ORIGIN", "exp03_ramp_origin"),
         ("EXP03_SNAPSHOT_BEFORE_STEP", "exp03_snapshot_before_step"),
+        ("EXP03_GRAD_ACCUMULATION", "exp03_grad_accumulation"),
     ):
         assert f'{env}="${{{env}:-' in text, env  # env-overridable with a default
         assert f'{key}="${{{env}}}"' in text, key  # ...and actually forwarded
@@ -966,6 +970,7 @@ _ALLOWED_DEFAULT_DELTAS = {
     "EXP03_P_SS_RAMP_STEPS",
     "EXP03_RAMP_ORIGIN",
     "EXP03_SNAPSHOT_BEFORE_STEP",
+    "EXP03_GRAD_ACCUMULATION",
 }
 _ALLOWED_OVERRIDE_DELTAS = {
     "exp03_objective",
@@ -976,6 +981,7 @@ _ALLOWED_OVERRIDE_DELTAS = {
     "exp03_p_ss_ramp_steps",
     "exp03_ramp_origin",
     "exp03_snapshot_before_step",
+    "exp03_grad_accumulation",
 }
 
 
@@ -1011,6 +1017,7 @@ def test_the_launcher_defaults_do_not_drift_from_the_overfit100_launcher():
         "EXP03_P_SS_RAMP_STEPS",
         "EXP03_RAMP_ORIGIN",
         "EXP03_SNAPSHOT_BEFORE_STEP",
+        "EXP03_GRAD_ACCUMULATION",
     }
     _assert_maps_agree(base, mine, _ALLOWED_DEFAULT_DELTAS, "launcher defaults")
 
