@@ -519,3 +519,4 @@ instrument {250,1000,2500} → `20260807-180850-68847f8b-exp03-b0-inst-yixun`; S
 (loss trajectory + SSIM at 2,500), the Tier-2 question "does the objective change the first 2,500
 updates from init". Watchlist updated.
 
+### A0 resubmit #2 (2026-08-07T~18:20Z): 16b barrier-134 again -> **Job 16c** `20260807-184137-5aaf7812-exp03-s2b-a0c-yixun` (watchlisted).
