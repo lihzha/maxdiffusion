@@ -47,3 +47,11 @@ Context: the joint P1 reading (J1-4 + K1-2, both STOP; A3 measurement verdict ok
 **Yixun, verbatim:** "Honor the STOP for K2, and GO for J1b"
 
 Planner reading: J1b (direct_opt, 8 DEV examples, measured recipe, attempt-scoped root per issue #13) is approved for immediate launch; exp_05's K2/K3 stand DOWN per the STOP — exp_05 proceeds to P4' analysis/report.
+
+## Grant (2026-08-06T~22:45Z) — J1c GO
+
+Context: the J1b reading (joint opt reaches own-basin quality from fresh noise on 3/8; transfer unmeasured) with the J1c proposal: replay `a3_nulls.npz` under own-ε₀ + keyed{0,1,2}, decode, SSIM — the decisive transfer question.
+
+**Yixun, verbatim:** "GO for J1c"
+
+Planner reading: J1c approved — one small code round first (a `transfer_probe` mode reusing committed replay/decode/SSIM primitives; no wired mode can replay external null tensors today), focused review, then the ~20-min TPU job. Reports (P4/P4') follow J1c either way.
