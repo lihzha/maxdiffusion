@@ -522,3 +522,15 @@ updates from init". Watchlist updated.
 ### A0 resubmit #2 (2026-08-07T~18:20Z): 16b barrier-134 again -> **Job 16c** `20260807-184137-5aaf7812-exp03-s2b-a0c-yixun` (watchlisted).
 
 ### A Tier-1 resubmit (2026-08-07T~18:45Z): 12d barrier-134 -> **Job 12e** `20260807-184217-af7fac34-exp03-s2a-corrsse-yixun` (watchlisted).
+
+### TIER-1 B TRAINED (2026-08-07T~19:30Z) — first correct Tier-1 arm; eval pair launched
+
+Job 13d SUCCEEDED with both fixes live: checkpoints {10000 (seed), 12500 (trained)} verified on
+GCS under the correct root. Eval pair:
+- instrument `20260807-201044-4513bc6f-exp03-b-inst-yixun` — CHECKPOINT_STEPS 10000,12500 → validation_loss_12500/;
+  **validity anchor: the 10,000 reading must reproduce 0.12227 exactly** (proves the seed IS
+  exp_02's step-10,000 state).
+- SSIM@12500 `20260807-201111-281293a0-exp03-b-ssim-yixun` — canonical seed-0 correct, s3_intermediate.
+**This pair yields exp_03's first primary-metric number:** B's mean SSIM at 12,500 vs the lr1e5c
+control's 0.9159, judged at the plan's +0.02 practical-effect gate. Watchlist updated.
+
