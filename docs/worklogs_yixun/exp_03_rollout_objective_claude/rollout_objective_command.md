@@ -490,3 +490,14 @@ retry; non-finite → diagnose. **Job 18:** `20260807-152010-5727dddd-exp03-s16-
 - **Job 16 (A0) FAILED** (barrier 134) → **Job 16b** `20260807-162505-bd6705aa-exp03-s2b-a0b-yixun`.
 - B0 (17) and cfit2 (18) provisioning.
 
+### Tier-1 checkpoint-schedule defect + relaunches (2026-08-07T17:04Z)
+
+A's SSIM eval failed correctly: **the Tier-1 runs never saved 12,500** — my launches omitted
+CHECKPOINT_STEPS, and the YAML default list covers early steps only (why ctrl0's 2,500 exists but
+A's 12,500 does not). A's 2,500 trained updates were lost (~50 min). Fixes: 13c cancelled;
+**A relaunch (12d)** `20260807-170404-efb8af3b-exp03-s2a-corrssd-yixun` and **B relaunch (13d)**
+`20260807-170431-2fda8ebd-exp03-s2a-rolloutle-yixun`, both with CHECKPOINT_STEPS="[10000,12500]".
+Tier-2 runs unaffected (2,500 is in the default list; ctrl0's artifacts prove it). A's eval pair
+relaunches on 12d's landing (the queued instrument job will fail harmlessly on the missing 12500 or
+read the seed only; superseded either way). Watchlist updated.
+
