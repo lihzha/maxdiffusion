@@ -90,6 +90,12 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff)
 - **Workaround (now the standing pattern):** monitor TPU jobs with **`ScheduleWakeup`** (25–30 min cadence, the wakeup prompt carrying the full "if RUNNING reschedule / if SUCCEEDED read these artifacts / if FAILED triage per SOP / reauth = ALARM" instruction). It survives teardown because the harness re-invokes the model rather than keeping a shell alive.
 - **Status:** standing. Corollary: a stale monitor's silence is NOT evidence about a job — always re-read `status.json` directly.
 
+### 10. v6e-64 multi-host startup SIGABRT is frequent (infra, standing)
+- **Symptom:** worker exits with code 134 (SIGABRT) inside `jax.distributed.initialize` (max_utils.py:783), before any training code. Frame-verified 2026-08-05/07. Hit ~10 exp_03 S2/S1.6 submissions on 2026-08-06/07; exp_02 Jobs 44/47 earlier.
+- **Character:** PROBABILISTIC, not deterministic — the same job/commit succeeds on a later attempt (proven repeatedly), so it is pool weather, not a code regression. Distinguish from a real defect by: it always aborts pre-training, and a resubmit of the identical spec eventually runs.
+- **Workaround:** standing auto-resubmit (unchanged spec). The **fleet watcher** pattern automates it: a watchlist file + persistent monitor, terminal FAILED → classify → resubmit routine ones and append the new id to the watchlist.
+- **Status:** standing; costs wall-clock only.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
