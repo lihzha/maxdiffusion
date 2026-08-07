@@ -47,3 +47,29 @@ instrumented — true for LOSS, false for SSIM: `wan-overfit100-s3ext-lr1e5c-202
 arms. **Tier 1's primary metric therefore has no comparator yet**; closing it needs one v6e-8
 canonical seed-0 SSIM eval at the control's step-12,500 checkpoint (which exists). That launch was
 NOT in the approved package — it goes to Yixun.
+
+## RESULT 2 (complete) — Tier 1 (from 10k, +2,500 updates): B — 2026-08-07
+
+| | one-step loss @12,500 | SSIM @12,500 | law prediction | residual vs law |
+| --- | --- | --- | --- | --- |
+| start (exp_02 @10,000) | 0.1222672 | 0.8416 | 0.8417 | +0.0000 |
+| control lr1e5c (one-step) | 0.1200277 | *0.8443 predicted, ±0.005* (measured PENDING) | 0.8443 | — |
+| **B (rollout loss)** | 0.1219373 | **0.850115** | 0.8421 | **+0.0081** |
+
+- **B gained +0.0085 SSIM over the segment while moving one-step loss only −0.00033** (the control
+  moved it −0.00224, 6.8× more). B bought SSIM almost entirely OFF the law.
+- **B beats the control's law-predicted SSIM by +0.0058** — larger than the law's ±0.005 residual
+  band across six one-step checkpoints, so this is not obviously noise; it is NOT yet the
+  predeclared comparison (measured control pending) and NOT the +0.02 gate.
+- Windows ≥0.95: 1/100 (from 0/100 at the 10,000 start).
+
+**Reading — Tier 1 points the opposite way from Tier 2, and that is the informative part.**
+From init (Tier 2) the rollout objective's off-law gain (+0.0100) was exactly cancelled by the
+one-step loss it surrendered (0.0108 law-priced) → net tie. **From a trained state (Tier 1) it
+surrenders almost nothing (−0.00033 vs −0.00224) and keeps the off-law gain (+0.0081) → net
+positive.** Mechanistically consistent with S1.5: at the trained state the trial gradients are far
+from the control's (cos 0.228 for B) and support-draw noise is low (44% vs 77% at init), so the
+rollout signal is both distinct and well-estimated exactly where it pays. **Caveat:** one arm, one
+seed, one 2,500-update segment, and the control's SSIM is still a law prediction rather than a
+measurement — the +0.02 practical-effect gate is NOT met either way.
+
