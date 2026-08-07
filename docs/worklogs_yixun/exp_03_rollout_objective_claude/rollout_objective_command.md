@@ -465,3 +465,12 @@ production p_ss ramp (YAML default), exp03 output root (same as ctrl0), COMMIT=t
 - **Job 16 (A0):** `20260807-151216-3f6a19ad-exp03-s2b-a0-yixun`
 - **Job 17 (B0):** `20260807-151221-dc9efde3-exp03-s2b-b0-yixun` (records verified).
 
+### Scan redesign APPROVED + Job 18 (C fit-smoke #2) — 2026-08-07T~16:10Z
+
+`af29d5a` review: **APPROVE** — BLOCK 2 closed (memory_analysis on the production step,
+discriminating tests); scan carry aliased, slice shard-local, N=1 verbatim parent (live arms
+non-interfered); remat/contiguous refutations sound. **Fit-smoke: GO** with the escalation rule:
+only an attributable compile/runtime HBM failure triggers the GBS-128 deviation to Yixun; infra →
+retry; non-finite → diagnose. **Job 18:** `20260807-152010-5727dddd-exp03-s16-cfit2-yixun` — C, N=2, PDB=4.0, 30 steps, COMMIT=tip
+(incl. af29d5a).
+
