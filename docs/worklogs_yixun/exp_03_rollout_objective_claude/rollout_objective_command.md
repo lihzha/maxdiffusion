@@ -418,3 +418,19 @@ pending that evidence. **Job 15 (C fit-smoke, the prescribed probe, S1.6 re-meas
 (incl. cb8c2c4). Fit + finite ⇒ the HBM claim validated on the real graph; test-strengthening
 round for BLOCK 2 follows; full C launches after both.
 
+### Jobs 12–15 outcomes (2026-08-07T~14:30Z)
+
+- **Job 13 (B → 12,500): SUCCEEDED** (attempt 4) — the first Tier-1 trial arm is TRAINED. Next:
+  its measurement pair (instrument {10000 anchor, 12500} + seed-0 canonical SSIM) under the
+  Query-6 approval.
+- **Job 14 (ctrl0): SUCCEEDED** (attempt 1) — Tier 2's control replication ran 2,500 updates.
+  Next: the AND-gate evaluation vs exp_02's full-precision anchors (gates A0/B0).
+- **Job 12 (A): FAILED** a2, barrier SIGABRT (weather) — auto-resubmitted as **Job 12b**
+  `20260807-143158-42b82629-exp03-s2a-corrssb-yixun`.
+- **Job 15 (C fit-smoke, N=2): FAILED — accumulation INCREASED compile HBM: 31.98G (755.16M over)
+  vs N=1's 31.28G (34.32M over).** The reviewer's BLOCK 2 vindicated empirically: the unrolled
+  two-microbatch graph grows program scratch; optimization_barrier chaining does not shrink peak.
+  **C is BLOCKED pending redesign** (options for the next round: remat around the accumulation
+  loop, per-microbatch donation, jax.remat on the loss-fn boundary, or scan-with-reshard accepted;
+  reviewer's real-layout evidence requirement stands). No further C launches until then.
+
