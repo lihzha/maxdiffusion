@@ -520,3 +520,5 @@ instrument {250,1000,2500} → `20260807-180850-68847f8b-exp03-b0-inst-yixun`; S
 updates from init". Watchlist updated.
 
 ### A0 resubmit #2 (2026-08-07T~18:20Z): 16b barrier-134 again -> **Job 16c** `20260807-184137-5aaf7812-exp03-s2b-a0c-yixun` (watchlisted).
+
+### A Tier-1 resubmit (2026-08-07T~18:45Z): 12d barrier-134 -> **Job 12e** `20260807-184217-af7fac34-exp03-s2a-corrsse-yixun` (watchlisted).
