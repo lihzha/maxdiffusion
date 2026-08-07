@@ -534,3 +534,12 @@ GCS under the correct root. Eval pair:
 **This pair yields exp_03's first primary-metric number:** B's mean SSIM at 12,500 vs the lr1e5c
 control's 0.9159, judged at the plan's +0.02 practical-effect gate. Watchlist updated.
 
+
+## Job 21 — TIER-1 CONTROL SSIM @12,500 (the missing comparator) — launched 2026-08-07T~21:30Z
+
+**Approved by Yixun ("approve the lr1e5c@12500 SSIM eval").** Closes the gap found in RESULT 2:
+exp_02's lr1e5c control had `validation_loss/` but never an SSIM pass. Same cells as every Tier-1
+arm (s3_intermediate, canonical, seed 0, correct) on the existing step-12,500 checkpoint of
+`wan-overfit100-s3ext-lr1e5c-20260802`. **Job 21:** `20260807-213418-b4bcb986-exp02-lr1e5c-ssim12500-yixun` (watchlisted). On landing, Tier 1's
+predeclared primary comparison becomes measurable: B (0.850115) − control, at the +0.02 gate; the
+law predicted the control at 0.8443 ±0.005, so this also tests the law one more time.
