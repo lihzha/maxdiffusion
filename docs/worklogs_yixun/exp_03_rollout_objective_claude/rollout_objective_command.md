@@ -474,3 +474,19 @@ only an attributable compile/runtime HBM failure triggers the GBS-128 deviation 
 retry; non-finite → diagnose. **Job 18:** `20260807-152010-5727dddd-exp03-s16-cfit2-yixun` — C, N=2, PDB=4.0, 30 steps, COMMIT=tip
 (incl. af29d5a).
 
+### THE AND-GATE PASSES + Tier-1 A trained + follow-ons (2026-08-07T~16:25Z)
+
+- **ctrl0 AND-GATE: PASS at the 1e-11 level** — losses 0.1919129606/0.1685259684/0.1459819537
+  reproduce exp_02's anchors with deltas −1.2e-11/+2.2e-11/+4.6e-11; SSIM@2500 0.8139005632, delta
+  −2.5e-11. Essentially bit-identical: the exp_03 trainer is CERTIFIED drift-free; Tier-2
+  comparisons are clean (the early A0/B0 launch carries no caveat).
+- **Job 12c (A, Tier 1) SUCCEEDED** — trained 10,000→12,500 correctly seeded. Measurement pair
+  launched: instrument `20260807-162252-8ffd72ac-exp03-a-inst-yixun` ({10000 anchor = 0.12227
+  exact, 12500}, fresh validation_loss_12500/) + SSIM@12500
+  `20260807-162326-b6e8ffd3-exp03-a-ssim-yixun` (canonical seed-0; primary metric vs lr1e5c's
+  0.9159 at the +0.02 gate).
+- **Job 13b (B) FAILED during setup** (exit 1, setup phase) → **Job 13c**
+  `20260807-162353-627fdfa0-exp03-s2a-rolloutld-yixun`.
+- **Job 16 (A0) FAILED** (barrier 134) → **Job 16b** `20260807-162505-bd6705aa-exp03-s2b-a0b-yixun`.
+- B0 (17) and cfit2 (18) provisioning.
+
