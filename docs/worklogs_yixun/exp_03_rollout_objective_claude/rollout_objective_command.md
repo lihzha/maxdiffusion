@@ -406,3 +406,15 @@ MAX_TRAIN_STEPS=12500, GBS 256, LR 1e-5, COMMIT=tip (APPROVED 7da7a66 lineage). 
 code round for C/C0 — dispatched to a fresh Coder; C launches after its review passes, per the
 approved package.
 
+### Accumulation review (`cb8c2c4`) + Job 15 C fit-smoke (2026-08-07T03:10Z)
+
+Review: REQUEST-REVISION — items 1 (update-matching; N=1 = parent `de2b87a` computation, so the
+LIVE A/B/ctrl0 runs are non-interfered) and 3 (finite-by-min, gates) PASS. BLOCKs: (2) mesh tests
+pre-shard/force out_shardings — the real accumulated value_and_grad layout is unproven; (4) launch
+spec must be PER_DEVICE_BATCH_SIZE=4.0 + EXP03_GRAD_ACCUMULATION=2 (PDB=2 would halve GBS to 128);
+reviewer requires a compiled-layout check or a one-update v6e-64 fit probe. **C launch: NO-GO**
+pending that evidence. **Job 15 (C fit-smoke, the prescribed probe, S1.6 re-measurement umbrella):**
+`20260807-030957-9c5bb0d0-exp03-s16-cfit-yixun` — 30 steps, combined, N=2, PDB=4.0, COMMIT=tip
+(incl. cb8c2c4). Fit + finite ⇒ the HBM claim validated on the real graph; test-strengthening
+round for BLOCK 2 follows; full C launches after both.
+
