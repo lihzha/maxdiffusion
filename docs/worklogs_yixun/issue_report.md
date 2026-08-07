@@ -2,7 +2,7 @@
 
 Open issues, recurring failures, and standing workarounds. Each entry: symptom, infra-vs-bug classification, workaround/fix, status. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`.
 
-Last updated: 2026-08-05 ~19:10Z
+Last updated: 2026-08-07 ~05:30Z (model-change handoff)
 
 ## OPEN / STANDING
 
@@ -84,6 +84,11 @@ Last updated: 2026-08-05 ~19:10Z
 - **Symptom:** exp_04 J1-3 (2026-08-06): attempt 1 completed phases 1–3 and published immutable artifacts, got preempted mid-phase-4; the queue's retry re-ran the runbook from phase 1 and the storage layer's own review-pinned rule ("a completed shard is never rewritten") correctly killed the job with FileExistsError. Any runbook that publishes to fixed immutable destinations dies on the FIRST retry after its first publication — and spot preemptions run ~hourly some nights (5 within J1-2/J1-3).
 - **Rule (standing, for every future multi-phase runbook):** either (a) give every queue attempt its own ATTEMPT-SCOPED artifact subtree (`<phase>_att-<ts>`; authoritative = the subtree carrying the run-level JSON, which publishes last), or (b) launch each phase as its own queue job consuming the previous phase's published artifacts. Completed phases' published artifacts are legitimately reusable at the same code SHA — do not re-run them in the remediation job.
 - **Status:** OPEN as a rule (not a bug — the immutability behavior is correct and stays). First applications: exp_04 `submit_j1_v4.sh`, exp_05 `submit_k1_v2.sh` (contingency).
+
+### 14. Long-lived background shell monitors are killed by session teardown (infra, standing workaround)
+- **Symptom:** 2026-08-06/07 — `run_in_background` gsutil polling loops (10-min cadence, multi-hour windows) were repeatedly reported `killed`/`stopped` without finishing, including a fresh one-hour-window variant. Job status was never lost (the queue's `status.json` is authoritative and re-readable), but the session stopped being *notified*.
+- **Workaround (now the standing pattern):** monitor TPU jobs with **`ScheduleWakeup`** (25–30 min cadence, the wakeup prompt carrying the full "if RUNNING reschedule / if SUCCEEDED read these artifacts / if FAILED triage per SOP / reauth = ALARM" instruction). It survives teardown because the harness re-invokes the model rather than keeping a shell alive.
+- **Status:** standing. Corollary: a stale monitor's silence is NOT evidence about a job — always re-read `status.json` directly.
 
 ## RESOLVED (kept for the record)
 
