@@ -379,3 +379,17 @@ package with this number. ctrl+B resubmitted once more under the barrier-is-prob
 **Job 9c** `20260806-201559-b54db5b7-exp03-s16-controlc-yixun`, **Job 10c** `20260806-201628-22f18581-exp03-s16-rolloutlc-yixun` (records at submission). Their steps/s ratios are the
 remaining S1.6 measurement.
 
+### S1.6 COMPLETE (Jobs 9c/10c SUCCEEDED attempt 1; 2026-08-06T~21:00Z) — final at-scale gate table
+
+| arm | v6e-64 GBS-256 result | budget | verdict |
+| --- | --- | --- | --- |
+| control | 1.769 steps/s (steady, steps 10–30, n=21) | — | baseline |
+| A (corrective_ss) | 1.17× (S1 re-smoke, v6e-8) | ≤1.6× | PASS (carried) |
+| B (rollout_loss) | 0.652 steps/s → **2.713×** | ≤2.5× | **OVER by 8.5%** |
+| C (combined) | compile-time HBM OOM — **31.28G vs 31.25G (34.32MB over)** | fits | **DOES NOT FIT as configured** |
+
+Both readings are decision inputs for the S2 package (Yixun): B's overrun is modest — accept the
+cost (extends wall-clock ~8.5% beyond plan) or trim; C needs per-device batch 2 + accumulation,
+more remat, or exclusion from Tier 1. S1.6 CLOSED as a measurement stage; no further launches
+under it.
+
