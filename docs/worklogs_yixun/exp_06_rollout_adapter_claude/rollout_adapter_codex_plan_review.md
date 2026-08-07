@@ -85,3 +85,14 @@ New finding:
 For F9, restore an explicit `eval/selection every 1,000 updates` requirement—or another numerically pinned cadence—identically for C0 and R-B.
 
 REQUEST-REVISION — v2 resolves the substantive design direction, but the action-shuffle execution contract and selection cadence must be pinned before implementation.
+
+## Pass 3 (2026-08-07, vs plan v2.1): **APPROVE-PLAN** — both pass-2 pins RESOLVED, zero regressions, zero new findings
+
+### Reviewer output (verbatim)
+
+- §3e — **RESOLVED**: cohort-independent seeded derangements, collision handling, persisted permutation/hash, and batch-1 execution are explicitly pinned ([plan:31](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/docs/worklogs_yixun/exp_06_rollout_adapter_claude/plan_rollout_adapter.md:31)).
+- §3d — **RESOLVED**: evaluation and checkpoint selection occur every 1,000 updates for both arms through a YAML-declared, drift-pinned key ([plan:29](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/docs/worklogs_yixun/exp_06_rollout_adapter_claude/plan_rollout_adapter.md:29)).
+- Regression check — **NONE**: `c3ba9c7..3360f89` changes only the header, §3d, and §3e.
+- New plan-blocking findings — **NONE**.
+
+**APPROVE-PLAN** — v2.1 closes both remaining pass-2 issues without regressing the previously resolved design.
