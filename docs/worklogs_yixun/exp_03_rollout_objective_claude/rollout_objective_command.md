@@ -434,3 +434,23 @@ round for BLOCK 2 follows; full C launches after both.
   loop, per-microbatch donation, jax.remat on the loss-fn boundary, or scan-with-reshard accepted;
   reviewer's real-layout evidence requirement stands). No further C launches until then.
 
+### LAUNCH DEFECT DISCLOSED + corrective relaunches (2026-08-07T14:48Z)
+
+**Planner launch error on Jobs 12/13 (and pending 12b): the 10k checkpoint seeds were copied into
+`wan-ti2v-overfit100/exp03-s2a-*` but the exp03 launcher's Orbax root is `wan-ti2v-exp03/` —
+A and B found EMPTY checkpoint dirs and trained FROM SCRATCH** (B's run dir shows the from-zero
+250/500/1000 saves). B-as-run is NOT the Tier-1 arm; its eval is moot. ctrl0 is unaffected
+(from-init is correct for Tier 2). Corrections, all records verified:
+- 12b CANCELLED. **A relaunch (12c):** `20260807-144740-4d6a2a41-exp03-s2a-corrssc-yixun`;
+  **B relaunch (13b):** `20260807-144745-1b5a579e-exp03-s2a-rolloutlc-yixun` — both with
+  `OUTPUT_DIR=…/wan-ti2v-overfit100` so the run dirs ARE the seeded trees (corrss seed verified
+  present pre-launch).
+- The from-scratch B run (12,500 steps) is retained, not deleted: its 2,500 checkpoint is a
+  candidate B0 datapoint (Tier-2-shaped; admissibility for the plan's B0 slot is a reviewer
+  question — it ran before ctrl0's gate, a sequencing deviation to weigh, not hide).
+- **ctrl0 AND-gate evals launched:** instrument {250,1000,2500} →
+  `20260807-144817-a4fb719c-exp03-ctrl0-inst-yixun` (fresh validation_loss_andgate/); SSIM@2500 →
+  `20260807-144821-f50cf5b9-exp03-ctrl0-ssim-yixun`. Gate: |Δloss|≤1e-4 vs
+  0.1919129606/0.1685259684/0.1459819537 AND |ΔSSIM|≤5e-4 vs 0.8139005632 at 2,500 (the 250/1000
+  SSIM anchors follow if the 2500 cell passes).
+
