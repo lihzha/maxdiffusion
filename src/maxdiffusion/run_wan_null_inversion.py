@@ -62,7 +62,7 @@ from maxdiffusion.null_adapter_cache_policy import FIDELITY_SUBSET_SIZE, Example
 from maxdiffusion.null_adapter_records import PRODUCTION_GEOMETRY, SOURCE_DTYPES
 
 
-NULL_MODES = ("capacity", "cache", "verify_replay", "adequacy_probe", "direct_opt")
+NULL_MODES = ("capacity", "cache", "verify_replay", "adequacy_probe", "direct_opt", "transfer_probe")
 # Plan §4-P2 fixes the fp16 decision to the first eight DEV examples whatever cohort is being cached,
 # so a cache run reads from two manifests rather than one.
 FIDELITY_COHORT = "dev64"
@@ -649,6 +649,15 @@ def mode_kwargs(
             a3_measure=bool(config.null_a3_measure),
         )
     # J1b: separately approved, so it takes only what it needs and stamps what it writes.
+    if plan["mode"] == "transfer_probe":
+        # J1c replays J1b's published tensors: the npz URI is the mode's whole input, and the run's
+        # provenance travels with the table it produces.
+        common.update(
+            manifest_hash=manifest_digest(manifests, plan["cohort"]),
+            code_sha=resolved_code_sha(optional_config_value(config, "code_sha", "") or os.environ.get("COMMIT")),
+            nulls_uri=str(optional_config_value(config, "null_transfer_nulls_uri", "")),
+            decode_batch_size=int(plan["decode_batch_size"]),
+        )
     if plan["mode"] == "direct_opt":
         common.update(
             manifest_hash=manifest_digest(manifests, plan["cohort"]),

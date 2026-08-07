@@ -1070,6 +1070,10 @@ def execute(
         report = run_direct_opt(plan, backend, sinks, **kwargs)
         # A fit probe that refuses is a stop, not a result to be scrolled past.
         return report, (0 if report["continued"] else 1)
+    if mode == "transfer_probe":
+        from maxdiffusion.null_transfer_probe import run_transfer_probe
+
+        return run_transfer_probe(plan, backend, sinks, **kwargs), 0
     if mode == "verify_replay":
         report = run_verify(plan, backend, sinks, **kwargs)
         return report, (1 if report["failures"] else 0)

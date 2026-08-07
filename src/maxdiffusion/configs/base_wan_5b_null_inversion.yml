@@ -295,3 +295,4 @@ null_selection_uri: ''             # the J1 selection artifact cache/verify read
 null_adequacy_uri: ''              # the adequacy artifact capacity adopts its recipe from
 null_a3_measure: False             # J1 §4-P1(iii): measure ONE A3 update inside the capacity run
 null_a3_iters: 300                 # J1b (direct_opt): Adam iterations over the joint null tensor
+null_transfer_nulls_uri: ''        # J1c (transfer_probe): the a3_nulls.npz this run replays
