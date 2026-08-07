@@ -454,3 +454,14 @@ A and B found EMPTY checkpoint dirs and trained FROM SCRATCH** (B's run dir show
   0.1919129606/0.1685259684/0.1459819537 AND |ΔSSIM|≤5e-4 vs 0.8139005632 at 2,500 (the 250/1000
   SSIM anchors follow if the 2500 cell passes).
 
+## Jobs 16–17 — S2b A0 + B0 — launched 2026-08-07T15:12Z (Yixun-directed, ahead of the AND-gate)
+
+**Yixun, verbatim: "Could you please start the training for A0 and B0 now? Since it doesn't hurt
+to launch the run even before the ctrl0's two evals pass the AND-gate."** Sequencing deviation from
+plan v3.2 (A0/B0 were gated on ctrl0's pass) accepted BY THE USER: the runs' bits are
+gate-independent; the gate still governs interpretation — if it fails, A0/B0-vs-ctrl0 comparisons
+inherit the drift caveat (or a rerun call). Spec: from init, EXP03_RAMP_ORIGIN=0, 2,500 updates,
+production p_ss ramp (YAML default), exp03 output root (same as ctrl0), COMMIT=tip.
+- **Job 16 (A0):** `20260807-151216-3f6a19ad-exp03-s2b-a0-yixun`
+- **Job 17 (B0):** `20260807-151221-dc9efde3-exp03-s2b-b0-yixun` (records verified).
+
