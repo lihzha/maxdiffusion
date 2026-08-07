@@ -78,3 +78,9 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 
 - Authoritative root: `…/j1r2/j1b_att-0806-211405/` — `a3_direct_opt.json` (per-example losses/endpoints/grad-norms, embedded re-run fit_probe, full provenance at code_sha `db8c3dc`) + `a3_nulls.npz` (the optimized joint null tensors — the J1c input if wanted). 300 iters, 3237 s wall, fits_budget confirmed in-run (projection 0.74 h).
 - Result recorded in the worklog reading below; any outcome is acceptance.
+
+## J1c-1 — transfer probe (2026-08-07T01:28Z, LAUNCHED under Yixun's "GO for J1c")
+
+- Queue job: `20260807-012812-b06e590a-exp04-j1c-transfer-yixun` (v6e-8); record confirmed PENDING. Tip `921358521f8d7769f0723b0d2cd67f20e3f25911` (R12 committed at `5ad79fb`).
+- Submission: `submit_j1c.sh` (archived; reproduced by this entry): NULL_MODE=transfer_probe, first-8 DEV, NULL_TRANSFER_NULLS_URI = J1b's `a3_nulls.npz` (sha256 recorded in the output table by design), settings global(0) own-ε₀ + keyed{0,1,2}, attempt-scoped root `…/j1r2/j1c_att-<ts>`.
+- Acceptance: the probe publishes the per-example × per-noise future-SSIM/MSE table, provenance-bound to J1b. Any outcome is acceptance — this table IS the revival-vs-close decision input.
