@@ -67,3 +67,31 @@ Presented: B at 2.713× vs the ≤2.5× budget (accept vs trim); C misses the GB
 The S2a/S2b launches themselves remain approval-gated (announcement 02): the package goes to
 Yixun with these settings baked in.
 
+## Query 6 — THE S2a/S2b TRAINING-ARMS LAUNCH PACKAGE (for approval) — 2026-08-06
+
+All gates passed: S1 CLOSED, S1.5 banked+admissible, S1.6 CLOSED; Query-5 decisions bound
+(B accepted at 2.713×; C at per-device batch 2 + 2× accumulation).
+
+**S2a — Tier 1 (from-10k), READY NOW (no code change):**
+- **Arms A + B**: v6e-64, GBS 256, +2,500 updates each from a per-arm server-side copy of
+   (sweep pattern, byte-verified);
+   explicit (standing requirement); LR 1e-5 (update-matched vs control);
+  COMMIT = tip (code = APPROVED 7da7a66 lineage).
+- **Control = the EXISTING exp_02 lr1e5c arm** (10,000→12,500 at 1e-5) — already run, already
+  instrumented (loss 0.1919…-anchored); no new launch.
+- **Cost:** A ≈ 46 min, B ≈ 1.8 h (2.713×, accepted) on v6e-64 + the standard measurement pair
+  (instrument + seed-0 canonical SSIM) per arm on v6e-8 afterward under the same approval.
+- **Acceptance per arm:** restore start_step=10000; ramp origin logged 10000; all steps finite;
+  checkpoint 12,500 saved; then primary metric = canonical seed-0 mean SSIM at 12,500 vs lr1e5c's
+  (+0.02 practical-effect gate per plan v3.2).
+
+**S2b — Tier 2 (from-scratch), ctrl0 FIRST:**
+- **ctrl0**: v6e-64, 2,500 updates from Wan init, exp_02's exact RNG stream; **AND-gate** vs the
+  exp_02 full-precision anchors (|Δloss|≤1e-4, |ΔSSIM|≤5e-4, max-window ≤1e-3 at the pinned
+  checkpoints). A0/B0 launch only after ctrl0's gate PASSES (separate go).
+- **C and C0**: BLOCKED on the gradient-accumulation capability (confirmed absent from the
+  trainer) — one small code round + Codex review, then C launches under this same approval.
+
+**Ask:** approve (1) A+B now, (2) ctrl0 now, (3) the accumulation code round now (C/C0 launch
+after its review passes, no separate ask). Tip at packaging: 31f00c474.
+
