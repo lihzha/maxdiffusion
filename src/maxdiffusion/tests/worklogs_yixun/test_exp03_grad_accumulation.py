@@ -170,6 +170,33 @@ def _toy_loss(params, state, data, rng, config, scheduler, *, global_step=None):
     }
 
 
+def _rng_probe_loss(params, state, data, rng, config, scheduler, *, global_step=None):
+    """An objective that IS its own rng draw, so each microbatch's key is readable in the output.
+
+    Under ``lax.scan`` the body is traced once no matter how many microbatches run, so "did every
+    microbatch get a different key?" cannot be answered by counting calls into a spy. It can be
+    answered by making the loss a pure function of the key it was handed: the reported (mean) loss
+    then pins exactly which keys were used. The parameter term is multiplied by zero purely so
+    ``value_and_grad`` has something to differentiate.
+    """
+    del scheduler, global_step
+    transformer = nnx.merge(state.graphdef, params, state.rest_of_state)
+    draw = jnp.mean(jax.random.normal(rng, (data["z_video"].shape[0],)))
+    loss = draw + 0.0 * transformer.gain[...]
+    zero = jnp.asarray(0.0, dtype=jnp.float32)
+    return loss, {
+        "velocity_mse": loss,
+        "sigma_mean": zero,
+        "timestep_mean": zero,
+        "v_pred_l2": zero,
+        "v_target_l2": zero,
+        "z_noisy_std": zero,
+        "z_target_std": zero,
+        "z_init_anchor_mse": zero,
+        "probe_finite": jnp.isfinite(loss).astype(jnp.float32),
+    }
+
+
 # =============================================================================================
 # 1. N = 1 is a bit-for-bit no-op.
 # =============================================================================================
@@ -435,19 +462,27 @@ def test_the_microbatch_keys_are_folded_in_so_the_halves_are_not_noise_twins():
     assert np.array_equal(np.asarray(naive[0]), np.asarray(naive[1])), "premise: the same key repeats"
     folded = [jax.random.normal(jax.random.fold_in(loss_rng, index), (2, 3)) for index in range(2)]
     assert not np.array_equal(np.asarray(folded[0]), np.asarray(folded[1]))
-    # ...and the real step inherits that: at N=2 the two microbatches' losses differ, which they
-    # could not do if they shared a draw over statistically identical halves.
+    # ...and the real step inherits it. Asserted BEHAVIOURALLY, not by counting calls into a spy:
+    # the step is a lax.scan, so the body is traced once however many microbatches run, and a
+    # call-counting spy would report 1 and prove nothing. Instead the objective below IS its own rng
+    # draw, so the key each microbatch actually received is readable in the reported loss.
     state, data, config, scheduler = _fixture(exp03_grad_accumulation=2)
-    seen = []
-    original = parent._denoising_loss
+    rows = _DATA_B // 2
+    _, loss_rng = jax.random.split(jax.random.key(2))
+    folded_mean = float(
+        jnp.mean(jnp.stack([jnp.mean(jax.random.normal(jax.random.fold_in(loss_rng, i), (rows,))) for i in range(2)]))
+    )
+    same_key_mean = float(jnp.mean(jax.random.normal(loss_rng, (rows,))))
 
-    def spy(params, state_, data_, rng_, config_, scheduler_, *, global_step=None):
-        seen.append(np.asarray(jax.random.key_data(rng_)))
-        return original(params, state_, data_, rng_, config_, scheduler_, global_step=global_step)
-
-    parent._make_train_step(spy)(state, data, jax.random.key(2), scheduler, config, global_step=0)
-    assert len(seen) == 2
-    assert not np.array_equal(seen[0], seen[1]), "the microbatches were handed the same key"
+    _, metrics, _ = parent._make_train_step(_rng_probe_loss)(
+        state, data, jax.random.key(2), scheduler, config, global_step=0
+    )
+    reported = float(metrics["scalar"]["learning/loss"])
+    # The reported loss is the mean of the two FOLDED draws, to the digit.
+    assert reported == pytest.approx(folded_mean, rel=1e-6), (reported, folded_mean)
+    # ...and it is NOT what reusing one key for both microbatches would have produced, which is the
+    # bug being excluded rather than a restatement of the line above.
+    assert reported != pytest.approx(same_key_mean, rel=1e-6), (reported, same_key_mean)
 
 
 def test_the_exp03_auxiliary_draws_are_identical_across_microbatches_and_to_the_unaccumulated_run():
@@ -770,6 +805,97 @@ def test_the_accumulator_stays_param_sharded_over_eight_devices():
     # The inversion: replicated, the same accumulator costs 8x, on the same mesh, in one process.
     assert result["replicated_total_bytes"] == 2048, result
     assert result["replicated_total_bytes"] / result["acc_total_bytes"] == pytest.approx(8.0), result
+
+
+# =============================================================================================
+# 8. Compiled-layout scratch: which design actually has the smaller program.
+#
+# Job 15 (v6e-64, trial C, N=2) failed at COMPILE with CompileTimeHbmOom -- 31.98 G of a 31.25 G
+# budget, 755.16 MB over, against N=1's 31.28 G (34.32 MB over). The first implementation unrolled
+# the microbatches and relied on a lax.optimization_barrier to stop XLA interleaving them; a
+# barrier orders execution but does not constrain allocation, so the program simply contained two
+# copies of the whole graph and XLA sized scratch for both.
+#
+# These tests measure the thing that actually regressed -- program scratch, from the compiled
+# executable's own memory_analysis() -- rather than counting live arrays, and they compare the
+# chosen design against the one it replaced in the same process on the same mesh.
+# =============================================================================================
+
+_MEMSCRIPT = Path(__file__).parent / "_memscript.py"
+_MEM_CACHE: dict[tuple[int, int, int], dict] = {}
+
+# Two regimes, because the answer genuinely differs between them and a single measurement would
+# overclaim. "Parameter-dominated" is a wide, shallow-sequence model whose scratch is dominated by
+# weights and their FSDP all-gathers -- the shape a 5B backbone with remat_policy FULL and a
+# 540-token sequence is in. "Activation-dominated" is a narrow model with a long sequence, where
+# the activations accumulation shrinks are the biggest term.
+_PARAM_DOMINATED = (384, 6, 48)
+_ACTIVATION_DOMINATED = (128, 3, 768)
+
+
+def _scratch(regime: tuple[int, int, int]) -> dict:
+    """Compile the real train step under FSDP on 8 forced devices; return per-design scratch bytes."""
+    if regime not in _MEM_CACHE:
+        import os
+
+        env = dict(os.environ)
+        env["XLA_FLAGS"] = env.get("XLA_FLAGS", "") + " --xla_force_host_platform_device_count=8"
+        env["JAX_PLATFORMS"] = "cpu"
+        env["PYTHONPATH"] = str(_REPO / "src")
+        proc = subprocess.run(
+            [sys.executable, str(_MEMSCRIPT), *(str(value) for value in regime)],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            env=env,
+        )
+        assert proc.returncode == 0, proc.stderr[-4000:]
+        line = next(line for line in proc.stdout.splitlines() if line.startswith("RESULT "))
+        _MEM_CACHE[regime] = json.loads(line[len("RESULT ") :])
+    return _MEM_CACHE[regime]
+
+
+@pytest.mark.parametrize("regime", [_PARAM_DOMINATED, _ACTIVATION_DOMINATED])
+def test_the_scanned_step_has_strictly_less_scratch_than_the_unrolled_one(regime):
+    # THE design decision, measured in both regimes rather than argued. The scanned body is
+    # compiled once, so the program holds one microbatch's graph however large N is; the unrolled
+    # form holds N of them.
+    result = _scratch(regime)
+    assert result["devices"] == 8, result
+    assert result["n2_scan"] < result["n2_unrolled"], result
+    # ...and by a margin that matters, not by a rounding artifact: at least 15% of the unrolled
+    # program's scratch. Measured 22% (parameter-dominated) and 46% (activation-dominated).
+    saving = 1.0 - result["n2_scan"] / result["n2_unrolled"]
+    assert saving > 0.15, (saving, result)
+
+
+def test_the_unrolled_design_duplicated_the_graph_which_is_why_job_15_ran_out_of_memory():
+    # The root cause, as a measurement. Unrolling N=2 costs far more scratch than N=1 even though
+    # each microbatch is HALF the examples -- the extra is a second copy of the program, which is
+    # exactly what a barrier cannot prevent. Pinned in the regime a 5B backbone actually sits in.
+    result = _scratch(_PARAM_DOMINATED)
+    assert result["n2_unrolled"] > result["n1"], result
+    growth = result["n2_unrolled"] / result["n1"]
+    assert growth > 1.5, (growth, result)
+
+
+def test_accumulation_reduces_scratch_when_activations_are_what_dominate():
+    # The other half of the honest picture: where activations ARE the big term, the scanned design
+    # does what accumulation is supposed to do -- and more microbatches help monotonically.
+    result = _scratch(_ACTIVATION_DOMINATED)
+    assert result["n2_scan"] < result["n1"], result
+    assert result["n4_scan"] < result["n2_scan"], result
+
+
+def test_accumulation_is_not_free_where_parameters_dominate():
+    # THE limit of the technique, stated as a measurement rather than discovered on a TPU queue.
+    # Accumulation trades activation memory for one persistent gradient accumulator. When the
+    # activations it shrinks are not the dominant term, that trade LOSES -- even scanned. This is
+    # the regime a 5B backbone with remat_policy FULL and a 540-token sequence is in, and it is why
+    # "C fits at GBS 256" is a question for a compile-only fit smoke on the real graph, not
+    # something this suite can promise.
+    result = _scratch(_PARAM_DOMINATED)
+    assert result["n2_scan"] > result["n1"], result
 
 
 def test_the_interleaved_microbatch_slice_is_shard_local_and_the_contiguous_one_is_not():

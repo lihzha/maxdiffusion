@@ -210,43 +210,64 @@ def resolve_grad_accumulation(config) -> int:
     return number
 
 
-def microbatch_slice(tree, index: int, num_microbatches: int):
-    """Microbatch ``index`` of ``num_microbatches`` — the INTERLEAVED slice ``x[index::N]``.
+def microbatch_view(tree, num_microbatches: int):
+    """Reshape every batch leaf ``[B, ...] -> [B // N, N, ...]``; **axis 1 is the microbatch axis**.
 
-    Interleaved rather than contiguous, and that choice is the whole reason this is cheap. The
-    training batch is a global array sharded over the batch axis: on v6e-64 at GBS 256 device ``d``
-    owns global rows ``4d .. 4d+3``. A contiguous half ``x[:128]`` re-lays those 128 rows over all
-    64 devices two-per-device, so device ``d`` would need rows ``2d, 2d+1``, which live on device
-    ``d // 2`` -- a real all-to-all, once per microbatch, on every step. The interleaved half
-    ``x[0::2]`` instead lands device ``d``'s own rows ``4d`` and ``4d+2`` at result positions ``2d``
-    and ``2d+1``, which is exactly the shard device ``d`` keeps. No row crosses a device, for any
-    ``N`` that divides the PER-DEVICE batch (hence the per-device divisibility gate in
-    ``wan_ti2v_exp03_trainer.validate_grad_accumulation``). Both halves of that claim are executed
-    on a forced 8-device mesh in ``test_exp03_grad_accumulation``.
+    THE definition of how a batch is partitioned; :func:`microbatch_slice` and the scanned train
+    step both index this one view, so a static and a traced microbatch are provably the same rows.
 
-    Written as ``reshape(B // N, N, ...)[:, index]`` rather than as a strided slice because that is
-    the split-a-dimension reshape GSPMD partitions by leaving the sharding on the outer factor: the
-    microbatch axis comes out unsharded and the index is a local pick. The two are the same
-    elements -- element ``a`` of the result is row ``N * a + index`` either way.
+    The partition is INTERLEAVED -- element ``[a, i]`` is row ``N * a + i``, so microbatch ``i`` is
+    ``x[i::N]`` -- and that choice is the whole reason it is cheap. The training batch is a global
+    array sharded over the batch axis: on v6e-64 at GBS 256 device ``d`` owns global rows
+    ``4d .. 4d+3``. A contiguous half ``x[:128]`` re-lays those 128 rows over all 64 devices
+    two-per-device, so device ``d`` would need rows ``2d, 2d+1``, which live on device ``d // 2`` --
+    a real all-to-all, once per microbatch, on every step. The interleaved half ``x[0::2]`` instead
+    lands device ``d``'s own rows ``4d`` and ``4d+2`` at result positions ``2d`` and ``2d+1``, which
+    is exactly the shard device ``d`` keeps. No row crosses a device, for any ``N`` that divides the
+    PER-DEVICE batch (hence the per-device divisibility gate in
+    ``wan_ti2v_exp03_trainer.validate_grad_accumulation``). Both halves of that claim are executed on
+    a forced 8-device mesh in ``test_exp03_grad_accumulation``.
 
-    Every leaf is sliced, including any the objective ignores; leaves must have a leading batch axis
-    divisible by ``N``, checked here at TRACE time (shapes are static), so a bad batch is a
-    compile-time error rather than a silent mis-slice.
+    A split-a-dimension reshape rather than a strided slice because that is what GSPMD partitions by
+    leaving the sharding on the OUTER factor: the microbatch axis comes out unsharded, so indexing it
+    -- statically or with a traced scan index -- is a device-local pick and never a collective.
+
+    Leaves must have a leading batch axis divisible by ``N``, checked here at TRACE time (shapes are
+    static), so a bad batch is a compile-time error rather than a silent mis-slice.
     """
 
-    def take(leaf):
+    def view(leaf):
         array = jnp.asarray(leaf)
         if array.ndim == 0:
-            raise ValueError("microbatch_slice: every batch leaf must have a leading batch axis; got a scalar")
+            raise ValueError("microbatch_view: every batch leaf must have a leading batch axis; got a scalar")
         if array.shape[0] % num_microbatches:
             raise ValueError(
-                f"microbatch_slice: leading axis {array.shape[0]} is not divisible by "
+                f"microbatch_view: leading axis {array.shape[0]} is not divisible by "
                 f"exp03_grad_accumulation={num_microbatches}"
             )
         rows = array.shape[0] // num_microbatches
-        return array.reshape((rows, num_microbatches) + array.shape[1:])[:, index]
+        return array.reshape((rows, num_microbatches) + array.shape[1:])
 
-    return jax.tree_util.tree_map(take, tree)
+    return jax.tree_util.tree_map(view, tree)
+
+
+def microbatch_slice(tree, index: int, num_microbatches: int):
+    """Microbatch ``index`` as a STATIC pick from :func:`microbatch_view` — the slice ``x[index::N]``.
+
+    Kept as the readable, testable statement of the partition (and used by the shard-locality test);
+    the train step itself indexes the same view with the scan's traced index.
+    """
+    return jax.tree_util.tree_map(lambda leaf: leaf[:, index], microbatch_view(tree, num_microbatches))
+
+
+def unstack_microbatch_aux(stacked: dict, num_microbatches: int) -> list[dict]:
+    """``{name: [N]}`` (a scan's stacked ``ys``) -> ``[{name: scalar}, ...]``, one dict per microbatch.
+
+    So the scanned step can reuse :func:`reduce_microbatch_aux` -- the single tested reduction --
+    instead of growing a second implementation that reduces along an axis. The aux values are
+    scalars, so unstacking them costs nothing.
+    """
+    return [{name: value[index] for name, value in stacked.items()} for index in range(num_microbatches)]
 
 
 def reduce_microbatch_aux(auxes: list[dict]) -> dict:
@@ -330,15 +351,39 @@ def _make_train_step(denoising_loss):
       microbatch instead of per batch. The exp_03 auxiliary draws -- the supports, ``k_A``, the
       ``p_ss`` coin -- are keyed on ``(seed, global_step, purpose)`` and are therefore identical in
       every microbatch and identical to the un-accumulated run, so cross-arm alignment survives.
-    * **Memory.** Only one microbatch's activations are ever live, and the accumulator is one
-      gradient tree carrying the parameters' own sharding (it is built by ``tree_map`` over the
-      per-microbatch gradients, which come back at the parameter layout). The sequencing is not left
-      to the scheduler's goodwill: each microbatch's inputs are routed through a
-      ``lax.optimization_barrier`` together with the running accumulator, so a microbatch's forward
-      cannot be hoisted above the previous microbatch's backward. Unrolled in Python rather than run
-      as a ``lax.scan``, because a scan wants its microbatches stacked on a leading axis -- which is
-      precisely the resharding transpose the interleaved slice exists to avoid -- and because ``N``
-      is small, static, and not differentiated through.
+    * **Memory — and the mistake that was made here first.** The original implementation unrolled
+      the microbatches in Python and used a ``lax.optimization_barrier`` to stop XLA interleaving
+      them. That barrier constrains the *order of execution*; it does not constrain *allocation*.
+      Unrolling put ``N`` copies of the entire ~5B graph into one program, and XLA sized program
+      scratch for all of them -- including ``N`` copies of the FSDP weight all-gather buffers.
+      Job 15 (v6e-64, C, ``N=2``) therefore asked for **755.16 MB more** than the un-accumulated
+      step (31.98 G vs 31.28 G against a 31.25 G budget), rather than less. Measured on a forced
+      8-device mesh with ``compiled.memory_analysis()``, the unrolled ``N=2`` program's scratch is
+      almost exactly **twice** the ``N=1`` program's, in both an activation-dominated and a
+      parameter-dominated regime -- i.e. duplication, not retention.
+
+      So the microbatches run as a ``lax.scan`` over the microbatch index. The body is compiled
+      ONCE, so the program holds one microbatch's graph and one set of scratch buffers however large
+      ``N`` is; only one microbatch can be in flight, structurally, with no scheduling hint needed;
+      and the accumulator is the scan CARRY, which XLA aliases in place. The microbatches are still
+      the interleaved, shard-local ones -- ``lax.scan``'s usual demand that its inputs be stacked on
+      a leading axis (which would force exactly the resharding transpose the interleaved partition
+      exists to avoid) is sidestepped by keeping the batch as a closure constant and indexing the
+      view's UNSHARDED microbatch axis with the traced scan index.
+
+      Measured scratch on the 8-device harness, ``N=1`` normalized to its own program:
+      unrolled ``N=2`` +254 MiB / scan ``N=2`` +142 MiB (parameter-dominated), and
+      unrolled ``N=2`` +4.3 MiB / scan ``N=2`` **-39.2 MiB** (activation-dominated). Wrapping the
+      per-microbatch loss in an extra ``jax.remat`` was also measured and is WORSE in both regimes
+      (+385 MiB and +8.8 MiB): the production model already sets ``remat_policy: FULL``, so a second
+      remat only adds recompute buffers.
+
+      **What this does not promise.** Accumulation only lowers the peak when the activations it
+      shrinks are a bigger term than the one gradient accumulator it adds. In the
+      parameter-dominated regime -- which is where a 5B backbone with ``remat_policy: FULL`` and a
+      540-token sequence sits -- even the scanned form measures ABOVE ``N=1``. Whether C fits at
+      GBS 256 is therefore an empirical question about the real graph, settled by a compile-only fit
+      smoke, not by this docstring.
     """
 
     def _train_step(state: Overfit100TrainState, data: dict, rng: jax.Array, scheduler, config, *, global_step=None):
@@ -365,34 +410,38 @@ def _make_train_step(denoising_loss):
             grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
             (loss, aux), grads = grad_fn(state.params)
         else:
-            grads = None
-            losses = []
-            auxes = []
-            for index in range(num_microbatches):
-                micro = microbatch_slice(data, index, num_microbatches)
-                if grads is not None:
-                    # SEQUENCING. Without this the unrolled microbatches are independent subgraphs
-                    # and XLA is free to interleave them, holding two microbatches' activations at
-                    # once -- which would give back exactly the HBM the accumulation is being added
-                    # to save. Routing this microbatch's inputs through a barrier with the running
-                    # accumulator makes the forward data-dependent on the previous backward.
-                    grads, micro = jax.lax.optimization_barrier((grads, micro))
+            # ONE compiled body, run N times -- NOT an unrolled Python loop. See the class of
+            # failure this replaces in the factory docstring: unrolling put N copies of the whole
+            # ~5B graph in one program and XLA sized scratch for all of them, which is how Job 15
+            # asked for 755 MB MORE than the un-accumulated step instead of less.
+            view = microbatch_view(data, num_microbatches)
 
-                def loss_fn(params, batch=micro, key=jax.random.fold_in(loss_rng, index)):
-                    return _objective(params, batch, key)
+            def body(carry, index):
+                accumulator, params = carry
+                # The microbatch axis is axis 1 of the view and is UNSHARDED, so a traced index into
+                # it is a device-local pick -- the same rows ``microbatch_slice`` picks statically.
+                micro = jax.tree_util.tree_map(
+                    lambda leaf: jax.lax.dynamic_index_in_dim(leaf, index, axis=1, keepdims=False), view
+                )
 
-                grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-                (micro_loss, micro_aux), micro_grads = grad_fn(state.params)
-                # SUM as we go, so at most two gradient trees exist at any moment (the accumulator
-                # and the one being folded into it) instead of N.
-                grads = micro_grads if grads is None else jax.tree_util.tree_map(jnp.add, grads, micro_grads)
-                del micro_grads
-                losses.append(micro_loss)
-                auxes.append(micro_aux)
+                def loss_fn(inner):
+                    return _objective(inner, micro, jax.random.fold_in(loss_rng, index))
+
+                (micro_loss, micro_aux), micro_grads = nnx.value_and_grad(loss_fn, has_aux=True)(params)
+                # The accumulator is the CARRY, so XLA aliases it in place across iterations: one
+                # gradient tree for the whole step, at the parameters' own sharding.
+                accumulator = jax.tree_util.tree_map(jnp.add, accumulator, micro_grads)
+                return (accumulator, params), (micro_loss, micro_aux)
+
+            # ``params`` rides in the carry rather than being closed over: nnx refuses to extract a
+            # graph node captured from an outer trace level, and carrying it costs nothing because
+            # it is loop-invariant and live for ``apply_gradients`` regardless.
+            zeros = jax.tree_util.tree_map(jnp.zeros_like, state.params)
+            (grads, _), (losses, stacked_aux) = jax.lax.scan(body, (zeros, state.params), jnp.arange(num_microbatches))
             # ONE division, at the end, of ONE tree: the mean gradient over the full batch.
             grads = jax.tree_util.tree_map(lambda leaf: leaf / num_microbatches, grads)
-            loss = sum(losses) / num_microbatches
-            aux = reduce_microbatch_aux(auxes)
+            loss = jnp.sum(losses) / num_microbatches
+            aux = reduce_microbatch_aux(unstack_microbatch_aux(stacked_aux, num_microbatches))
 
         grad_norm = jaxopt.tree_util.tree_l2_norm(grads)
         max_abs_grad = jax.tree_util.tree_reduce(
