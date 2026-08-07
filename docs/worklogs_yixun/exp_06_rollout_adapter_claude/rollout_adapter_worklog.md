@@ -9,3 +9,7 @@
 ## 2026-08-07T04:20:00Z — Plan review pass 1: REQUEST-REVISION (3 BLOCKER + 9 MAJOR, all accepted) → plan v2; pass 2 dispatched
 
 - Headline corrections: trainer base is the side-adapter trainer (S7 contributes generalized utilities only); exp_03 dependency = pinned-SHA blob import + kernel extraction with equivalence tests, NOT a branch merge (the reviewer measured ~44k insertions for a merge); the ACTION-USE GATE is now mandatory (true-vs-shuffled/zero actions, paired, CI-gated) — the reviewer confirmed the Planner-planted concern and supplied the design; matched-C0 required for causal objective-only claims; paired-delta +0.05 gate with anchor-reproduction protocol; explicit CFG gradient contract (no z-stop-grad across steps, FD oracle); the exp_05-unstall claim withdrawn (evaluator = exp_06-owned filename, tripwire untouched); k=2 primary; per-job approvals strictly at pushed SHAs.
+
+## 2026-08-07T05:10:00Z — Plan review CONVERGED: APPROVE-PLAN at v2.1 (3 passes: 12 findings → 2 pins → clean) → to Yixun for approval
+
+- The plan now goes to Yixun with §11's four decisions (matched-C0 cost; arm set; M3 budget class; optional compute-matched control). Plan approval authorizes NO job — T1–T7 code rounds begin on approval; M1 is the first launch request, at its own pushed SHA.
