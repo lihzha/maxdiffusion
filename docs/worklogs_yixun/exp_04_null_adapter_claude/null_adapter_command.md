@@ -84,3 +84,7 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 - Queue job: `20260807-012812-b06e590a-exp04-j1c-transfer-yixun` (v6e-8); record confirmed PENDING. Tip `921358521f8d7769f0723b0d2cd67f20e3f25911` (R12 committed at `5ad79fb`).
 - Submission: `submit_j1c.sh` (archived; reproduced by this entry): NULL_MODE=transfer_probe, first-8 DEV, NULL_TRANSFER_NULLS_URI = J1b's `a3_nulls.npz` (sha256 recorded in the output table by design), settings global(0) own-ε₀ + keyed{0,1,2}, attempt-scoped root `…/j1r2/j1c_att-<ts>`.
 - Acceptance: the probe publishes the per-example × per-noise future-SSIM/MSE table, provenance-bound to J1b. Any outcome is acceptance — this table IS the revival-vs-close decision input.
+
+## J1c-1 outcome (2026-08-07T~02:20Z, **SUCCEEDED-BY-ARTIFACT** — attempt 0 published the complete `transfer_probe.json` before a teardown-window preemption; the queue's redundant retry is being cancelled; authoritative root `…/j1r2/j1c_att-0807-020621/`)
+
+- Table provenance verified: npz sha256 `677502c5…eb68` = J1b's `a3_nulls.npz`; code_sha = the R12 tip; l_null 16; w 5.0. The own-basin column reproduces J1b's per-example endpoint MSEs as a multiset (loss-vs-replay deltas ≤ ~0.03) — cross-job consistency check PASSED.
