@@ -512,3 +512,10 @@ REPORTED to Yixun with the ~2.3 h veto window):
   N=2, PDB 4.0, ramp origin 10000.
 - **Job 20 (C0):** `20260807-171624-6c499c8e-exp03-s2b-c0-yixun` — from init, 2,500 updates, N=2. Watchlist updated.
 
+### B0 TRAINED + eval pair (2026-08-07T~18:00Z)
+
+Job 17 (B0) SUCCEEDED — Tier 2's first trial arm. Eval pair launched mirroring ctrl0's cells:
+instrument {250,1000,2500} → `20260807-180850-68847f8b-exp03-b0-inst-yixun`; SSIM@2500 → `20260807-180914-e7aae303-exp03-b0-ssim-yixun`. Read: B0 vs ctrl0 per-cell
+(loss trajectory + SSIM at 2,500), the Tier-2 question "does the objective change the first 2,500
+updates from init". Watchlist updated.
+
