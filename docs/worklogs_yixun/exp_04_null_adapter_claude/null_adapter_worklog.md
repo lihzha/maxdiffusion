@@ -415,3 +415,17 @@ Component-by-component against `third_party/Wan2.2/scripts/embedding_search.py` 
 
 - **Result** — `passed`. The J1c mode: replay a3_nulls.npz (VERIFIED step-major [25,8,16,4096] — the batch-major misread the brief assumed would have transposed the study; killed as mutant X2) under global(0) own-ε₀ + keyed{0,1,2}, decode, future-SSIM/MSE, provenance-bound incl. the npz bytes' sha256. Reviewer independently verified J1b/J1c ε₀ identity (same imported global_noise(0)). Wiring +19/−1 across four exp_04-owned files. One first-pass battery survivor (X7, default-seam swap invisible to stubs) closed with a real-replay frame-0-pin test. Baseline note: pre-existing suite measures 955 vs the recorded 954 — unreconciled-benign (all green), flagged not chased.
 - **Planner rulings:** four noise settings suffice; read_bytes as module seam; refusal over truncation — all reviewer-ratified.
+
+## 2026-08-07T02:30:00Z — J1c RESULT READING (the transfer answer; Planner) — JOINT NULLS RETAIN ~72% RELATIVE EFFECT ACROSS BASINS; absolute floors still unmet
+
+**8 examples × 4 settings (future-SSIM / future-MSE means):**
+
+| Setting | mean SSIM | mean MSE | reference points |
+|---|---|---|---|
+| global(0) — own ε₀ | **0.651** | 0.273 | reproduces J1b (multiset match) |
+| keyed(0) foreign | 0.471 | 1.315 | A1-probe (greedy nulls, foreign): **0.173** |
+| keyed(1) foreign | 0.477 | 1.423 | A2 (greedy, fresh): 0.497 |
+| keyed(2) foreign | 0.478 | 0.989 | base nulls, fresh: MSE ~4.95 |
+
+**Statement:** (1) Jointly-optimized nulls TRANSFER — foreign-basin SSIM ~0.47, stable across all three seeds, 2.8× the greedy nulls' 0.17 collapse, and MSE ~1.0–1.4 vs the do-nothing 4.95. **Relative retention 0.47/0.65 = 0.72 — above the 0.7× relative bar.** The basin-boundness that killed A1/A2 was substantially a GREEDY-OPTIMIZATION artifact on BOTH axes (capacity and transfer). (2) The absolute floor (0.70) is still unmet everywhere: own-basin 0.65, foreign 0.47 — at 300 iters the joint optimum itself is not yet deployment-grade, and per-example the pattern is consistent: well-converged examples (own SSIM 0.83–0.99) retain 0.58–0.88 under foreign noise; poorly-converged ones are weak everywhere. Transfer quality tracks optimization quality.
+**Mechanism chain now COMPLETE (the P1/P1b/P1c arc):** greedy per-step nulls = basin-locked AND capacity-limited → joint endpoint optimization lifts both (own-basin to near-A1 on converged examples; 72% relative transfer) → the remaining gap is optimization quality/budget, not a basin wall. **Every predeclared exp_04 gate has fired (STOP / below-floor): the experiment's question set is fully answered.** A revival (longer/better joint optimization → caching at ~225+ v6e-8-h → P3) is an exp_06-scale NEW proposal, not a continuation under these gates.
