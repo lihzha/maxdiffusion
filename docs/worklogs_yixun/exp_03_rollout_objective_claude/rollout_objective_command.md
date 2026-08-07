@@ -393,3 +393,16 @@ cost (extends wall-clock ~8.5% beyond plan) or trim; C needs per-device batch 2 
 more remat, or exclusion from Tier 1. S1.6 CLOSED as a measurement stage; no further launches
 under it.
 
+## Jobs 12–14 — S2a (A, B from 10k) + S2b (ctrl0 from init) — launched 2026-08-07T01:52Z
+
+**Approved by Yixun ("approve all three", Query 6).** Seeds: per-arm server-side copies of the
+step-10,000 checkpoint, byte-verified 23,654,557,930 B ×2. A/B: EXP03_RAMP_ORIGIN=10000,
+MAX_TRAIN_STEPS=12500, GBS 256, LR 1e-5, COMMIT=tip (APPROVED 7da7a66 lineage). ctrl0: from init,
+2,500 updates, exp_02's exact stream (control-by-identity), AND-gate eval follows landing.
+- **Job 12 (A):** `20260807-015203-926b2a91-exp03-s2a-corrss-yixun`
+- **Job 13 (B):** `20260807-015228-1ad2b2e5-exp03-s2a-rolloutl-yixun`
+- **Job 14 (ctrl0):** `20260807-015254-4670f66b-exp03-s2b-ctrl0-yixun`
+(all three records verified at submission). Item (3) of the approval — the gradient-accumulation
+code round for C/C0 — dispatched to a fresh Coder; C launches after its review passes, per the
+approved package.
+
