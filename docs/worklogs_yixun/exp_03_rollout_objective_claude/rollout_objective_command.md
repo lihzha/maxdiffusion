@@ -570,3 +570,5 @@ the exp_03 branch. **Fix without code change:** relaunched via the exp03 trainer
 EXP03_OBJECTIVE=control — certified identical to the exp_02 recipe by ctrl0's 1e-11 AND-gate.
 Launched: {'ctrlext2': '20260808-144912-192bdbc4-exp02-lr1e5c-ext2-yixun', 'c-inst': '20260808-144939-fde13c90-exp03-c-inst-yixun', 'lam25-inst': '20260808-145007-bfefd471-exp03-lam25-inst-yixun', 'lam75-inst': '20260808-145035-5c2012e5-exp03-lam75-inst-yixun', 'aext-inst': '20260808-145126-edc972cf-exp03-aext-inst-yixun', 'c-ssim': '20260808-145205-37f5cd96-exp03-c-ssim-yixun', 'lam25-ssim': '20260808-145233-68847bfe-exp03-lam25-ssim-yixun', 'lam75-ssim': '20260808-145326-944c9a9a-exp03-lam75-ssim-yixun', 'aext-ssim': '20260808-145354-775edb0f-exp03-aext-ssim-yixun'}
 All watchlisted.
+
+### Control extension SUCCEEDED via certified control-identity (2026-08-08T~15:45Z) — eval pair `20260808-180149-48bef098-exp03-ctrlext-inst-yixun` (anchor 0.1200277@12,500) + `20260808-180227-ab829726-exp03-ctrlext-ssim-yixun` (SSIM@17,500). Watchlisted.
