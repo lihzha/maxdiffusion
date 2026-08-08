@@ -114,3 +114,28 @@ gradient, not the trajectory 2,500 updates of following it produces. Whether A0 
 off-law SSIM (which would keep the trade-ratio story intact) is exactly what its pending SSIM
 answers.
 
+## RESULT 4 — TIER 2 COMPLETE (A0, B0, ctrl0 @2,500 from init) — 2026-08-08
+
+| arm | one-step loss | SSIM | law | **off-law** | vs ctrl0 | loss paid | law-priced cost |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ctrl0 (one-step) | 0.14598 | 0.813901 | 0.8132 | +0.0007 | — | — | — |
+| B0 (rollout) | 0.15496 | 0.812425 | 0.8024 | **+0.0100** | −0.00148 (t=−2.9, 44/100) | +0.00898 | −0.01078 |
+| **A0 (corrective SS)** | 0.15644 | **0.815026** | 0.8006 | **+0.0144** | **+0.00113** (t=+1.6, 67/100) | +0.01046 | −0.01256 |
+
+**The trade-ratio story survives its own refuted prediction.** A0 surrenders MORE one-step loss than
+B0 (+0.01046 vs +0.00898 — the reverse of what I predicted from S1.5's gradient cosines) but buys
+proportionally MORE off-law SSIM (+0.0144 vs +0.0100). Off-law gain per unit of law-priced loss:
+**A0 1.15, B0 0.93, ctrl0 n/a** — i.e. A0's exchange rate is favourable (>1) and B0's is not, which
+is exactly why A0 nets positive from init (+0.0011) where B0 nets negative (−0.0015). Neither
+approaches the +0.02 gate; A0's advantage is not significant at n=100 seed-0 (t=+1.6).
+
+**What Tier 2 establishes:** from init, both trial objectives decouple from the law (4×–20× the
+control's residual), so the mechanism is not an artifact of starting from a trained state. But at
+2,500 updates the decoupling merely pays for the one-step loss it costs — A0 slightly ahead, B0
+slightly behind, both practically a wash. **Tier 1 is where the trade turns clearly profitable**
+(B +0.0059, t=+21), because there the objective surrenders almost no one-step loss.
+
+**A Tier-1 instrument** (this hour): anchor 0.1222672 (exp_02's 0.12227 — VALID),
+12,500 = 0.1186258 (segment -0.00364; B was −0.00033, control −0.00224).
+A's Tier-1 SSIM pending — the last piece of the A-vs-B comparison at the trained state.
+
