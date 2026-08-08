@@ -27,3 +27,14 @@ Planner reading — the plan of record is **v2.1** with:
 4. **Compute-matched multi-draw one-step control: DEFERRED** — revisited only if the pilot gate passes.
 
 **This grant authorizes NO TPU job** (announcement 02 unchanged): it opens the T1–T7 code rounds. M1 (fit probe) is requested separately at its own pushed SHA with the full pre-launch package.
+
+## Grant (2026-08-08T~04:05Z / bedtime) — sleep-window standing approval, ~10 h
+
+**Yixun, verbatim:** "Currently I will go to bed, so I will approve everythin after your recommendation util I wake up, potential 10h from now. Please go ahead"
+
+Planner reading (recorded BEFORE acting on it):
+1. The grant covers, for ~10 h, every approval the Planner would otherwise seek AND recommend — it is a conditional grant riding on the Planner's own recommendations, not a carte blanche beyond them.
+2. **Job ladder, in order, each rung only on its predecessor's PREDECLARED pass:** M1 fit probe (v6e-8, ~1 h) may launch once both rework tracks re-review clean and commit; M2 learnability probe (v6e-8, 32 ex, ≤2k steps + matched-C0) may launch on M1's authorization verdict; M3 (the Yixun-approved pilot budget class: 10k steps @ GBS 256, v6e-64) may launch ONLY if M2 passes its predeclared numerical continuation rule — realistically beyond this window. Every launch gets its `_command.md` entry, acceptance criteria, and ScheduleWakeup monitoring at launch time.
+3. Submissions are attempted directly under this grant (the classifier permitted J1b/J1c under explicit in-conversation grants); if the classifier blocks (issue #10), the exact `! bash` command is queued for wake-up and everything else continues.
+4. Non-TPU work needing no grant proceeds regardless: rework completion, re-reviews, strengthens, commits, and the exp_04 P4 / exp_05 P4' REPORT DRAFTS (Coder-written; their Codex analysis reviews are DEFERRED past wake-up to preserve reviewer quota for exp_06's critical path).
+5. **Failure policy overnight:** infra failures auto-resubmit per the standing policy; real bugs get fix cycles per SOP; gsutil/gcloud reauth expiry (issue #6, ~4-hourly) is an ALARM the Planner cannot clear — anything auth-blocked is queued for wake-up with a clear morning summary.
