@@ -39,6 +39,22 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff: exp_06 section added at 
 ## exp_03 `rollout_objective` — train on the trajectory the eval runs (ACTIVE — smokes closed, S1.5 probe in flight)
 
 - **What:** exp_02 established that one-step denoising loss improves while 25-step rollout SSIM lags (the loss→SSIM law's slope is the compounding price). exp_03 attacks the objective/rollout mismatch directly with three trial losses on the same OVERFIT100 task: **A** = corrective scheduled sampling (k_A∼U{1,2} stop-grad advances along the descending σ grid via the extracted sampler, corrective target v\*=(z_lo−z_gt)/σ_lo — exact under the Euler rule); **B** = short-horizon differentiable rollout (k=2 sampler unroll, lax.scan + remat, endpoint MSE ÷ (σ_hi−σ_lo)²); **C** = literal same-batch λ·L_A+(1−λ)·L_B, λ=0.5, single Adam update. **Two tiers:** Tier 1 continues from exp_02's step-10,000 checkpoint (A/B/C vs the lr1e5c control, update-matched); Tier 2 retrains from step 0 (ctrl0 one-step control FIRST with an AND-gate replication of exp_02's exact RNG stream — |Δloss|≤1e-4, |ΔSSIM|≤5e-4 — then A0/B0/C0). Plan v3.2 **approved by Yixun**; primary metric = canonical seed-0 mean SSIM at the +0.02 practical-effect gate vs control.
+- **RESULTS (1–6, in `rollout_objective_results.md`, all artifact-backed):** The mechanism is REAL —
+  trial objectives decouple from exp_02's loss→SSIM law (control residual −0.0002, its 8th and
+  tightest hold; trial arms +0.006…+0.014 above the line). **Tier 1 @12,500 (from 10k):** A
+  (corrective SS) WINS ON BOTH AXES — one-step loss 0.11863 (better than the control's 0.12003)
+  AND SSIM 0.851570 vs control 0.844169 = **+0.0074, t=+22.8, 100/100 windows**; B +0.0059
+  (t=+21.0, off-law only); A>B paired +0.0015 (t=+5.8). **Tier 2 @2,500 (from init), FINAL:**
+  **C0 SUPER-ADDITIVE** — beats both parents on both axes: loss cost +0.0039 (less than HALF of
+  A0's +0.0105 / B0's +0.0090), SSIM 0.820169, net **+0.0063 (t=+14.2, 95/100)**; exchange ratios
+  (off-law gain ÷ law-priced cost): C0 2.51, A0 1.15, B0 0.93. Ordering: C0 ≫ A0 > ctrl0 > B0.
+  **Neither tier meets the +0.02 practical-effect gate** (~⅓ of it) — statistically overwhelming,
+  practically modest, one seed. ctrl0's AND-gate passed at 1e-11. One refuted prediction + one
+  self-caught write-up error disclosed in the results doc.
+- **OVERNIGHT (Query 7 blanket grant, ~10 h from 2026-08-08T04:30Z):** λ-sweep (0.25/0.75, Jobs
+  22–23) testing C0's super-additivity; A + control extensions 12,500→17,500 (Jobs 24–25) testing
+  compounding toward the gate; Tier-1 C still queued (attempt 5/20, pool weather); predeclared: C
+  extends too if its Tier-1 net > A's +0.0074. Fleet watcher chains evals automatically.
 - **Status: S2 TRAINING ARMS IN FLIGHT — the experiment proper is running.** All pre-training stages closed: S1 smoke, **S1.5** (dual-state discriminator data banked + reviewer-admissible), **S1.6** (at-scale budgets: A 1.17× PASS; B 2.713× over the 2.5× budget — Yixun ACCEPTED; C failed the GBS-256 fit by 34.32MB → Yixun chose **batch-2 + accumulation**).
   - **ctrl0 AND-GATE: PASSED AT 1e-11** — the exp_03 trainer reproduces exp_02 essentially bit-identically (losses 0.1919129606/0.1685259684/0.1459819537, deltas ~1e-11 vs a 1e-4 tolerance; SSIM@2500 0.8139005632, delta −2.5e-11). **The instrument is certified drift-free; every Tier-2 comparison is attributable to the objective.**
   - **Arms:** Tier 1 (from-10k, +2,500 updates, vs exp_02's lr1e5c control at the +0.02 gate): A `exp03-s2a-corrss-20260806`, B `…-rolloutl-…`, C `…-combined-…` (N=2 accumulation). Tier 2 (from init, 2,500): ctrl0 DONE, **B0 DONE** (eval pair launched), A0, C0. Seeds: per-arm byte-verified copies (23,654,557,930 B) of `wan-overfit100-s3-20260730/checkpoints/10000`.
