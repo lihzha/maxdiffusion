@@ -113,3 +113,18 @@ umbrella for Planner-recommended actions. Under it, launched now (each individua
    C 12,500→17,500 as well (~4.6 h at 5.92×; fits the window if it lands early enough); otherwise not.
 All follow-on eval pairs (instrument with known anchors + canonical seed-0 SSIM) launch
 automatically as runs land. Nothing outside this list launches under the umbrella.
+
+## Query 8 — the closure decision (2026-08-08)
+
+**Yixun, verbatim:** "Your pratical +0.02 not met is a hard gate, everytime later this kind of
+success or not gate, you need to ask me for the final decision. I think the results of C shows
+that C is working better than B and A method (train from scratch). You can close exp_03"
+
+Three parts, all executed: (1) standing rule recorded as announcement 03 (hard gates are Yixun's
+call); (2) **Yixun's verdict**: from scratch, C (the λ=0.5 combined objective) works better than
+the A and B methods — consistent with RESULT 6/8 (C₀.₅ +0.0063 vs ctrl0, t=+14.2, the λ-sweep
+optimum; the +0.02 hard gate NOT met, per his adjudication this closes rather than continues);
+(3) **exp_03 CLOSED.** Per SOP and the exp_01/exp_02 precedent (merge only on confirmed success;
+the hard gate was not met): code stays on the experiment branch, docs live on yixun-dev via the
+sync hook. The recommendation ladder (seed replication / A-saturation / λ-schedule) is PARKED as
+future-experiment material, not launched.

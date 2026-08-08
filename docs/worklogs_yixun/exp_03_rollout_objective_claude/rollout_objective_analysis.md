@@ -1,5 +1,9 @@
 # exp_03 `rollout_objective` — Analysis (Planner)
 
+> **CLOSED 2026-08-08 by Yixun (Query 8).** His verdict: from scratch, C (λ=0.5) works better than
+> the A and B methods. The +0.02 practical-effect hard gate was NOT met (his adjudication, per
+> announcement 03). Unmerged per SOP; recommendation ladder parked.
+
 **v1.1, written 2026-08-08** — v1 revised against the Codex analysis review
 (SOUND-WITH-REVISIONS, 4 MAJOR / 2 MODERATE, all accepted; record in
 `rollout_objective_codex_analysis_review.md`). The review caught an arm-mixing arithmetic error in
