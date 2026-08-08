@@ -99,7 +99,18 @@ measurement — the +0.02 practical-effect gate is NOT met either way.
    from a trained state B surrenders almost no one-step loss (−0.0003 vs the control's −0.0022) and
    the gain survives (+0.0059 net); from init it surrenders 0.0090 and the gain cancels (−0.0015 net).
 
-A0's Tier-2 loss trajectory (this hour): [(250, '+0.00189'), (1000, '+0.00444'), (2500, '+0.01046')] vs ctrl0 —
-A0 gives up **far less** one-step loss than B0 did (+0.00898 @2500), consistent with S1.5's
-gradient-cosine ordering (A 0.465 vs B 0.228 against the control). A0's SSIM pending.
+A0's Tier-2 loss trajectory vs ctrl0: **+0.00189 @250, +0.00444 @1000, +0.01046 @2500**
+(B0 was +0.00169 / +0.00281 / +0.00898).
+
+**CORRECTION (same commit-day, self-caught):** my first write-up of this line said A0 gives up "far
+less" one-step loss than B0. That is BACKWARDS — **A0 surrenders MORE** (+0.01046 vs B0's +0.00898
+at 2,500). The claim is corrected here rather than silently edited.
+
+That also **refutes a prediction I had drawn from S1.5**: A's gradient sits closer to the control's
+(cosine 0.465 vs B's 0.228), from which I expected A to deviate less on the one-step metric. It
+deviates more. So gradient-cosine-to-control does NOT predict how much one-step loss an objective
+surrenders — a useful negative, and a reminder that the S1.5 diagnostics describe the *instantaneous*
+gradient, not the trajectory 2,500 updates of following it produces. Whether A0 also buys more
+off-law SSIM (which would keep the trade-ratio story intact) is exactly what its pending SSIM
+answers.
 
