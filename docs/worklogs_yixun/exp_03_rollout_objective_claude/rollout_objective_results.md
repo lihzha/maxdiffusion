@@ -223,3 +223,42 @@ vs predicted 0.8482 (residual +0.00001). And Tier-1 C's instrument: anchor exact
 −0.00294 — C beats the control on the one-step axis at the trained state too (A −0.00364 >
 C −0.00294 > control −0.00224 > B −0.00033; the same A>C>ctrl>B ordering as Tier 2's cost ranking,
 inverted — the blend inherits A's one-step-friendliness).
+
+## RESULT 8 — λ-sweep COMPLETE + Tier-1 C: the full mechanism map — 2026-08-08
+
+**Tier-2 net curve (vs ctrl0, @2,500 from init):**
+
+| λ (A-share) | loss cost | SSIM | off-law | **NET** | t | improved |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 (B0) | +0.00898 | 0.812425 | +0.0100 | −0.00148 | −2.9 | 44/100 |
+| 0.25 | +0.00467 | 0.818092 | +0.0105 | +0.00419 | +10.1 | 90/100 |
+| **0.5 (C0)** | **+0.00385** | **0.820169** | +0.0116 | **+0.00627** | +14.2 | 95/100 |
+| 0.75 | +0.00599 | 0.819832 | +0.0139 | +0.00593 | +11.6 | 93/100 |
+| 1 (A0) | +0.01046 | 0.815026 | **+0.0144** | +0.00113 | +1.6 | 67/100 |
+
+The decomposition is textbook: **off-law gain rises monotonically with the A-share** (+0.0100 →
++0.0144 — A's corrective label is the stronger rollout signal), while **loss cost is U-shaped with
+its minimum at 0.5** (gradient cancellation). Net = their difference, peaking at λ=0.5 (0.75 within
+noise of it). Both new arms are decisive (t=+10.1/+11.6). λ=0.5 was, by luck or by symmetry, already
+optimal among the five tested.
+
+**Tier 1 FINAL @12,500 (all four arms, measured control):**
+
+| arm | Δloss | SSIM | off-law | vs control | t | improved |
+| --- | --- | --- | --- | --- | --- | --- |
+| control | −0.00224 | 0.844169 | −0.0002 | — | — | — |
+| B | −0.00033 | 0.850115 | +0.0081 | +0.0059 | +21.0 | 99/100 |
+| **A** | **−0.00364** | **0.851570** | +0.0055 | **+0.0074** | +22.8 | 100/100 |
+| C | −0.00294 | 0.849752 | +0.0046 | +0.0056 | +21.9 | 100/100 |
+
+**C is NOT super-additive at the trained state** — A > B ≈ C. And that asymmetry CONFIRMS the
+cancellation theory rather than undermining it: cancellation pays only where the parents' one-step
+costs are large (init: ~+0.01 each → C0 halves them → big win). At the trained state the costs are
+small or negative (A GAINS one-step loss), so there is nothing to cancel — the blend just averages
+its parents' off-law gains and A's solo advantage survives. **Recipe implication: λ should be
+state-dependent — blend early (from init), anneal toward pure A as training matures.** Not tested;
+would need a schedule arm.
+
+**Standing scoreboard:** trained-state winner **A** (+0.0074, both axes, 100/100); from-init winner
+**C₀.₅** (+0.0063, 95/100). The law: 9 holds, last at +0.00001. Gate status: nothing yet at +0.02;
+best single number so far is A@12,500. A-ext@17,500 SSIM pending — the compounding verdict.
