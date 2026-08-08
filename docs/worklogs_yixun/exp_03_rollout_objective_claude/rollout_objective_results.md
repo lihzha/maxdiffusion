@@ -73,3 +73,33 @@ rollout signal is both distinct and well-estimated exactly where it pays. **Cave
 seed, one 2,500-update segment, and the control's SSIM is still a law prediction rather than a
 measurement — the +0.02 practical-effect gate is NOT met either way.
 
+## RESULT 3 — TIER 1 PRIMARY COMPARISON, MEASURED (B vs control @12,500) — 2026-08-07
+
+| | one-step loss | **SSIM (measured)** | law prediction | residual | ≥0.95 |
+| --- | --- | --- | --- | --- | --- |
+| control lr1e5c (one-step) | 0.1200277 | **0.844169** | 0.8443 | −0.0002 | 0/100 |
+| **B (short-horizon rollout)** | 0.1219373 | **0.850115** | 0.8421 | **+0.0081** | 1/100 |
+
+**B − control = +0.005947.** Paired per-window: mean +0.00595, sd 0.0028, **se 0.00028, t = +21.0,
+99/100 windows improved.**
+
+1. **The effect is real and essentially uniform** — a 21-sigma paired difference with 99 of 100
+   windows improving is not sampling noise, and its tightness (sd 0.0028 on a +0.0059 mean) says the
+   rollout objective helps nearly every window a little rather than a few windows a lot.
+2. **It does NOT meet the predeclared +0.02 practical-effect gate.** By the plan's own rule, B at
+   2,500 Tier-1 updates is a **statistically decisive but practically small** improvement. The gate
+   stands as written; this is a real effect of about a third the size deemed practically meaningful.
+3. **The law survives its 7th test and explains the mechanism.** It predicted the control at 0.8443
+   from loss alone; measured 0.844169 (residual −0.0002 — the tightest hold yet). The control is ON
+   the line; B is +0.0081 ABOVE it. **All of B's advantage is off-law**: B is worse on one-step loss
+   (0.12194 vs 0.12003) yet better on rollout SSIM, which is precisely the decoupling exp_03 set out
+   to produce. Training on the trajectory the eval runs buys rollout quality that one-step loss
+   cannot see.
+4. **Tier 1 vs Tier 2 remains the sharpest contrast:** same off-law gain (+0.0081 vs +0.0100), but
+   from a trained state B surrenders almost no one-step loss (−0.0003 vs the control's −0.0022) and
+   the gain survives (+0.0059 net); from init it surrenders 0.0090 and the gain cancels (−0.0015 net).
+
+A0's Tier-2 loss trajectory (this hour): [(250, '+0.00189'), (1000, '+0.00444'), (2500, '+0.01046')] vs ctrl0 —
+A0 gives up **far less** one-step loss than B0 did (+0.00898 @2500), consistent with S1.5's
+gradient-cosine ordering (A 0.465 vs B 0.228 against the control). A0's SSIM pending.
+
