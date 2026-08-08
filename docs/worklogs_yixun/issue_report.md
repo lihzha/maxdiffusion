@@ -98,6 +98,11 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff)
 - **Workaround:** standing auto-resubmit (unchanged spec). The **fleet watcher** pattern automates it: a watchlist file + persistent monitor, terminal FAILED → classify → resubmit routine ones and append the new id to the watchlist.
 - **Status:** standing; costs wall-clock only.
 
+### 15. exp_04's launcher never wires `null_adequacy_uri` — J1-4's gates ran at an un-adopted recipe (real bug, found post-hoc by the P4 audit)
+- **Symptom:** the J1-4 runbook exported `NULL_ADEQUACY_URI` but `bash_scripts/run_wan_null_inversion.sh` has no env mapping for it, so the YAML default `''` applied, `load_adoption` returned None, and capacity ran at default J=10 while the adequacy probe had adopted J=50/lr=0.01 — confirmed in `run_report.json` and the shard provenance headers. exp_05's launcher wires it correctly (its K1 honored adoption), so the two experiments' in-basin numbers are not recipe-matched. G1's FAIL margin is contaminated; the STOP survives via the probe floors (over-determined). Full record: exp_04 worklog 2026-08-08 correction entry + the drafted results/analysis docs.
+- **Class:** real bug in a settled exp_04 file; the same env-mapping-omission family as T7's D20 mutant (an env added without extending the launcher's mapping table — now a named hazard).
+- **Status:** OPEN. Fix requires an exp_04 fix cycle (settled-file discipline). The clean gate re-run at the adopted recipe (~1.4 h v6e-8) is a pending YIXUN DECISION (queued in the 2026-08-08 morning summary); exp_04 is otherwise results-complete and exp_06 does not consume the contaminated number.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
