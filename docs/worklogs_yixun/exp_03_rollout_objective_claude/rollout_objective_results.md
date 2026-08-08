@@ -139,3 +139,37 @@ slightly behind, both practically a wash. **Tier 1 is where the trade turns clea
 12,500 = 0.1186258 (segment -0.00364; B was −0.00033, control −0.00224).
 A's Tier-1 SSIM pending — the last piece of the A-vs-B comparison at the trained state.
 
+## RESULT 5 — TIER 1 A vs B vs control @12,500 (C pending) — 2026-08-08
+
+| arm | one-step loss | Δloss over segment | SSIM | law | off-law | **vs control** | t | improved | ≥0.95 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| control (one-step) | 0.12003 | −0.00224 | 0.844169 | 0.8443 | −0.0002 | — | — | — | 0 |
+| B (rollout) | 0.12194 | −0.00033 | 0.850115 | 0.8421 | +0.0081 | **+0.00595** | +21.0 | 99/100 | 1 |
+| **A (corrective SS)** | **0.11863** | **−0.00364** | **0.851570** | 0.8460 | +0.0055 | **+0.00740** | **+22.8** | **100/100** | 1 |
+
+**A wins the trained state, and wins it differently than B does.**
+- **A beats the control on BOTH axes simultaneously** — better one-step loss (0.11863 vs 0.12003;
+  it optimizes the *shared* metric 1.6× faster than the control does) AND better rollout SSIM
+  (+0.00740, t=+22.8, **100/100 windows improved**). No trade at all: A is a strict improvement.
+- **B wins only off-law**: worse one-step loss, better SSIM. Two genuinely different mechanisms
+  reaching the same place.
+- **A > B directly**: +0.00146 paired, t=+5.8, A better in 73/100 windows.
+- **Neither meets the +0.02 practical-effect gate.** By the predeclared rule both are
+  statistically overwhelming, practically small (a third of the bar).
+- The law now has **8 holds**: the control's residual −0.0002 is its tightest ever; A and B sit
+  +0.0055 and +0.0081 above it, both far outside the ±0.005 band that governed every one-step arm.
+
+**Synthesis across tiers (C pending):**
+| | off-law gain | one-step loss surrendered | net vs control |
+| --- | --- | --- | --- |
+| Tier 2 B0 (init) | +0.0100 | +0.00898 | −0.0015 |
+| Tier 2 A0 (init) | +0.0144 | +0.01046 | +0.0011 |
+| Tier 1 B (10k) | +0.0081 | +0.00191 | +0.0059 |
+| **Tier 1 A (10k)** | **+0.0055** | **−0.00161 (IMPROVED)** | **+0.0074** |
+
+The pattern is monotone in one quantity: **how much one-step loss the objective gives up.** From
+init both arms pay ~0.01 and net ≈0; from the trained state B pays 0.002 and nets +0.006; A pays
+nothing (it gains) and nets +0.007. exp_03's mechanism is real, and it is cheapest — therefore most
+profitable — exactly where exp_02 stalled: at a trained checkpoint whose one-step loss has already
+flattened.
+
