@@ -270,15 +270,17 @@ best single number so far is A@12,500. A-ext@17,500 SSIM pending — the compoun
 | control | 0.1168342 | 0.848196 | 0.8482 | +0.0000 | — |
 | **A** | **0.1153891** | **0.856099** | 0.8499 | **+0.0062** | **+0.007904 (t=+30.8, 100/100)** |
 
-- **The gap widened: +0.0059 @12,500 → +0.0079 @17,500** (t rose 22.8 → 30.8; still 100/100
-  windows). The advantage compounds — slowly, but in the right direction, and A's off-law residual
-  GREW (+0.0055 → +0.0062) while the control stayed glued to the law.
-- Per-5,000-update accounting: A gained +0.0104 SSIM over 10,000→17,500 vs the control's +0.0064 —
-  a 63% faster rollout-quality rate at identical LR and updates.
-- **Gate arithmetic:** at the current widening rate (~+0.002/2,500 updates) the +0.02 gate is
-  ~15,000 more updates away IF linear — a real extrapolation risk (everything in this system
-  saturates). The honest statement: A is decisively better and getting more so, but the predeclared
-  practical-effect bar remains unmet at tested budgets.
+- **CORRECTED (analysis review, finding 1 — my arm-mixing error, disclosed):** the original text
+  compared B@12,500 (+0.0059) to A@17,500 (+0.0079). A's own trajectory is **+0.007401 @12,500 →
+  +0.007903 @17,500 — a widening of +0.0005 over 5,000 updates**, with no
+  difference-in-differences uncertainty computed. Supported claim: the advantage PERSISTED and was
+  marginally larger. NOT supported: "compounds"; the "~15k updates to the gate" extrapolation is
+  WITHDRAWN. A's off-law residual +0.0055 → +0.0062; the control stayed on the law.
+- Per-7,500-update accounting stands: A gained +0.0104 SSIM over 10,000→17,500 vs the control's
+  +0.0064 at identical LR and updates.
+- **Gate arithmetic WITHDRAWN** (rested on the arm-mixed widening). Honest statement: A is
+  decisively better within this seed and its lead persisted through 17,500; whether it grows,
+  saturates, or shrinks is not established from two closely-spaced points.
 
 **This closes the Query-7 overnight program.** All 9 results stand on: certified controls (1e-11
 AND-gate; 9-hold law), exact seed anchors at every handoff, one seed, canonical-100 windows.
