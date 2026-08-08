@@ -204,3 +204,22 @@ the one that wins from scratch. Tier-1 C (still queued) now carries the experime
 interesting open question: whether the same super-additivity appears at the trained state, where A
 already beats the control on both axes.
 
+
+## RESULT 7 (partial) — the λ-sweep confirms the U-shape — 2026-08-08
+
+Query 7's predeclared prediction: if C0's super-additivity comes from gradient cancellation, the
+one-step-loss cost should be U-shaped in λ. Measured (Tier 2, @2,500, cost vs ctrl0):
+
+| λ (A-share) | 0 (B0) | 0.25 | **0.5 (C0)** | 0.75 | 1 (A0) |
+| --- | --- | --- | --- | --- | --- |
+| loss cost | +0.00898 | +0.00467 | **+0.00385** | +0.00599 | +0.01046 |
+
+**U-shape CONFIRMED, minimum at (or near) λ=0.5**, consistent at every checkpoint (250/1000/2500).
+The two objectives' one-step-loss errors partially cancel when mixed. Off-law SSIM gains for
+λ=0.25/0.75 pending (their SSIMs queued) — those decide whether NET advantage also peaks at 0.5.
+
+**Also this hour:** the law's **9th hold is its most extreme** — control @17,500 measured 0.848196
+vs predicted 0.8482 (residual +0.00001). And Tier-1 C's instrument: anchor exact, segment Δloss
+−0.00294 — C beats the control on the one-step axis at the trained state too (A −0.00364 >
+C −0.00294 > control −0.00224 > B −0.00033; the same A>C>ctrl>B ordering as Tier 2's cost ranking,
+inverted — the blend inherits A's one-step-friendliness).
