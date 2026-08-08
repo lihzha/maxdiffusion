@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exp_03 rollout_objective — Results Report</title>
+<style>
+:root{--bg:#ffffff;--ink:#1a1a1a;--ink2:#555;--line:#d8d8d8;--card:#f6f6f4;--accA:#4477AA;--accB:#EE6677;--accC:#228833;--accK:#CCBB44;--warn:#a05a00}
+@media (prefers-color-scheme: dark){:root{--bg:#14161a;--ink:#e8e8e6;--ink2:#a5a5a0;--line:#3a3d42;--card:#1d2025;--warn:#e0a34a}}
+html{background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+body{max-width:920px;margin:0 auto;padding:28px 20px 80px}
+h1{font-size:1.5em;margin:.2em 0 0}h2{font-size:1.15em;margin:2em 0 .5em;border-bottom:1px solid var(--line);padding-bottom:.25em}
+.sub{color:var(--ink2);margin:.2em 0 1em}
+.banner{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accC);padding:12px 16px;border-radius:6px;margin:1.2em 0}
+.caveat{border-left-color:var(--warn)}
+table{border-collapse:collapse;width:100%;margin:.8em 0;font-size:.93em}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:right}
+th:first-child,td:first-child{text-align:left}
+th{background:var(--card);font-weight:600}
+.win{font-weight:700}
+.tablewrap{overflow-x:auto}
+figure{margin:1.2em 0;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px}
+figcaption{color:var(--ink2);font-size:.88em;margin-top:8px}
+.legend span{display:inline-block;margin-right:14px;font-size:.88em}
+.sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+code{background:var(--card);border:1px solid var(--line);border-radius:3px;padding:0 4px;font-size:.9em}
+.small{font-size:.85em;color:var(--ink2)}
+</style></head><body>
+<h1>exp_03 <code>rollout_objective</code> — Results Report</h1>
+<p class="sub">Frozen-eval question: do losses that train on the 25-step rollout trajectory (A: corrective scheduled sampling · B: short-horizon rollout · C: λ·A+(1−λ)·B) beat one-step denoising on OVERFIT100? &nbsp;·&nbsp; One training seed, canonical-100 windows, seed-0 rollouts &nbsp;·&nbsp; Closed 2026-08-08.</p>
+
+<div class="banner"><b>Yixun's closing verdict (Query 8):</b> from scratch, <b>C (λ=0.5) works better than the A and B methods</b>. The predeclared <b>+0.02 practical-effect hard gate was NOT met</b> by any arm (best ≈ 40% of it) — by his adjudication the experiment closes rather than continues. Code unmerged per SOP.</div>
+
+<h2>1 · Instruments (why these numbers are citable)</h2>
+<ul>
+<li><b>Certified control:</b> ctrl0 (the exp_03 trainer running the exp_02 recipe by identity) reproduced exp_02's training to ~1e-11 on losses at 3 anchored checkpoints and 2.5e-11 on SSIM — trainer drift is excluded by measurement.</li>
+<li><b>The loss→SSIM law</b> (exact OLS on exp_02's one-step checkpoints: SSIM = 0.98895405 − 1.20004257·loss): <b>9 held-out evaluations</b> within ±0.005, controls in this experiment at −0.0002 and ≈0 residual. Held-out, <i>not</i> statistically independent (shared ancestry). Every "off-law" number below = measured SSIM − law prediction.</li>
+<li><b>Exact seed anchors:</b> every checkpoint handoff reproduced its fixed-RNG instrument value to 7 decimals (e.g. 0.1222672 at 10,000; 0.1186258 at A's 12,500).</li>
+</ul>
+
+<h2>2 · Tier 1 — from the trained state (exp_02 @10,000, +2,500 updates, LR 1e-5)</h2>
+<div class="tablewrap"><table>
+<tr><th>arm @12,500</th><th>one-step loss</th><th>Δloss (segment)</th><th>SSIM</th><th>off-law</th><th>vs control</th><th>t (paired)</th><th>windows improved</th></tr>
+<tr><td>control (one-step)</td><td>0.12003</td><td>−0.00224</td><td>0.844169</td><td>−0.0002</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td>B (rollout)</td><td>0.12194</td><td>−0.00033</td><td>0.850115</td><td>+0.0081</td><td>+0.0059</td><td>+21.0</td><td>99/100</td></tr>
+<tr class="win"><td>A (corrective SS)</td><td>0.11863</td><td>−0.00364</td><td>0.851570</td><td>+0.0055</td><td>+0.0074</td><td>+22.8</td><td>100/100</td></tr>
+<tr><td>C (λ=0.5, accum N=2)</td><td>0.11933</td><td>−0.00294</td><td>0.849752</td><td>+0.0046</td><td>+0.0056</td><td>+21.9</td><td>100/100</td></tr>
+</table></div>
+<p><b>A is a strict upgrade at the trained state</b> — it beats the control on the control's own objective <i>and</i> on rollout SSIM, in every window. Extended to 17,500 against the extended control: <b>+0.007903 (t=+30.8, 100/100)</b>; vs +0.007401 at 12,500 — the lead <i>persisted</i> (+0.0005 widening over 5,000 updates; not established as a trend). C is <b>not</b> super-additive here (nothing left to cancel when the parents' one-step costs vanish).</p>
+
+<h2>3 · Tier 2 — from scratch (2,500 updates) and the λ-sweep</h2>
+<div class="tablewrap"><table>
+<tr><th>λ (A-share)</th><th>0 (B0)</th><th>0.25</th><th>0.5 (C0)</th><th>0.75</th><th>1 (A0)</th></tr>
+<tr><td>one-step loss cost</td><td>+0.00898</td><td>+0.00467</td><td class="win">+0.00385</td><td>+0.00599</td><td>+0.01046</td></tr>
+<tr><td>off-law SSIM gain</td><td>+0.0100</td><td>+0.0105</td><td>+0.0116</td><td>+0.0139</td><td class="win">+0.0144</td></tr>
+<tr><td>NET vs ctrl0</td><td>−0.00148</td><td>+0.00419</td><td class="win">+0.00627</td><td>+0.00593</td><td>+0.00113</td></tr>
+<tr><td>t (paired) · improved</td><td>−2.9 · 44</td><td>+10.1 · 90</td><td class="win">+14.2 · 95</td><td>+11.6 · 93</td><td>+1.6 · 67</td></tr>
+</table></div>
+<figure>
+<svg viewBox="0 0 640 260" width="100%" role="img" aria-label="Lambda sweep: loss cost is U-shaped with minimum at 0.5; off-law gain rises with A-share; net peaks at 0.5">
+<line x1="60" y1="220" x2="600" y2="220" stroke="var(--line)"/>
+<line x1="60" y1="30" x2="60" y2="220" stroke="var(--line)"/>
+<text x="330" y="248" text-anchor="middle" fill="var(--ink2)" font-size="12">λ (A-share)</text>
+<text x="20" y="128" fill="var(--ink2)" font-size="12" transform="rotate(-90 20 128)">Δ vs ctrl0 (×10³)</text>
+<g font-size="11" fill="var(--ink2)"><text x="60" y="236" text-anchor="middle">0</text><text x="195" y="236" text-anchor="middle">0.25</text><text x="330" y="236" text-anchor="middle">0.5</text><text x="465" y="236" text-anchor="middle">0.75</text><text x="600" y="236" text-anchor="middle">1</text>
+<text x="52" y="224" text-anchor="end">0</text><text x="52" y="164" text-anchor="end">5</text><text x="52" y="104" text-anchor="end">10</text><text x="52" y="44" text-anchor="end">15</text></g>
+<line x1="60" y1="220" x2="600" y2="220" stroke="var(--line)" stroke-dasharray="3 3"/>
+<polyline fill="none" stroke="var(--accB)" stroke-width="2.5" points="60,112.2 195,163.9 330,173.8 465,148.1 600,94.4"/>
+<polyline fill="none" stroke="var(--accA)" stroke-width="2.5" points="60,100 195,94 330,80.8 465,53.2 600,47.2"/>
+<polyline fill="none" stroke="var(--accC)" stroke-width="3" points="60,237.8 195,169.7 330,144.8 465,148.9 600,206.4"/>
+<g><circle cx="330" cy="144.8" r="5" fill="var(--accC)"/><circle cx="330" cy="173.8" r="4" fill="var(--accB)"/><circle cx="600" cy="47.2" r="4" fill="var(--accA)"/></g>
+</svg>
+<figcaption class="legend"><span><span class="sw" style="background:var(--accB)"></span>one-step loss cost (U-shape, min at 0.5)</span><span><span class="sw" style="background:var(--accA)"></span>off-law SSIM gain (rises with A-share)</span><span><span class="sw" style="background:var(--accC)"></span>NET advantage (peaks at 0.5)</span> — all ×10⁻³, vs ctrl0 at 2,500 updates.</figcaption>
+</figure>
+<p><b>The decomposition:</b> off-law gain rises monotonically with the A-share; loss cost is U-shaped with its minimum at λ=0.5; the net is their difference and peaks at 0.5. A nonlinear mixture benefit <i>consistent with</i> the two objectives' one-step errors cancelling (hypothesis — the predeclared D1/sigma post-training tests were not run).</p>
+
+<h2>4 · The two regimes, one accounting</h2>
+<div class="tablewrap"><table>
+<tr><th></th><th>off-law gain</th><th>one-step loss surrendered</th><th>net vs control</th></tr>
+<tr><td>From init — pure arms (A0/B0)</td><td>+0.010…+0.014</td><td>≈ +0.010</td><td>≈ 0</td></tr>
+<tr><td>From init — blend C0</td><td>+0.0116</td><td class="win">+0.0039 (cancellation)</td><td class="win">+0.0063</td></tr>
+<tr><td>Trained — B</td><td>+0.0081</td><td>+0.0019</td><td>+0.0059</td></tr>
+<tr><td>Trained — A</td><td>+0.0055</td><td class="win">−0.0016 (it gains)</td><td class="win">+0.0074</td></tr>
+</table></div>
+<p>The trial objectives are most profitable exactly where exp_02 stalled: at a trained checkpoint whose one-step loss has flattened. From init the rollout signal must be paid for; C's blend halves the bill. At the trained state A's signal is free — blending only dilutes it. Recipe implication (untested): λ scheduled from 0.5 toward 1 as training matures.</p>
+
+<div class="banner caveat"><b>Honest limits:</b> one training seed and one rollout seed everywhere (t-statistics measure per-episode consistency <i>within</i> that seed); the +0.02 hard gate unmet by every arm; the law applied to trial arms is a reference counterfactual, not a causal price; "cancellation" is a hypothesis; two closely-spaced points cannot establish a trend for A's lead. One arm-mixing arithmetic error in the original growth claim was caught by the Codex analysis review and corrected with disclosure (results doc, RESULT 9).</div>
+
+<h2>5 · Provenance</h2>
+<p class="small">Docs: <code>rollout_objective_{results,analysis,command,yixun_query}.md</code> in this folder (analysis at v1.1 after SOUND-WITH-REVISIONS review; all 6 findings applied). Artifacts: GCS under <code>wan-ti2v-overfit100/exp03-s2a-*</code> (Tier 1, control <code>wan-overfit100-s3ext-lr1e5c-20260802</code>) and <code>wan-ti2v-exp03/exp03-s2b-*</code> (Tier 2 + λ-sweep); S1.5 probe payloads under <code>exp03-s15-probe7-20260805/validation_probe_sampling/</code>. Code: branch <code>claude-exp_03_rollout_objective-20260802</code>, suite 1,584 passed / 2 skipped, unmerged per SOP. Every launch, failure, and correction: <code>rollout_objective_command.md</code>.</p>
+</body></html>
