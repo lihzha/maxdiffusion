@@ -169,7 +169,7 @@ max_train_samples: -1
 max_train_steps: 10000
 num_train_epochs: 1
 seed: 0
-output_dir: 'gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-side-adapter'
+output_dir: 'gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-pos-rollout'
 per_device_batch_size: 1.0
 global_batch_size: 0
 global_batch_size_to_train_on: 1
@@ -288,3 +288,37 @@ pos_microbatch: 32
 # refuses anything whose bytes do not hash to the digest below.
 pos_dev_manifest: 'docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/dev64.json'
 pos_dev_manifest_sha256: '3c59d023f3b782542ecae443b8d83008e7d8dfd801347f41adfab75218340836'
+
+# T6: the evaluation launcher's own keys. `pos_eval_phase` orders the protocol (anchor -> benchmark
+# -> gates -> confirm); `pos_run_report` is the published artifact the evaluator reads instead of
+# accepting loose expectations (T5a review item 6); `pos_test_manifest` is read ONLY to refuse -- the
+# anchor's TEST screen and the post-DEV confirmation, both digest-pinned.
+pos_eval_phase: 'anchor'
+pos_run_report: ''
+pos_test_manifest: 'docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/test64.json'
+
+# T7: M1's published fit authorization. A training run presents this or it does not start -- M1
+# authorizes only the (arm, microbatch, k) cells it actually measured (plan §4-P1).
+pos_fit_authorization: ''
+
+# Review pass 3, T6-1/T6-2/T6-3. Every one of these is a PATH the launcher DERIVES; none is an
+# operator input, and none is a complete root a caller may override (that override is what let a
+# caller flatten the phase/attempt/arm scoping the queue's auto-retry depends on).
+#
+# `pos_resume_parent` is the arm's attempts ROOT -- the immutable resume INPUT, distinct from this
+# attempt's fresh OUTPUT (`checkpoint_dir`). A retry adopts the latest COMPLETE publication under it
+# whose recorded code_sha is the code now running, and never a half-written or foreign-arm tree.
+#
+# `pos_recipe_lock` is RUN-level and shared by both arms: the first arm publishes its normalized
+# recipe there and the second ADOPTS it or refuses to start, naming the keys that differ. That is
+# Yixun's decision-1 matched control expressed as an artifact rather than as a hope about two
+# separate queue submissions.
+#
+# The three eval inputs are the protocol's dependency edges (plan §3c): anchor -> benchmark -> gates
+# -> confirm. Each phase's launcher refuses BEFORE the prefetch when its prior-phase artifact is
+# absent or was issued at another code_sha.
+pos_resume_parent: ''
+pos_recipe_lock: ''
+pos_anchor_certificate: ''
+pos_benchmark_row: ''
+pos_dev_certificate: ''

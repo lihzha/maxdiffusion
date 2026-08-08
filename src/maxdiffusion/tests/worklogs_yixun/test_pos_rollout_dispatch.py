@@ -43,6 +43,22 @@ _ADDED_KEYS = {
     "pos_microbatch",
     "pos_dev_manifest",
     "pos_dev_manifest_sha256",
+    # T6: the evaluation launcher's keys. pyconfig coerces only keys the YAML already declares, so a
+    # launcher override for an undeclared key is a launch-time failure, not a silent no-op.
+    "pos_eval_phase",
+    "pos_run_report",
+    "pos_test_manifest",
+    # T7: M1's fit authorization, which start_training refuses to run without.
+    "pos_fit_authorization",
+    # Review pass 3 (T6-1/T6-2/T6-3): the derived paths the launchers transport. `pos_resume_parent`
+    # is the immutable resume INPUT (distinct from the fresh attempt's OUTPUT tree); `pos_recipe_lock`
+    # is the run-level artifact that makes a divergent second arm refuse to start; the three eval
+    # inputs are the protocol's dependency edges (anchor -> benchmark -> gates -> confirm).
+    "pos_resume_parent",
+    "pos_recipe_lock",
+    "pos_anchor_certificate",
+    "pos_benchmark_row",
+    "pos_dev_certificate",
 }
 
 
@@ -56,14 +72,22 @@ def test_the_config_is_a_superset_of_the_side_adapter_config():
     missing = sorted(set(base) - set(pos))
     assert not missing, f"the pos_rollout config dropped {missing}"
     assert sorted(set(pos) - set(base)) == sorted(_ADDED_KEYS)
-    assert len(pos) == len(base) + len(_ADDED_KEYS) == 193
+    assert len(pos) == len(base) + len(_ADDED_KEYS) == 202
 
 
-def test_only_the_two_intended_values_differ_from_the_side_adapter_config():
+def test_only_the_three_intended_values_differ_from_the_side_adapter_config():
+    """Review pass 3, T6 MAJOR: `output_dir` is now the THIRD intended substitution.
+
+    The launcher defaulted its storage parent to the rollout root while this config still declared
+    the side-adapter root -- real drift, in the exact place the "every default equals the YAML" test
+    was supposed to catch, and it survived because that test never looked at `output_dir`. Changing
+    the generation rule rather than appending an override keeps the config a generated copy.
+    """
     base, pos = _load(_BASE), _load(_POS)
     changed = {key: (base[key], pos[key]) for key in base if base[key] != pos[key]}
-    assert set(changed) == {"model_type", "eval_data_dir"}, changed
+    assert set(changed) == {"model_type", "eval_data_dir", "output_dir"}, changed
     assert changed["model_type"] == ("SIDE_ADAPTER_TI2V", "POS_ROLLOUT_TI2V")
+    assert changed["output_dir"][1].endswith("wan-ti2v-pos-rollout")
 
 
 def test_the_config_is_generated_from_the_side_adapter_config():
@@ -76,6 +100,8 @@ def test_the_config_is_generated_from_the_side_adapter_config():
             produced.append(
                 'eval_data_dir: ""  # exp_06: selection binds to pos_dev_manifest, never a directory (plan §3d)'
             )
+        elif line.startswith("output_dir:"):
+            produced.append("output_dir: 'gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-pos-rollout'")
         else:
             produced.append(line)
     generated = "\n".join(produced).rstrip("\n") + "\n"
@@ -114,10 +140,24 @@ def test_selection_binds_to_the_dev_manifest_and_never_to_a_directory():
     # ...and the digest really is the published manifest's, so the binding is checkable end to end.
     repository = _CONFIGS.parents[2]
     assert (repository / manifest).exists(), f"{manifest} is not in the tree"
-    cohort = pos_rollout_dev_instrument.load_dev_cohort(
-        str(repository / manifest), expected_sha256=pos["pos_dev_manifest_sha256"]
-    )
+    cohort = pos_rollout_dev_instrument.load_dev_cohort(str(repository / manifest))
     assert cohort.cohort == "dev64" and len(cohort) == 64
+
+
+def test_the_configs_digest_is_a_declaration_and_never_an_argument_to_the_loader():
+    """T3b-4 review, BLOCKER A-B1: a caller-settable digest was the forgery that needed no private
+    access. The YAML still DECLARES which manifest a run intends; it cannot widen what is accepted."""
+    from maxdiffusion.trainers.wan_pos_rollout_trainer import WanPosRolloutTrainer
+
+    trainer = WanPosRolloutTrainer(_config_from_yaml({"pos_dev_manifest_sha256": "0" * 64})[0])
+    with pytest.raises(ValueError, match="cannot choose what the instrument will accept"):
+        trainer.load_dev_cohort()
+    import inspect as _inspect
+
+    from maxdiffusion.trainers import wan_pos_rollout_trainer
+
+    assert "expected_sha256" not in _inspect.getsource(wan_pos_rollout_trainer)
+    assert list(_inspect.signature(pos_rollout_dev_instrument.load_dev_cohort).parameters) == ["path"]
 
 
 def test_no_inversion_or_null_slot_key_leaks_into_the_training_config():
@@ -165,12 +205,30 @@ def test_every_pre_existing_dispatch_route_is_byte_preserved():
 
 
 def test_the_dispatch_file_keeps_its_upstream_two_space_style():
-    # S8's ruling: do not reformat an upstream file, or a small diff becomes a merge hazard.
-    body = [line for line in _TRAIN_WAN.read_text().splitlines() if line.startswith("  ") and line.strip()]
-    assert body, "no indented body found"
-    assert not any(
-        line.startswith("    ") and not line.startswith("     ") and "  " * 2 == line[:4] and False for line in body
+    """S8's ruling: do not reformat an upstream file, or a small diff becomes a merge hazard.
+
+    The first version of this test ended its predicate with ``and False``, so it could never fire
+    (review, MINOR). Indentation is now asserted on the AST's own column offsets, which is what
+    "two-space style" actually means and which no amount of line-prefix cleverness can fake.
+    """
+    train = next(
+        node
+        for node in ast.walk(ast.parse(_TRAIN_WAN.read_text()))
+        if isinstance(node, ast.FunctionDef) and node.name == "train"
     )
+    assert train.col_offset == 0
+    assert [statement.col_offset for statement in train.body] == [2] * len(train.body), "the body is at column 2"
+    dispatch = [node for node in train.body if isinstance(node, ast.If)]
+    assert dispatch, "no dispatch chain found"
+    branches = 0
+    node = dispatch[0]
+    while isinstance(node, ast.If):
+        assert [statement.col_offset for statement in node.body] == [4] * len(node.body), ast.unparse(node.test)
+        branches += 1
+        node = node.orelse[0] if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If) else None
+        if node is None:
+            break
+    assert branches >= 6, f"only {branches} dispatch branches were checked"
     assert "  if config.model_type ==" in _TRAIN_WAN.read_text(), "the two-space dispatch body was reformatted"
 
 
