@@ -67,7 +67,7 @@ from maxdiffusion.models.wan.side_adapter_wan import apply_first_frame_pin
 
 # Re-exported so a reader of THIS module sees the pin without chasing it; the constant itself lives
 # in pos_rollout_support (single source of truth) and is pinned by T1's tests.
-from maxdiffusion.pos_rollout_support import EXP03_SOURCE_COMMIT, rollout_support
+from maxdiffusion.pos_rollout_support import EXP03_SOURCE_COMMIT
 
 __all__ = [
     "EXP03_SOURCE_COMMIT",
@@ -92,7 +92,11 @@ EXP03_T2_EXTRACTED_SYMBOLS = {
         "sha256": "a4e4c8d8e7424b255ee37ca195beabf0e844c22d7d1540ef776f47d3b89fa23a",
         # Deliberate, reviewed divergences from the pinned body. The arithmetic is verbatim; these
         # are the config-coupling removal and the added preconditions (module docstring).
-        "divergences": ("config reads replaced by explicit arguments", "float32 precondition enforced"),
+        "divergences": (
+            "config reads replaced by explicit arguments",
+            "float32 precondition enforced",
+            "support window supplied by the caller rather than derived (T3b-2 review, BLOCKER 1)",
+        ),
     },
     "interpolant_at": {
         "source_symbol": "_interpolant_at",
@@ -231,11 +235,9 @@ def rollout_endpoint_loss(
     velocity_fn,
     weights_dtype,
     num_train_timesteps,
-    seed: int,
-    global_step,
-    num_steps: int,
+    support_start,
+    support_end,
     k_b: int,
-    support_salt: int = 0,
 ) -> tuple[jax.Array, dict]:
     """R-B — the short-horizon rollout loss, horizon-normalized.
 
@@ -250,23 +252,24 @@ def rollout_endpoint_loss(
     ``velocity_fn(hidden_states, timestep, encoder_hidden_states)`` is the caller's: the eval closes
     over the frozen transformer, T3a closes over the CFG branch under the §3a gradient contract.
     Nothing here differentiates or stop-gradients on the caller's behalf. ``k_b`` is static (it is
-    the scan length); ``global_step`` may be traced but must not be ``None``. The latents, the noise
-    and the sigma grid must be float32 (module docstring); ``weights_dtype`` — the dtype the rollout
-    state is carried in — is unconstrained.
+    the scan length). The latents, the noise and the sigma grid must be float32 (module docstring);
+    ``weights_dtype`` — the dtype the rollout state is carried in — is unconstrained.
+
+    **The support is SUPPLIED, not derived here (T3b-2 review, BLOCKER 1).** This kernel used to take
+    ``seed``/``global_step``/``support_salt`` and call ``rollout_support`` itself. That let a caller
+    hand it an epsilon from one step's draw while the kernel silently redrew the support from
+    another — the two halves of one ``StepDraws`` coming apart without any test being able to see it.
+    Taking ``support_start``/``support_end`` as explicit arguments is the same move the plan already
+    made for ``seed``/``k``/``salt`` (issue #11): **the arithmetic is unchanged**, and the round's
+    equivalence tests pass in exactly the values the old derivation produced.
     """
-    if global_step is None:
+    if support_start is None or support_end is None:
         raise ValueError(
-            "rollout_endpoint_loss needs the threaded global_step (the LOOP's step, not a restored "
-            "state.step): it keys the support draw, and None would fail deep inside the key derivation"
+            "rollout_endpoint_loss needs its support window from the caller's StepDraws: the kernel no "
+            "longer derives one, so that the epsilon and the support of a step cannot come apart"
         )
     _require_float32(z_video_f32=z_video_f32, z_i0_f32=z_i0_f32, eps_f32=eps_f32, sigmas=sigmas)
-    start, end = rollout_support(
-        seed=seed,
-        global_step=global_step,
-        num_steps=num_steps,
-        k_b=k_b,
-        support_salt=support_salt,
-    )
+    start, end = support_start, support_end
     b = z_video_f32.shape[0]
     sigma_hi = sigmas[start].astype(jnp.float32)
     sigma_lo = sigmas[end].astype(jnp.float32)

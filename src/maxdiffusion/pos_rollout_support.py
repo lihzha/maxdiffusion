@@ -18,10 +18,10 @@ provenance is nominal as well as behavioural: a future re-pin is then a pure con
 CONDITIONAL arm admitted only by a recorded decision (plan §3), and its support construction is
 arm-specific. Its *purposes* stay declared in :data:`EXP03_AUX_PURPOSES` regardless, because purpose
 ids are hashes of the NAME — trimming the tuple would change nothing numerically but would make a
-later R-A admission a re-pin event for no gain. There is likewise no epsilon purpose: exp_03 drew
-epsilon from its shared training stream on purpose, and where exp_06's fresh epsilon comes from is
-the trainer round's (T3b) decision. Adding a purpose then is additive and leaves every draw here
-bit-identical.
+later R-A admission a re-pin event for no gain. exp_03 drew its epsilon from the shared training stream, so no epsilon purpose existed at the pin;
+exp_06 added `rollout_epsilon` (T3b-1), `one_step_index` (T3b-1 strengthen) and `dev_instrument`
+(T3b-3) additively. **Seven purposes are live**: the four inherited above plus those three. Because
+an id is the hash of its NAME, every addition left every earlier draw bit-identical.
 
 **Provenance** — recorded below as module constants so it is machine-checkable, and pinned by
 ``tests/worklogs_yixun/test_exp03_imports.py``. exp_03 @ ``2ef9b8a`` is READ-ONLY to exp_06; nothing
@@ -101,6 +101,16 @@ EXP03_AUX_PURPOSES = (
     "k_a_draw",  # trial A: k_A ~ U{1..exp03_k_a}, drawn FIRST (plan v2.2)
     "index_support",  # trial A: the start index s ~ U{0 .. 24 - k_A}
     "index_support_rollout",  # trial B: the start index s ~ U{0 .. 22}  <- exp_06's R-B draw
+    # ADDED AT T3b-1, additively (plan §3b, T1 finding 4). exp_03 drew its epsilon from the shared
+    # training stream; exp_06's loop needs a resume-stable one, so it gets its own purpose. Because
+    # an id is the hash of its NAME, appending here leaves every id above -- and so every draw ever
+    # made from them -- bit-identical; `test_pos_rollout_stream.py` pins exactly that.
+    "rollout_epsilon",  # exp_06 R-B / matched-C0: the per-step epsilon
+    "one_step_index",  # exp_06 matched-C0: the per-example sigma index (T3b-1 strengthen)
+    # T3b-3: the DEV-64 selection instrument. DEDICATED so selection randomness never moves
+    # when the training stream does -- sharing a purpose would make the same checkpoint score
+    # differently depending on which step it happened to be evaluated at.
+    "dev_instrument",  # exp_06 selection: the fixed per-(example, eval) draw
 )
 
 # Offset for the auxiliary root key. The shared stream is key(seed + 1); the auxiliary root is a

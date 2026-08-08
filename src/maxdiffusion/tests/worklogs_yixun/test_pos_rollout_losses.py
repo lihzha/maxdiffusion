@@ -82,6 +82,10 @@ def _batch(seed=0):
 def _run(velocity_fn, *, global_step=0, k_b=_K, batch=None, weights_dtype=jnp.float32):
     z_video, z_i0, eps, context = batch if batch is not None else _batch()
     sigmas, timesteps = _grid()
+    # The kernel no longer derives its support (T3b-2 review, BLOCKER 1). To keep this round's
+    # equivalence claim EXACTLY as it was, the tests pass in the very values the old in-kernel
+    # derivation produced -- same primitive, same arguments, same numbers.
+    support_start, support_end = support.rollout_support(seed=0, global_step=global_step, num_steps=_STEPS, k_b=k_b)
     return losses.rollout_endpoint_loss(
         z_video_f32=z_video,
         z_i0_f32=z_i0,
@@ -92,9 +96,8 @@ def _run(velocity_fn, *, global_step=0, k_b=_K, batch=None, weights_dtype=jnp.fl
         velocity_fn=velocity_fn,
         weights_dtype=weights_dtype,
         num_train_timesteps=_NUM_TRAIN_TIMESTEPS,
-        seed=0,
-        global_step=global_step,
-        num_steps=_STEPS,
+        support_start=support_start,
+        support_end=support_end,
         k_b=k_b,
     )
 
@@ -348,9 +351,8 @@ def test_the_kernel_refuses_non_float32_latents_noise_or_sigmas(offender):
         "velocity_fn": _optimal_velocity(z_video, eps),
         "weights_dtype": jnp.float32,
         "num_train_timesteps": _NUM_TRAIN_TIMESTEPS,
-        "seed": 0,
-        "global_step": 3,
-        "num_steps": _STEPS,
+        "support_start": jnp.asarray(3, jnp.int32),
+        "support_end": jnp.asarray(3 + _K, jnp.int32),
         "k_b": _K,
     }
     arguments[offender] = arguments[offender].astype(jnp.bfloat16)
@@ -369,13 +371,27 @@ def test_the_rollout_state_dtype_stays_free_because_it_is_not_a_loss_input():
     assert float(aux["z_end_finite"]) == 1.0
 
 
-def test_an_explicit_none_global_step_is_rejected_with_a_clear_message():
-    # Restored from the pin (exp_03 raised the same way): None would otherwise fail deep inside the
-    # key derivation, where the message says nothing about the missing plumbing.
+def test_a_missing_support_window_is_rejected_with_a_clear_message():
+    # The kernel takes its support from the caller's StepDraws; a None is the plumbing mistake that
+    # replaces the old missing-global_step one, and it names the reason (T3b-2 review, BLOCKER 1).
     batch = _batch(seed=15)
-    z_video, _, eps, _ = batch
-    with pytest.raises(ValueError, match="global_step"):
-        _run(_optimal_velocity(z_video, eps), global_step=None, batch=batch)
+    z_video, z_i0, eps, context = batch
+    sigmas, timesteps = _grid()
+    with pytest.raises(ValueError, match="support window"):
+        losses.rollout_endpoint_loss(
+            z_video_f32=z_video,
+            z_i0_f32=z_i0,
+            eps_f32=eps,
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            velocity_fn=_optimal_velocity(z_video, eps),
+            weights_dtype=jnp.float32,
+            num_train_timesteps=_NUM_TRAIN_TIMESTEPS,
+            support_start=None,
+            support_end=None,
+            k_b=_K,
+        )
 
 
 def test_the_deliberate_divergences_from_the_pinned_bodies_are_recorded():
@@ -541,6 +557,7 @@ def _state_coupled_loss(k_b, *, global_step=7):
     """
     z_video, z_i0, eps, context = _batch()
     sigmas, timesteps = _grid()
+    support_start, support_end = support.rollout_support(seed=0, global_step=global_step, num_steps=_STEPS, k_b=k_b)
 
     def loss_of(scale):
         def velocity_fn(hidden_states, timestep, encoder_hidden_states):
@@ -557,9 +574,8 @@ def _state_coupled_loss(k_b, *, global_step=7):
             velocity_fn=velocity_fn,
             weights_dtype=jnp.float32,
             num_train_timesteps=_NUM_TRAIN_TIMESTEPS,
-            seed=0,
-            global_step=global_step,
-            num_steps=_STEPS,
+            support_start=support_start,
+            support_end=support_end,
             k_b=k_b,
         )
         return value
@@ -635,8 +651,10 @@ def test_the_kernel_module_performs_no_config_access_at_all():
     parameters = inspect.signature(losses.rollout_endpoint_loss).parameters
     assert not set(parameters) & banned_bases
     # ...and everything exp_03 read from config is a first-class, keyword-only argument here.
-    for required in ("seed", "global_step", "num_steps", "k_b", "support_salt", "num_train_timesteps"):
+    for required in ("support_start", "support_end", "k_b", "num_train_timesteps"):
         assert parameters[required].kind is inspect.Parameter.KEYWORD_ONLY, required
+    # The support-derivation inputs are GONE, not merely unused: the kernel cannot redraw a support.
+    assert not {"seed", "global_step", "num_steps", "support_salt"} & set(parameters)
 
 
 def test_the_kernel_takes_the_velocity_function_from_its_caller():
@@ -655,88 +673,24 @@ def test_the_kernel_module_is_side_effect_free():
         assert forbidden not in source, forbidden
 
 
-def test_the_support_draw_is_the_t1_primitive_not_a_second_copy():
-    """One support construction for the whole experiment, checked where a copy would have to show.
+def test_the_kernel_no_longer_derives_a_support_at_all():
+    """Stronger than the old "it calls T1's primitive": it calls nothing.
 
-    A private re-implementation is numerically indistinguishable from T1's while it agrees, so a
-    value test cannot see it -- and it is exactly what §3b's legal-range and per-batch guarantees
-    would silently stop covering. Structural locks only, and none of them defeated by renaming the
-    copy or by REBINDING the imported name to it: the object the module will actually call must BE
-    T1's function; the name may not be re-bound anywhere; the call site must spell it; no second
-    support-shaped function may exist; and the module may draw NO randomness of its own.
+    Deriving the support here is what let a step's epsilon and its sigma interval come from
+    different draws (T3b-2 review, BLOCKER 1). The kernel now receives the window, so the pairing is
+    the caller's `StepDraws` and cannot be undone downstream.
     """
     source = _MODULE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
-    imported = [
-        (alias.asname or alias.name)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("pos_rollout_support")
-        for alias in node.names
-    ]
-    assert "rollout_support" in imported
-    assert imported.count("rollout_support") == 1, "bound by more than one import"
-
-    # (0) THE lock no textual trick survives: at run time the module's `rollout_support` IS T1's
-    # function object. A later `rollout_support = _draw_window` passes every syntactic check ever
-    # written and fails right here.
-    assert losses.rollout_support is support.rollout_support
-
-    # (0b) ...and statically, the name is never re-bound: no assignment, no `for`/`with` target, no
-    # parameter, no `del`, no second import. (Belt and braces: the identity check above is evaluated
-    # at import time, so a rebinding executed lazily inside a function would still be caught here.)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == "rollout_support":
-            assert isinstance(node.ctx, ast.Load), f"rollout_support is re-bound: {ast.dump(node.ctx)}"
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            arguments = node.args
-            names = {
-                argument.arg
-                for argument in arguments.args + arguments.kwonlyargs + arguments.posonlyargs
-                if argument is not None
-            }
-            for extra in (arguments.vararg, arguments.kwarg):
-                if extra is not None:
-                    names.add(extra.arg)
-            assert "rollout_support" not in names, f"{node.name} shadows rollout_support with a parameter"
-
-    # (1) The kernel's support really is that call, not something that merely looks like it.
-    kernel = _function_node(source, "rollout_endpoint_loss")
-
-    def _flat_names(target):
-        if isinstance(target, ast.Tuple) and all(isinstance(element, ast.Name) for element in target.elts):
-            return [element.id for element in target.elts]
-        return None
-
-    draws = [
-        node
-        for node in ast.walk(kernel)
-        if isinstance(node, ast.Assign) and _flat_names(node.targets[0]) == ["start", "end"]
-    ]
-    assert len(draws) == 1, "the support is bound more than once -- a second, private draw"
-    assert isinstance(draws[0].value, ast.Call) and isinstance(draws[0].value.func, ast.Name)
-    assert draws[0].value.func.id == "rollout_support", ast.unparse(draws[0])
-
-    # (2) No second support-shaped definition anywhere in the module, whatever it is called.
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            assert "support" not in node.name, f"{node.name} looks like a private support draw"
-
-    # (3) The module draws no randomness at all -- a copy of the draw would have to.
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and node.attr in {
-            "randint",
-            "uniform",
-            "normal",
-            "fold_in",
-            "key",
-            "split",
-        }:
-            raise AssertionError(f"the kernel module must not draw randomness: {ast.unparse(node)}")
-        if isinstance(node, ast.Name):
-            assert node.id != "exp03_aux_key", "the key derivation belongs to T1's module, not here"
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("pos_rollout_support"):
+            assert "rollout_support" not in {a.asname or a.name for a in node.names}
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") in {"rollout_support", "exp03_aux_key"}:
+            raise AssertionError(f"the kernel must not draw: {ast.unparse(node)}")
+        if isinstance(node, ast.Attribute) and node.attr in {"randint", "normal", "fold_in", "key", "split"}:
+            raise AssertionError(f"the kernel must not draw: {ast.unparse(node)}")
     assert "jax.random" not in source
-
-    # ...and the values agree with T1's primitive, which is what the structure is protecting.
+    # ...and the window it uses is exactly the one it was handed.
     batch = _batch()
     z_video, _, eps, _ = batch
     for global_step in (0, 5, 77):

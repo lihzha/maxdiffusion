@@ -42,6 +42,9 @@ def train(config):
   elif config.model_type == "POS_CONTEXT_TI2V":
     from maxdiffusion.trainers.wan_pos_context_regression_trainer import WanPosContextRegressionTrainer
     trainer = WanPosContextRegressionTrainer(config)
+  elif config.model_type == "POS_ROLLOUT_TI2V":
+    from maxdiffusion.trainers.wan_pos_rollout_trainer import WanPosRolloutTrainer
+    trainer = WanPosRolloutTrainer(config)
   else:
     from maxdiffusion.trainers.wan_trainer import WanTrainer
     trainer = WanTrainer(config)

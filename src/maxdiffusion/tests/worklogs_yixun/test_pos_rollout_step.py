@@ -800,9 +800,8 @@ def test_the_velocity_fn_plugs_into_the_t2_endpoint_kernel_and_is_differentiable
                 velocity_fn=make_velocity_fn(p, actions=data["actions"], guide_scale=_GUIDE),
                 weights_dtype=jnp.float32,
                 num_train_timesteps=_NUM_TRAIN_TIMESTEPS,
-                seed=0,
-                global_step=3,
-                num_steps=_STEPS,
+                support_start=jnp.asarray(3, jnp.int32),
+                support_end=jnp.asarray(5, jnp.int32),
                 k_b=2,
             )
             return value
