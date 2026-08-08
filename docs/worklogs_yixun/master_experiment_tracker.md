@@ -51,10 +51,16 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff: exp_06 section added at 
   **Neither tier meets the +0.02 practical-effect gate** (~⅓ of it) — statistically overwhelming,
   practically modest, one seed. ctrl0's AND-gate passed at 1e-11. One refuted prediction + one
   self-caught write-up error disclosed in the results doc.
-- **OVERNIGHT (Query 7 blanket grant, ~10 h from 2026-08-08T04:30Z):** λ-sweep (0.25/0.75, Jobs
-  22–23) testing C0's super-additivity; A + control extensions 12,500→17,500 (Jobs 24–25) testing
-  compounding toward the gate; Tier-1 C still queued (attempt 5/20, pool weather); predeclared: C
-  extends too if its Tier-1 net > A's +0.0074. Fleet watcher chains evals automatically.
+- **OVERNIGHT PROGRAM COMPLETE (Results 1–9; analysis v1 under Codex review).** λ-sweep: off-law
+  gain monotone in A-share, loss cost U-shaped with min at λ=0.5 → **net peaks at C₀.₅ from init
+  (+0.0063, t=+14.2)**. Tier 1 final: **A wins at the trained state on BOTH axes** (+0.0074 →
+  **+0.0079 @17,500, t=+30.8, 100/100 windows**; off-law residual growing while the control sits on
+  the law at +0.00001 — its 9th hold). C is NOT super-additive at the trained state (nothing to
+  cancel when costs vanish) — confirming the gradient-cancellation account and implying a
+  state-dependent λ (blend early, anneal to A). **No arm reaches the +0.02 gate** (best ≈40% of it,
+  widening). Recommended next (analysis §4): second seed of the two headline arms → A to ~25,000 vs
+  extended control → λ-schedule arm. All on one seed, canonical-100; three launch-defect incidents
+  (wrong seed root, missing save schedule, colon-split envs) disclosed in `_command.md`.
 - **Status: S2 TRAINING ARMS IN FLIGHT — the experiment proper is running.** All pre-training stages closed: S1 smoke, **S1.5** (dual-state discriminator data banked + reviewer-admissible), **S1.6** (at-scale budgets: A 1.17× PASS; B 2.713× over the 2.5× budget — Yixun ACCEPTED; C failed the GBS-256 fit by 34.32MB → Yixun chose **batch-2 + accumulation**).
   - **ctrl0 AND-GATE: PASSED AT 1e-11** — the exp_03 trainer reproduces exp_02 essentially bit-identically (losses 0.1919129606/0.1685259684/0.1459819537, deltas ~1e-11 vs a 1e-4 tolerance; SSIM@2500 0.8139005632, delta −2.5e-11). **The instrument is certified drift-free; every Tier-2 comparison is attributable to the objective.**
   - **Arms:** Tier 1 (from-10k, +2,500 updates, vs exp_02's lr1e5c control at the +0.02 gate): A `exp03-s2a-corrss-20260806`, B `…-rolloutl-…`, C `…-combined-…` (N=2 accumulation). Tier 2 (from init, 2,500): ctrl0 DONE, **B0 DONE** (eval pair launched), A0, C0. Seeds: per-arm byte-verified copies (23,654,557,930 B) of `wan-overfit100-s3-20260730/checkpoints/10000`.
