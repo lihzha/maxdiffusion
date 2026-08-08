@@ -53,9 +53,10 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff: exp_06 section added at 
   self-caught write-up error disclosed in the results doc.
 - **OVERNIGHT PROGRAM COMPLETE (Results 1–9; analysis v1 under Codex review).** λ-sweep: off-law
   gain monotone in A-share, loss cost U-shaped with min at λ=0.5 → **net peaks at C₀.₅ from init
-  (+0.0063, t=+14.2)**. Tier 1 final: **A wins at the trained state on BOTH axes** (+0.0074 →
-  **+0.0079 @17,500, t=+30.8, 100/100 windows**; off-law residual growing while the control sits on
-  the law at +0.00001 — its 9th hold). C is NOT super-additive at the trained state (nothing to
+  (+0.0063, t=+14.2)**. Tier 1 final: **A wins at the trained state on BOTH axes** (+0.0074 @12,500 →
+  **+0.0079 @17,500** — persisted, +0.0005 widening, NOT established as a trend (v1.1 correction:
+  the earlier "grows" framing arm-mixed B's number); t=+30.8, 100/100 windows; the control sits on
+  the law's exact fit). C is NOT super-additive at the trained state (nothing to
   cancel when costs vanish) — confirming the gradient-cancellation account and implying a
   state-dependent λ (blend early, anneal to A). **No arm reaches the +0.02 gate** (best ≈40% of it,
   widening). Recommended next (analysis §4): second seed of the two headline arms → A to ~25,000 vs
