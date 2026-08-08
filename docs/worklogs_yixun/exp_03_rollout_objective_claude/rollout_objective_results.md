@@ -262,3 +262,23 @@ would need a schedule arm.
 **Standing scoreboard:** trained-state winner **A** (+0.0074, both axes, 100/100); from-init winner
 **C₀.₅** (+0.0063, 95/100). The law: 9 holds, last at +0.00001. Gate status: nothing yet at +0.02;
 best single number so far is A@12,500. A-ext@17,500 SSIM pending — the compounding verdict.
+
+## RESULT 9 — A @17,500: the advantage GROWS — 2026-08-08
+
+| @17,500 | loss | SSIM | law | off-law | vs control |
+| --- | --- | --- | --- | --- | --- |
+| control | 0.1168342 | 0.848196 | 0.8482 | +0.0000 | — |
+| **A** | **0.1153891** | **0.856099** | 0.8499 | **+0.0062** | **+0.007904 (t=+30.8, 100/100)** |
+
+- **The gap widened: +0.0059 @12,500 → +0.0079 @17,500** (t rose 22.8 → 30.8; still 100/100
+  windows). The advantage compounds — slowly, but in the right direction, and A's off-law residual
+  GREW (+0.0055 → +0.0062) while the control stayed glued to the law.
+- Per-5,000-update accounting: A gained +0.0104 SSIM over 10,000→17,500 vs the control's +0.0064 —
+  a 63% faster rollout-quality rate at identical LR and updates.
+- **Gate arithmetic:** at the current widening rate (~+0.002/2,500 updates) the +0.02 gate is
+  ~15,000 more updates away IF linear — a real extrapolation risk (everything in this system
+  saturates). The honest statement: A is decisively better and getting more so, but the predeclared
+  practical-effect bar remains unmet at tested budgets.
+
+**This closes the Query-7 overnight program.** All 9 results stand on: certified controls (1e-11
+AND-gate; 9-hold law), exact seed anchors at every handoff, one seed, canonical-100 windows.
