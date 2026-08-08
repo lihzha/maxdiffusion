@@ -560,3 +560,13 @@ law predicted the control at 0.8443 ±0.005, so this also tests the law one more
   wan-overfit100-s3ext-lr1e5c-20260802 (exp_02 trainer, one-step, LR 1e-5), matched schedule.
 All watchlisted; eval pairs auto-follow each landing (instrument anchors: A@12,500 = 0.1186258,
 control@12,500 = 0.1200277 must reproduce exactly).
+
+## CATCH-UP after the overnight auth gap (2026-08-08T~14:52Z) — Jobs 26–34
+
+Overnight: 6/7 SUCCEEDED (Tier-1 C on attempt 8; C0 evals; both lambda arms; A-ext to 17,500).
+ctrl-ext FAILED on a real cross-branch defect: the shared trainer reads `exp03_snapshot_before_step`,
+absent from exp_02's YAML (pyconfig raises on missing keys) — the exp_02-recipe script cannot run on
+the exp_03 branch. **Fix without code change:** relaunched via the exp03 trainer with
+EXP03_OBJECTIVE=control — certified identical to the exp_02 recipe by ctrl0's 1e-11 AND-gate.
+Launched: {'ctrlext2': '20260808-144912-192bdbc4-exp02-lr1e5c-ext2-yixun', 'c-inst': '20260808-144939-fde13c90-exp03-c-inst-yixun', 'lam25-inst': '20260808-145007-bfefd471-exp03-lam25-inst-yixun', 'lam75-inst': '20260808-145035-5c2012e5-exp03-lam75-inst-yixun', 'aext-inst': '20260808-145126-edc972cf-exp03-aext-inst-yixun', 'c-ssim': '20260808-145205-37f5cd96-exp03-c-ssim-yixun', 'lam25-ssim': '20260808-145233-68847bfe-exp03-lam25-ssim-yixun', 'lam75-ssim': '20260808-145326-944c9a9a-exp03-lam75-ssim-yixun', 'aext-ssim': '20260808-145354-775edb0f-exp03-aext-ssim-yixun'}
+All watchlisted.
