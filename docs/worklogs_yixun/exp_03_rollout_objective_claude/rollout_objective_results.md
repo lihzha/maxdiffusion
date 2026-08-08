@@ -173,3 +173,34 @@ nothing (it gains) and nets +0.007. exp_03's mechanism is real, and it is cheape
 profitable — exactly where exp_02 stalled: at a trained checkpoint whose one-step loss has already
 flattened.
 
+## RESULT 6 — TIER 2 FINAL: C0 breaks the interpolation — 2026-08-08
+
+| arm | loss | Δloss vs ctrl0 | SSIM | law | off-law | **vs ctrl0** | ratio* | t | improved |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ctrl0 (one-step) | 0.14598 | — | 0.813901 | 0.8132 | +0.0007 | — | — | — | — |
+| B0 (rollout) | 0.15496 | +0.00898 | 0.812425 | 0.8024 | +0.0100 | −0.00148 | 0.93 | −2.9 | 44/100 |
+| A0 (corrective SS) | 0.15644 | +0.01046 | 0.815026 | 0.8006 | +0.0144 | +0.00113 | 1.15 | +1.6 | 67/100 |
+| **C0 (λ·A + (1−λ)·B, λ=0.5)** | **0.14983** | **+0.00385** | **0.820169** | 0.8086 | **+0.0116** | **+0.00627** | **2.51** | **+14.2** | **95/100** |
+
+\*ratio = off-law gain ÷ law-priced cost of the surrendered one-step loss. >1 profits.
+
+**C0 is not an interpolation of its components — it is better than both, on both axes.**
+- Its one-step loss cost is **+0.00385 — LESS THAN HALF** of either parent (A0 +0.01046, B0 +0.00898)
+  and far outside the [B0, A0] range a 50/50 blend would predict (+0.00972). Same at every
+  checkpoint: 250 (+0.00106 vs blend +0.00179), 1000 (+0.00102 vs +0.00362).
+- It keeps an off-law gain of +0.0116, between its parents' +0.0100 and +0.0144.
+- Net vs ctrl0 **+0.00627 (t=+14.2, 95/100 windows)** — **5.5× A0's advantage and the only Tier-2
+  arm with a decisive win.** Its exchange ratio 2.51 more than doubles A0's 1.15.
+
+**Interpretation (hypothesis, not established):** the two objectives' gradients are near-orthogonal
+at init (S1.5 measured cos(A,B) = 0.459 at init, 0.165 at 10k) and their one-step-loss *costs* appear
+to partially cancel while their off-law *gains* do not. Averaging two differently-wrong descent
+directions lands closer to the shared metric than either alone, without giving up the rollout signal.
+A cleaner test would be a λ-sweep (0.25/0.75) — not yet run, not yet proposed.
+
+**Tier 2 final ordering: C0 (+0.0063) ≫ A0 (+0.0011) > ctrl0 > B0 (−0.0015).** The combined
+objective — the arm that needed the 34MB HBM fight and the accumulation redesign to run at all — is
+the one that wins from scratch. Tier-1 C (still queued) now carries the experiment's most
+interesting open question: whether the same super-additivity appears at the trained state, where A
+already beats the control on both axes.
+
