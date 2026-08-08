@@ -95,3 +95,21 @@ All gates passed: S1 CLOSED, S1.5 banked+admissible, S1.6 CLOSED; Query-5 decisi
 **Ask:** approve (1) A+B now, (2) ctrl0 now, (3) the accumulation code round now (C/C0 launch
 after its review passes, no separate ask). Tip at packaging: 31f00c474.
 
+
+## Query 7 — overnight blanket grant (2026-08-08, ~10 h window)
+
+**Yixun, verbatim: "Currently I will go to bed, so I will approve everythin after your
+recommendation util I wake up, potential 10h from now. Please go ahead"** — a time-boxed approval
+umbrella for Planner-recommended actions. Under it, launched now (each individually recorded in
+`_command.md`):
+1. **λ-sweep (Tier 2):** C-objective arms at λ=0.25 and λ=0.75, from init, 2,500 updates, N=2 —
+   the direct test of RESULT 6's super-additivity hypothesis (prediction if gradient-cancellation
+   is right: one-step-loss cost is U-shaped in λ with the minimum near where the components'
+   errors cancel; off-law gain roughly monotone in the A-share).
+2. **Trained-state extensions 12,500 → 17,500:** the A arm and the lr1e5c control, +5,000 updates
+   each, update-matched — does A's both-axes advantage (+0.0074) compound toward the +0.02 gate?
+3. Tier-1 C continues (already queued); its eval pair on landing.
+4. **Predeclared rule for a C extension:** if Tier-1 C's net vs control exceeds A's +0.0074, extend
+   C 12,500→17,500 as well (~4.6 h at 5.92×; fits the window if it lands early enough); otherwise not.
+All follow-on eval pairs (instrument with known anchors + canonical seed-0 SSIM) launch
+automatically as runs land. Nothing outside this list launches under the umbrella.
