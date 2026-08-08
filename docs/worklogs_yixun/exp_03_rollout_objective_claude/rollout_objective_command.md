@@ -572,3 +572,11 @@ Launched: {'ctrlext2': '20260808-144912-192bdbc4-exp02-lr1e5c-ext2-yixun', 'c-in
 All watchlisted.
 
 ### Control extension SUCCEEDED via certified control-identity (2026-08-08T~15:45Z) — eval pair `20260808-180149-48bef098-exp03-ctrlext-inst-yixun` (anchor 0.1200277@12,500) + `20260808-180227-ab829726-exp03-ctrlext-ssim-yixun` (SSIM@17,500). Watchlisted.
+
+### Batch-launch colon-split defect (disclosed) + relaunches (2026-08-08T~18:20Z)
+
+The 7 batch-launched catch-up evals had SCRAMBLED envs — my launch loop split fields on ":" which
+collided with "gs://" URLs (third shell-quoting incident this experiment; rule reaffirmed: launch
+loops must never colon-split, and every submission's env block is now spelled explicitly). All 7
+failed fast and were relaunched individually: {'cinst2': '20260808-181438-e25ac804-exp03-c-inst2-yixun', 'cssim3': '20260808-181559-cded0c2e-exp03-c-ssim3-yixun', 'lam25inst2': '20260808-181648-6db3ea6b-exp03-lam25-inst2-yixun', 'lam75inst2': '20260808-181757-fe412acf-exp03-lam75-inst2-yixun', 'lam25ssim2': '20260808-181840-e6213b6f-exp03-lam25-ssim2-yixun', 'lam75ssim2': '20260808-181946-d2944540-exp03-lam75-ssim2-yixun', 'aextssim2': '20260808-182023-0f183bc0-exp03-aext-ssim2-yixun'}. A-ext instrument (solo-launched, correct)
+LANDED: 12,500 anchor 0.1186258 (must equal 0.1186258 — VALID), 15,000 0.1164789, 17,500 0.1153891.
