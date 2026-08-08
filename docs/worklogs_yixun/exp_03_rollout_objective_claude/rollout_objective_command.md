@@ -549,3 +549,14 @@ law predicted the control at 0.8443 ±0.005, so this also tests the law one more
 ### TIER-1 A TRAINED (2026-08-07T~23:00Z, Job 12e) — eval pair `20260808-002116-b6b2020c-exp03-a-inst2-yixun` (instrument, anchor 0.12227) + `20260808-002142-dcb36950-exp03-a-ssim2-yixun` (SSIM@12500); watchlisted.
 
 ### C0 TRAINED (2026-08-08T~01:30Z, N=2 accumulation) — eval pair `20260808-024515-aa305b3c-exp03-c0-inst-yixun` + `20260808-024542-affcbf7a-exp03-c0-ssim-yixun`; completes Tier 2. Watchlisted.
+
+## Jobs 22–25 — OVERNIGHT STACK under Query 7 — launched 2026-08-08T~04:35Z
+
+- **Job 22 (λ=0.25):** `20260808-043421-de91a2b8-exp03-s2b-lam25-yixun` — Tier-2 combined, from init, N=2.
+- **Job 23 (λ=0.75):** `20260808-043506-4e833b83-exp03-s2b-lam75-yixun` — ditto.
+- **Job 24 (A extension 12,500→17,500):** `20260808-043618-ab6d7061-exp03-s2a-corrssext-yixun` — resumes exp03-s2a-corrss-20260806 from
+  its own 12,500; CHECKPOINT_STEPS [12500,15000,17500].
+- **Job 25 (control extension 12,500→17,500):** `20260808-043702-c76166ae-exp02-lr1e5c-ext-yixun` — resumes
+  wan-overfit100-s3ext-lr1e5c-20260802 (exp_02 trainer, one-step, LR 1e-5), matched schedule.
+All watchlisted; eval pairs auto-follow each landing (instrument anchors: A@12,500 = 0.1186258,
+control@12,500 = 0.1200277 must reproduce exactly).
