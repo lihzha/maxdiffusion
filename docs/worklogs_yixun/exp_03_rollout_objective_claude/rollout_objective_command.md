@@ -547,3 +547,5 @@ law predicted the control at 0.8443 ±0.005, so this also tests the law one more
 ### A0 TRAINED (2026-08-07T~22:00Z) — eval pair launched: instrument `20260807-225403-3d4fd840-exp03-a0-inst-yixun`, SSIM@2500 `20260807-225429-8969048a-exp03-a0-ssim-yixun` (ctrl0/B0 cells; watchlisted).
 
 ### TIER-1 A TRAINED (2026-08-07T~23:00Z, Job 12e) — eval pair `20260808-002116-b6b2020c-exp03-a-inst2-yixun` (instrument, anchor 0.12227) + `20260808-002142-dcb36950-exp03-a-ssim2-yixun` (SSIM@12500); watchlisted.
+
+### C0 TRAINED (2026-08-08T~01:30Z, N=2 accumulation) — eval pair `20260808-024515-aa305b3c-exp03-c0-inst-yixun` + `20260808-024542-affcbf7a-exp03-c0-ssim-yixun`; completes Tier 2. Watchlisted.
