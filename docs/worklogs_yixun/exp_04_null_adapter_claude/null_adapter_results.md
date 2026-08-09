@@ -1,7 +1,13 @@
 # null_adapter_results — exp_04 P4 (SOP artifact 10)
 
-**Status: DRAFT for review.** Written by the Coder; the Codex analysis review is deliberately deferred, so every
-judgment call is flagged inline with **[JUDGMENT]** and every deviation from plan v5 with **[DEVIATION]**.
+**Status: DRAFT — revision 2, after the Codex analysis review (`null_adapter_codex_analysis_review.md`,
+REQUEST-REVISION).** Judgment calls are flagged **[JUDGMENT]**, deviations from plan v5 **[DEVIATION]**, and
+edits made in response to the review **[REV2]**.
+
+> **⚠ THE HEADLINE VERDICT IS PROVISIONAL.** The reviewer overturned the argument that the predeclared STOP
+> survived the recipe deviation of §4.4. **Every number in this document was produced at J=10, not the adopted
+> J=50**, so the observed STOP stands as an observation while the *plan-compliant* selection is **unmeasured**.
+> A **J=50 clean-gate re-run is approved and pending**; §1, §4.2 and §4.4 are written to be superseded by it.
 
 This document is the **factual record only**: what was predeclared, what ran (including every failed attempt and
 its classification), the numbers exactly as the gate module computed them, the gate verdicts, and the artifact
@@ -22,9 +28,12 @@ first-frame condition and is excluded from every primary statistic.
 | Experiment | exp_04 `null_adapter` — null-text inversion (Mokady et al. 2022) ported to JAX against the frozen Wan2.2 TI2V 5B |
 | Plan of record | `plan_null_adapter.md` **v5** (5 Codex review passes, all findings accepted, APPROVE-PLAN 2026-08-04) |
 | Phases executed | J0 (cohorts) → **P1** (J1 capacity + basin probe) → **P1b** (J1b joint direct optimization) → **P1c** (J1c transfer probe) |
-| Phases NOT executed | **P2** (target caching), **P3** (null-embedding adapter), J2–J5 — stopped by the predeclared target-selection rule |
-| Terminal verdict | **TARGET = STOP on both cohorts.** Every predeclared gate fired; no arm qualified for caching |
-| Branch / tip | `claude-exp_04_null_adapter-20260803` @ `0b780df` (clean) |
+| Phases NOT executed | **P2** (target caching), **P3** (null-embedding adapter), J2–J5 — not advanced |
+| **Observed verdict** | **`target = "stop"` on both cohorts at the recipe that actually ran (J=10, lr=0.01).** The gate module returned STOP; no arm qualified for caching |
+| **Formal verdict** **[REV2]** | **INDETERMINATE.** Plan v5 §4-P1 requires G1/G2 to be evaluated on the *adopted* recipe (J=50); they were evaluated at J=10 (§4.4). A J=50 A1 yields different optimized nulls and therefore a different A1-probe, and **A2's J=50 G2 result is unmeasured** — so the plan-compliant target selection cannot be read off these artifacts either way. The decision not to advance to P2/P3 was **discretionary**, taken on the observed J=10 result |
+| **Resolution in flight** **[REV2]** | A **J=50 clean-gate re-run is APPROVED (Yixun) and PENDING**; the launcher fix is in preparation. **§1, §4.2 and §4.4 will be superseded by its result** — which will either restore the predeclared STOP or name a target |
+| Evidence-producing tips | J0-2 `7199feb` · J1-4 `3bdbd2a` · J1b `db8c3dc` · J1c `9213585` (§8.1) |
+| Report commit **[REV2]** | revision 1 of this document was committed at `6aefa6c`. A branch tip plus "clean" is mutable and is deliberately **not** quoted as provenance |
 | Code state | R1–R11 + the `hyperparameters-config-access` fix + R12-lite `transfer-probe`; suite **989** tests |
 
 ---
@@ -100,20 +109,23 @@ Authoritative roots (both published 2026-08-06):
 `…/capacity_trainfit_att-0806-164625` (TRAINFIT-16). Full coverage, **zero quarantines, zero invalid pairs,
 `coverage_ok: true`** on every gate in both cohorts.
 
-### 4.1 Per-arm means (gate metric `future_ssim`; secondary columns re-derived from `gate_tables.json`)
+### 4.1 Per-arm means — **all values at J=10, lr=0.01 (NOT the adopted J=50; §4.4)** **[REV2]**
 
-**DEV-64** (n = 64; probe arms average over k ∈ {0,1,2} ⇒ 192 observations)
+**DEV-64 @ J=10** (n = 64; probe arms average over k ∈ {0,1,2} ⇒ 192 observations)
+
+**[REV2]** The pixel column in revision 1 was mislabelled: five of its six values were `full_pixel_mse` and A0's
+was a single example's value. Corrected below to true `future_pixel_mse` means, matching the gate metric.
 
 | Arm | mean future-SSIM | mean full-SSIM | mean future-MSE | mean future-pixel-MSE |
 |---|---|---|---|---|
-| A0 (control) | **0.6665** | 0.6766 | 0.3354 | 0.02085 |
-| **A1** | **0.8523** | 0.8567 | 0.1127 | 0.00648 |
-| A1-probe | **0.1729** | 0.1980 | 4.3589 | 0.18647 |
-| A2-0 (control) | **0.1423** | 0.1683 | 4.7431 | 0.21958 |
-| **A2** | **0.4973** | 0.5126 | 0.4901 | 0.03321 |
-| A2-probe | 0.2958 | 0.3172 | 3.2459 | 0.10646 |
+| A0 (control) | **0.6665** | 0.6766 | 0.3354 | 0.0218796 |
+| **A1** | **0.8523** | 0.8567 | 0.1127 | 0.0066857 |
+| A1-probe | **0.1729** | 0.1980 | 4.3589 | 0.1922965 |
+| A2-0 (control) | **0.1423** | 0.1683 | 4.7431 | 0.2264450 |
+| **A2** | **0.4973** | 0.5126 | 0.4901 | 0.0342444 |
+| A2-probe | 0.2958 | 0.3172 | 3.2459 | 0.1097904 |
 
-**TRAINFIT-16** (n = 16)
+**TRAINFIT-16 @ J=10** (n = 16)
 
 | Arm | mean future-SSIM | mean full-SSIM | mean future-MSE |
 |---|---|---|---|
@@ -140,7 +152,8 @@ Authoritative roots (both published 2026-08-06):
 | DEV-64 | **0.1729** ✗ | 0.2029 ✗ | fails; **the absolute floor is the binding constraint** |
 | TRAINFIT-16 | **0.1738** ✗ | 0.1993 ✗ | same |
 
-**Selection: `target = "stop"` on both cohorts**, with the reasons recorded verbatim in `selection.json`:
+**Observed selection: `target = "stop"` on both cohorts** (at J=10), with the reasons recorded verbatim in
+`selection.json`:
 
 ```
 "G1 failed (median_ratio)"
@@ -149,12 +162,12 @@ Authoritative roots (both published 2026-08-06):
 "G2 failed (mean_ssim, ssim_ci_low)"
 ```
 
-**One-line gate readings (no interpretation beyond the gate):**
-- G1 failed on the MSE-ratio conjunct alone; A1's absolute SSIM and its CI both cleared their bars.
+**One-line gate readings (no interpretation beyond the gate; all at J=10):**
+- **[REV2]** **A1's absolute conditions passed** (0.8523 ≥ 0.80; CI-low 0.8327 ≥ 0.75); only G1's *ratio* conjunct against the strong, CFG-collapsed A0 control failed. A0 behaved exactly as designed — nothing here indicates a defective control.
 - G2 failed on both absolute-SSIM conjuncts; its ratio and improvement conjuncts both cleared.
-- A1-probe sits at **0.1729** against a 0.70 floor — a factor of four short.
-- **[DEVIATION — RECORD]** The nearest measured "do nothing under a non-own basin" reference is A2-0 (base nulls from ε₀) at **0.1423**, so A1-probe is **+0.031 ABOVE it**, not below. The worklog's J1 reading states "locked wrong-basin nulls are actively destructive, WORSE than doing nothing" — **that is not supported by these artifacts** and appears to have been transposed from exp_05's B2 result, where the same phrase *is* gate-verified (B2 0.1610 vs B2-0 0.2814, 0/64 improved). The supported exp_04 statement is: **locked wrong-basin nulls buy essentially nothing over doing nothing (+0.03 SSIM) while costing a full optimization pass.** Caveat: the comparison is approximate — A1-probe replays from `keyed(k)`, A2-0 from `global(0)`; a "base nulls under `keyed(k)`" arm was never run.
-- The selection verdict is **over-determined**: it holds on the probe floors alone even if G1 had passed.
+- A1-probe sits at **0.1729** against a 0.70 floor — a factor of four short, i.e. **very low absolute quality**.
+- **[DEVIATION — RECORD, revised at REV2]** The worklog's J1 reading calls these nulls "actively destructive, WORSE than doing nothing". **The artifacts do not support that**: the nearest do-nothing reference, A2-0, is **0.1423**, and A1-probe is **+0.031 above** it. The phrase is gate-verified for exp_05's B2 (0.1610 vs 0.2814, 0/64 improved) and appears to have been transposed. **The supported statement is narrower than either "destructive" or "inert":** A1-probe has very low absolute quality and is **+0.031 above the nearest *unmatched* do-nothing proxy; its matched incremental benefit or harm was not measured.** The proxy is unmatched because A1-probe replays from `keyed(k)` while A2-0 replays from `global(0)` — **no base-null `keyed(k)` control arm exists**, so neither an inertness nor a harm claim is available.
+- **[REV2]** The selection is **NOT over-determined**, contrary to revision 1. A1-probe is a function of A1, so a J=50 A1 produces different locked nulls and a different probe; and A2's J=50 G2 outcome is unmeasured, leaving the A2 fallback branch of the selection rule open. **What the artifacts license: `target="stop"` was returned at J=10. What they do not license: that the plan-compliant selection is STOP.** See §4.4.
 
 ### 4.3 Adequacy probe (`…/j1r2/adequacy/adequacy_report.json`, published by J1-3 attempt 1)
 
@@ -204,9 +217,14 @@ Same adoption logic, same adopted cell, opposite outcome, because of one missing
 **Consequences (stated factually; weighed in the analysis doc §4):**
 - Plan v5 §4-P1's clause "*G1/G2 are evaluated once, on the adopted recipe only*" was **not satisfied**.
 - The projection would have permitted the re-run: 40.195 s × 64 examples × `RERUN_ARMS=2` = **5,145 s ≈ 1.43 h**, under the plan's ≤ 2 h re-run budget (`RERUN_BUDGET_SECONDS = 7200`). The deviation is *not* a budget stop; it is a plumbing gap.
-- **Direction is not uniform.** For G2 (bars 0.75 / 0.70 vs measured 0.4973 / 0.4697) the deviation is conservative — a stronger optimizer could only have raised A2. For **G1 it is not**: G1 failed on `median_ratio` alone at **3.605 against a bar of 5**, and the adopted recipe cut the tracking loss **2.57×**; whether J=50 would have crossed 5 is **unmeasured**.
-- The **selection verdict is unaffected**, because it is over-determined by the A1-probe floors (0.1729 vs 0.70), which fail by a factor of four and were measured on locked nulls whose transfer is a property of the optimization *procedure*, not its iteration count. [JUDGMENT — this is the load-bearing claim of §4.4 and the first thing a reviewer should attack.]
-- **Cross-experiment comparability is compromised:** exp_04's A1 (0.8523) and exp_05's B1 (0.9227) were optimized at **different budgets** (J=10 vs J=50). See analysis §4.2.
+- **[REV2] THE FORMAL SELECTION IS INDETERMINATE.** Revision 1 argued the deviation was survivable because the selection was over-determined by the A1-probe floor. **The reviewer overturned that, correctly, on three grounds:**
+  1. **A1-probe is not budget-independent.** It replays *A1's* optimized nulls. Recomputing A1 at J=50 yields different nulls and therefore a different probe; 0.1729 is a property of the J=10 nulls, not a fixed property of the arm.
+  2. **The A2 fallback branch is unmeasured.** Even if a J=50 A1 still failed its probe, the selection rule then asks whether G2 passes at J=50. No such measurement exists.
+  3. **No monotonicity is guaranteed.** Revision 1 asserted "a stronger optimizer could only have raised A2" — **that claim is withdrawn.** Tracking loss and decoded SSIM need not move together, in either direction.
+  ⇒ The artifacts genuinely say `target="stop"` **at J=10**; the **plan-compliant target selection is unmeasured**. Advancing no further was a **discretionary decision on the observed result**, not the firing of a predeclared gate.
+- **[REV2] Resolution.** A **J=50 clean-gate re-run is approved and pending**; its result restores a formal verdict — either the predeclared STOP or a named target. This subsection is written to be superseded by it.
+- **Every headline number in this document therefore carries "@ J=10"**, not only this subsection.
+- **Cross-experiment comparability is compromised:** exp_04's A1 (0.8523 @ J=10) and exp_05's B1 (0.9227 @ J=50) were optimized at **different budgets**. See analysis §5.2.
 - **Not recorded anywhere before this document** — not in the worklog, `_command.md`, the tracker, or CLAUDE.md. `null_adapter_params_set_up.md` states "FULL CAPACITY … at the production recipe (adoption consumed via `NULL_ADEQUACY_URI`)", which was never achievable through the shipped launcher.
 
 ### 4.5 L_null ablation (diagnostic-only, plan v5 §4-P1 N5)
@@ -264,8 +282,8 @@ The worklog's J1b table reports `final_loss`; J1c's own-basin column reports `fi
 
 - **Cross-job consistency:** J1b's `initial_loss` mean **4.9477** reproduces A2-0's mean on the same 8 (**4.9465**) to 0.02 % — the fresh-noise starting point is consistent across independently launched jobs.
 - **Joint beats greedy on 6/8 clips**, by up to **5.57×** (ep67499: A2 0.701 → A3 0.1258).
-- **3/8 clips reach own-basin quality from fresh noise:** endpoints **0.0067 / 0.1001 / 0.1258** all fall inside A1's own range on these 8 clips, **[0.0039, 0.1478]**.
-- **Convergence is uneven:** ep12399 stalls at 0.703 — worse than its *own-basin* A0 control (0.4341). Gradient norms fell 8.49–16.65 → 0.0029–0.308 (most examples converged inside the 300-iter budget; ep12399's last grad norm 0.308 is the largest).
+- **[REV2] Stated exactly, replacing revision 1's "3/8 reach own-basin quality":** **none of the eight A3 endpoints matches or beats its *paired* A1 MSE (0/8).** Three of them — 0.0067 / 0.1001 / 0.1258 — fall inside the **pooled cross-clip** A1 range **[0.0039, 0.1478]**, which is a weaker statement: it compares a clip's joint endpoint against the *best* other clips' greedy own-basin results, not against its own.
+- **Convergence is uneven:** ep12399 stalls at 0.703 — worse than its *own-basin* A0 control (0.4341). **[REV2]** First-iteration gradient norms spanned **6.5797–16.6542** (revision 1 said 8.49; that was the second element, not the minimum), falling to 0.0029–0.308 (ep12399's 0.308 is the largest final norm).
 - **J1b measures latent MSE only** — no decode, therefore **no SSIM** at this stage.
 
 ---
@@ -296,7 +314,11 @@ Reference points on the same 8 clips: **A1-probe (greedy nulls, foreign) = 0.163
 |---|---|
 | `keyed(0)` mean ÷ own mean (the worklog's figure, 0.471/0.651) | **0.7235** |
 | pooled keyed mean ÷ own mean | **0.7301** |
-| mean of the 24 **per-example paired** ratios | **0.7007** (range 0.428–0.855) |
+| mean of the 24 **per-example paired** ratios (≡ mean of the 8 per-clip mean ratios) | **0.7007** |
+
+**[REV2] Spread, correctly attributed** — revision 1 attached the wrong range to the 0.7007 figure:
+the **8 per-clip mean** ratios span **0.4280–0.8554**; the **24 individual** (clip × seed) ratios span
+**0.3856–0.9732**.
 
 The worklog and tracker state "**~72 %**", which corresponds to the first estimator. All three exceed the
 plan's 0.7× relative conjunct; **none of them changes the verdict**, because the **absolute floor of 0.70 is the
@@ -324,7 +346,7 @@ better absolute foreign quality"*, **not** *"better-optimized clips retain a lar
 "transfer quality tracks optimization quality" is true of the absolute reading and only weakly of the relative one.
 
 - Own-basin `global(0)` MSE column reproduces J1b's `final_endpoint` as an exact multiset — the cross-job consistency check passed.
-- **Absolute floors are unmet everywhere:** own-basin 0.651 and foreign ~0.47 both sit below the 0.70 floor. At 300 iterations the joint optimum is itself not deployment-grade.
+- **[REV2] Every aggregate setting mean missed the 0.70 floor** — own-basin 0.651, foreign 0.471/0.477/0.478. Revision 1 said "unmet everywhere", which is false at the observation level: **8 of the 32 individual (clip × setting) observations exceed 0.70**, all from the three best-converged clips (ep45499 0.729/0.878/0.880 and own 0.991; ep21099 0.701/0.747 and own 0.834; ep67499 own 0.829). The floor is a cohort-mean criterion and it failed as such.
 
 ---
 
@@ -378,8 +400,18 @@ Corrected here rather than by editing the append-only ledger.
 | Worklog J1 reading, tracker | A1-probe "actively destructive, WORSE than doing nothing" | A1-probe **0.1729** vs the A2-0 do-nothing proxy **0.1423** — the probe is **+0.031 above** it. The claim holds for exp_05's B2, not for exp_04's probe — §4.2 |
 | `params_set_up.md` | capacity ran "at the production recipe (adoption consumed)" | ran at the **default J=10** — §4.4 |
 | `_command.md` J1-4 | tip `27efcd1` | artifacts record `3bdbd2a` (docs-only descendant, identical `src/`) — §8.1 |
+| **[REV2]** revision 1 §4.1 | DEV "future-pixel-MSE" column | five values were `full_pixel_mse`, A0's was one example's value; true `future_pixel_mse` means now in §4.1 |
+| **[REV2]** revision 1 §5.2 | J1b first grad-norm range "8.49–16.65" | **6.5797–16.6542** |
+| **[REV2]** revision 1 §5.2 | "3/8 clips reach own-basin quality" | **0/8** beat their *paired* A1; 3/8 fall inside the *pooled* A1 range — §5.2 |
+| **[REV2]** revision 1 §6.2 | retention 0.7007 "range 0.428–0.855" | that is the range of the **8 clip means**; the **24 individual ratios** span 0.3856–0.9732 — §6.2 |
+| **[REV2]** revision 1 §6.3 | "floors unmet everywhere" | every **aggregate mean** missed 0.70; **8/32 observations exceed it** — §6.3 |
+| **[REV2]** revision 1 §4.2/§4.4 | selection "over-determined", deviation survivable | **overturned** — formal selection is **INDETERMINATE**; J=50 re-run pending — §4.4 |
 
-All other figures in the worklog's J1-4 / J1b / J1c readings reproduce **exactly**.
+**[REV2]** Revision 1 closed this table with "all other figures reproduce exactly". **That claim is withdrawn** —
+it asserted completeness over a comparison that was never exhaustively enumerated, and revision 1 itself carried
+four numeric defects the reviewer found (the pixel column, the gradient-norm minimum, the retention range
+attribution, and the paired-vs-pooled A1 comparison). The correct statement is narrower: **every figure this
+document quotes has been checked against the artifacts; no claim is made about figures it does not quote.**
 
 ---
 
@@ -388,7 +420,7 @@ All other figures in the worklog's J1-4 / J1b / J1c readings reproduce **exactly
 1. **The 0.2946 anchor is not a quality baseline.** The deployed `pre_context` adapter's rollout SSIM 0.2946 comes from a **4-sample** validation at step 30,000 — and those four samples are **four correlated windows of a single episode**. It is a **wiring/sanity check**, never a statistically meaningful quality baseline, and no comparison in this document or the analysis treats it as one.
 2. **A1/A2/A3 are ORACLES, not deployable systems.** Every arm optimizes conditioning **per clip against that clip's own ground-truth latents**. They bound what the conditioning channel can express; they say nothing directly about what an amortized, action-conditioned predictor can achieve.
 3. **J1b/J1c are n = 8**, first-8-DEV, **no confidence intervals**, no multiplicity control. J1b is **latent-MSE only**; SSIM appears only in J1c. The n=8 correlations in §6.3 are descriptive.
-4. **The gates ran at a recipe the experiment's own adequacy probe rejected** (§4.4) — the single largest threat to the quantitative claims here.
+4. **The gates ran at a recipe the experiment's own adequacy probe rejected** (§4.4) — the single largest threat to the quantitative claims here, and the reason the **formal selection is INDETERMINATE** rather than STOP. **Every number in this document is a J=10 number.** **[REV2]**
 5. **Exp_05's method pivots were never shared with exp_04.** exp_05 inverts with an **8-token** context; exp_04 with the **512-row padded** context with 16 rows replaced. The trajectories, controls, and pivots are different objects; cross-experiment tables are descriptive only (exp_05 plan §4's H1 interpretation note, and its `A0` vs `B0` control asymmetry — A0 collapses CFG to identity, B0 does not).
 6. **One cohort, one dataset, one backbone, one guidance scale (w = 5).** DEV-64/TRAINFIT-16 of DROID at 192×320×32f through Wan2.2 TI2V 5B. TEST-64 was never touched — correctly, since selection stopped at P1.
 7. **σ₀ = 1.0** here vs **0.999** in the PyTorch reference (ratified deviation, plan §8 register): no cross-repo artifacts were exchanged, so prior-art numbers are directional context, not matched comparisons.

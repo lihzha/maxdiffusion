@@ -1,49 +1,68 @@
 # null_adapter_analysis — exp_04 P4 (SOP artifact 11)
 
-**Status: DRAFT for review.** The Codex analysis review is deferred; this document is written to be attacked.
-Every interpretive step is labelled **[FINDING]** (artifact-backed), **[INFERENCE]** (a reading the artifacts
-support but do not compel), or **[HYPOTHESIS]** (a mechanism story that is *not* tested by this experiment).
-Numbers are not restated except where the argument turns on them — the record is `null_adapter_results.md`.
+**Status: DRAFT — revision 2, after the Codex analysis review (`null_adapter_codex_analysis_review.md`,
+REQUEST-REVISION).** Every interpretive step is labelled **[FINDING]** (artifact-backed), **[INFERENCE]** (a
+reading the artifacts support but do not compel), or **[HYPOTHESIS]** (a mechanism story *not* tested here);
+**[REV2]** marks an edit made in response to the review. Numbers are not restated except where the argument
+turns on them — the record is `null_adapter_results.md`.
+
+> **⚠ TWO CONCLUSIONS FROM REVISION 1 WERE OVERTURNED AND ARE NOT RECOVERABLE FROM THIS EVIDENCE.**
+> (1) The predeclared STOP is **not** rescued by over-determination — the plan-compliant selection is
+> **unmeasured**, and a J=50 re-run is approved and pending (§4.1). (2) The objective-shape attribution
+> **remains compute-confounded**; a budget-matched greedy probe is required for causal attribution (§3.2).
 
 ---
 
-## 1. The verdict in one paragraph
+## 1. The verdict in one paragraph **[REV2 — rewritten]**
 
 exp_04 asked whether per-step null embeddings recovered by inversion can drive the frozen Wan2.2 TI2V 5B to
 reconstruct DROID futures, and whether those embeddings are stable enough to become regression targets for an
-amortized adapter. **The answer to the first question is a qualified yes and to the second an unambiguous no —
-for the specific target family the plan proposed.** Optimized nulls reach 0.8523 own-basin SSIM, but the
-predeclared G1 ratio bar failed (3.605 vs 5), fresh-noise optimization reached only 0.4973 against a 0.75 bar,
-and locked nulls transferred to foreign noise at 0.1729 against a 0.70 floor — a mere **+0.03 SSIM above the
-0.1423 do-nothing reference**, i.e. very nearly inert outside their own basin. The predeclared rule stopped the
-experiment before any caching spend.
-Two conditional follow-ons then found the more interesting result: **the ceiling and the basin-boundness were
-both substantially artifacts of the greedy per-step objective, not of the conditioning channel.** Replacing
-per-step tracking with joint optimization through the differentiable 25-step rollout cut fresh-noise endpoint
-MSE from 0.429 to 0.273 (own-basin quality on 3 of 8 clips) and lifted foreign-basin SSIM from 0.163 to 0.475 —
-about 2.9×. Absolute deployment floors remained unmet everywhere. **The experiment's durable contribution is not
-a null-embedding adapter; it is the demonstration that the objective's shape, not the channel's capacity, is
-what binds.**
+amortized adapter. **At the recipe that ran (J=10), the observed answers are a qualified yes and a clear no.**
+Optimized nulls reach 0.8523 own-basin SSIM — clearing G1's absolute conditions — while G1's *ratio* conjunct
+against a strong CFG-collapsed control failed (3.605 vs 5); fresh-noise optimization reached 0.4973 against a
+0.75 bar; and locked nulls under foreign noise reached 0.1729 against a 0.70 floor, very low in absolute terms
+and **+0.031 above the nearest *unmatched* do-nothing proxy, whose matched incremental effect was never
+measured.** The gate module returned `target="stop"`.
+
+**But that STOP is an observation, not the predeclared verdict.** Plan v5 required the gates to run at the
+adopted J=50; a launcher gap meant they ran at J=10 (§4.1). Because A1-probe is computed from A1's own nulls,
+and because A2's J=50 G2 outcome is unmeasured, **the plan-compliant target selection is INDETERMINATE.** Not
+advancing to P2/P3 was a discretionary decision on the observed result. A J=50 clean-gate re-run is approved and
+pending and will decide the formal outcome.
+
+Two conditional follow-ons produced the more interesting result. Replacing per-step tracking with joint
+optimization through the differentiable 25-step rollout — **at roughly 19× the per-example compute** — cut
+fresh-noise endpoint MSE from 0.429 to 0.273 and lifted foreign-basin SSIM from 0.163 to 0.475, about 2.9×.
+**Joint endpoint optimization at substantially greater compute produced better n=8 capacity and transfer;
+objective shape is a promising explanation, but a budget-matched greedy probe is required for causal
+attribution.** Every aggregate setting mean still missed the 0.70 floor. **The experiment's durable contribution
+is a well-supported research direction — through-the-sampler objectives — not a null-embedding adapter and not
+yet a demonstrated mechanism.**
 
 ---
 
 ## 2. What each gate outcome actually means
 
-### 2.1 G1 failed on its control, not on its method [FINDING → INFERENCE]
+### 2.1 G1's absolute conditions passed; only its ratio against a strong control failed [FINDING → INFERENCE] **[REV2 — retitled and rescoped]**
 
-G1 failed a single conjunct: median `MSE(A0)/MSE(A1)` = 3.605 against a bar of 5. A1's *absolute* conjuncts both
-passed comfortably (0.8523 ≥ 0.80; CI-low 0.8327 ≥ 0.75). The ratio bar was missed because **A0 is an unusually
-strong control** — 0.6665 SSIM / 0.3354 MSE — leaving only ~3× of headroom before the bar is arithmetically
-reachable.
+**[REV2]** Revision 1 titled this "G1 failed on its control", which implies a defective control. **A0 behaved
+exactly as designed.** The accurate statement is:
 
-Why is A0 so strong? [INFERENCE, mechanically grounded in the plan's own parity register] With **base** null rows
-in the 512-token context, the two CFG branches are *identical*, so the combine
-`v = v_unc + w(v_cond − v_unc)` degenerates to `v = v_unc`: A0 replays at **effective w = 1**. The inversion
-trajectory it replays was itself computed at **w = 1**. A0 is therefore close to a self-consistent replay of its
-own pivots, and it should be good. **This is a property of the experiment's control design, not evidence about
-the null channel.** The practical consequence: a ratio-form gate calibrated against a near-self-consistent
-control was always going to be hard to pass, and reading "G1 FAIL" as "the null channel is weak" is a
-misreading the results doc's one-line gate readings deliberately avoid.
+> **G1's absolute A1 conditions passed; only its ratio against the strong, CFG-collapsed A0 control failed.**
+
+Concretely: median `MSE(A0)/MSE(A1)` = 3.605 against a bar of 5, while A1's absolute conjuncts both passed
+(0.8523 ≥ 0.80; CI-low 0.8327 ≥ 0.75). **[REV2]** Revision 1 also claimed the strong control left "only ~3× of
+headroom" — **withdrawn**: MSE ratios have no fixed headroom, and the arithmetic does not bound what a
+better-optimized A1 could have achieved (which is precisely why §4.1's re-run is needed).
+
+Why is A0 strong? [INFERENCE, mechanically grounded in the plan's own parity register] With **base** null rows in
+the 512-token context the two CFG branches are *identical*, so `v = v_unc + w(v_cond − v_unc)` degenerates to
+`v = v_unc`: A0's dynamics become independent of `w` and match the single-context inversion dynamics — and the
+trajectory it replays was itself computed at w = 1. "Near-self-consistent replay" is a reasonable inference, and
+the reviewer confirmed the algebra. The consequence to carry forward is interpretive, not critical of the design:
+**a ratio-form gate measured against a control this strong is a different and harder test than the same ratio
+measured against a weak control** — which is exactly why exp_04's 3.6× and exp_05's 28.6× cannot be compared
+(§5.2). Reading "G1 FAIL" as "the null channel is weak" remains a misreading.
 
 ### 2.2 G2 is the honest measurement of the null channel's fresh-noise reach [FINDING]
 
@@ -52,65 +71,85 @@ does real work — 10.2× median MSE reduction, **64/64 examples improved**, 4.7
 0.4973 SSIM against a 0.75 bar. **Direction without magnitude** is the accurate summary: the channel reliably
 steers a fresh basin toward the target and reliably fails to arrive.
 
-### 2.3 The transfer collapse is the finding that actually stopped the experiment [FINDING]
+### 2.3 The transfer result is what drove the discretionary decision [FINDING] **[REV2 — retitled]**
 
-A1-probe = 0.1729 against a 0.70 floor — short by a factor of four. The selection verdict is
-**over-determined**: even had G1 passed, the probe floors alone would have stopped it. Per the standing R5 note
-this is a **failure of the absolute floor**; the relative conjunct is logically redundant on [0,1] SSIM and is
-never the binding constraint.
+A1-probe = 0.1729 against a 0.70 floor — short by a factor of four, i.e. **very low absolute quality**. Per the
+standing R5 note this is a **failure of the absolute floor**; the relative conjunct is logically redundant on
+[0,1] SSIM and is never the binding constraint.
 
-The sharpest available framing is a comparison against doing nothing. The nearest measured reference is A2-0
-(base nulls, fresh ε₀) at **0.1423**, so the locked nulls are **+0.031 above** it. **[FINDING]** An entire
-per-step optimization pass, transplanted to a different noise draw, is worth about three SSIM points over not
-optimizing at all — the optimized tensor is very nearly *inert* outside the basin it was fitted in.
+**[REV2]** Revision 1 said the selection was "over-determined" by this floor. **That is withdrawn** — A1-probe
+replays A1's own nulls, so it is not budget-independent, and the A2 fallback branch is unmeasured (§4.1). The
+probe is what *motivated* the discretionary decision not to advance; it does not *formally settle* the selection.
+
+**[REV2] The comparison against doing nothing, stated at the precision the artifacts allow.** The nearest
+reference is A2-0 (base nulls, fresh ε₀) at **0.1423**, so A1-probe is **+0.031 above** it. But A1-probe replays
+from `keyed(k)` while A2-0 replays from `global(0)`, and **no base-null `keyed(k)` control arm exists**. So:
+
+> A1-probe has very low absolute quality and is +0.031 above the nearest **unmatched** do-nothing proxy; its
+> **matched incremental benefit or harm was not measured.**
+
+Revision 1 called the tensor "very nearly *inert*" outside its basin. **That is too categorical** and is
+withdrawn: inertness is a claim about a matched incremental effect, and the matched control was never run.
 
 **[DEVIATION — RECORD]** The worklog and tracker say instead that these nulls are "actively destructive, WORSE
 than doing nothing". **The artifacts do not support that** (0.1729 > 0.1423); the phrase belongs to exp_05's B2
 arm, where it is gate-verified (0.1610 vs 0.2814, 0/64 improved), and appears to have been transposed across the
-joint reading. The distinction matters for §5.1: *inert* and *harmful* are different geometries, and the whole
-opposite-geometries argument depends on keeping them apart. Caveat both ways: A1-probe replays from `keyed(k)`
-and A2-0 from `global(0)`, and a "base nulls under `keyed(k)`" arm was never run, so this is a proxy comparison.
+joint reading. The distinction matters for §5.1: *destructive* and *low-quality-but-not-measurably-harmful* are
+different geometries, and the opposite-geometries argument depends on keeping them apart.
 
 ---
 
-## 3. The real result: greedy is the artifact
+## 3. Joint endpoint optimization outperformed greedy — at ~19× the compute **[REV2 — retitled]**
 
-### 3.1 What J1b and J1c changed, and what they showed [FINDING]
+**[REV2]** Revision 1 titled this "The real result: greedy is the artifact". That attributes the effect to
+objective shape, which the design does not isolate. The supported headline is the one below.
+
+### 3.1 What J1b and J1c measured [FINDING]
 
 J1b and J1c hold the channel (16 null rows), the backbone, the guidance scale, the clips and the noise fixed,
-and change **only the objective**: from *per-step tracking of the inversion pivots* to *joint optimization of
-the rollout endpoint through the differentiable sampler*. Both failure modes move:
+and change the objective — from *per-step tracking of the inversion pivots* to *joint optimization of the rollout
+endpoint through the differentiable sampler* — **and, unavoidably, the compute budget with it** (§3.2):
 
-| Axis | greedy per-step | joint endpoint | change |
+| Axis | greedy per-step (J=10) | joint endpoint (300 iters) | change |
 |---|---|---|---|
-| Fresh-noise capacity (mean endpoint MSE, same 8 clips) | 0.4294 (A2) | **0.2731** (A3) | 1.57×; 3/8 clips land inside A1's own-basin range |
+| Fresh-noise capacity (mean endpoint MSE, same 8 clips) | 0.4294 (A2) | **0.2731** (A3) | 1.57×; **0/8 beat their paired A1**, 3/8 fall inside the pooled A1 range |
 | Foreign-basin transfer (mean SSIM, same 8 clips) | 0.1633 (A1-probe) | **0.4753** (J1c keyed) | **2.91×** |
 
-The greedy arm's two headline weaknesses — "can't get there from fresh noise" and "doesn't survive a different
-noise draw" — **both** substantially dissolve under a through-the-sampler objective. That is a strong, coherent
-signal, and it is the single most transferable thing exp_04 produced.
+> **[REV2] The supported statement, verbatim from the review's prescribed wording:**
+> *Joint endpoint optimization at substantially greater compute produced better n=8 capacity and transfer;
+> objective shape is a promising explanation, but a budget-matched greedy probe is required for causal
+> attribution.*
 
-### 3.2 The confound I cannot dismiss, and the one place it does not bite [INFERENCE — read this before quoting §3.1]
+Both of the greedy arm's headline weaknesses — "can't get there from fresh noise" and "doesn't survive a
+different noise draw" — moved substantially. **What moved them is not established.**
+
+### 3.2 The compute confound, which is NOT eliminated on either axis **[REV2 — conclusion reversed]**
 
 **J1b changed the budget as well as the objective.** Greedy A2 ran 25 steps × J=10 = 250 cheap single-step inner
 iterations at ~21.2 s/example (adequacy J=10 cell). A3 ran 300 iterations of a *full 25-step remat'd rollout* at
-~405 s/example (3,237 s ÷ 8). That is roughly **19× the per-example optimization compute** of the arm it beat —
-and about 10× the adopted J=50 recipe. Worse, the adequacy probe's own plateau verdict was **"recipe-limited"**:
-more greedy iterations were still buying accuracy at the grid's edge. **So the capacity half of §3.1 is
-confounded: some unknown fraction of 0.429 → 0.273 is budget, not objective shape.** No arm in this experiment
-separates them.
+~405 s/example (3,237 s ÷ 8) — roughly **19× the per-example optimization compute** of the arm it beat, and about
+10× the adopted J=50 recipe. The adequacy probe's plateau verdict was **"recipe-limited"**: more greedy
+iterations were still buying accuracy at the grid's edge. **The capacity half of §3.1 is therefore confounded**,
+and no arm in this experiment separates budget from objective.
 
-**The transfer half is much cleaner, and here is why.** A *better-optimized* greedy null is one that fits its own
-per-step pivots more tightly. Tighter fitting to a basin-specific trajectory should, if anything, make a locked
-null **less** transferable, not more. So the direction of the budget confound on the transfer axis runs
-*against* the observed effect: J1c's 0.163 → 0.475 cannot be explained by "A3 simply had more compute" without
-also positing that extra greedy compute would have improved greedy transfer, which the mechanism argues against.
-**[INFERENCE]** I therefore treat J1c, not J1b, as the load-bearing evidence for the objective-shape claim, and I
-would recommend any future write-up lead with the transfer number rather than the capacity number.
+**[REV2] Revision 1 then argued the transfer half escapes the confound, on the reasoning that a
+better-optimized greedy null fits its own pivots more tightly and should therefore transfer *worse*, so the
+confound runs against the observed effect. The reviewer rejected that, and I accept the rejection.** The
+counter-mechanism is straightforward and I did not consider it: **more greedy iterations might first learn
+transferable, shared corrections before beginning to overfit basin-specific detail.** Under that trajectory,
+extra greedy compute would *improve* transfer over the J=10 measurement, and the observed 0.163 → 0.475 gap
+would shrink for reasons that have nothing to do with objective shape. Nothing in the artifacts distinguishes
+the two trajectories, because greedy transfer was only ever measured at one budget.
 
-A cheap experiment would settle it: run the greedy arm at the *adopted* J=50 (or higher) on the same 8 clips and
-re-probe transfer. It was never run. **[JUDGMENT]** This is the highest-value ~1 v6e-8-hour follow-up exp_04
-could still buy, and I flag it as the reviewer's most likely "why didn't you do this".
+**Standing conclusion:** J1c is *cleaner* evidence about transfer than J1b is about capacity — it at least
+compares locked tensors under identical replay conditions — but **it is not causal either.** The proposed sign
+of the confound is **plausible, not established**. Any future write-up should lead with transfer *and* state the
+confound in the same breath.
+
+**The experiment that would settle it, and was never run:** the greedy arm at the adopted J=50 (or higher) on the
+same 8 clips, re-probed for transfer — a **budget-matched greedy probe**. **[JUDGMENT]** ~1 v6e-8-hour, and it is
+the difference between a research direction and a demonstrated mechanism. It is now priority 2 in §7, and the
+approved J=50 clean-gate re-run (§4.1) is a natural vehicle for it.
 
 ### 3.3 Transfer tracks *absolute* quality, not *retention* [FINDING]
 
@@ -119,8 +158,9 @@ Spearman +0.976) but predicts the *retained fraction* only weakly (+0.623 / +0.7
 "**better-optimized clips end up better everywhere**", not "better-optimized clips lose proportionally less".
 The worklog's phrasing ("transfer quality tracks optimization quality") is true of the first reading and
 overstated for the second, and the retention figure itself is estimator-dependent (0.700 / 0.724 / 0.730
-depending on how you average — results §6.2). **None of this changes the verdict**: at 0.475 foreign and 0.651
-own-basin, the joint optimum is not deployment-grade at 300 iterations either.
+depending on how you average — results §6.2). **[REV2]** These correlations are n = 8 with no CIs and are
+descriptive only. **None of this changes the picture**: at 0.475 foreign and 0.651 own-basin, **every aggregate
+setting mean missed the 0.70 floor**, so the joint optimum is not deployment-grade at 300 iterations either.
 
 ---
 
@@ -133,12 +173,30 @@ requires G1/G2 to be evaluated *only* on the adopted recipe, and the capacity ru
 J=10** because `bash_scripts/run_wan_null_inversion.sh` never passes `null_adequacy_uri`. The re-run was
 affordable (1.43 h against a 2 h budget); this was a plumbing gap, not a budget stop.
 
-**How much does it hurt?**
+**[REV2] How much does it hurt? — revision 1's answer was wrong on the decisive point.**
 
-- **G2: not much.** 0.4973 against a 0.75 bar, with a CI-low of 0.4697 against 0.70. A 2.57× tracking-loss improvement closing a 0.25 SSIM gap is implausible on its face, and J1b — which threw ~19× the compute at the *same* fresh-noise problem with a *better-shaped* objective — still only reached 0.651 own-basin SSIM. **[INFERENCE]** G2's FAIL is robust.
-- **G1: materially.** G1 failed on `median_ratio` **3.605 against a bar of 5** — a 1.39× gap, against a recipe change worth 2.57× on the optimization's own tracking metric. **I cannot rule out that J=50 would have passed G1.** Anyone who reads "G1 FAILED" as a settled fact about the null channel is reading more than the evidence supports.
-- **The selection verdict: not at all.** Selection is over-determined by the A1-probe floor (0.1729 vs 0.70 — a factor of four), and transfer is a property of the *procedure* (greedy per-step, basin-specific pivots), which more inner iterations do not change in the helpful direction (§3.2). **[JUDGMENT] This is the load-bearing claim that rescues the experiment's conclusion from its own deviation, and it is the first thing a reviewer should attack.**
-- **Cross-experiment comparability: badly.** exp_04's A1 (0.8523, J=10) and exp_05's B1 (0.9227, J=50) were optimized at *different budgets*. §5.1 handles this.
+Revision 1 concluded "the selection verdict is unaffected, because it is over-determined by the A1-probe floor",
+and flagged it as its own most attackable claim. **The reviewer attacked it and it does not survive.** Three
+independent reasons, all of which I accept:
+
+1. **A1-probe is not budget-independent.** It replays *A1's* nulls. Recompute A1 at J=50 and you get different nulls, hence a different probe. 0.1729 characterises the J=10 nulls, not the arm.
+2. **The A2 fallback is unmeasured.** The selection rule's second branch asks whether G2 passes. There is no J=50 G2 measurement, so that branch is simply open.
+3. **No monotonicity is available.** Revision 1's supporting claim — "a stronger optimizer could only have raised A2" — **is withdrawn.** Tracking loss and decoded SSIM are not guaranteed to move together, in either direction, so I cannot even sign the effect of the missing re-run.
+
+**Consequence, and the formal state of the experiment:**
+
+> The artifacts genuinely say `target="stop"` at J=10, but the **plan-compliant target selection is
+> INDETERMINATE.** The decision not to advance to P2/P3 was **discretionary**, taken on the observed J=10 result.
+
+**Resolution in flight.** A **J=50 clean-gate re-run is approved by Yixun and pending** (the launcher fix is in
+preparation). It now **decides the formal outcome** rather than merely tidying the record: it will either restore
+the predeclared STOP or name a target. §1, §2.3 and this subsection are written to be superseded by it.
+
+What can still be said about the individual gates, pending that re-run:
+
+- **G2's FAIL looks robust but is no longer certified.** 0.4973 against a 0.75 bar, CI-low 0.4697 against 0.70, is a wide gap for a 2.57× tracking-loss improvement to close, and J1b threw ~19× the compute at the same fresh-noise problem and still reached only 0.651 own-basin SSIM. **[INFERENCE]** — but with no monotonicity guarantee this is a plausibility argument, not a bound.
+- **G1's FAIL is materially in doubt.** It failed on `median_ratio` **3.605 against a bar of 5** — a 1.39× gap against a recipe change worth 2.57× on the optimization's own tracking metric. **J=50 might well have passed G1.**
+- **Cross-experiment comparability: badly damaged.** exp_04's A1 (0.8523 @ **J=10**) and exp_05's B1 (0.9227 @ **J=50**). §5.2 handles this.
 
 **Process reading.** The R10 follow-up review installed a fail-closed guard against precisely this
 failure — its docstring names it verbatim — but the guard covers "URI set and unparseable", not "URI empty". The
@@ -150,10 +208,14 @@ adequacy artifact exists at the conventional path and no URI was passed" asserti
 ### 4.2 Sample sizes and metric coverage
 
 J1b and J1c are **n = 8** — the first eight DEV clips, no CIs, no multiplicity control, and the §3.3 correlations
-are descriptive. J1b reports **latent MSE only**; SSIM enters only at J1c. The headline "3/8 clips reach
-own-basin quality" is a count over eight, and one of them (ep45499) is an outlier the greedy arm also nearly
-solved (A2 = 0.037). Strip that clip and the story weakens but survives (2/7, and the transfer ratio is
-essentially unchanged).
+are descriptive. J1b reports **latent MSE only**; SSIM enters only at J1c.
+
+**[REV2]** Revision 1's "3/8 clips reach own-basin quality" **overstated the comparison** and is corrected in
+results §5.2: **none of the eight A3 endpoints matches or beats its *paired* A1 MSE (0/8)**. Three fall inside
+the **pooled cross-clip** A1 range, which measures a clip's joint endpoint against the best *other* clips'
+greedy own-basin results — a much weaker claim. One of those three (ep45499) is also an outlier the greedy arm
+nearly solved (A2 = 0.037). The capacity story is therefore weaker than revision 1 presented it, independently
+of the compute confound in §3.2.
 
 ### 4.3 Oracles are not systems
 
@@ -187,19 +249,27 @@ every unsafe write. The failure modes this campaign hit were orchestration failu
 
 ## 5. The joint reading with exp_05
 
-### 5.1 The two slots fail with opposite geometries [FINDING]
+### 5.1 The two experiments' fresh-noise arms moved in opposite directions [FINDING — observation only] **[REV2 — retitled and de-causalised]**
 
-From a **fresh** noise basin, on the **same 64 clips**, with the **same manifest hash**:
+From a **fresh** noise basin, on the **same 64 clips**, with the **same manifest hash** — **but at different
+optimization budgets, in different conditioning representations, against differently-constructed controls, and
+on non-shared pivots** (the four mismatches of §5.3):
 
-| | do-nothing control (MSE) | after per-step greedy optimization | effect |
-|---|---|---|---|
-| **Null slot** (exp_04, A2-0 → A2) | 4.743 | 0.490 | **9.7× better** |
-| **Positive slot** (exp_05, B2-0 → B2) | 1.418 | 5.625 | **4.0× worse** |
+| | recipe | do-nothing control (MSE) | after per-step greedy optimization | effect | clips improved |
+|---|---|---|---|---|---|
+| **Null slot** (exp_04, A2-0 → A2) | **J=10** (unadopted) | 4.743 | 0.490 | **9.7× better** | 64/64 |
+| **Positive slot** (exp_05, B2-0 → B2) | **J=50** (adopted) | 1.418 | 5.625 | **4.0× worse** | 0/64 |
 
-The positive slot's *do-nothing* control is already 3.3× better than the null slot's, and greedy optimization
-**inverts the ordering**: 64/64 improved in the null slot, **0/64 improved** in the positive slot. In-basin the
-picture flips again — the positive slot reaches 0.9227 and the null slot 0.8523. So: **the positive channel is
-the more powerful one and the more dangerous one; the null channel is weaker and better behaved.**
+Each row is internally matched — same cohort, same ε₀, each arm against its own control — so **each row is a
+sound finding on its own.** The positive slot's do-nothing control is 3.3× better than the null slot's, and
+greedy optimization inverts the ordering. In-basin the picture inverts again: positive 0.9227, null 0.8523.
+
+**[REV2]** Revision 1 concluded from this that "the positive channel is the more powerful and the more dangerous;
+the null channel is weaker and better behaved." **That conclusion is withdrawn.** It attributes a
+between-row difference to the *slot*, when the rows also differ in recipe (J=10 vs J=50), context construction
+(16 rows inside 512 vs 8 tokens as the whole context), pivots (not shared), and control design. **Comparing the
+two rows is descriptive, not a controlled slot contrast.** What survives is the pair of within-row observations
+— and they are genuinely opposite in direction, which is what makes the pair worth recording at all.
 
 ### 5.2 A mechanism story for that asymmetry [HYPOTHESIS — not tested by either experiment]
 
@@ -211,6 +281,9 @@ per-step authority applied greedily from the wrong basin produces more damage, n
 why the same procedure improves the low-authority null slot 9.7× and degrades the high-authority positive slot
 4.0×. It is consistent with every number in both experiments, and it is **untested**: no arm in either experiment
 varies w, varies L, or measures per-step step magnitude. I would not put it in a paper without the ablation.
+**[REV2]** Note also that it is a story about the *slot*, and §5.1 no longer licenses a slot attribution — so
+this hypothesis now rests on even less than when it was written, and would need the recipe held constant before
+it could be tested at all.
 
 ### 5.3 Why exp_04's G1 FAIL and exp_05's H1 PASS are not a slot comparison [FINDING]
 
@@ -219,19 +292,30 @@ w = 1 the pivots were computed at (§2.1) — a near-self-consistent, strong con
 CFG active (8-token conditional ≠ 512-row unconditional) and so replays w = 5 dynamics against w = 1 pivots — a
 mismatched, weak control (MSE 0.890). Ratios of 3.6× and 28.6× against those two controls are simply not the
 same statistic. **This was predeclared** in exp_05's plan §4 H1 interpretation note; it is repeated here because
-the two numbers are the ones most likely to be quoted side by side. Add the §4.1 budget difference (J=10 vs
-J=50) and the pivot difference (512-row vs 8-token inversion contexts), and the only defensible cross-experiment
-statements are the ones in §5.1, which are matched by construction (same cohort, same fresh noise, each slot
-against its own control).
+the two numbers are the ones most likely to be quoted side by side.
 
-### 5.4 The joint conclusion [INFERENCE]
+**[REV2] The full mismatch list is four items, not two**, and it applies to §5.1 as well as to the H1/G1 pair:
+(a) **controls** — CFG-collapsed A0 vs active-CFG B0; (b) **recipe** — exp_04 ran the **unadopted J=10 because
+of its launcher deviation** (§4.1), exp_05 honored the adopted **J=50**; (c) **representation** — 16 rows inside
+a 512-row context vs 8 tokens as the entire context; (d) **pivots** — not shared, so the two experiments'
+inversion trajectories and targets are different objects. **Each row of §5.1's table is internally matched;
+comparing the two rows remains descriptive, not a controlled slot contrast.**
 
-Across both slots, **static per-clip conditioning targets are dead as a training signal.** Both experiments'
-fresh-noise arms failed their predeclared gates (null 0.4973 vs a 0.75 bar; positive 0.1610, worse than doing
-nothing), and both experiments' locked contexts degrade badly across noise basins (null 0.173; positive 0.525).
-A cached tensor per clip cannot be the supervision, because the tensor that works is a function of the noise
-draw, and at training time the noise draw is fresh every step. **This is the finding that killed exp_04's P2/P3
-and exp_05's K2/K3, and it should stay killed.**
+### 5.4 The joint conclusion [INFERENCE] **[REV2 — narrowed]**
+
+Revision 1 said "static per-clip conditioning targets are dead as a training signal." **Too universal.** The
+evidence rejects **the specific family that was tested**:
+
+> The predeclared **single-basin cached-target family** — one per-clip, per-timestep context sequence produced by
+> **greedy pivot tracking** — is **rejected for P2/P3 and K2/K3 under these conditions.**
+
+What remains **untested**, and must not be swept in: **multi-noise / robust joint optimization of a static
+tensor** (optimizing one tensor against several noise draws at once was never attempted in either experiment);
+and a **state-conditioned emitter** that re-reads `z_t` (exp_05's K3 never ran). Both fresh-noise arms did fail
+their predeclared gates, and both experiments' locked contexts degrade across basins — but that indicts *greedy,
+single-basin* target construction, not every conceivable static formulation. This is the finding that stopped
+exp_04's P2/P3 and exp_05's K2/K3, and it should keep them stopped; it is not a proof that no static target can
+work.
 
 ---
 
@@ -239,28 +323,31 @@ and exp_05's K2/K3, and it should stay killed.**
 
 ### 6.1 Licensed
 
-1. **Stop proposing capacity-first changes.** More conditioning tokens, a bigger adapter, deeper injection points — none of these are indicated. The channel drives the frozen backbone to 0.85 (null) and 0.92 (positive) SSIM; the deployed adapter does not come close. **Capacity is not the binding constraint, and no proposal should assume it is without new evidence.**
-2. **Through-the-sampler objectives are the direction.** The one manipulation that improved both the capacity and the transfer axes was changing the objective's shape (§3.1), with the transfer half surviving the budget confound (§3.2).
-3. **The frozen backbone is exonerated.** It reconstructs DROID futures to 0.85–0.92 SSIM when conditioned correctly. Unfreezing it is not indicated by anything here.
-4. **Gate-as-code and predeclaration earned their cost.** Every verdict in this experiment was computed, not argued, and the one place the process failed (§4.1) failed *silently in the plumbing*, which is exactly the class of error predeclared gates cannot catch and provenance-bound artifacts can.
+1. **Capacity-first changes are not indicated by this evidence.** **[REV2]** More *conditioning tokens* or *deeper injection* attack a constraint that has been measured not to bind on the **output channel**: per-clip optimized conditioning drives the frozen backbone to 0.85 (null, J=10) and 0.92 (positive, J=50) SSIM. **[REV2]** Revision 1 added "the deployed adapter does not come close" — **removed**, because that compares a 64-clip oracle against the 4-window single-episode 0.2946 anchor this document elsewhere disowns (§4.4). No proposal should assume output-channel capacity binds without new evidence.
+2. **Through-the-sampler objectives are the most promising direction.** **[REV2]** Downgraded from "are the direction": the manipulation that improved both axes also carried ~19× the compute, so this is a well-motivated research direction, not a demonstrated mechanism (§3.2).
+3. **[REV2] The oracle demonstrates backbone expressivity on these evaluated clips.** Revision 1 said "the frozen backbone is exonerated", which overreaches: reaching 0.85–0.92 SSIM *when handed per-clip optimized conditioning* shows the frozen backbone can express these reconstructions on DEV/TRAINFIT clips. It does **not** establish deployable predictive sufficiency, and it is evidence against unfreezing only in the weak sense that no observed failure is attributable to the backbone.
+4. **Gate-as-code and predeclaration earned their cost.** Every verdict was computed, not argued. **[REV2]** And the one place the process failed (§4.1) failed *silently in the plumbing* — which is precisely the class of error predeclared gates cannot catch, provenance-bound artifacts can surface after the fact, and a launcher-level assertion should have caught before the run.
 
 ### 6.2 NOT licensed — and one distinction that is load-bearing
 
 1. **No claim that a null-embedding adapter would work.** P3 was never built. exp_04 has no amortization evidence.
-2. **No deployment claim.** Every arm is a per-clip oracle (§4.3), and even the best of them misses the 0.70 absolute floor.
-3. **No claim that "the basin problem is solved".** J1c retained ~72 % of a 0.651 own-basin SSIM. 72 % of not-good-enough is still not good enough.
-4. **No settled claim that the null channel fails G1** (§4.1) — that verdict is contaminated by the recipe deviation.
-5. **THE DISTINCTION THAT MATTERS.** exp_05's basin finding kills **static per-clip conditioning targets**. It does **NOT** kill the **rollout-loss family**. These are different objects, and conflating them would have cancelled the campaign's most promising direction:
+2. **No deployment claim.** Every arm is a per-clip oracle (§4.3); every aggregate setting mean misses the 0.70 floor.
+3. **No claim that "the basin problem is solved".** J1c retained ~0.70–0.73 of a 0.651 own-basin SSIM. A fraction of not-good-enough is still not good enough.
+4. **[REV2] No settled selection verdict at all** (§4.1) — not "STOP", not "the null channel fails G1". The formal selection is **INDETERMINATE** pending the approved J=50 re-run.
+5. **[REV2] No causal claim that objective shape is what produced J1b/J1c's gains** — a budget-matched greedy probe is required (§3.2).
+6. **THE DISTINCTION THAT MATTERS.** The campaign's basin findings refute **the tested greedy single-basin cached-target family**. They do **NOT** refute the **rollout-loss family**. These are different objects, and conflating them would cancel the campaign's most promising direction:
 
-   | | what was measured and failed | what remains untested |
+   | | measured and refuted | **untested** — not refuted, not validated |
    |---|---|---|
-   | **Target form** | a *fixed tensor per clip*, cached and regressed onto | a *state-conditioned emitter* that reads `z_t` and re-emits every step — not a fixed tensor, so "the tensor doesn't transfer across basins" does not apply to it |
-   | **Objective form** | *per-step greedy tracking* of inversion pivots | *through-the-sampler* optimization of the rollout endpoint — which J1b/J1c showed behaves differently on **both** the capacity and the transfer axes |
-   | **Training signal** | teacher-forced regression onto cached targets | a differentiable rollout loss computed live, with no cache at all |
+   | **Target form** | a *fixed per-clip, per-timestep tensor sequence* from **greedy pivot tracking**, cached and regressed onto | a *state-conditioned emitter* re-reading `z_t` each step; **also** robust/multi-noise joint optimization of a static tensor — neither was attempted |
+   | **Objective form** | *per-step greedy tracking* of inversion pivots, with no endpoint term | *through-the-sampler* optimization of the rollout endpoint — better on both axes at n=8, **at ~19× compute**, mechanism unattributed |
+   | **Training signal** | teacher-forced regression onto a cache | a differentiable rollout loss computed live, no cache |
 
-   Everything exp_04 and exp_05 refuted lives in the left column. exp_06 lives in the right one, and J1b/J1c are
-   its positive evidence. **[JUDGMENT]** I consider this the single most important paragraph in either analysis
-   document, and the one most at risk of being flattened into "the adapter line failed" by a summary.
+   **[REV2] The honest status line, replacing revision 1's implication that the right column is "alive":**
+   rollout-loss training is **not refuted, and has an n=8 motivating oracle result** — J1c at 0.475 foreign SSIM,
+   still **below the 0.70 floor**, with J1b's capacity half compute-confounded. It is **not validated** and
+   carries real risk. **[JUDGMENT]** This remains the paragraph most at risk of being flattened, in either
+   direction: into "the adapter line failed" or into "rollout losses work".
 
 ---
 
@@ -268,19 +355,32 @@ and exp_05's K2/K3, and it should stay killed.**
 
 | Priority | Action | Cost | Why |
 |---|---|---|---|
-| **1** | Nothing here blocks **exp_06**; it is the correct continuation and its motivation (E2) rests on J1b/J1c | — | The mechanism arc is complete; every predeclared gate has fired |
-| **2** | Add the one-line `null_adequacy_uri` wiring to `run_wan_null_inversion.sh` **plus** a fail-closed assertion when an adequacy artifact exists at the conventional path and no URI was passed | minutes | §4.1; the guard exists, the plumbing does not |
-| **3** | If exp_04's G1 verdict is ever cited as a fact, first re-run A1/A2 on DEV-64 at the **adopted J=50** and re-gate | ~1.5 h v6e-8 | §4.1 — closes the deviation properly rather than arguing around it |
-| **4** | Re-probe **greedy transfer at J=50** on the same 8 clips | ~1 h v6e-8 | §3.2 — the cheapest way to disentangle objective-shape from budget in the campaign's headline lesson |
+| **1** **[REV2]** | **The approved J=50 clean-gate re-run** — A1/A2 on DEV-64 (+TRAINFIT-16) at the adopted recipe, re-gated, with the launcher fix in place | ~1.5 h v6e-8 | §4.1. **This now DECIDES the formal outcome**, not merely tidies the record: it either restores the predeclared STOP or names a target. Until it lands, exp_04's selection is INDETERMINATE |
+| **2** **[REV2]** | Fold a **budget-matched greedy transfer probe** into that re-run — lock the J=50 A1 nulls and replay under `keyed{0,1,2}` | ~+1 h v6e-8 | §3.2. The single measurement that would convert "objective shape is a promising explanation" into a causal claim. It shares a job with priority 1 |
+| **3** | The launcher fix itself: wire `null_adequacy_uri` in `run_wan_null_inversion.sh` **plus** a fail-closed assertion when an adequacy artifact exists at the conventional path and no URI was passed | minutes | §4.1; the guard exists, the plumbing does not. **Precondition for priorities 1–2** |
+| **4** | Add a **base-null `keyed(k)` control arm** if the probe comparison is ever load-bearing | small | §2.3 — the missing matched control that makes "inert vs harmful" unanswerable today |
 | **5** | Pull the published `videos/` and write the P4 HTML report (SOP artifact 12) | host-only | Nobody has looked at what a 0.85 vs 0.50 vs 0.17 reconstruction *looks like*; the qualitative half of the evidence is unexamined |
-| **—** | **Do NOT** revive P2/P3 as planned | ~225+ v6e-8-h for A3-caching TRAIN-2000 alone | §5.4. Any revival is an **exp_07-scale new proposal** with its own gates, not a continuation under exp_04's fired ones |
+| **—** | **exp_06 is not blocked** by any of the above — but its motivating claim (E2) should be stated as "not refuted, n=8 motivating oracle, compute-confounded", not as a demonstrated mechanism | — | §6.2 |
+| **—** | **Do NOT** revive P2/P3 as planned | ~225+ v6e-8-h for A3-caching TRAIN-2000 alone | §5.4. Any revival is an **exp_07-scale new proposal** with its own gates |
 
 ---
 
-## 8. Open questions I would put to the reviewer first
+## 8. Open questions — **answered by the review; recorded with their answers** **[REV2]**
 
-1. Does the over-determination argument in §4.1 actually hold — is A1-probe's transfer failure genuinely independent of the optimization budget, or is that special pleading for a run that missed its own predeclared recipe?
-2. Is §3.2's asymmetry argument (budget confounds capacity but runs *against* the transfer effect) sound, or is there a mechanism by which more greedy iterations improve transfer that I have not considered?
-3. Is §2.1's account of A0's strength (CFG collapse ⇒ effective w = 1 ⇒ near-self-consistent replay of w = 1 pivots) correct as stated? The whole "G1 failed on its control" reading depends on it.
-4. Should the results doc's headline numbers carry an explicit "measured at J=10, not the adopted J=50" annotation everywhere they appear, rather than only in §4.4?
-5. Is the §6.2 static-targets-vs-rollout-family distinction stated strongly enough to survive being summarised by someone who has not read the arms?
+Revision 1's five questions were all answered in `null_adapter_codex_analysis_review.md`. Recorded here so the
+resolutions travel with the document:
+
+| # | Question (revision 1) | Reviewer's answer | Where applied |
+|---|---|---|---|
+| 1 | Does the over-determination argument hold? | **No — "special pleading as written; formal selection remains unmeasured."** | §1, §2.3, §4.1, results §1/§4.2/§4.4 |
+| 2 | Is the asymmetric-confound argument sound? | **No — "plausible hypothesis, not a valid elimination of the compute confound. J1c is cleaner but not causal."** | §3.1, §3.2 |
+| 3 | Is the A0 CFG-collapse account correct? | **Algebraically correct; but "G1 failed on its control" is overstated** — A0 behaved as designed | §2.1 |
+| 4 | Should headline numbers carry a J=10 annotation everywhere? | **Yes — every headline, table and terminal-status statement** | results §1, §4.1, §4.4, §9; analysis §5.1 |
+| 5 | Is the static-vs-rollout distinction strong enough? | **Visually prominent but scientifically too binary** — scope "failed" to the tested greedy targets; list robust multi-noise static targets among the untested | §5.4, §6.2 |
+
+### Open questions for the NEXT review (revision 2)
+
+1. Does §5.1 still overreach? It now refuses a slot attribution but keeps the two rows adjacent — is adjacency itself the problem, as the exp_05 reviewer suggested for H1/G1?
+2. Is §6.2's "not refuted, n=8 motivating oracle, not validated" the right standing status line for exp_06's motivation, and should the tracker carry it verbatim?
+3. §3.2 now concedes the counter-mechanism (greedy may learn transferable corrections first). Does anything in the *existing* artifacts bear on which trajectory is real, short of the new probe?
+4. Is priority 2 (folding the budget-matched greedy probe into the approved J=50 re-run) safe to combine in one job, or does it risk repeating the multi-phase runbook failures of J1-2/J1-3?

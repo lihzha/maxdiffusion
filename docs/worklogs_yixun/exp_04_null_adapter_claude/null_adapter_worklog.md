@@ -443,3 +443,30 @@ Four corrections to previously recorded statements. The drafted `null_adapter_re
 
 - The 3-line surgical fix (default/echo/override, each beside its NULL_SELECTION_URI sibling) + static-source tests incl. the uniqueness regex that closes the mistyped-expansion hole — the silent failure mode that cost four jobs. Issue #12's xtrace defect deliberately untouched.
 - **Stakes upgraded by the P4 analysis review:** the J=10 STOP was ruled formally INDETERMINATE (A1-probe is budget-dependent; A2's J=50 G2 unmeasured), so this rerun — capacity dev64 + trainfit16 at the ADOPTED J=50/lr=0.01, attempt-scoped roots — now DECIDES exp_04's plan-compliant target selection: either the predeclared STOP is retained on clean measurements, or an arm is selected and the P2 question reopens. Yixun's approval: "exp_04 clean_gate rerun" (mid-turn, 2026-08-09).
+
+## 2026-08-09T (local) — P4 analysis review applied (append-only; ONE correction TO THIS WORKLOG)
+
+- **Goal** — Record the Codex analysis review's verdict (REQUEST-REVISION) and correct, by annotation, one claim this file now carries that the review overturned.
+
+**Correction — "locked nulls are nearly INERT under foreign noise" is TOO CATEGORICAL and is withdrawn.**
+The 2026-08-08 audit entry above retracted the J1-4 reading's "actively destructive, WORSE than doing nothing"
+(correctly — A1-probe 0.1729 is +0.031 *above* the A2-0 reference 0.1423) and replaced it with "nearly INERT".
+The reviewer struck the replacement too: **A1-probe replays from `keyed(k)` while A2-0 replays from `global(0)`,
+and no base-null `keyed(k)` control arm was ever run**, so the proxy is *unmatched* and neither inertness nor
+harm is measurable from it. Standing wording, per the review:
+
+> A1-probe has **very low absolute quality** and is **+0.031 above the nearest UNMATCHED do-nothing proxy**;
+> its **matched incremental benefit or harm was not measured.**
+
+Adding a base-null `keyed(k)` arm is the missing measurement, noted as a cheap addition if the comparison is
+ever load-bearing.
+
+- **Review verdict — REQUEST-REVISION**, with the artifact numbers, gate statistics/CIs, adequacy scores, J1b losses/endpoints, J1c means and correlations, provenance and the complete failed-job trail all **independently verified**. Four conclusions exceeded the evidence:
+  1. **THE OVERTURN (already reflected in the J1-5 entry above):** the STOP is **not** rescued by over-determination — A1-probe is budget-dependent and A2's J=50 G2 is unmeasured ⇒ **formal target selection INDETERMINATE**; J1-5 now decides it.
+  2. **The objective-shape attribution remains COMPUTE-CONFOUNDED** (~19×). My "the transfer half escapes the confound" argument was rejected: **more greedy iterations might first learn transferable shared corrections before overfitting basin-specific detail**, so the confound's sign is not established. Standing wording: *"joint endpoint optimization at substantially greater compute produced better n=8 capacity and transfer; objective shape is a promising explanation, but a **budget-matched greedy probe** is required for causal attribution."* Folding that probe into J1-5 (lock the J=50 A1 nulls, replay under `keyed{0,1,2}`) is now analysis priority 2.
+  3. **"G1 failed on its control" overstated** — A0 behaved exactly as designed. Standing wording: *"G1's absolute A1 conditions passed; only its ratio against the strong, CFG-collapsed A0 control failed."* The CFG-collapse algebra itself was confirmed.
+  4. **Scope narrowings:** *none* of the 8 A3 endpoints beats its **paired** A1 (3 merely fall inside the *pooled* range — "3/8 reach own-basin quality" retracted); "floors unmet everywhere" → **every aggregate mean** missed 0.70 (**8/32 observations exceed it**); "static per-clip targets are dead" → **the tested greedy single-basin family**, with multi-noise static targets and state-conditioned emitters explicitly untested; "frozen backbone exonerated" → **backbone expressivity on these evaluated clips**.
+- **Four numeric defects in revision 1, all fixed:** the DEV pixel column was `full_pixel_mse` (and A0's value was a single example's) ⇒ true `future_pixel_mse` means; J1b first grad-norm min is **6.5797**, not 8.49; the 0.428–0.855 spread is the **8 clip means**, the **24 individual ratios** span **0.3856–0.9732**; and "all other figures reproduce exactly" removed as an unearned completeness claim.
+- **Result** — `passed` (docs-only). Revision 2 of `null_adapter_results.md` + `null_adapter_analysis.md` uncommitted in the worktree; every headline number now annotated **@ J=10**, and §1/§4.2/§4.4 written so J1-5's outcome drops in cleanly.
+- **Analysis** — The through-line across both experiments' review rounds: **each of my "new findings" overstated a favourable aggregate as though it were the whole distribution**, and the reviewer's discriminating move was always to check the other metric and the per-example counts. Worth carrying into the HTML reports.
+- **Next** — J1-5 lands ⇒ supersede results §1/§4.2/§4.4 and analysis §1/§2.3/§4.1 with the plan-compliant verdict; then the P4 HTML report from the published `videos/`.
