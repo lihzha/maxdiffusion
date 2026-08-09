@@ -389,3 +389,10 @@
 - **Telling evidence the rules were genuinely absent, not merely unasserted:** the fit-probe tests' tiny meshes had to GROW from 2 axes to the config's 4 — they only worked before because the probe never applied the axis rules.
 - **Residuals:** the real 5B path remains the one thing only M1's first minutes can test; the recipe-lock race + `publish_attempt` binding stay recorded as M2/M3-gating (F2).
 - **Next** — the scoped re-ruling review (W3 alone + the M1 ruling). On READY: commit ceremony → the M1 package.
+
+## 2026-08-09T22:00:00Z — W3 re-ruling: NOT-READY — the compiled-input contract has three more owners; W4 dispatched
+
+- **The oracle-fooling mechanism is the lesson:** both sides were lowered with M1's OWN inputs, so the oracle proved agreement on the probe's question, not the trainer's. This is the Z04 principle biting at the next layer — *an equality oracle proves agreement, and here even the agreement was on the wrong operands.* The re-scoped oracle must lower each path with ITS OWN path-produced inputs and assert ABSOLUTE expected shardings.
+- **The three missing owners:** production batch sharding (`NamedSharding(mesh, P('data','fsdp','context','tensor'))` from the real loader vs M1's single-device arrays, with no `in_shardings` on the shared jit); optimizer-state placement (equality-only today — every leaf explicitly on `P()` with an absolute per-leaf assertion); and the DEV scorer (M1's private scalar-only jit lets XLA prune the aux computation ⇒ eval cost understated — the SHARED scorer must be what M1 times, its lowering compared too). Plus the LOW: authorization literally `body[0]`.
+- Settled this pass: MAJOR-2/3 verified, the harness evidence-availability gap closed by static reconciliation, W1's peak ruling re-affirmed.
+- **Next** — W4 at the same Coder (same surface, three owners + the LOW). Honest running total: this is the fifth NOT-READY; every one has been materially correct; the minimal set is now purely mechanical completion of one contract.
