@@ -315,3 +315,17 @@ pos_artifact_dir: ''               # published B-arm shards / tables / report la
 pos_staging_dir: ''                # attempt staging for the positive shard writer
 pos_selection_uri: ''              # the K1 selection artifact the cache/verify modes read
 pos_adequacy_uri: ''               # the positive adequacy artifact capacity adopts its recipe from
+
+# ---------------------------------------------------------------------------
+# Post-STOP capacity-videos runbook (run_wan_capacity_videos.py, 2026-08-09).
+# Renders the never-decoded arms of BOTH experiments' published capacity
+# artifacts as GT-vs-prediction mp4s. An empty root skips that experiment;
+# each configured root requires its matching *_out root. Read-only against
+# the capacity roots; writes only mp4s + one videos_report.json per out root.
+# ---------------------------------------------------------------------------
+videos_null_capacity_root: ''      # exp_04 capacity root (a1/ + a2/ shards + gate_tables.json)
+videos_null_out: ''                # where exp_04's new videos + report land (attempt-scoped)
+videos_pos_capacity_root: ''       # exp_05 capacity root (b1/ + b2/ shards + gate_tables.json)
+videos_pos_out: ''                 # where exp_05's new videos + report land (attempt-scoped)
+videos_subset: 8                   # first N clips in manifest-ordinal order (matches decode_subset)
+videos_probe_k: 0                  # which keyed(name, k) start the probe arms replay from

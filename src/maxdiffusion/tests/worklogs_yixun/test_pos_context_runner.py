@@ -50,7 +50,6 @@ from maxdiffusion.pos_context_modes import (
 from maxdiffusion.pos_context_records import pos_header_from_json, pos_header_to_json
 from maxdiffusion.run_wan_null_inversion import EMBEDDING_SLOTS, main, plan_run, resolve_embedding_slot
 
-
 _S, _D = 512, 4096
 _LATENT = PRODUCTION_GEOMETRY.z_video
 _NAMES = ("ep1_v0_s00000", "ep2_v0_s00004")
@@ -431,7 +430,19 @@ def test_the_positive_yaml_declares_every_key_the_positive_route_reads():
     for key in ("pos_artifact_dir", "pos_staging_dir", "pos_adequacy_uri", "pos_ablation_L"):
         assert key in positive, key
     assert "embedding_slot" not in null and not any(k.startswith("pos_") for k in null)
-    assert {k: v for k, v in positive.items() if not k.startswith("pos_") and k != "embedding_slot"} == null
+    # Three allowed additions over the null YAML: the slot switch, the pos_* slot keys, and the
+    # post-STOP capacity-videos runbook's videos_* keys (run_wan_capacity_videos.py, 2026-08-09).
+    assert not any(k.startswith("videos_") for k in null)
+    assert {k for k in positive if k.startswith("videos_")} == {
+        "videos_null_capacity_root",
+        "videos_null_out",
+        "videos_pos_capacity_root",
+        "videos_pos_out",
+        "videos_subset",
+        "videos_probe_k",
+    }
+    extras = ("embedding_slot",)
+    assert {k: v for k, v in positive.items() if not k.startswith(("pos_", "videos_")) and k not in extras} == null
 
 
 def test_l_pos_threads_from_the_config_into_the_contexts_and_the_header():
@@ -451,9 +462,14 @@ def test_l_pos_threads_from_the_config_into_the_contexts_and_the_header():
     assert fake.contexts[0] == (len(_NAMES), 1, _D)  # the inversion context is one row, not eight
     assert result["pos_embeds"]["b1"].shape[2] == 1 and result["l_pos"] == 1
     header = pos_header_for(
-        {"params": {"guide_scale": 5.0, "l_pos": plan["params"]["l_pos"]}, "optimization_config": {},
-         "latent_dtype": "fp16"},
-        fake.backend(), manifest_hash="m" * 8, code_sha=_SHA,
+        {
+            "params": {"guide_scale": 5.0, "l_pos": plan["params"]["l_pos"]},
+            "optimization_config": {},
+            "latent_dtype": "fp16",
+        },
+        fake.backend(),
+        manifest_hash="m" * 8,
+        code_sha=_SHA,
     )
     assert header.l_pos == 1  # ... and the header says what actually ran
 
@@ -732,8 +748,11 @@ def _arms_and_header(inner_iters=1, lr=0.01, guide_scale=5.0, l_pos=POS_L):
     fake = _Fake()
     batch, fields = fake.read_batch(_NAMES)
     result = run_pos_capacity_example_batch(
-        fake.velocity_fn, batch, _BASE_CONTEXT,
-        CapacityParams(inner_iters=inner_iters, lr=lr, guide_scale=guide_scale), l_pos=l_pos,
+        fake.velocity_fn,
+        batch,
+        _BASE_CONTEXT,
+        CapacityParams(inner_iters=inner_iters, lr=lr, guide_scale=guide_scale),
+        l_pos=l_pos,
     )
     header = _header(
         fake,
@@ -791,8 +810,13 @@ def test_the_writer_refuses_a_non_canonical_sigma_grid_and_incomplete_example_fi
 
     with pytest.raises(ValueError, match="does not match the canonical grid"):
         build_pos_capacity_records(
-            fake.velocity_fn, result, batch, _BASE_CONTEXT, dataclasses.replace(header, sigma_vector=grid),
-            fields, arm="b1",
+            fake.velocity_fn,
+            result,
+            batch,
+            _BASE_CONTEXT,
+            dataclasses.replace(header, sigma_vector=grid),
+            fields,
+            arm="b1",
         )
     thin = {name: {k: v for k, v in row.items() if k != "actions"} for name, row in fields.items()}
     with pytest.raises(ValueError, match="example_fields must carry exactly"):
@@ -915,8 +939,15 @@ def test_the_consuming_side_refuses_a_selection_that_does_not_authorize_this_job
     from maxdiffusion.pos_context_modes import pos_selected_arm
 
     good = {
-        "embedding_slot": "positive", "cohort": "dev64", "manifest_hash": "d" * 64, "smoke_examples": 0,
-        "target": "B1/keyed", "arm": "b1", "label": "B1", "noise_convention": "keyed", "reasons": [],
+        "embedding_slot": "positive",
+        "cohort": "dev64",
+        "manifest_hash": "d" * 64,
+        "smoke_examples": 0,
+        "target": "B1/keyed",
+        "arm": "b1",
+        "label": "B1",
+        "noise_convention": "keyed",
+        "reasons": [],
     }
 
     assert pos_selected_arm(good) == "b1"
@@ -988,8 +1019,10 @@ def test_the_checked_in_positive_yaml_reaches_main_without_touching_a_null_root(
 
     observed = {"swept": [], "free_space": []}
     overrides = {
-        **{key: declared[key] for key in ("embedding_slot", "pos_L", "pos_ablation_L", "null_artifact_dir",
-                                          "null_staging_dir")},
+        **{
+            key: declared[key]
+            for key in ("embedding_slot", "pos_L", "pos_ablation_L", "null_artifact_dir", "null_staging_dir")
+        },
         "pos_artifact_dir": "gs://bucket/k1",
         "pos_staging_dir": "gs://bucket/k1-staging",
         "activations_dtype": "bfloat16",
@@ -1014,8 +1047,10 @@ def test_positive_roots_are_normalized_before_they_are_compared(pos_artifact, po
     from maxdiffusion.pos_context_modes import positive_roots
 
     config = _config(
-        pos_artifact_dir=pos_artifact, pos_staging_dir=pos_staging,
-        null_artifact_dir=null_artifact, null_staging_dir="gs://b/s",
+        pos_artifact_dir=pos_artifact,
+        pos_staging_dir=pos_staging,
+        null_artifact_dir=null_artifact,
+        null_staging_dir="gs://b/s",
     )
 
     with pytest.raises(ValueError, match=message):
@@ -1063,12 +1098,19 @@ def test_a_positive_run_refuses_an_adoption_artifact_that_is_not_its_own(overrid
     plan = {"cohort": "dev64", "params": {"l_pos": POS_L, "guide_scale": 5.0}}
     good = _adequacy_artifact()
 
-    assert pos_adoption("gs://a/x.json", plan, exists=lambda u: True, read_json=lambda u: good,
-                        manifest_hash="d" * 64)["inner_iters"] == 25
+    assert (
+        pos_adoption("gs://a/x.json", plan, exists=lambda u: True, read_json=lambda u: good, manifest_hash="d" * 64)[
+            "inner_iters"
+        ]
+        == 25
+    )
     assert pos_adoption("", plan, exists=lambda u: True, read_json=lambda u: good) is None  # no URI, no adoption
     with pytest.raises(ValueError, match=message):
         pos_adoption(
-            "gs://a/x.json", plan, exists=lambda u: True, read_json=lambda u: _adequacy_artifact(**overrides),
+            "gs://a/x.json",
+            plan,
+            exists=lambda u: True,
+            read_json=lambda u: _adequacy_artifact(**overrides),
             manifest_hash="d" * 64,
         )
 
