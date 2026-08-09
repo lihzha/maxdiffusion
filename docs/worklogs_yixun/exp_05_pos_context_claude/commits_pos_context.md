@@ -20,3 +20,7 @@
 - `0d1f4a5` — merge(exp_05): merge-interim-2 (exp_04 fix + R11; 1353 tests; K1-1 remediation)
 - `337f570` — feat(exp_05): S8 dispatch-config (K3 YAML; 1378 tests; 21 mutants)
 - `3571df6` — feat(exp_05): S9 partial (eval restore + gate certificate; 1417 tests; held open at the matrix)
+- `6f3146a` — feat(exp_04+exp_05): post-STOP capacity-videos runbook (10 tests; overwrite-idempotent publication)
+- `3561d5c` — docs(exp_05): capacity-videos job record (SUCCEEDED; cross-check clean; subset deviation)
+- `9ce88d3` — docs(exp_05): capacity-videos submit script (as run, tip 6f3146a)
+- `df23c87` — docs(exp_05): P4' HTML results reports 01/02 + gallery assets (24 mp4s)
