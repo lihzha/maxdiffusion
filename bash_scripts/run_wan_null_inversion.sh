@@ -90,6 +90,7 @@ NULL_MANIFEST_DIR="${NULL_MANIFEST_DIR:-gs://v6_east1d/datasets/droid_wan_null_a
 NULL_ARTIFACT_DIR="${NULL_ARTIFACT_DIR:-gs://v6_east1d/artifacts/exp04/${RUN_NAME}}"
 NULL_STAGING_DIR="${NULL_STAGING_DIR:-gs://v6_east1d/artifacts/exp04/${RUN_NAME}/_staging}"
 NULL_SELECTION_URI="${NULL_SELECTION_URI:-}"
+NULL_ADEQUACY_URI="${NULL_ADEQUACY_URI:-}"   # issue #15: the adequacy artifact capacity adopts its recipe from
 NULL_BATCH_SIZE="${NULL_BATCH_SIZE:-8}"
 NULL_DECODE_BATCH_SIZE="${NULL_DECODE_BATCH_SIZE:-8}"
 NULL_SMOKE_EXAMPLES="${NULL_SMOKE_EXAMPLES:-0}"
@@ -249,6 +250,7 @@ echo "NULL_DATA_DIR=${NULL_DATA_DIR}"
 echo "NULL_MANIFEST_DIR=${NULL_MANIFEST_DIR}"
 echo "NULL_ARTIFACT_DIR=${NULL_ARTIFACT_DIR}"
 echo "NULL_SELECTION_URI=${NULL_SELECTION_URI}"
+echo "NULL_ADEQUACY_URI=${NULL_ADEQUACY_URI}"
 echo "NULL_BATCH_SIZE=${NULL_BATCH_SIZE} NULL_DECODE_BATCH_SIZE=${NULL_DECODE_BATCH_SIZE}"
 echo "NULL_SMOKE_EXAMPLES=${NULL_SMOKE_EXAMPLES}"
 echo "NULL_A3_MEASURE=${NULL_A3_MEASURE} NULL_A3_ITERS=${NULL_A3_ITERS}"
@@ -269,6 +271,7 @@ git status --short --branch 2>/dev/null || echo "(no git checkout; running from 
   null_artifact_dir="${NULL_ARTIFACT_DIR}" \
   null_staging_dir="${NULL_STAGING_DIR}" \
   null_selection_uri="${NULL_SELECTION_URI}" \
+  null_adequacy_uri="${NULL_ADEQUACY_URI}" \
   null_batch_size="${NULL_BATCH_SIZE}" \
   null_decode_batch_size="${NULL_DECODE_BATCH_SIZE}" \
   null_smoke_examples="${NULL_SMOKE_EXAMPLES}" \

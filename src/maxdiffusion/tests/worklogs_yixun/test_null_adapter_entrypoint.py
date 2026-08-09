@@ -1037,8 +1037,44 @@ def test_the_r1_noise_golden_is_asserted_on_device_before_any_arm_runs():
 def test_the_launcher_passes_every_new_config_key():
     source = _launcher()
 
-    for key in ("null_smoke_examples", "null_decode_batch_size", "null_selection_uri"):
+    for key in ("null_smoke_examples", "null_decode_batch_size", "null_selection_uri", "null_adequacy_uri"):
         assert f'{key}="${{{key.upper()}' in source, key
+
+
+def test_the_launcher_maps_the_adequacy_uri_env_onto_the_config_key():
+    """Issue #15: the J1-4 runbook exported ``NULL_ADEQUACY_URI`` and this launcher had no mapping for
+    it, so the YAML default ``''`` applied, ``load_adoption`` returned None, and capacity ran at the
+    default J=10 while the adequacy probe had adopted J=50/lr=0.01.
+
+    exp_04's launcher style is a three-place mapping -- an env default, an echo, and one CLI override
+    -- and dropping any one of them breaks it: no default is fatal under ``set -u``, no override is
+    the silent discard that happened, and no echo means the log cannot show which recipe ran.
+    """
+    source = _launcher()
+
+    assert 'NULL_ADEQUACY_URI="${NULL_ADEQUACY_URI:-}"' in source
+    assert 'echo "NULL_ADEQUACY_URI=${NULL_ADEQUACY_URI}"' in source
+    assert 'null_adequacy_uri="${NULL_ADEQUACY_URI}"' in source
+    # ``set -u`` aborts on an unset expansion, so the default has to be established first.
+    default = _position('NULL_ADEQUACY_URI="${NULL_ADEQUACY_URI:-}"', source)
+    assert default < _position('echo "NULL_ADEQUACY_URI=${NULL_ADEQUACY_URI}"', source)
+    assert default < _position("run_wan_null_inversion.py", source)
+
+
+def test_an_exported_adequacy_uri_is_not_silently_dropped():
+    """The negative that bit: the env was exported at launch and never reached pyconfig.
+
+    Asserted on the entrypoint's own argument list -- a mapping anywhere else in the file is not an
+    override -- and on the spelling, because a mistyped expansion overrides with the empty string,
+    which is indistinguishable from the default that hid the bug for four jobs.
+    """
+    import re
+
+    source = _launcher()
+    invocation = source.split("run_wan_null_inversion.py", 1)[1]
+
+    assert 'null_adequacy_uri="${NULL_ADEQUACY_URI}"' in invocation
+    assert set(re.findall(r"NULL_ADEQUACY\w*", source)) == {"NULL_ADEQUACY_URI"}
 
 
 def test_the_xla_flags_stay_identical_to_the_side_adapter_launcher():
