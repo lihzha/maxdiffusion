@@ -94,3 +94,38 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 - Queue job: `20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun` (v6e-8); record confirmed at the authoritative status.json. Tip `a5aa6bce119b400df31d67dabcdbf7659c1c2036` (the adequacy-wiring fix `a520e9d` + ledger; APPROVE first-pass). Submit script archived beside this file (guard = clean EXECUTABLE tree; a docs file was legitimately mid-edit by the report reviser).
 - Phases: capacity dev64 + capacity trainfit16, both adopting the standing `…/j1r2/adequacy` artifact (J=50/lr=0.01 — now actually reaching the runner via the fixed launcher), attempt-scoped roots `cleangate[_trainfit]_att-<ts>`. ~1.4 h projected.
 - **Stakes (per the P4 analysis review): this run DECIDES the plan-compliant target selection** — the J=10 STOP was ruled indeterminate. Acceptance: gates evaluated at the adopted recipe on both cohorts; ANY outcome is acceptance (STOP retained ⇒ the predeclared verdict stands clean; an arm selected ⇒ the P2 question reopens as a Yixun decision). Provenance headers must show J=50. Triage per SOP.
+
+
+---
+
+## 2026-08-09 — J1-5 clean-gate rerun: DEV-64 capacity cohort verdict — **STOP retained at the adopted J=50 recipe**
+
+**Job:** `20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun` (v6e-8, attempt 1). Artifact root:
+`gs://v6_east1d/datasets/droid_wan_null_adapter/j1r2/cleangate_att-0809-180640/` (capacity/DEV-64 phase published ~20:45Z; trainfit-16 phase still running at write time).
+
+**Provenance (the point of the rerun) — verified bound in the artifacts, not just the log:** every shard `header.json` carries `"optimization_config": {"inner_iters": 50, "lr": 0.01}`, `code_sha a5aa6bc` (the adequacy-wiring-fix tip), `manifest_hash 433f8691…` matching `selection.json`. The launcher log independently shows `adopted recipe from the adequacy artifact: {'adopted': True, 'inner_iters': 50, 'lr': 0.01}`. Issue #15's fix is confirmed live end-to-end.
+
+**Formal target selection (plan §gates, DEV-64, J=50): `target = STOP`.**
+
+| arm | J=10 (J1-4, informal) | J=50 (J1-5, formal) | movement |
+|---|---|---|---|
+| A0 (per-clip control, locked basin) | 0.6665 | 0.6665 | identical (deterministic control — exact cross-run comparability) |
+| A1 (optimized null, locked basin) | 0.8523 | **0.8868** (CI 0.8711–0.9010) | +0.035 — more iters buys more in-basin capacity |
+| A1-probe (fresh noise) | 0.1729 | **0.1666** (rel. 0.188) | flat — transfer does NOT improve with J |
+| A2 (fresh-noise-trained) | 0.4973 | **0.6638** (CI 0.6312–0.6949) | +0.166 — converges to the control, not past it |
+| A2-0 (zero-null baseline) | 0.1423 | 0.1423 | identical (deterministic) |
+
+(All numbers mean future-SSIM over the 64-clip DEV cohort, k=0; probe means over k∈{0,1,2} per the selection rule.)
+
+**Gate clauses (measured vs bar):**
+- **G1** — median MSE ratio **4.681 vs ≥ 5** (FAIL, the only clause missed); improved 100% vs ≥80% (pass); mean 0.8868 ≥ 0.80 with CI-low 0.8711 ≥ 0.75 (pass).
+- **A1 selection clauses** — probe 0.1666 vs the 0.70 absolute floor (FAIL ×4.2); probe/A1 = 0.188 vs ≥ 0.7 (FAIL). ⇒ even a G1 pass could not have selected A1.
+- **G2** — mean 0.6638 vs ≥ 0.75 (FAIL) and CI-low 0.6312 vs ≥ 0.70 (FAIL); its ratio clause 17.8 ≥ 5 and improved 100% pass.
+
+**Robustness note:** the STOP does not hinge on G1's near-miss (4.681 vs 5). A1's selection was independently barred by the transfer probe missing its floor by >4x, and G2 by both SSIM clauses. Every path to a non-STOP outcome fails on at least one clause that is nowhere near its bar.
+
+**Scientific reading:** J=50 *strengthens* exp_04's conclusion rather than merely re-confirming it. The fresh-noise arm A2 improved from "worse than doing nothing" (0.4973 at J=10) to *statistically indistinguishable from doing nothing* (0.6638 vs control 0.6665) — 5x the optimization budget moved it exactly to the control, not past it. Meanwhile locked-basin capacity rose (0.8868) and fresh-noise transfer stayed at 0.17 — the basin-specificity of greedy per-clip nulls is budget-independent.
+
+**Formal consequence (per the analysis review's indeterminacy ruling):** the plan-compliant target selection, previously INDETERMINATE because the gates had only ever run at un-adopted J=10, is now **measured at the adopted recipe: STOP**. The predeclared verdict stands clean. Adjudication of closure is Yixun's (announcement 03) — reported to him this session.
+
+**Pending in this run:** trainfit-16 cohort (G2' fit-check) still executing; report drop-in rows (results §1/§4) will be folded in one commit when it lands.
