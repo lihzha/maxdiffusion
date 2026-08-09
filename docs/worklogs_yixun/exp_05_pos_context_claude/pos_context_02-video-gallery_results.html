@@ -1,0 +1,192 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>exp_05 pos_context — 02 video gallery</title><style>
+ body { font-family: -apple-system, sans-serif; margin: 2rem auto; max-width: 1180px; padding: 0 1rem; background:#111; color:#eee; }
+ h1 { font-size: 1.35rem } h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid #333; padding-bottom:.3rem }
+ h3 { font-size: 1rem; margin-top: 1.6rem }
+ .sub { color:#aaa; margin-top:-.4rem; font-size:.9rem }
+ .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:1rem }
+ .card { background:#1b1b1f; border-radius:10px; padding:.6rem }
+ video { width:100%; border-radius:6px; background:#000 }
+ .cap { margin:.4rem 0 .3rem; font-size:.83rem }
+ table { border-collapse:collapse; font-size:.78rem; color:#ccc }
+ .card table { width:100% }
+ th,td { border:1px solid #333; padding:.18rem .35rem; text-align:center }
+ th { background:#232327; font-weight:600 } td.hi { color:#7fd47f; font-weight:700 } td.lo { color:#e08a8a }
+ .note { background:#232327; border-left:4px solid #888; padding:.6rem .9rem; border-radius:6px; font-size:.9rem; margin:1rem 0 }
+ .warn { border-left-color:#c9a227 }
+ .badge { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.78rem; font-weight:700 }
+ .badge.stop { background:#5a2323; color:#f0b3b3 } .badge.pass { background:#1f4d2a; color:#a9e5b8 }
+ .badge.warnb { background:#54430f; color:#ecd48a }
+ code { background:#232327; padding:.05rem .3rem; border-radius:4px; font-size:.85em }
+</style></head><body>
+<h1>exp_05 <code>pos_context</code> — comparison-video gallery <span class="badge stop">TARGET = STOP (honored)</span></h1>
+<div class="note">Every clip: <b>ground truth on top, prediction underneath</b>; pixel frame 0 is the pinned
+first-frame condition. B1/B2 are per-clip ORACLES in the deployment-exact 8-token channel (C passed as the entire
+<code>encoder_hidden_states</code>) against the frozen Wan2.2 TI2V 5B, optimized at the adopted J=50. Rendered by
+the 2026-08-09 capacity-videos job (<code>6f3146a</code>): B1/B2 decoded from stored
+<code>expected_final_latent</code>, B1-probe a true 25-step replay from <code>keyed(name, 0)</code>. Recomputed
+per-clip future-SSIM matched the published <code>gate_tables.json</code> to fp16-storage tolerance
+(max |Δ| 0.052). Record: <code>pos_context_results.md</code> §4; these are the first pixels anyone has seen from
+this experiment (its results doc's caveat 6, now discharged).</div>
+
+<h2>B1 — own-basin oracle: the 0.92 ceiling of the deployed channel</h2>
+<p class="sub">Cohort mean 0.9227 [0.9129, 0.9314], 64/64 improved, 28.6× median MSE reduction. What H1's PASS looks like.</p>
+<div class="grid">
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/079_ep10899_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep10899_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.927</td><td>0.919</td><td>0.008</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/257_ep12399_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep12399_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.946</td><td>0.940</td><td>0.007</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/350_ep13099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep13099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.895</td><td>0.892</td><td>0.003</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/959_ep17199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep17199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.901</td><td>0.913</td><td>-0.011</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/1297_ep18699_v0_s00008.mp4"></video>
+        <div class="cap"><b>ep18699_v0_s00008</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.905</td><td>0.901</td><td>0.004</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/1386_ep19199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.955</td><td>0.952</td><td>0.003</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/1433_ep19599_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19599_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.924</td><td>0.926</td><td>-0.002</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1/1813_ep21099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep21099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.932</td><td>0.930</td><td>0.003</td></tr></table>
+      </div></div>
+
+<h2>B2 — optimized from fresh noise: worse than doing nothing</h2>
+<p class="sub">Cohort mean 0.1610 vs the frozen-context control's 0.2814; 0/64 improved, median ratio 0.254.
+The H2 failure that killed the caching program — the tensor that works is a function of the noise draw.</p>
+<div class="grid">
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/079_ep10899_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep10899_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.238</td><td>0.231</td><td>0.007</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/257_ep12399_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep12399_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.235</td><td>0.233</td><td>0.001</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/350_ep13099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep13099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.131</td><td>0.139</td><td>-0.009</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/959_ep17199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep17199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.121</td><td>0.132</td><td>-0.011</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/1297_ep18699_v0_s00008.mp4"></video>
+        <div class="cap"><b>ep18699_v0_s00008</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.179</td><td>0.177</td><td>0.002</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/1386_ep19199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.273</td><td>0.267</td><td>0.006</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/1433_ep19599_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19599_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.070</td><td>0.018</td><td>0.052</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b2/1813_ep21099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep21099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.174</td><td>0.174</td><td>-0.001</td></tr></table>
+      </div></div>
+
+<h2>B1-probe k=0 — B1's context locked under foreign noise: partial transfer</h2>
+<p class="sub">Cohort mean 0.5254 (k-avg) against the 0.70 absolute floor — the binding target-selection constraint.</p>
+<div class="grid">
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/079_ep10899_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep10899_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.541</td><td>0.543</td><td>-0.002</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/257_ep12399_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep12399_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.476</td><td>0.505</td><td>-0.028</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/350_ep13099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep13099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.352</td><td>0.328</td><td>0.025</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/959_ep17199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep17199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.347</td><td>0.349</td><td>-0.002</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/1297_ep18699_v0_s00008.mp4"></video>
+        <div class="cap"><b>ep18699_v0_s00008</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.413</td><td>0.406</td><td>0.007</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/1386_ep19199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.571</td><td>0.529</td><td>0.042</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/1433_ep19599_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19599_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.283</td><td>0.274</td><td>0.009</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="pos_context_02-video-gallery_results_assets/b1_probe_k0/1813_ep21099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep21099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.527</td><td>0.535</td><td>-0.009</td></tr></table>
+      </div></div>
+
+<div class="note warn"><b>Clip-subset note:</b> all three sections render the same 8 lowest-ordinal DEV clips
+(recorded deviation, worklog 2026-08-09) — same-clip comparable with each other and with exp_04's A2/A1-probe
+gallery sections, not with exp_04's A1 sections (overlap ep12399/ep19599/ep21099 only).</div>
+</body></html>
