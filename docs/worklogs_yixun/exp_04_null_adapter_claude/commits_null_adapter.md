@@ -16,3 +16,4 @@
 - `65bf65f` — feat(exp_04): R11 a3-direct-opt (TDD, 936 tests) — final code round
 - `925ee17` — fix(exp_04): HyperParameters config access (J1-1 crash; 954 tests)
 - `5ad79fb` — feat(exp_04): R12-lite transfer-probe (J1c mode; 989 tests; 22 mutants)
+- `a520e9d` — fix(exp_04): adequacy-wiring (issue #15; 991 tests; 6 mutants; APPROVE first-pass)
