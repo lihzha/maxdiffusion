@@ -1,0 +1,123 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>exp_05 pos_context — 01 capacity &amp; gates</title><style>
+ body { font-family: -apple-system, sans-serif; margin: 2rem auto; max-width: 1080px; padding: 0 1rem; background:#111; color:#eee; }
+ h1 { font-size: 1.35rem } h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid #333; padding-bottom:.3rem }
+ h3 { font-size: 1rem; margin-top: 1.6rem }
+ .sub { color:#aaa; font-size:.9rem }
+ table { border-collapse:collapse; font-size:.82rem; color:#ccc; margin:.6rem 0 }
+ th,td { border:1px solid #333; padding:.22rem .5rem; text-align:center }
+ th { background:#232327; font-weight:600 } td.l { text-align:left }
+ td.hi { color:#7fd47f; font-weight:700 } td.lo { color:#e08a8a; font-weight:700 }
+ .note { background:#232327; border-left:4px solid #888; padding:.6rem .9rem; border-radius:6px; font-size:.9rem; margin:1rem 0 }
+ .warn { border-left-color:#c9a227 } .good { border-left-color:#3f7a4d }
+ .badge { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.78rem; font-weight:700 }
+ .badge.stop { background:#5a2323; color:#f0b3b3 } .badge.pass { background:#1f4d2a; color:#a9e5b8 }
+ code { background:#232327; padding:.05rem .3rem; border-radius:4px; font-size:.85em }
+ details { background:#1b1b1f; border-radius:8px; padding:.5rem .8rem; margin:.8rem 0 }
+ summary { cursor:pointer; font-weight:600 }
+ .pass:after{content:" ✓"; color:#7fd47f} .fail:after{content:" ✗"; color:#e08a8a}
+</style></head><body>
+<h1>exp_05 <code>pos_context</code> — P1′ capacity study &amp; gates
+<span class="badge pass">H1 PASS</span> <span class="badge stop">TARGET = STOP (honored by Yixun 2026-08-06)</span></h1>
+<p class="sub">Presentation of <code>pos_context_results.md</code> (rev 2) §1–§4 and
+<code>pos_context_analysis.md</code> (rev 2) §1–§2 — the gate record was independently reproduced by the
+analysis reviewer and stands unchanged. No new numbers. Plan v3; branch
+<code>claude-exp_05_pos_context-20260804</code>; frozen Wan2.2 TI2V 5B (<code>@b8fff7315c…</code>);
+<b>deployment-exact representation</b>: C ∈ ℝ^{8×4096} passed as the <em>entire</em>
+<code>encoder_hidden_states</code>, exactly what <code>wan_pre_context_adapter_forward</code> feeds the
+transformer; recipe <b>J=50, lr=0.01 — adopted AND honored</b>; guide scale 5.0; same DEV-64/TRAINFIT-16
+manifests as exp_04, byte-identical hashes.</p>
+
+<h2>1 · The verdict in one paragraph (analysis §1)</h2>
+<div class="note good">Yixun's question was: <em>is the deployed <code>pre_context</code> adapter's poor rollout
+quality a limit of its capacity or of its training signal?</em> <b>Capacity is not the limit.</b> Per-clip
+optimized 8-token contexts drive the frozen 5B to <b>0.9227 SSIM</b> (64/64 improved, 28.6× median MSE
+reduction). <b>But that capability is bound to the noise basin it was optimized in, and bound hard:</b>
+re-optimizing from a fresh ε₀ lands at <b>0.1610 — worse than doing nothing</b> (0.2814), 0/64 improved;
+locked contexts under foreign noise fall to <b>0.5254</b> against a 0.70 floor. The predeclared rule stopped
+the experiment before any of the ~14.80 GiB cache was written. <b>The finding is not "the positive slot is
+weak" — it is that a per-clip conditioning tensor is the wrong object to regress onto</b>, because the tensor
+that works is a function of the noise draw, and the training-time noise draw is fresh every step.
+<b>[REV2 scope]</b> H1 establishes <em>output-channel expressivity</em>; it does <em>not</em> bound the ~128M
+head's <em>function capacity</em> (K3 never ran) — proposals to widen/deepen the head are not excluded.</div>
+
+<h2>2 · Per-arm means @ J=50 (gate metric: future-SSIM / future-MSE; frame 0 excluded)</h2>
+<h3>DEV-64 (n=64)</h3>
+<table>
+<tr><th>Arm</th><th>role</th><th>mean future-SSIM</th><th>mean full-SSIM</th><th>mean future-MSE</th><th>mean future-pixel-MSE</th></tr>
+<tr><td class="l">B0 (control)</td><td class="l">frozen 8-token C_init, own basin — <b>active-CFG</b> control (unlike exp_04's A0)</td><td>0.3215</td><td>0.3420</td><td>0.8897</td><td>0.05164</td></tr>
+<tr><td class="l"><b>B1</b></td><td class="l">C optimized per step, own basin</td><td class="hi">0.9227</td><td>0.9250</td><td>0.0369</td><td>0.00197</td></tr>
+<tr><td class="l">B1-probe</td><td class="l">B1's C locked, foreign keyed(k)</td><td class="lo">0.5254</td><td>0.5398</td><td>0.6387</td><td>0.03543</td></tr>
+<tr><td class="l">B2-0 (control)</td><td class="l">frozen C_init from fresh ε₀</td><td>0.2814</td><td>0.3032</td><td>1.4178</td><td>0.07526</td></tr>
+<tr><td class="l"><b>B2</b></td><td class="l">C optimized per step from fresh ε₀</td><td class="lo">0.1610</td><td>0.1865</td><td>5.6250</td><td>0.31332</td></tr>
+<tr><td class="l">B2-probe</td><td class="l">B2's C locked, keyed(k)</td><td>0.2118</td><td>0.2357</td><td>5.9509</td><td>0.36205</td></tr>
+</table>
+<h3>TRAINFIT-16 (n=16)</h3>
+<table>
+<tr><th>Arm</th><th>mean future-SSIM</th><th>mean full-SSIM</th><th>mean future-MSE</th></tr>
+<tr><td class="l">B0</td><td>0.3115</td><td>0.3324</td><td>0.8820</td></tr>
+<tr><td class="l"><b>B1</b></td><td class="hi">0.9095</td><td>0.9122</td><td>0.0397</td></tr>
+<tr><td class="l">B1-probe</td><td class="lo">0.4885</td><td>0.5040</td><td>0.8140</td></tr>
+<tr><td class="l">B2-0</td><td>0.2803</td><td>0.3021</td><td>1.3944</td></tr>
+<tr><td class="l"><b>B2</b></td><td class="lo">0.1570</td><td>0.1825</td><td>5.8810</td></tr>
+<tr><td class="l">B2-probe</td><td>0.2121</td><td>0.2359</td><td>5.4751</td></tr>
+</table>
+<div class="note warn"><b>[REV2 — material record correction]</b> The worklog/tracker's "B0 ≈ 0.25" and
+"B1 ≈ 3.6× the control" were wrong: the published tables give <b>B0 = 0.3215</b> (median 0.30456, min 0.01763,
+max 0.59362), so <b>B1 = 2.87× B0</b> and 3.13× the 0.2946 anchor (that second figure was right; the anchor
+itself is a 4-sample wiring check, never a baseline). Control pairing confirmed by exact reproduction of the
+gate statistic (28.6320 to five decimals). No gate verdict changes.</div>
+
+<h2>3 · Gate verdicts (exp_04's gate module imported unchanged; 10,000 resamples, seed 20260804; coverage clean)</h2>
+<table>
+<tr><th>Gate</th><th>Cohort</th><th>median ratio (≥5)</th><th>frac improved (≥0.80)</th><th>mean SSIM</th><th>95% CI</th><th>verdict</th></tr>
+<tr><td>H1 (B1 vs B0)</td><td>DEV-64</td><td class="pass"><b>28.6320</b></td><td class="pass">1.0000</td><td class="pass">0.9227</td><td class="pass">[0.9129, 0.9314]</td><td><span class="badge pass">PASS — every conjunct, with margin</span></td></tr>
+<tr><td>H1</td><td>TRAINFIT-16</td><td class="pass"><b>26.0421</b></td><td class="pass">1.0000</td><td class="pass">0.9095</td><td class="pass">[0.8839, 0.9270]</td><td><span class="badge pass">PASS</span></td></tr>
+<tr><td>H2 (B2 vs B2-0)</td><td>DEV-64</td><td class="fail"><b>0.2540</b></td><td class="fail">0.0000</td><td class="fail">0.1610</td><td class="fail">[0.1358, 0.1868]</td><td><span class="badge stop">FAIL — all four conjuncts</span></td></tr>
+<tr><td>H2</td><td>TRAINFIT-16</td><td class="fail"><b>0.1962</b></td><td class="fail">0.0000</td><td class="fail">0.1570</td><td class="fail">[0.1076, 0.2082]</td><td><span class="badge stop">FAIL — all four conjuncts</span></td></tr>
+</table>
+<h3>Transfer (target-selection conjuncts)</h3>
+<table>
+<tr><th>Cohort</th><th>B1-probe absolute (floor 0.70)</th><th>relative (0.7×B1)</th><th>verdict</th></tr>
+<tr><td>DEV-64</td><td class="fail"><b>0.5254</b></td><td class="fail">0.5695</td><td class="l">fails — <b>the absolute floor is the binding constraint</b></td></tr>
+<tr><td>TRAINFIT-16</td><td class="fail"><b>0.4885</b></td><td class="fail">0.5371</td><td class="l">same</td></tr>
+</table>
+<p class="sub">The selection verdict rests <b>entirely on the transfer floors</b> — unlike exp_04, the capacity
+gate H1 <em>passed</em>. H2's median ratio of 0.254 is below 1: fresh-noise optimization made reconstruction
+worse than the frozen-context control on every example. (The <code>selection.json</code> reason strings say
+"A1"/"G2" — a cosmetic label carry-over from the imported gate module; the statistics are exp_05's B-arms.)</p>
+
+<h2>4 · Adequacy — adopted <b>and honored</b> (the wiring exp_04's launcher lacked)</h2>
+<table>
+<tr><th>Cell (8 DEV)</th><th>score (median s_e)</th></tr>
+<tr><td class="l">J=10, lr=0.01 (default)</td><td>0.00563540</td></tr>
+<tr><td class="l">J=25, lr=0.01</td><td>0.00362877</td></tr>
+<tr><td class="l"><b>J=50, lr=0.01 — ADOPTED</b> (threshold 0.00281770) and verified in the shard provenance headers</td><td class="hi">0.00238379</td></tr>
+<tr><td class="l">J=10 / J=25 / J=50 @ lr=0.03</td><td>0.00746982 / 0.00334528 / 0.00273655</td></tr>
+</table>
+<p class="sub">Plateau: recipe-limited (34.31% ≥ 10%). L_pos ablation (diagnostic-only): L=1 (the PyTorch fork's
+prior art) tracks at 0.01316775 vs L=8's 0.00238379 — <b>5.52× better</b>; L=8 fixed by plan.</p>
+
+<h2>5 · Cross-experiment framing constraints (predeclared — results §4.3)</h2>
+<div class="note">H1's PASS and exp_04's G1 FAIL are <b>not</b> a like-for-like slot comparison:
+(a) B0 is an <b>active-CFG</b> control while exp_04's A0 collapses CFG to identity;
+(b) exp_04 replaced 16 rows inside a 512-row context, exp_05 passes 8 tokens as the whole context;
+(c) the inversion pivots are different objects (8-token vs 512-row inversion contexts — no artifact shared);
+(d) <b>different optimization budgets</b> — exp_05 @ J=50 (adopted), exp_04 @ J=10 (default; its J1-5 rerun
+pending). Descriptive side-by-side only.</div>
+
+<details><summary>Job trail &amp; what the STOP did / did not stop (results §3, §6)</summary>
+<table>
+<tr><th>Item</th><th>Status</th></tr>
+<tr><td class="l">K1-1</td><td class="l">FAILED 23 s in — inherited stale copy of the shared entrypoint (exp_04's issue-#11 fix predated the merge; no propagation step existed → the standing fix-propagation rule)</td></tr>
+<tr><td class="l">K1-2 (tip <code>bb845ea</code>)</td><td class="l">SUCCEEDED — all four phases (smoke → adequacy → capacity dev64 → capacity trainfit16)</td></tr>
+<tr><td class="l">K2 target caching (~14.80 GiB)</td><td class="l"><b>STOPPED</b> — Yixun verbatim: "Honor the STOP for K2, and GO for J1b"</td></tr>
+<tr><td class="l">K3 regression / K4 eval</td><td class="l">STOPPED (downstream of K2); TEST-64 never touched</td></tr>
+<tr><td class="l">S1–S8 + S10a trainer stack</td><td class="l">Built, reviewed, committed, green (1,417 tests) — the STOP is not "nothing was built"</td></tr>
+</table></details>
+
+<div class="note"><b>Bounding caveats (results §9):</b> B1 is a per-clip oracle bounding the output channel, not
+the head; pivots are exp_05's own; one cohort/dataset/backbone/guidance scale/L_pos; no comparison videos existed
+until the 2026-08-09 gallery (page 02); σ₀=1.0 vs 0.999 in the PyTorch reference (ratified).</div>
+<p class="sub">Companion page: <a href="pos_context_02-video-gallery_results.html" style="color:#8ab4f8">02 — video gallery</a></p>
+</body></html>
