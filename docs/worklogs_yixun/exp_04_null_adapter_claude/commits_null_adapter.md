@@ -17,3 +17,4 @@
 - `925ee17` — fix(exp_04): HyperParameters config access (J1-1 crash; 954 tests)
 - `5ad79fb` — feat(exp_04): R12-lite transfer-probe (J1c mode; 989 tests; 22 mutants)
 - `a520e9d` — fix(exp_04): adequacy-wiring (issue #15; 991 tests; 6 mutants; APPROVE first-pass)
+- `39e46f0` — docs(exp_04): P4 HTML results reports 01/02/03 + gallery assets (32 mp4s; INDETERMINATE-pending-J1-5 badge)
