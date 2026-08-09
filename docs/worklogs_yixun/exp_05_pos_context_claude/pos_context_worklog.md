@@ -279,3 +279,24 @@ Scope: the inherited exp_04 audit (recorded CLEAN 2026-08-05 in `exp_04_null_ada
 1. **B0 (frozen-context control, dev64 mean future-SSIM) = 0.3215, not the "≈0.25" recorded in the K1 reading** (and propagated to the tracker). B1/B0 = **2.87×**, not ~3.6×. No verdict changes — B0 is a ratio denominator, not a gate input; the origin of 0.25 could not be reconstructed.
 2. **New observation (not previously noted): B2-probe (0.2118) > B2 (0.1610)** — the fresh-noise-optimized contexts do BETTER on noise they were never optimized for. This rules out "the optimizer found nothing" and is a clean fingerprint of objective mismatch; a cheap host-only confirmation (reading `per_step_final_losses` from the published b2 shards) is flagged in the analysis draft, deliberately not run in the docs-only round.
 3. Drafts `pos_context_results.md` / `pos_context_analysis.md` written; Codex analysis review deferred. exp_04's gate-recipe deviation (recorded in its worklog) means the two experiments' IN-BASIN numbers are not recipe-matched — K1 honored its adoption (J=50), J1-4 silently ran J=10 — a non-comparability caveat both drafts carry.
+
+## 2026-08-09T00:00:00Z — P4' analysis review applied (append-only; two corrections TO THIS WORKLOG)
+
+- **Goal** — Record the Codex analysis review's verdict (REQUEST-REVISION) and, per the append-only rule, correct two defects the review found in *this file* by annotation rather than edit.
+
+**Correction 1 — the merge-interim-2 entry's timestamp is ERRONEOUS.** The entry above headed
+`## 2026-08-06T02:05:00Z — merge-interim-2 EXECUTED (exp_04 fix 27efcd1 → this branch) — the K1-1 remediation; K1-2 ready`
+carries an impossible time: **K1-2 launched at 01:24:45Z** (queue job `20260806-012445-20a744fe-exp05-k1-pos-yixun`),
+so the merge that enabled it cannot postdate it. The authoritative time is the commit's own:
+**`0d1f4a5` is timestamped `2026-08-05T21:22:54-04:00` = `2026-08-06T01:22:54Z`** — 111 s before the launch.
+The heading stands as written per the append-only rule; **read it as 01:22:54Z**. Only the stamp was wrong — the
+ordering of events (merge → relaunch) was correct throughout, and no artifact or verdict is affected. Same
+class as the two timestamp corrections already recorded in this file and exp_04's.
+
+**Correction 2 — the 2026-08-08T07:35Z audit entry's items 1 and 2 are both partly wrong.**
+- *Item 1* said "B0 is a ratio denominator, **not a gate input**". Half wrong: **B0's future-MSE IS a gate input** — it is the numerator of H1's `median_ratio` statistic (mean 0.8897). What is not a gate input is **B0's future-SSIM**, the quantity that was misreported. The conclusion (no verdict changes) is unaffected and the reviewer independently reproduced B0 = 0.32147 and B1/B0 = 2.87022×. Extrema also refined: min **0.01763**, max **0.59362**.
+- *Item 2* said B2-probe > B2 "rules out 'the optimizer found nothing'" and is "a clean fingerprint of objective mismatch". **Withdrawn.** The signature is MIXED: probe is **worse** on future-MSE (5.9509 vs 5.6250); probe SSIM exceeds B2 on only **35/64** examples with median ΔSSIM **+0.00435**; on the matched eight it is **3/8** with median **−0.00797**. Optimizer failure or overfitting can also produce basin-specific destructive contexts. Standing wording: **"consistent with objective mismatch, but not discriminating."** The confirming diagnostic requires **all eight b2 shards** (not one) and a comparison of B2's final tracking-loss distribution against B1's.
+
+- **Result** — `passed` (docs-only). Review verdict **REQUEST-REVISION** with the gate record **verified correct** (B0, all DEV/TRAINFIT arm means, H1/H2 ratios, CIs, fractions, coverage, both STOPs, the J=50 adoption and its use in both capacity runs, K1-1's FAILED record, K1-2's provenance header, and the exp_04-J10-vs-exp_05-J50 non-comparability). Three analysis conclusions narrowed or withdrawn: §3.2 hedged; the static-target conclusion scoped to the **predeclared single-basin greedy-pivot family**; §4.1 retitled to lead with retention with the absolute comparison inconclusive. Five factual/reporting defects fixed. Review saved verbatim as `pos_context_codex_analysis_review.md`; revision 2 of both reports is uncommitted in the worktree.
+- **Analysis** — Not infra, not a code bug: a reporting-layer accuracy round. The pattern worth carrying: **both** of the previous audit entry's "new findings" were overstated in the same direction — treating a favourable mean as though it were the whole distribution. The reviewer's discriminating move each time was to check the *other* metric and the *per-example* counts.
+- **Next** — Tracker + CLAUDE.md to carry: *"the planned single-basin greedy cache target was rejected; state-conditioned live rollout training remains untested and risky, but was not refuted."* Then the P4' HTML report and the all-eight-shard tracking-loss diagnostic.
