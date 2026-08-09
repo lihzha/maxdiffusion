@@ -1,0 +1,123 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>exp_04 null_adapter — 01 capacity &amp; gates</title><style>
+ body { font-family: -apple-system, sans-serif; margin: 2rem auto; max-width: 1080px; padding: 0 1rem; background:#111; color:#eee; }
+ h1 { font-size: 1.35rem } h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid #333; padding-bottom:.3rem }
+ h3 { font-size: 1rem; margin-top: 1.6rem }
+ .sub { color:#aaa; font-size:.9rem }
+ table { border-collapse:collapse; font-size:.82rem; color:#ccc; margin:.6rem 0 }
+ th,td { border:1px solid #333; padding:.22rem .5rem; text-align:center }
+ th { background:#232327; font-weight:600 } td.l { text-align:left }
+ td.hi { color:#7fd47f; font-weight:700 } td.lo { color:#e08a8a; font-weight:700 }
+ .note { background:#232327; border-left:4px solid #888; padding:.6rem .9rem; border-radius:6px; font-size:.9rem; margin:1rem 0 }
+ .warn { border-left-color:#c9a227 } .bad { border-left-color:#b04a4a }
+ .badge { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.78rem; font-weight:700 }
+ .badge.stop { background:#5a2323; color:#f0b3b3 } .badge.pass { background:#1f4d2a; color:#a9e5b8 }
+ .badge.warnb { background:#54430f; color:#ecd48a }
+ code { background:#232327; padding:.05rem .3rem; border-radius:4px; font-size:.85em }
+ details { background:#1b1b1f; border-radius:8px; padding:.5rem .8rem; margin:.8rem 0 }
+ summary { cursor:pointer; font-weight:600 }
+ .pass:after{content:" ✓"; color:#7fd47f} .fail:after{content:" ✗"; color:#e08a8a}
+</style></head><body>
+<h1>exp_04 <code>null_adapter</code> — P1 capacity study &amp; gates
+<span class="badge warnb">observed STOP @ J=10 · formal verdict INDETERMINATE pending J1-5</span></h1>
+<p class="sub">Presentation of <code>null_adapter_results.md</code> (rev 2) §1–§4 and
+<code>null_adapter_analysis.md</code> (rev 2) §1–§2. No new numbers. Plan of record v5; branch
+<code>claude-exp_04_null_adapter-20260803</code>; frozen Wan2.2 TI2V 5B
+(<code>@b8fff7315c…</code>), guide scale 5.0, L=16 null rows inside the 512-row T5("") context,
+25-step σ grid (shift 5.0, σ₀=1.0), DEV-64 / TRAINFIT-16 of DROID 192×320×32f.</p>
+
+<div class="note warn"><b>Why "INDETERMINATE":</b> plan v5 required the gates to run at the recipe the adequacy
+probe adopted (<b>J=50, lr=0.01</b>). A launcher gap (<code>null_adequacy_uri</code> never passed —
+results §4.4) meant J1-4's gates ran at the <b>default J=10</b>. The J=10 observations below are real and
+fully verified; the <em>plan-compliant</em> target selection is unmeasured. The <b>J1-5 clean-gate rerun</b>
+at the adopted recipe (job <code>20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun</code>, tip
+<code>a5aa6bc</code> with the launcher fix <code>a520e9d</code>) was launched 2026-08-09 under Yixun's
+approval and <b>will decide the formal outcome</b>; this page will be superseded in place when it lands.</div>
+
+<h2>1 · The verdict in one paragraph (analysis §1, rev 2)</h2>
+<div class="note">At J=10 the observed answers are <b>a qualified yes and a clear no</b>: optimized nulls reach
+<b>0.8523</b> own-basin SSIM — clearing G1's absolute conditions — while G1's <em>ratio</em> conjunct against a
+strong CFG-collapsed control failed (3.605 vs 5); fresh-noise optimization reached <b>0.4973</b> against a 0.75
+bar; and locked nulls under foreign noise reached <b>0.1729</b> against a 0.70 floor (+0.031 above the nearest
+<em>unmatched</em> do-nothing proxy). The gate module returned <code>target="stop"</code> — an observation, not
+the predeclared verdict, because the gates ran at a recipe the experiment's own adequacy probe rejected. Not
+advancing to P2/P3 was a discretionary decision on the observed result.</div>
+
+<h2>2 · Per-arm means — all values @ J=10, lr=0.01 (gate metric: future-SSIM / future-MSE)</h2>
+<p class="sub">Frame 0 (the pinned condition) is excluded from every primary statistic. Probe arms average over
+k∈{0,1,2}. Pixel column corrected in rev 2 to true future-pixel-MSE means.</p>
+<h3>DEV-64 (n=64)</h3>
+<table>
+<tr><th>Arm</th><th>role</th><th>mean future-SSIM</th><th>mean full-SSIM</th><th>mean future-MSE</th><th>mean future-pixel-MSE</th></tr>
+<tr><td class="l">A0 (control)</td><td class="l">frozen ∅, own basin — CFG collapses to identity</td><td>0.6665</td><td>0.6766</td><td>0.3354</td><td>0.0218796</td></tr>
+<tr><td class="l"><b>A1</b></td><td class="l">∅ optimized per step, own basin</td><td class="hi">0.8523</td><td>0.8567</td><td>0.1127</td><td>0.0066857</td></tr>
+<tr><td class="l">A1-probe</td><td class="l">A1's ∅ locked, foreign keyed(k)</td><td class="lo">0.1729</td><td>0.1980</td><td>4.3589</td><td>0.1922965</td></tr>
+<tr><td class="l">A2-0 (control)</td><td class="l">frozen ∅ from fresh ε₀</td><td>0.1423</td><td>0.1683</td><td>4.7431</td><td>0.2264450</td></tr>
+<tr><td class="l"><b>A2</b></td><td class="l">∅ optimized per step from fresh ε₀</td><td class="lo">0.4973</td><td>0.5126</td><td>0.4901</td><td>0.0342444</td></tr>
+<tr><td class="l">A2-probe</td><td class="l">A2's ∅ locked, keyed(k)</td><td>0.2958</td><td>0.3172</td><td>3.2459</td><td>0.1097904</td></tr>
+</table>
+<h3>TRAINFIT-16 (n=16)</h3>
+<table>
+<tr><th>Arm</th><th>mean future-SSIM</th><th>mean full-SSIM</th><th>mean future-MSE</th></tr>
+<tr><td class="l">A0</td><td>0.7335</td><td>0.7416</td><td>0.2391</td></tr>
+<tr><td class="l"><b>A1</b></td><td class="hi">0.8722</td><td>0.8761</td><td>0.0778</td></tr>
+<tr><td class="l">A1-probe</td><td class="lo">0.1738</td><td>0.1988</td><td>4.2236</td></tr>
+<tr><td class="l">A2-0</td><td>0.1355</td><td>0.1617</td><td>4.6438</td></tr>
+<tr><td class="l"><b>A2</b></td><td class="lo">0.4563</td><td>0.4728</td><td>0.4850</td></tr>
+<tr><td class="l">A2-probe</td><td>0.2540</td><td>0.2766</td><td>3.5268</td></tr>
+</table>
+
+<h2>3 · Gate verdicts (10,000 bootstrap resamples, seed 20260804; coverage clean, zero invalid pairs)</h2>
+<table>
+<tr><th>Gate</th><th>Cohort</th><th>median ratio (≥5)</th><th>frac improved (≥0.80)</th><th>mean SSIM</th><th>95% CI</th><th>verdict</th></tr>
+<tr><td>G1 (A1 vs A0)</td><td>DEV-64</td><td class="fail"><b>3.6052</b></td><td class="pass">0.9531</td><td class="pass">0.8523</td><td class="pass">[0.8327, 0.8710]</td><td><span class="badge stop">FAIL — median_ratio only</span></td></tr>
+<tr><td>G1</td><td>TRAINFIT-16</td><td class="fail"><b>3.0134</b></td><td class="pass">1.0000</td><td class="pass">0.8722</td><td class="pass">[0.8549, 0.8891]</td><td><span class="badge stop">FAIL — median_ratio only</span></td></tr>
+<tr><td>G2 (A2 vs A2-0)</td><td>DEV-64</td><td class="pass">10.2156</td><td class="pass">1.0000</td><td class="fail"><b>0.4973</b></td><td class="fail">[0.4697, 0.5264]</td><td><span class="badge stop">FAIL — mean_ssim, ssim_ci_low</span></td></tr>
+<tr><td>G2</td><td>TRAINFIT-16</td><td class="pass">9.5375</td><td class="pass">1.0000</td><td class="fail"><b>0.4563</b></td><td class="fail">[0.4165, 0.4973]</td><td><span class="badge stop">FAIL — mean_ssim, ssim_ci_low</span></td></tr>
+</table>
+<h3>Transfer (target-selection conjuncts)</h3>
+<table>
+<tr><th>Cohort</th><th>A1-probe absolute (floor 0.70)</th><th>relative (0.7×A1)</th><th>verdict</th></tr>
+<tr><td>DEV-64</td><td class="fail"><b>0.1729</b></td><td class="fail">0.2029</td><td class="l">fails — <b>the absolute floor is the binding constraint</b> (standing R5 note)</td></tr>
+<tr><td>TRAINFIT-16</td><td class="fail"><b>0.1738</b></td><td class="fail">0.1993</td><td class="l">same</td></tr>
+</table>
+<p class="sub">G1's absolute A1 conditions passed; only its ratio against the strong CFG-collapsed A0 control
+failed (analysis §2.1 rev 2 — A0 behaved exactly as designed; "headroom" claims withdrawn). Observed selection:
+<code>target="stop"</code> on both cohorts.</p>
+
+<h2>4 · The adopted-recipe deviation (results §4.4 — the reason for J1-5)</h2>
+<table>
+<tr><th>Cell (adequacy probe, 8 DEV)</th><th>score (median s_e)</th></tr>
+<tr><td class="l">J=10, lr=0.01 (default — <b>what J1-4's gates ran at</b>)</td><td>0.00213840</td></tr>
+<tr><td class="l">J=25, lr=0.01</td><td>0.00127321</td></tr>
+<tr><td class="l"><b>J=50, lr=0.01 — ADOPTED</b> (threshold 0.00106920)</td><td class="hi">0.00083133</td></tr>
+<tr><td class="l">J=10 / J=25 / J=50 @ lr=0.03</td><td>0.00256496 / 0.00155268 / 0.00115508</td></tr>
+</table>
+<div class="note bad">The probe adopted J=50 (plateau verdict: <b>recipe-limited</b> — more iterations were
+still buying accuracy) but <code>run_wan_null_inversion.sh</code> never passed <code>null_adequacy_uri</code>,
+so capacity silently ran at J=10 — verified three independent ways (run report, shard provenance headers, both
+cohorts). Direction is <b>not uniform</b>: conservative for G2, <em>not</em> for G1 (3.605 vs bar 5 with the
+adopted recipe cutting tracking loss 2.57×, unmeasured). Contrast: exp_05's launcher wired the same adoption
+correctly and ran at J=50. Fixed for J1-5 by <code>a520e9d</code>.</div>
+<p class="sub">L_null ablation (diagnostic-only): L_nat=1 scores 0.00302201 vs L=16's 0.00213840 (1.41× better);
+L=16 stays fixed by plan N5.</p>
+
+<details><summary>Job trail (every attempt, incl. failures — results §3)</summary>
+<table>
+<tr><th>Job</th><th>Outcome</th><th>Classification</th></tr>
+<tr><td>J0-1</td><td class="l">FAILED — ADC reauth + anonymous 401 before any scan</td><td class="l">Infrastructure (issue #6 sub-variant)</td></tr>
+<tr><td>J0-2</td><td class="l">SUCCEEDED — VAL 14,636 records / TRAIN 5,000 episodes</td><td class="l">—</td></tr>
+<tr><td>J1-1</td><td class="l">FAILED — 3-arg <code>getattr</code> on HyperParameters</td><td class="l">REAL BUG → fix <code>925ee17</code> (issue #11)</td></tr>
+<tr><td>J1-2</td><td class="l">FAILED at smoke→verify wiring (n=2 gates STOP by design)</td><td class="l">Planner runbook design flaw</td></tr>
+<tr><td>J1-3</td><td class="l">FAILED — non-idempotent runbook under queue auto-retry</td><td class="l">Planner runbook flaw (issue #13 → attempt-scoped roots)</td></tr>
+<tr><td>J1-4</td><td class="l">SUCCEEDED — the primary result (tip <code>3bdbd2a</code>)</td><td class="l">—</td></tr>
+<tr><td>J1b-1 / J1c-1</td><td class="l">SUCCEEDED — see page 02</td><td class="l">—</td></tr>
+<tr><td>J1-5</td><td class="l">LAUNCHED 2026-08-09 — clean-gate rerun @ J=50</td><td class="l">decides the formal verdict</td></tr>
+</table></details>
+
+<div class="note"><b>Bounding caveats (results §9):</b> all arms are per-clip oracles; one cohort, one dataset,
+one backbone, one guidance scale (w=5); the 0.2946 deployed-adapter anchor is a 4-sample wiring check, never a
+baseline; exp_04's A1 (@J=10) and exp_05's B1 (@J=50) are <b>not</b> budget-matched; TEST-64 untouched.</div>
+<p class="sub">Companion pages: <a href="null_adapter_02-joint-transfer_results.html" style="color:#8ab4f8">02 — joint endpoint optimization &amp; transfer (J1b/J1c)</a> ·
+<a href="null_adapter_03-video-gallery_results.html" style="color:#8ab4f8">03 — video gallery</a></p>
+</body></html>

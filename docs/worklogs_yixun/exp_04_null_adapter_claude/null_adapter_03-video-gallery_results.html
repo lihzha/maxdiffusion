@@ -1,0 +1,241 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>exp_04 null_adapter — 03 video gallery</title><style>
+ body { font-family: -apple-system, sans-serif; margin: 2rem auto; max-width: 1180px; padding: 0 1rem; background:#111; color:#eee; }
+ h1 { font-size: 1.35rem } h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid #333; padding-bottom:.3rem }
+ h3 { font-size: 1rem; margin-top: 1.6rem }
+ .sub { color:#aaa; margin-top:-.4rem; font-size:.9rem }
+ .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:1rem }
+ .card { background:#1b1b1f; border-radius:10px; padding:.6rem }
+ video { width:100%; border-radius:6px; background:#000 }
+ .cap { margin:.4rem 0 .3rem; font-size:.83rem }
+ table { border-collapse:collapse; font-size:.78rem; color:#ccc }
+ .card table { width:100% }
+ th,td { border:1px solid #333; padding:.18rem .35rem; text-align:center }
+ th { background:#232327; font-weight:600 } td.hi { color:#7fd47f; font-weight:700 } td.lo { color:#e08a8a }
+ .note { background:#232327; border-left:4px solid #888; padding:.6rem .9rem; border-radius:6px; font-size:.9rem; margin:1rem 0 }
+ .warn { border-left-color:#c9a227 }
+ .badge { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.78rem; font-weight:700 }
+ .badge.stop { background:#5a2323; color:#f0b3b3 } .badge.pass { background:#1f4d2a; color:#a9e5b8 }
+ .badge.warnb { background:#54430f; color:#ecd48a }
+ code { background:#232327; padding:.05rem .3rem; border-radius:4px; font-size:.85em }
+</style></head><body>
+<h1>exp_04 <code>null_adapter</code> — comparison-video gallery <span class="badge warnb">@ J=10 · verdict INDETERMINATE pending J1-5</span></h1>
+<div class="note">Every clip: <b>ground truth on top, prediction underneath</b>; pixel frame 0 is the pinned
+first-frame condition. All arms are per-clip ORACLES against the frozen Wan2.2 TI2V 5B — they bound the null-slot
+conditioning channel, they are not deployable systems. Numbers are per-clip <b>future-SSIM</b>; sources:
+J1-4 <code>gate_tables.json</code> (published) and the 2026-08-09 capacity-videos job
+(<code>videos_report.json</code>, code <code>6f3146a</code>) whose recomputed values matched the published tables
+to fp16-storage tolerance (max |Δ| 0.024 on these arms). Record: <code>null_adapter_results.md</code> §4, §8.2.</div>
+
+<h2>A1 — own-basin reconstruction (the method's best case; published by J1-4)</h2>
+<p class="sub">DEV-64 first 8, manifest row order. Cohort mean 0.8523 @ J=10. 01/ep45499 is the near-static 0.99-SSIM clip.</p>
+<div class="grid">
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/00.mp4"></video>
+        <div class="cap"><b>00 — ep12399_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.904</td><td>0.528</td><td>0.504</td><td>0.109</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/01.mp4"></video>
+        <div class="cap"><b>01 — ep45499_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.990</td><td>0.081</td><td>0.953</td><td>0.185</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/02.mp4"></video>
+        <div class="cap"><b>02 — ep26599_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.921</td><td>0.717</td><td>0.523</td><td>0.134</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/03.mp4"></video>
+        <div class="cap"><b>03 — ep19599_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.783</td><td>0.737</td><td>0.555</td><td>0.131</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/04.mp4"></video>
+        <div class="cap"><b>04 — ep42299_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.857</td><td>0.645</td><td>0.553</td><td>0.286</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/05.mp4"></video>
+        <div class="cap"><b>05 — ep67499_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.914</td><td>0.622</td><td>0.369</td><td>0.133</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/06.mp4"></video>
+        <div class="cap"><b>06 — ep28899_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.864</td><td>0.608</td><td>0.614</td><td>0.280</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_dev/07.mp4"></video>
+        <div class="cap"><b>07 — ep21099_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.896</td><td>0.725</td><td>0.546</td><td>0.097</td></tr></table>
+      </div></div>
+<h3>TRAINFIT-16 first 8 (cohort mean 0.8722)</h3>
+<div class="grid">
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/00.mp4"></video>
+        <div class="cap"><b>00 — ep1039_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.919</td><td>0.591</td><td>0.594</td><td>0.127</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/01.mp4"></video>
+        <div class="cap"><b>01 — ep12823_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.809</td><td>0.678</td><td>0.601</td><td>0.305</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/02.mp4"></video>
+        <div class="cap"><b>02 — ep14034_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.816</td><td>0.795</td><td>0.412</td><td>0.181</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/03.mp4"></video>
+        <div class="cap"><b>03 — ep10998_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.883</td><td>0.729</td><td>0.417</td><td>0.123</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/04.mp4"></video>
+        <div class="cap"><b>04 — ep1467_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.919</td><td>0.851</td><td>0.541</td><td>0.196</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/05.mp4"></video>
+        <div class="cap"><b>05 — ep11408_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.884</td><td>0.785</td><td>0.395</td><td>0.213</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/06.mp4"></video>
+        <div class="cap"><b>06 — ep1064_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.925</td><td>0.847</td><td>0.402</td><td>0.133</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_trainfit/07.mp4"></video>
+        <div class="cap"><b>07 — ep11837_v0_s00000</b></div>
+        <table><tr><th>A1 (shown)</th><th>A0 ctrl</th><th>A2</th><th>A1-probe k0</th></tr>
+        <tr><td class="hi">0.883</td><td>0.764</td><td>0.374</td><td>0.105</td></tr></table>
+      </div></div>
+
+<h2>A2 — optimized from fresh noise (deployable regime; rendered 2026-08-09)</h2>
+<p class="sub">Cohort mean 0.4973 @ J=10 against the 0.75 G2 bar. Decoded from each record's stored
+<code>expected_final_latent</code> — the deployed A2 latent by the cast→replay→record discipline.</p>
+<div class="grid">
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/079_ep10899_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep10899_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.435</td><td>0.421</td><td>0.014</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/257_ep12399_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep12399_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.510</td><td>0.504</td><td>0.007</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/350_ep13099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep13099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.255</td><td>0.258</td><td>-0.003</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/959_ep17199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep17199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.460</td><td>0.462</td><td>-0.002</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/1297_ep18699_v0_s00008.mp4"></video>
+        <div class="cap"><b>ep18699_v0_s00008</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.454</td><td>0.451</td><td>0.003</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/1386_ep19199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.545</td><td>0.535</td><td>0.009</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/1433_ep19599_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19599_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.546</td><td>0.555</td><td>-0.009</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a2/1813_ep21099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep21099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.546</td><td>0.546</td><td>-0.000</td></tr></table>
+      </div></div>
+
+<h2>A1-probe k=0 — A1's nulls locked under foreign noise (transfer collapse; rendered 2026-08-09)</h2>
+<p class="sub">Cohort mean 0.1729 (k-avg) against the 0.70 floor — the conjunct that stops target selection
+regardless of G1. True 25-step replays of the stored nulls from <code>keyed(name, 0)</code>.</p>
+<div class="grid">
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/079_ep10899_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep10899_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.453</td><td>0.430</td><td>0.024</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/257_ep12399_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep12399_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.101</td><td>0.109</td><td>-0.008</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/350_ep13099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep13099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.062</td><td>0.062</td><td>-0.000</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/959_ep17199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep17199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.202</td><td>0.206</td><td>-0.004</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/1297_ep18699_v0_s00008.mp4"></video>
+        <div class="cap"><b>ep18699_v0_s00008</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.153</td><td>0.148</td><td>0.005</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/1386_ep19199_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19199_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.145</td><td>0.156</td><td>-0.011</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/1433_ep19599_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep19599_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.132</td><td>0.131</td><td>0.002</td></tr></table>
+      </div>
+      <div class="card">
+        <video controls loop muted playsinline preload="metadata" src="null_adapter_03-video-gallery_results_assets/a1_probe_k0/1813_ep21099_v0_s00000.mp4"></video>
+        <div class="cap"><b>ep21099_v0_s00000</b></div>
+        <table><tr><th>recomputed</th><th>published</th><th>Δ</th></tr>
+        <tr><td class="hi">0.091</td><td>0.097</td><td>-0.007</td></tr></table>
+      </div></div>
+
+<div class="note warn"><b>Clip-subset note (recorded deviation, worklog 2026-08-09):</b> the A2/A1-probe sections
+render the 8 lowest-ordinal DEV clips; the A1 sections are the first-8-by-manifest-row clips J1-4 published.
+Overlap: ep12399, ep19599, ep21099. A row-order re-render is an approved-scope optional follow-up.</div>
+</body></html>
