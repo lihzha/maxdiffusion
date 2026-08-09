@@ -11,7 +11,7 @@ review-package artifacts and are kept current in this folder.
 - `reviewer_attacks.py` — every probe the campaign has accumulated, each one an attack that must be
   REFUSED. Rounds are additive: a probe is never removed, and the final run of a round executes all
   of them. Run from the repository root with `PYTHONPATH=src`.
-- `attacks_after_w3.log` — the final all-probes run of round W3: **78 probes, 78 refused, 0 succeeded.**
+- `attacks_after_w4.log` — the final all-probes run of round W4: **80 probes, 80 refused, 0 succeeded.**
 
 ## Reproducing
 
@@ -29,3 +29,10 @@ probe comparing two empty maps read as SUCCEEDED (`both arms write and restore N
 lying about production. It now REFUSES to return when a launch produced nothing, and a probe that
 deliberately expects a non-launch opts out with `_expect_failure`. When adding a probe that inspects
 launcher argv, make sure it fails loudly if the launcher did not run.
+
+## A second caution, earned in W4
+
+Probe `W3-1` reported SUCCEEDED after W4 refactored the replication behind `replicated_sharding` —
+the probe was checking one SPELLING of the property, not the property. It was updated to name the
+property, not deleted. **A probe that goes stale reports a defect it cannot see; treat every
+SUCCEEDED as production-guilty until you have read the probe.**

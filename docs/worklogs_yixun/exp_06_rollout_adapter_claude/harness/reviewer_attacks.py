@@ -1834,7 +1834,12 @@ def attack_w3_measure_an_unsharded_program():
     from maxdiffusion import pos_rollout_update as shared
 
     finalizer = _textwrap.dedent(_inspect.getsource(shared.build_training_program))
-    replicates = "NamedSharding(backbone.mesh, P())" in finalizer
+    # W4 moved the replication behind `replicated_sharding`, and this probe went stale rather than
+    # production going wrong -- the check now names the property (params AND every optimizer leaf
+    # placed replicated) instead of one spelling of it.
+    replicates = "jax.device_put(adapter_params, replicated)" in finalizer and (
+        "jax.device_put(leaf, replicated), opt_state" in finalizer
+    )
     scoped = finalizer.count("program_scope(config, backbone.mesh)") >= 3
     builder = _textwrap.dedent(_inspect.getsource(fp.build_probe_program))
     shares = "build_training_program" in {
@@ -1896,6 +1901,50 @@ def attack_w3_the_seams_diverge():
     if not seams or not all(callers):
         return f"SUCCEEDED: seams_present={seams} callers_delegating={callers}"
     return "REFUSED: one loader reaches the settled seams and both callers enter it"
+
+
+
+def attack_w4_compile_against_a_batch_production_never_hands_it():
+    """The re-ruling's BLOCKER: M1 specializing on single-device zeros while production's loader hands
+    the step NamedSharding(mesh, P(mesh.axis_names)) arrays."""
+    import inspect as _inspect
+    import textwrap as _textwrap
+
+    from maxdiffusion import pos_rollout_fit_probe as fp
+    from maxdiffusion import pos_rollout_update as shared
+
+    place = _textwrap.dedent(_inspect.getsource(shared.place_step_inputs))
+    loader = _textwrap.dedent(_inspect.getsource(shared.production_batch_sharding))
+    finalizer = _textwrap.dedent(_inspect.getsource(shared.build_training_program))
+    from_mesh = "PartitionSpec(mesh.axis_names)" in loader
+    batch_split = "_place(part, batch)" in place
+    draws_split = "replicated if index < 2 else batch" in place
+    step_places = "place_step_inputs(" in finalizer
+    opt_placed = "jax.device_put(leaf, replicated), opt_state" in finalizer
+    agrees = "assert_batch_contract_matches_config" in finalizer
+    shares_scorer = "score=program.score," in _textwrap.dedent(_inspect.getsource(fp.build_probe_program))
+    if not all((from_mesh, batch_split, draws_split, step_places, opt_placed, agrees, shares_scorer)):
+        return (
+            f"SUCCEEDED: mesh={from_mesh} batch={batch_split} draws={draws_split} places={step_places} "
+            f"opt={opt_placed} agrees={agrees} scorer={shares_scorer}"
+        )
+    return "REFUSED: one placement owns the compiled-input contract and both paths enter it"
+
+
+def attack_w4_time_a_pruned_scorer():
+    """M1's private `loss_fn(...)[0]` let XLA drop the aux norms it was supposed to be timing."""
+    import inspect as _inspect
+    import textwrap as _textwrap
+
+    from maxdiffusion import pos_rollout_fit_probe as fp
+    from maxdiffusion import pos_rollout_update as shared
+
+    builder = _textwrap.dedent(_inspect.getsource(fp.build_probe_program))
+    private = "jax.jit(score)" in builder or "draws=_draws_from(v))[0]" in builder
+    shared_scorer = "score=scorer," in _textwrap.dedent(_inspect.getsource(shared.build_training_program))
+    if private or not shared_scorer:
+        return f"SUCCEEDED: private_scorer={private} shared_exposed={shared_scorer}"
+    return "REFUSED: M1 times the shared scorer, aux included"
 
 
 if __name__ == "__main__":
@@ -1981,3 +2030,5 @@ if __name__ == "__main__":
         _report("W3-1   unsharded M1 program ", attack_w3_measure_an_unsharded_program)
         _report("W3-2   zero null context     ", attack_w3_zero_null_context)
         _report("W3-3   two loaders, two progs", attack_w3_the_seams_diverge)
+        _report("W4-1   foreign batch contract ", attack_w4_compile_against_a_batch_production_never_hands_it)
+        _report("W4-2   time a pruned scorer   ", attack_w4_time_a_pruned_scorer)

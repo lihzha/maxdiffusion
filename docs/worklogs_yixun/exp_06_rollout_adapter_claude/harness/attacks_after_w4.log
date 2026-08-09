@@ -5,7 +5,7 @@ A-B2   unrestricted callback :: REFUSED: score_dev_cohort() takes 2 positional a
 B-1    terminal resume       :: steps_run=0 events=[]  -> REFUSED (no step, no iterator)
 [pos-rollout] repaired the selection artifact from the restored state: step 2 (dev_rollout_loss=0.5) was saved to the resume tree but never to the sibling.
 B-2    selection crash window:: history_best=2 shipped_selection=2  -> REFUSED (reconciled)
-T5a-1  restore falls back     :: REFUSED: there is no selection artifact under /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmp_mq9mgvq/run: the loo
+T5a-1  restore falls back     :: REFUSED: there is no selection artifact under /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpdg5orntx/run: the loo
 T5a-2  widen/miss the anchor  :: REFUSED (TypeError): the anchor is reproduced from a Measurement, never from a mapping: a mapping is a caller's description of a me
 T5a-3  TEST into the anchor   :: REFUSED (TypeError): summarize_samples() got an unexpected keyword argument 'checkpoint_step'
 T5a-4  re-derive the benchmark:: REFUSED (TypeError): freeze_benchmark_row() got an unexpected keyword argument 'cohort'
@@ -17,21 +17,21 @@ T5b-4  swap arm and control   :: REFUSED: primary_gate() takes 0 positional argu
 T5b-5  drop C0's battery      :: REFUSED (TypeError): cohort_derangement() got multiple values for argument 'cohort'
 T7-1   run an unmeasured cell :: REFUSED: M1 did not authorize rollout at microbatch=32 k=4: that cell was never measured. M1 authorizes only the cells 
 T7-2   forge an authorization :: REFUSED: a training run needs the authorization the fit probe published; a mapping that lists cells is not evidence tha
-T7-3   edit an authorization  :: REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpxnhzw8ag/t7c.json: the recorded digest '93e14d09601fca75ad
+T7-3   edit an authorization  :: REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpdu_pq_e7/t7c.json: the recorded digest 'e00540255273686904
 T7-4   run a cell that missed :: REFUSED: M1 did not authorize rollout at microbatch=64 k=2: it measured that cell and refused it (['headroom']). Choose
 T7-5   project the unmeasured :: REFUSED: every cadence is a required argument; there is no overhead argument to supply; a misfit cell cannot be projected
 P1-1   echoed-identity decoder:: REFUSED: DevBatchReader takes a cohort and nothing else; score_dev_cohort has no batch source parameter
 P1-2   NaN poisons selection  :: REFUSED: the DEV metric at step 1000 is nan, which is not finite: a non-finite metric cannot be compared, so it would s
 P1-3   gs:// written locally  :: REFUSED: pathlib would give 'gs:/bucket/run/report.json'; storage layer treats it as remote=True
 P3-1   arms share checkpoints :: REFUSED: rollout -> m3/rollout/train/attempts/att-X/checkpoints vs one_step -> m3/one_step/train/attempts/att-X/checkpoints
-P3-2   divergent second arm   :: REFUSED: arm 'one_step' asks to join run /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpxnhzw8ag/p3_lock.json with a DIFFERENT recipe:
+P3-2   divergent second arm   :: REFUSED: arm 'one_step' asks to join run /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpdu_pq_e7/p3_lock.json with a DIFFERENT recipe:
 P3-3   confirm w/o certificate:: REFUSED: FATAL: phase 'confirm' requires POS_ANCHOR_CERTIFICATE, and it is empty.
 P3-4   flatten attempt scoping:: REFUSED: train=derived, eval=derived
 P3-5   adopt incomplete/foreign:: REFUSED: adopted only att-mine (step 1000); the 9000-step foreign-SHA and other-arm trees were skipped
 P3-6   another program's auth :: REFUSED: this authorization measured a different program: ['code_sha', 'device_count', 'device_kind', 'model_revision'] differ (measured on
 P3-7   one arm authorizes other:: REFUSED: M1 did not authorize rollout at microbatch=32 k=2: that cell was never measured. M1 authorizes only the cells it measured (plan §4
 P3-8   contradictory duplicates:: REFUSED: M1 did not authorize rollout at microbatch=32 k=2: it measured that cell and refused it (['headroom', 'reservation_failures']). Ch
-[M1] context e19719997abe757a on v6ex1 @ fba9012c149d
+[M1] context a4bb1c52c5d51845 on v6ex1 @ 9b5693e11ce2
 [M1] rollout   microbatch=8   k=2  AUTHORIZED
 [M1] rollout   microbatch=8   k=4  AUTHORIZED
 [M1] rollout   microbatch=16  k=2  AUTHORIZED
@@ -64,7 +64,7 @@ P3-8   contradictory duplicates:: REFUSED: M1 did not authorize rollout at micro
 [M1] projection one_step m=32 k=4: 11.77h at 62.5% of capacity
 [M1] projection one_step m=64 k=2: 11.77h at 62.5% of capacity
 [M1] projection one_step m=64 k=4: 11.77h at 62.5% of capacity
-[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpxnhzw8ag/p3_m1.json sha256=b2d3ff8f4bcc45d1c6536bdbb6a8e437a87c08e324ed8853e571b0dfb80535f7
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpdu_pq_e7/p3_m1.json sha256=eaaf2f74f684a0b9213c0c7963e5dc6d5d54f69b9f0dc653b03de53b1e7a4ee0
 P3-9   M1 cannot be run        :: REFUSED (M1 runs): launcher probe mode=yes, ladder walked 16 cells, published 16 authorized cells
 G3-1   anchor: foreign names   :: REFUSED: these samples were rolled out on grids ['']; the deployed grid is 40af72e74c726c8d. A measurement is identifie
 G3-2   anchor: wrong order     :: REFUSED: these samples were rolled out on grids ['']; the deployed grid is 40af72e74c726c8d. A measurement is identifie
@@ -81,12 +81,12 @@ G3-12  TEST: primary gate only :: REFUSED: the TEST door runs both gates and dem
 G3-13  the evaluator cannot run:: REFUSED: all four phases are implemented and dispatched
 G3-14  skip the anchor         :: REFUSED (confirm): there is no anchor certificate at gs://attack/run/anchor_certificate.json: plan §3c runs t
 G4-1   a plan with no consumer :: REFUSED: score_condition_table consumes the plan and enforces the receiver-keyed draw
-F1-1   load w/o re-decision  : REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpxnhzw8ag/f1_redecide.json: re-deciding this artifact from its own recorded mea
+F1-1   load w/o re-decision  : REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpdu_pq_e7/f1_redecide.json: re-deciding this artifact from its own recorded mea
 F1-2   fingerprint blindness : REFUSED: every graph/HBM-bearing key moves the fingerprint
 F1-3   projection miscounts  : REFUSED: projected=2 production=2; an independent checkpoint cadence is refused
 F1-4   two models are equal  : REFUSED: an unresolvable model fails closed; two local models get different content manifests
 F1-5   entrypoint cannot run : REFUSED: the measurement path is real -- reached the real model load (ModuleNotFoundError)
-F1-6   real parser never runs: REFUSED (it runs): 1 passed, 132 deselected in 24.49s
+F1-6   real parser never runs: REFUSED (it runs): 1 passed, 132 deselected in 17.05s
 F3a-1  NaN latent MSE certifies:: REFUSED: sample 0 ('ep10099_v0_s00000')'s latent_mse is nan, which is not finite: a non-finite metric cannot be compare
 F3a-2  inf pixel MSE certifies :: REFUSED: sample 0 ('ep10099_v0_s00000')'s pixel_mse is inf, which is not finite: a non-finite metric cannot be compared
 F3a-3  all-ones grid accepted  :: REFUSED: the terminal sigma is 1.0, not 0: the deployed grid ends AT the data, and a grid that does not is not the sche
@@ -97,7 +97,7 @@ F1b-2  microbatch as update : REFUSED (AttributeError): 'TinyModelSource' object
 F1b-3  inherited peak       : REFUSED: no per-cell steady-state peak could be obtained: this backend offers no way to reset the high-water mark, this region did not rais
 F1b-4  'boom' is not OOM    : REFUSED: only the genuine refusal classifies ({'boom in program build': False, 'No room left on device': False, 'genuine RESOURCE_EXHAUSTED': True})
 F1b-5  swap the weights     : REFUSED: the identity moved with the bytes
-F1b-6  retype a duration    : REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpxnhzw8ag/f1b_retype.json: re-deciding this artifact from i
+F1b-6  retype a duration    : REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpdu_pq_e7/f1b_retype.json: re-deciding this artifact from i
 F3a-6  loader: undeclared key  :: REFUSED: every config key the loader reads is declared (undeclared reads would raise: True)
 F3a-7  loader: skips grid check:: REFUSED: the loader builds from the scheduler and binds the result to the deployed grid
 W1-1   authorize on a floor : REFUSED: ('peak_source',) -- an analysis floor may refuse a cell, never authorize one
@@ -105,10 +105,12 @@ W1-2   reshuffle a snapshot : REFUSED: length-framed records separate the two tr
 W1-3   hand-rebuild adapter : REFUSED (AttributeError): type object 'ProductionModelSource' has no attribute 'build'
 W2-1   trainer cannot train  : REFUSED: start_training loads, builds and runs the loop -- no boundary is left in it
 W2-2   bypass the factories  : REFUSED: both callers enter one finalizer, which enters the three shared factories
-W2-3   publish a foreign tree: REFUSED: checkpoint_dir '/var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpxnhzw8ag/somewhere/else/chec
+W2-3   publish a foreign tree: REFUSED: checkpoint_dir '/var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpdu_pq_e7/somewhere/else/chec
 W2-4   select on train stream: REFUSED: the metric is the instrument's cohort mean, over the instrument's own draws
 W2-5   gate after the load   : REFUSED: every configuration gate precedes the pipeline load
 W2b-1  M2 at the YAML batch  : REFUSED: derived in the launcher, and re-checked on the worker -- the input pipeline loads 8 examples per step but pos_logical_batch is 
 W3-1   unsharded M1 program : REFUSED: one finalizer replicates, scopes and jits; M1 measures inside that same scope
 W3-2   zero null context     : REFUSED: the context is the loader's and the grid is the scheduler's, for both callers
 W3-3   two loaders, two progs: REFUSED: one loader reaches the settled seams and both callers enter it
+W4-1   foreign batch contract : REFUSED: one placement owns the compiled-input contract and both paths enter it
+W4-2   time a pruned scorer   : REFUSED: M1 times the shared scorer, aux included
