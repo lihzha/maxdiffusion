@@ -5,7 +5,7 @@
 set -euo pipefail
 cd /Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter
 TIP=$(git rev-parse HEAD)
-if [ "$TIP" != "dfc11836ca3a7421476ef9b1dbdcfccb27880be5" ]; then echo "FATAL: tip moved ($TIP != dfc11836ca3a7421476ef9b1dbdcfccb27880be5) — re-verify before launching"; exit 9; fi
+if [ "$TIP" != "a266fe609be91439b1b2e5d1bad60bf69a5f484f" ]; then echo "FATAL: tip moved ($TIP != a266fe609be91439b1b2e5d1bad60bf69a5f484f) — re-verify before launching"; exit 9; fi
 if [ -n "$(git status --porcelain)" ]; then echo "FATAL: dirty tree — never launch it"; exit 9; fi
 M1ROOT="gs://v6_east1d/datasets/droid_wan_pos_rollout/m1"
 
