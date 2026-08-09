@@ -11,7 +11,7 @@ review-package artifacts and are kept current in this folder.
 - `reviewer_attacks.py` — every probe the campaign has accumulated, each one an attack that must be
   REFUSED. Rounds are additive: a probe is never removed, and the final run of a round executes all
   of them. Run from the repository root with `PYTHONPATH=src`.
-- `attacks_after_w5.log` — the final all-probes run of round W5: **80 probes, 80 refused, 0 succeeded**, with `W3-1` and `W4-1` rewritten as BEHAVIOURAL probes (they execute the placement contract and observe shardings, rather than matching source text).
+- `attacks_after_w5b.log` — the final all-probes run of round W5b: **80 probes, 80 refused, 0 succeeded**. `W3-1` and `W4-1` are BEHAVIOURAL: they execute the placement contract and the scope, and observe shardings and rules, rather than matching source text. `W3-1`'s "the measurement enters the scope" half is an AST `with`-item check, which survives an equivalent refactor and fails a real removal.
 
 ## Reproducing
 

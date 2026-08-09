@@ -422,3 +422,9 @@
 
 - The reviewer ran the 8-device oracle directly (every field true) and both probes (both REFUSED), re-confirmed production digests clean, and ruled `is_equivalent_to` correct. The four remaining edits: batches pinned into `operands_are_own` with the difference assertion on the LOWERED operands (rewiring the trainer to `right.batch` currently leaves all three ownership checks green); scorer inputs absolute per-argument (two `str==str` gates still carry claims); W3-1's remaining scope-spelling substring made behavioral. The W4 caveat list stands unchanged.
 - W5b is the last enumerated item before READY.
+
+## 2026-08-09T (local) — Round W5b complete: the four edits, digest-proven test-only; final verify dispatched
+
+- Ownership covers all EIGHT operands with the difference read off the operands ACTUALLY LOWERED (mutant T01 — the reviewer's exact rewiring scenario — now dies); every `str==str` gate is GONE, step and scorers asserted absolutely per-argument via `is_equivalent_to` grounded on measurement (all 45 scorer input leaves replicated on both paths — the DEV instrument feeds batch-one host arrays against the replicated tree); W3-1's last substring replaced by a behavioral half (rules really installed, checked inside vs outside the scope) + an AST half (`with program.scope()` as a with-item — survives equivalent refactors, fails real removals). Battery 8/8; suite 2113/0; harness 80/80; production digests unchanged from the ruled-clean snapshot.
+- **On the record at the Coder's request:** the reviewer's independent EXECUTION of the oracle is what caught the batch-ownership gap — its own battery had not modelled "rewire the lowering but leave the locals correct." The three-role system finding from outside what inside-testing missed, one more time.
+- Environment-durability note for the runbook: /private/tmp purged the venv mid-day; everything that must survive now lives in-repo.
