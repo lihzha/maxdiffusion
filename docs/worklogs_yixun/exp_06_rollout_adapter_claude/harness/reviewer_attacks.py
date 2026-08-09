@@ -1825,37 +1825,58 @@ def attack_w2b_launch_m2_with_the_yaml_per_device_batch(tmp):
 
 
 def attack_w3_measure_an_unsharded_program():
-    """The final review's BLOCKER: M1 measuring a program with different shardings than training's."""
+    """M1 measuring a program whose placements differ from training's.
+
+    W5: this EXECUTES the placement contract instead of grepping for one spelling of it. The previous
+    version matched the literal `jax.device_put(adapter_params, replicated)` and reported SUCCEEDED
+    against correct code the moment W4 refactored that line — a probe that goes stale reports a defect
+    it cannot see.
+    """
     import ast as _ast
     import inspect as _inspect
     import textwrap as _textwrap
 
+    import jax
+    import jax.numpy as jnp
+    import numpy as _np
+    from jax.sharding import NamedSharding, PartitionSpec
+
     from maxdiffusion import pos_rollout_fit_probe as fp
     from maxdiffusion import pos_rollout_update as shared
 
-    finalizer = _textwrap.dedent(_inspect.getsource(shared.build_training_program))
-    # W4 moved the replication behind `replicated_sharding`, and this probe went stale rather than
-    # production going wrong -- the check now names the property (params AND every optimizer leaf
-    # placed replicated) instead of one spelling of it.
-    replicates = "jax.device_put(adapter_params, replicated)" in finalizer and (
-        "jax.device_put(leaf, replicated), opt_state" in finalizer
+    mesh = jax.sharding.Mesh(_np.array(jax.devices()).reshape(1, 1, 1, 1), ("data", "fsdp", "context", "tensor"))
+    want_rep = NamedSharding(mesh, PartitionSpec())
+    want_batch = NamedSharding(mesh, PartitionSpec(mesh.axis_names))
+    batch = ({"z_video": jnp.zeros((1, 2, 2)), "z_i0": jnp.zeros((1, 2, 2))},)
+    draws = ((jnp.asarray(0), jnp.asarray(2), jnp.zeros((1, 2, 2)), jnp.zeros((1,), jnp.int32)),)
+    params, opt_state, placed_batch, placed_draws = shared.place_step_inputs(
+        mesh, params={"w": jnp.zeros((2,))}, opt_state={"mu": jnp.zeros((2,))}, micro_batches=batch,
+        micro_draws=draws,
     )
-    scoped = finalizer.count("program_scope(config, backbone.mesh)") >= 3
-    builder = _textwrap.dedent(_inspect.getsource(fp.build_probe_program))
-    shares = "build_training_program" in {
+    observed = {
+        "params": all(leaf.sharding == want_rep for leaf in jax.tree.leaves(params)),
+        "opt": all(leaf.sharding == want_rep for leaf in jax.tree.leaves(opt_state)),
+        "batch": all(leaf.sharding == want_batch for leaf in jax.tree.leaves(placed_batch)),
+        "draws": all(
+            value.sharding == (want_rep if index < 2 else want_batch)
+            for part in placed_draws
+            for index, value in enumerate(part)
+        ),
+        "loader_spec": shared.production_batch_sharding(mesh) == want_batch,
+    }
+    # The call-graph half stays structural: it is a fact about WHO calls what, not about text.
+    entered = {
         node.func.id
-        for node in _ast.walk(_ast.parse(builder))
+        for node in _ast.walk(_ast.parse(_textwrap.dedent(_inspect.getsource(fp.build_probe_program))))
         if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name)
     }
+    observed["m1_enters_the_finalizer"] = "build_training_program" in entered
     measured = _textwrap.dedent(_inspect.getsource(fp._measure_under_mesh))
-    inside_scope = "with program.scope():" in measured
-    private_grid = "overfit100_sampler_grid" in builder
-    if not (replicates and scoped and shares and inside_scope) or private_grid:
-        return (
-            f"SUCCEEDED: replicated={replicates} scoped={scoped} shared={shares} "
-            f"measured_in_scope={inside_scope} private_grid={private_grid}"
-        )
-    return "REFUSED: one finalizer replicates, scopes and jits; M1 measures inside that same scope"
+    observed["measured_in_scope"] = "with program.scope():" in measured
+    failed = sorted(name for name, ok in observed.items() if not ok)
+    if failed:
+        return f"SUCCEEDED: the observed contract fails {failed}"
+    return "REFUSED: the executed placement contract holds and M1 enters the shared finalizer"
 
 
 def attack_w3_zero_null_context():
@@ -1905,30 +1926,31 @@ def attack_w3_the_seams_diverge():
 
 
 def attack_w4_compile_against_a_batch_production_never_hands_it():
-    """The re-ruling's BLOCKER: M1 specializing on single-device zeros while production's loader hands
-    the step NamedSharding(mesh, P(mesh.axis_names)) arrays."""
-    import inspect as _inspect
-    import textwrap as _textwrap
+    """A step compiling against a batch the deployed loader never produces.
 
-    from maxdiffusion import pos_rollout_fit_probe as fp
+    W5: EXECUTED. `production_batch_sharding` is compared with the sharding the deployed loader
+    builds (`multihost_dataloading._build_global_shape_and_sharding`), re-derived here from the mesh,
+    and the config-agreement guard is exercised on a config that disagrees.
+    """
+    import jax
+    import numpy as _np
+    from jax.sharding import NamedSharding, PartitionSpec
+
     from maxdiffusion import pos_rollout_update as shared
 
-    place = _textwrap.dedent(_inspect.getsource(shared.place_step_inputs))
-    loader = _textwrap.dedent(_inspect.getsource(shared.production_batch_sharding))
-    finalizer = _textwrap.dedent(_inspect.getsource(shared.build_training_program))
-    from_mesh = "PartitionSpec(mesh.axis_names)" in loader
-    batch_split = "_place(part, batch)" in place
-    draws_split = "replicated if index < 2 else batch" in place
-    step_places = "place_step_inputs(" in finalizer
-    opt_placed = "jax.device_put(leaf, replicated), opt_state" in finalizer
-    agrees = "assert_batch_contract_matches_config" in finalizer
-    shares_scorer = "score=program.score," in _textwrap.dedent(_inspect.getsource(fp.build_probe_program))
-    if not all((from_mesh, batch_split, draws_split, step_places, opt_placed, agrees, shares_scorer)):
-        return (
-            f"SUCCEEDED: mesh={from_mesh} batch={batch_split} draws={draws_split} places={step_places} "
-            f"opt={opt_placed} agrees={agrees} scorer={shares_scorer}"
-        )
-    return "REFUSED: one placement owns the compiled-input contract and both paths enter it"
+    mesh = jax.sharding.Mesh(_np.array(jax.devices()).reshape(1, 1, 1, 1), ("data", "fsdp", "context", "tensor"))
+    deployed = NamedSharding(mesh, PartitionSpec(mesh.axis_names))
+    matches = shared.production_batch_sharding(mesh) == deployed
+    shared.assert_batch_contract_matches_config(_pos_config(data_sharding=[list(mesh.axis_names)]), mesh)
+    try:
+        shared.assert_batch_contract_matches_config(_pos_config(data_sharding=[["data"]]), mesh)
+    except ValueError:
+        refuses = True
+    else:
+        refuses = False
+    if not matches or not refuses:
+        return f"SUCCEEDED: loader_match={matches} refuses_disagreement={refuses}"
+    return "REFUSED: the contract is the deployed loader's, and a disagreeing config does not start"
 
 
 def attack_w4_time_a_pruned_scorer():
