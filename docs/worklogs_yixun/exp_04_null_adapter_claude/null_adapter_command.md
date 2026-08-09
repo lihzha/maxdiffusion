@@ -88,3 +88,9 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 ## J1c-1 outcome (2026-08-07T~02:20Z, **SUCCEEDED-BY-ARTIFACT** — attempt 0 published the complete `transfer_probe.json` before a teardown-window preemption; the queue's redundant retry is being cancelled; authoritative root `…/j1r2/j1c_att-0807-020621/`)
 
 - Table provenance verified: npz sha256 `677502c5…eb68` = J1b's `a3_nulls.npz`; code_sha = the R12 tip; l_null 16; w 5.0. The own-basin column reproduces J1b's per-example endpoint MSEs as a multiset (loss-vs-replay deltas ≤ ~0.03) — cross-job consistency check PASSED.
+
+## J1-5 — the CLEAN-GATE RERUN at the adopted recipe (2026-08-09T17:56Z, LAUNCHED by the session under Yixun's explicit approval "exp_04 clean_gate rerun")
+
+- Queue job: `20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun` (v6e-8); record confirmed at the authoritative status.json. Tip `a5aa6bce119b400df31d67dabcdbf7659c1c2036` (the adequacy-wiring fix `a520e9d` + ledger; APPROVE first-pass). Submit script archived beside this file (guard = clean EXECUTABLE tree; a docs file was legitimately mid-edit by the report reviser).
+- Phases: capacity dev64 + capacity trainfit16, both adopting the standing `…/j1r2/adequacy` artifact (J=50/lr=0.01 — now actually reaching the runner via the fixed launcher), attempt-scoped roots `cleangate[_trainfit]_att-<ts>`. ~1.4 h projected.
+- **Stakes (per the P4 analysis review): this run DECIDES the plan-compliant target selection** — the J=10 STOP was ruled indeterminate. Acceptance: gates evaluated at the adopted recipe on both cohorts; ANY outcome is acceptance (STOP retained ⇒ the predeclared verdict stands clean; an arm selected ⇒ the P2 question reopens as a Yixun decision). Provenance headers must show J=50. Triage per SOP.
