@@ -1871,8 +1871,35 @@ def attack_w3_measure_an_unsharded_program():
         if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name)
     }
     observed["m1_enters_the_finalizer"] = "build_training_program" in entered
-    measured = _textwrap.dedent(_inspect.getsource(fp._measure_under_mesh))
-    observed["measured_in_scope"] = "with program.scope():" in measured
+
+    # W5b: the last source-SPELLING dependency, replaced. Two halves, neither of them a substring:
+    #  (a) BEHAVIOURAL -- entering a program's scope really does install the deployed axis rules, so
+    #      the scope object is not decorative;
+    #  (b) STRUCTURAL on the AST -- the measurement enters `program.scope()` as a `with` item, which
+    #      survives any equivalent refactor that still enters it and fails the moment one does not.
+    from flax.linen import partitioning as nn_partitioning
+
+    from maxdiffusion.pos_rollout_update import program_scope
+
+    class _Cfg:
+        logical_axis_rules = (("batch", "data"),)
+
+    outside = tuple(nn_partitioning.get_axis_rules())
+    with program_scope(_Cfg(), mesh):
+        inside = tuple(nn_partitioning.get_axis_rules())
+    observed["scope_installs_the_rules"] = inside == (("batch", "data"),) and outside != inside
+
+    measured = _ast.parse(_textwrap.dedent(_inspect.getsource(fp._measure_under_mesh)))
+    observed["measured_in_scope"] = any(
+        isinstance(node, _ast.With)
+        and any(
+            isinstance(item.context_expr, _ast.Call)
+            and isinstance(item.context_expr.func, _ast.Attribute)
+            and item.context_expr.func.attr == "scope"
+            for item in node.items
+        )
+        for node in _ast.walk(measured)
+    )
     failed = sorted(name for name, ok in observed.items() if not ok)
     if failed:
         return f"SUCCEEDED: the observed contract fails {failed}"
