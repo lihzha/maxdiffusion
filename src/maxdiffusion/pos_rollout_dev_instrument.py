@@ -24,19 +24,24 @@ the arm, "R-B selected a better checkpoint" would be unfalsifiable.
 selection to training randomness — the same checkpoint would score differently depending on which
 step it was evaluated at.
 
-**Capabilities, not labels.** A ``DevCohort`` cannot be constructed — only ISSUED by
-:func:`load_dev_cohort`, which requires the approved manifest's digest and validates every row
-against the bytes it hashed. The previous design checked that a caller had passed the string
-``"dev64"``, which is a claim about a label rather than about content: the reviewer duly wrapped a
-DEV label around a genuine TEST name and obtained a draw (BLOCKER 1). Guarding a claim is not the
-same as making the wrong thing unconstructible, and this module now does the latter.
+**Construction IS verification.** A ``DevCohort`` is built from a PATH and nothing else: the
+constructor reads the file, hashes it, and refuses anything whose digest is not
+:data:`J0_DEV64_SHA256`. Two earlier designs failed here, both to attacks the reviewer EXECUTED
+rather than hypothesized. The first validated that a caller had passed the string ``"dev64"`` -- a
+claim about a LABEL -- so a DEV label wrapped around a genuine TEST name produced a draw (BLOCKER 1).
+The second made the class a loader-issued capability but kept the issue secret in a module attribute
+(``instrument._ISSUE_TOKEN`` handed it straight back) and let the caller supply the expected digest,
+so a 64-row DEV-labelled manifest whose first row was the real TEST row loaded under its own hash
+(BLOCKER A-B1). Both existed because verification and construction were separable. They are not
+separable now, and there is no secret left to leak because none is needed.
 
 **TEST-64 is structurally unreachable, not merely unused.** The S7-era hazard was a config pointing
 at the whole validation directory, so "we don't pass TEST" is exactly the assurance that failed. Here
-there is no API that accepts a bare example name: draws are produced from a :class:`DevCohort`, a
-``DevCohort`` can only be built by :func:`load_dev_cohort`, and that refuses any manifest whose
-cohort is not ``dev64``. A training-time caller holding the TEST manifest cannot construct the object
-the instrument requires. The tests try it and are refused.
+there is no API that accepts a bare example name: draws are produced from a :class:`DevCohort`, and a
+``DevCohort`` requires the approved manifest's bytes. A training-time caller holding the TEST manifest
+cannot construct the object the instrument requires -- nor the batches, since :class:`DevBatchReader`
+opens the cohort's own rows and verifies what comes back (BLOCKER A-B2). Every route in is tried by
+the tests and refused.
 
 **Not this round:** the loop and its cadence/stop rule/checkpoints (T3b-4), YAML (T4), the evaluator
 and its gates (T5a/b). This module computes a per-example number and the provenance that makes it
@@ -47,22 +52,24 @@ from __future__ import annotations
 
 import hashlib
 import json
-import pathlib
 from typing import Sequence
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from maxdiffusion.pos_rollout_stream import StepDraws
-from maxdiffusion.pos_rollout_support import exp03_aux_key
+from maxdiffusion.pos_rollout_support import exp03_aux_key, require_finite, storage_read_bytes
 
 __all__ = [
     "DEV_COHORT",
+    "DEV_COHORT_SIZE",
     "FORBIDDEN_COHORTS",
     "POS_ROLLOUT_DEV_PURPOSE",
     "DEFAULT_REPLICATES",
     "INSTRUMENT_SEED",
     "J0_DEV64_SHA256",
+    "DevBatchReader",
     "DevCohort",
     "instrument_provenance",
     "load_dev_cohort",
@@ -72,6 +79,8 @@ __all__ = [
 #: The ONLY cohort this instrument will score. Selection runs during training; TEST is confirmation
 #: only (plan §3d), so the name is a constant here rather than a caller's argument.
 DEV_COHORT = "dev64"
+#: Pinned like the digest. A caller-settable size is a knob that can only ever weaken a constant.
+DEV_COHORT_SIZE = 64
 #: Named so a refusal can say what it refused, and so the guard is greppable from a worker log.
 FORBIDDEN_COHORTS = ("test64",)
 
@@ -92,10 +101,6 @@ INSTRUMENT_SEED = 20260804
 #: measured.
 DEFAULT_REPLICATES = (0,)
 
-# Only `load_dev_cohort` holds this; `DevCohort.__init__` refuses without it, so the class is a
-# capability the loader ISSUES rather than a struct any caller can fill in (review BLOCKER 1).
-_ISSUE_TOKEN = object()
-
 
 def _name_id(text: str) -> int:
     """A stable 32-bit id for a string, hashed like T1's purpose ids (never positional)."""
@@ -114,31 +119,78 @@ def _dev_draw_key(*, name: str, field: str, replicate: int) -> jax.Array:
     return jax.random.fold_in(jax.random.fold_in(root, _name_id(name)), _name_id(field))
 
 
-class DevCohort:
-    """A loader-ISSUED capability: the only object the instrument will draw or score for.
+def _read_bytes(path: str) -> bytes:
+    """One reader for every artifact, remote or local (review pass 2, T5a BLOCKER 2)."""
+    return storage_read_bytes(path)
 
-    Not a dataclass and not publicly constructible — :func:`load_dev_cohort` holds the only issue
-    token. The previous design was a public frozen dataclass validating that the caller had passed
-    the label ``"dev64"``; the reviewer wrapped that label around a genuine TEST name and got a draw
-    (review BLOCKER 1). A capability cannot be forged, so the attack has no entry point rather than a
-    guarded one.
+
+class DevCohort:
+    """The only object the instrument will draw or score for — and **constructing one IS loading the
+    approved manifest.**
+
+    Three designs failed before this one, each in the same way. A public dataclass validating that
+    the caller passed the label ``"dev64"`` was a claim about a LABEL: the reviewer wrapped that
+    label around a genuine TEST name and got a draw (BLOCKER 1). A loader-issued capability moved the
+    check but kept a secret in a module attribute, and ``instrument._ISSUE_TOKEN`` handed it straight
+    back; worse, the caller-settable digest let a 64-row DEV-labelled manifest whose first row was
+    the real TEST row be loaded with its own computed hash (BLOCKER A-B1). Both attacks existed
+    because verification and construction were separable.
+
+    They are not separable here. There is no token, no secret and no digest argument: this
+    constructor reads the file, hashes it, and refuses anything but :data:`J0_DEV64_SHA256`. The only
+    input a caller controls is a path, so producing a cohort requires producing the approved
+    manifest's bytes — and the forgery has nowhere to go. (No in-language guard survives
+    ``object.__new__`` plus slot assignment; an attacker with that reach can rewrite the pinned
+    digest just as easily, so that is a bound on Python, not a residual of this design.)
 
     It carries the manifest's ROWS, not just names: identity for scoring is the row (name, shard,
-    ordinal) the approved manifest specifies, so what gets read is decided by the manifest and not by
-    a caller's dictionary keys (review BLOCKER 2).
+    ordinal) the approved manifest specifies, so what gets read is decided by the manifest and never
+    by a caller (BLOCKER 2, BLOCKER A-B2).
     """
 
     __slots__ = ("_rows", "_by_name", "cohort", "manifest_sha256", "manifest_path")
 
-    def __init__(self, token, *, cohort, rows, manifest_sha256, manifest_path):
-        if token is not _ISSUE_TOKEN:
-            raise TypeError(
-                "DevCohort is issued by load_dev_cohort, never constructed: a hand-built cohort is a "
-                "label, and this instrument binds to the approved manifest's CONTENT"
+    def __init__(self, path: str):
+        from maxdiffusion.null_adapter_manifest_io import MANIFEST_SCHEMA_VERSION
+
+        raw = _read_bytes(path)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != J0_DEV64_SHA256:
+            raise ValueError(
+                f"manifest hash mismatch for {path}: the DEV instrument binds to the published J0 "
+                f"DEV-64 manifest {J0_DEV64_SHA256}, found {digest}. A score is only quotable against "
+                f"the cohort it was measured on, so there is no argument that relaxes this."
             )
+        # Parsed from the SAME buffer that was hashed: validating one read and hashing another
+        # permits payload/digest disagreement (review BLOCKER 2).
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict) or set(payload) != {"schema_version", "cohort", "rows"}:
+            raise ValueError(f"{path}: manifest fields do not match the schema")
+        if int(payload["schema_version"]) != MANIFEST_SCHEMA_VERSION:
+            raise ValueError(f"{path}: unsupported manifest schema_version {payload['schema_version']!r}")
+
+        cohort = str(payload["cohort"])
+        if cohort in FORBIDDEN_COHORTS:
+            raise ValueError(
+                f"refusing to load cohort {cohort!r} for training-time selection: TEST is confirmation only "
+                f"(plan §3d), and the DEV instrument scores {DEV_COHORT!r}"
+            )
+        if cohort != DEV_COHORT:
+            raise ValueError(f"the DEV instrument scores {DEV_COHORT!r} only, refusing cohort {cohort!r}")
+
+        rows = payload["rows"]
+        if not isinstance(rows, list) or len(rows) != DEV_COHORT_SIZE:
+            raise ValueError(f"the {cohort} cohort must carry exactly {DEV_COHORT_SIZE} examples, got {len(rows)}")
+        names = [str(row["name"]) for row in rows]
+        if len(set(names)) != len(names):
+            raise ValueError(f"{path}: the cohort carries duplicate example names")
+        for row in rows:
+            if str(row["split"]) != cohort:
+                raise ValueError(f"{path}: row {row['name']!r} declares split {row['split']!r}, not {cohort!r}")
+
         self.cohort = cohort
-        self.manifest_sha256 = manifest_sha256
-        self.manifest_path = manifest_path
+        self.manifest_sha256 = digest
+        self.manifest_path = str(path)
         self._rows = tuple(rows)
         self._by_name = {row["name"]: row for row in self._rows}
 
@@ -180,54 +232,66 @@ class DevCohort:
         return StepDraws(support_start=start, support_end=start + int(k_b), epsilon=epsilon, t_idx=t_idx)
 
 
-def load_dev_cohort(path: str, *, expected_sha256: str = J0_DEV64_SHA256, expected_size: int = 64) -> DevCohort:
-    """Issue a cohort from exp_04's published J0 DEV-64 manifest, fail-closed.
+def load_dev_cohort(path: str) -> DevCohort:
+    """Load exp_04's published J0 DEV-64 manifest, fail-closed. One argument, and no knobs."""
+    return DevCohort(path)
 
-    The digest is REQUIRED (it defaults to the approved manifest's, so binding is the easy path and
-    opting out is impossible): any schema-valid file labelled ``dev64`` was previously accepted.
-    The bytes are read ONCE and both hashed and parsed from that same buffer — validating one read
-    and hashing another permits payload/digest disagreement (review BLOCKER 2).
+
+class DevBatchReader:
+    """**The instrument's own canonical row reader.** It opens the row's ``shard_path``/``ordinal``
+    and verifies the decoded example's identity before anything is scored.
+
+    **There is no injectable seam. That was the defect.** Two designs failed here, one layer apart.
+    The first took ``batch_loader(row)`` from the caller and could not require it to use the row:
+    ``lambda row: test_batch`` scored TEST content as DEV (BLOCKER A-B2). The second replaced it with
+    this reader but kept ``reader``/``binder`` injectable "to exp_04's standard" — and the reviewer
+    executed the same attack one layer lower: a ``reader`` echoing every genuine DEV name and its
+    declared ordinal while returning tensors filled with 999, plus a ``binder`` echoing the
+    manifest's generation and size, produced ``metric 999.0`` stamped ``cohort dev64`` with the
+    genuine digest over all 64 examples. Equivalently it can hand back TEST tensors relabelled with
+    the requested DEV identity, and every check believes it.
+
+    **The lesson, recorded because it took three rounds:** matching a prior experiment's tolerance is
+    not the same as closing the path. "exp_04's standard, no better" is not a justification when the
+    hole is reachable.
+
+    So this constructor takes a cohort and nothing else. Reading is exp_04's manifest-bound
+    ``build_read_batch`` over the instrument's own TFRecord decoder and exp_04's own shard binding;
+    it refuses a name outside the cohort, a record whose DECODED ordinal disagrees with its row, a
+    shard whose generation/size has moved since J0 bound it, a duplicate, a name the shard did not
+    yield, and any payload that is not production geometry and finite. A test that needs different
+    bytes monkeypatches the decoder MODULE, which is a property of the test process rather than an
+    argument any production caller can reach.
     """
-    from maxdiffusion.null_adapter_manifest_io import MANIFEST_SCHEMA_VERSION
 
-    try:
-        from tensorflow.io import gfile
+    __slots__ = ("cohort", "_read_batch")
 
-        raw = gfile.GFile(path, "rb").read()
-    except Exception:  # noqa: BLE001 - a local path is the common case and must not need tensorflow
-        raw = pathlib.Path(path).read_bytes()
+    def __init__(self, cohort: DevCohort):
+        if not isinstance(cohort, DevCohort):
+            raise TypeError(
+                "a DevBatchReader reads a loaded DevCohort's own rows; a hand-built cohort is exactly "
+                "what the manifest binding exists to refuse"
+            )
+        from maxdiffusion import run_wan_null_inversion
 
-    digest = hashlib.sha256(raw).hexdigest()
-    if digest != expected_sha256:
-        raise ValueError(
-            f"manifest hash mismatch for {path}: expected {expected_sha256}, found {digest}. A score is only "
-            f"quotable against the cohort it was measured on."
+        self.cohort = cohort
+        # Resolved from the module at construction, never from an argument: a caller cannot supply a
+        # decoder, and a test that needs one patches `run_wan_null_inversion._tfrecord_reader`.
+        self._read_batch = run_wan_null_inversion.build_read_batch(
+            {str(row["name"]): row for row in cohort.rows}, reader=run_wan_null_inversion._tfrecord_reader
         )
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, dict) or set(payload) != {"schema_version", "cohort", "rows"}:
-        raise ValueError(f"{path}: manifest fields do not match the schema")
-    if int(payload["schema_version"]) != MANIFEST_SCHEMA_VERSION:
-        raise ValueError(f"{path}: unsupported manifest schema_version {payload['schema_version']!r}")
 
-    cohort = str(payload["cohort"])
-    if cohort in FORBIDDEN_COHORTS:
-        raise ValueError(
-            f"refusing to load cohort {cohort!r} for training-time selection: TEST is confirmation only "
-            f"(plan \u00a73d), and the DEV instrument scores {DEV_COHORT!r}"
-        )
-    if cohort != DEV_COHORT:
-        raise ValueError(f"the DEV instrument scores {DEV_COHORT!r} only, refusing cohort {cohort!r}")
-
-    rows = payload["rows"]
-    if not isinstance(rows, list) or len(rows) != int(expected_size):
-        raise ValueError(f"the {cohort} cohort must carry exactly {int(expected_size)} examples, got {len(rows)}")
-    names = [str(row["name"]) for row in rows]
-    if len(set(names)) != len(names):
-        raise ValueError(f"{path}: the cohort carries duplicate example names")
-    for row in rows:
-        if str(row["split"]) != cohort:
-            raise ValueError(f"{path}: row {row['name']!r} declares split {row['split']!r}, not {cohort!r}")
-    return DevCohort(_ISSUE_TOKEN, cohort=cohort, rows=rows, manifest_sha256=digest, manifest_path=str(path))
+    def read(self, name: str) -> dict:
+        """The batch for ONE cohort example, decoded from the row the approved manifest bound."""
+        self.cohort.row(str(name))  # membership, against the digest-pinned manifest's content
+        batch, fields = self._read_batch((str(name),))
+        if tuple(batch.names) != (str(name),):
+            raise ValueError(f"the canonical reader returned {tuple(batch.names)} when asked for {name!r}")
+        return {
+            "z_i0": np.asarray(batch.z_i0, np.float32),
+            "z_video": np.asarray(batch.z_video, np.float32),
+            "actions": np.asarray(fields[str(name)]["actions"], np.float32)[None, ...],
+        }
 
 
 def instrument_provenance(
@@ -255,7 +319,6 @@ def instrument_provenance(
 def score_dev_cohort(
     cohort: DevCohort,
     loss_fn,
-    batch_loader,
     *,
     params,
     context,
@@ -267,12 +330,18 @@ def score_dev_cohort(
 ) -> dict:
     """Score every DEV example on its pinned draw; return the mean and its provenance.
 
-    ``batch_loader(row) -> batch`` is driven BY THE COHORT: the instrument hands it the approved
-    manifest's row and takes what comes back. It does NOT accept a caller-supplied mapping keyed by
-    name — that design let TEST tensors be filed under DEV keys and stamped with DEV provenance
-    (review BLOCKER 2). Verifying caller tensors is checkable but forgeable; sourcing them from the
-    validated manifest is not.
+    Batches come from the instrument's own :class:`DevBatchReader`, which opens the approved
+    manifest's row and verifies the decoded example's identity. There is no caller callback and no
+    caller mapping: both were forgeable (review BLOCKERs 2 and A-B2), and a forged batch scored under
+    genuine DEV provenance is not a noisy measurement, it is a fabricated one.
+
+    The reader is built here rather than accepted, and the read is dispatched through the CLASS
+    rather than the instance, so neither a callback, a decoder, nor a subclass can substitute for
+    reading the row the approved manifest names.
     """
+    # The reader is CONSTRUCTED here, from this cohort. It is not a parameter, so there is nothing to
+    # substitute: neither a callback (BLOCKER A-B2) nor a decoder under it (review pass 1, BLOCKER 1).
+    batch_reader = DevBatchReader(cohort)
     per_example: dict[str, float] = {}
     for row in cohort.rows:
         name = str(row["name"])
@@ -284,12 +353,14 @@ def score_dev_cohort(
             replicate=replicate,
             dtype=dtype,
         )
-        batch = batch_loader(dict(row))
+        batch = DevBatchReader.read(batch_reader, name)
         value, _ = loss_fn(params, batch, context, draws=draws)
-        per_example[name] = float(value)
+        # A non-finite per-example score would travel into the mean, into the stop rule, and into an
+        # unbeatable running best (review BLOCKER 2). It is refused where it is produced.
+        per_example[name] = require_finite(value, f"the DEV score for {name}")
     ordered = [per_example[str(row["name"])] for row in cohort.rows]
     return {
-        "metric": float(sum(ordered) / len(ordered)),
+        "metric": require_finite(sum(ordered) / len(ordered), "the aggregate DEV metric"),
         "per_example": per_example,
         **instrument_provenance(cohort, k_b=context.k_b, eval_index=eval_index, arm=arm),
     }

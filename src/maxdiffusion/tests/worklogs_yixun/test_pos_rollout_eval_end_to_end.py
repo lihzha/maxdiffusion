@@ -1,0 +1,948 @@
+"""exp_06 `rollout_adapter` — the END-TO-END evaluation test (review pass 2's launch precondition).
+
+**Why this file exists, in the reviewer's own words:** *"the tests manufacture ideal scalar tables and
+never exercise table production, artifact round-tripping, GCS I/O, real certificate consumption, VAE
+decode layout, Orbax restore templates, or bf16/sharding. A small end-to-end fake-model artifact test
+should precede the first real checkpoint smoke run."* The Planner adopted it as a **launch
+precondition**, so this runs the protocol — restore → rollout → decode → summarize → certificate →
+gate → TEST door — before any real checkpoint is ever loaded.
+
+**What is REAL here.** A real ``WanModel`` and a real ``NNXWanSideAdapterStack`` in its ``pre_context``
+configuration (T3a's fixtures, reused rather than re-declared); a real Orbax checkpoint tree written
+and restored through the production template; real TFRecord shards written and read by the anchor's
+own reader; the real 25-step deployed sigma grid; the real ``DeviceBackend``; the real
+``rollout_prediction``/``sample_metrics``/``summarize_samples``; the real digest-bound artifacts,
+published and re-loaded through a ``gs://`` URI; the real cohorts, the real derangement derived from
+the records' own action bytes, the real table producer, and both real gates.
+
+**What is not, and why.** The VAE is a deterministic stand-in: it needs the 5B pipeline's weights,
+and what this test must exercise is the LAYOUT its output has to have — ``(batch, frames, H, W, 3)``,
+both sides through one seam — which the stand-in reproduces exactly. And the second half's device
+compute is a stub, because 64 examples × seven condition tables × a 25-step rollout is a TPU-shaped
+amount of work: what the second half is testing is the ORCHESTRATION (restores, cohorts, production,
+publication, gate consumption, the TEST door), while the first half runs one complete measurement
+through the real model. Both halves are named for what they cover.
+
+**The first half's most useful assertion is the one that fails the anchor.** A randomly initialised
+tiny adapter does not reproduce the deployed 0.2946, so the verdict is ``reproduced=False`` — and the
+test then shows that every later phase REFUSES to run. That is plan §3c's ordering, executed rather
+than described.
+"""
+
+from __future__ import annotations
+
+import functools
+import inspect
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from maxdiffusion import eval_wan_pos_rollout as anchor
+from maxdiffusion import pos_rollout_dev_instrument as instrument
+from maxdiffusion import pos_rollout_gates as gates
+from maxdiffusion import pos_rollout_loop as loop
+from maxdiffusion.models.wan.overfit100_sampling import overfit100_sampler_grid
+from maxdiffusion.pos_rollout_step import build_cfg_velocity_fn
+from maxdiffusion.tests.worklogs_yixun.test_pos_rollout_gates import _install_records, _StubBackend
+from maxdiffusion.tests.worklogs_yixun.test_pos_rollout_step import _mesh_context, _tiny_cfg_stack
+
+_MANIFEST_DIR = Path(anchor.__file__).resolve().parents[2] / "docs" / "worklogs_yixun"
+_MANIFEST_DIR = _MANIFEST_DIR / "exp_04_null_adapter_claude" / "j0_manifests"
+_DEV = str(_MANIFEST_DIR / "dev64.json")
+_TEST = str(_MANIFEST_DIR / "test64.json")
+_SHA = "a" * 40
+
+# The tiny fixture's geometry (exp_05's `_tiny_pre_context`, via T3a).
+_C, _TEXT, _F, _H, _W, _ACTION_LEN, _ACTION_DIM = 4, 32, 2, 4, 6, 4, 7
+_GUIDE, _STEPS = 5.0, 25
+
+
+class _Config(dict):
+    """A stand-in for ``pyconfig.HyperParameters``: attribute reads, ``ValueError`` on an unknown key.
+
+    The ``ValueError`` matters — it is why ``getattr(config, key, default)`` never falls back and has
+    killed two TPU jobs in this campaign (issue #11). A dict-like fake that raised ``AttributeError``
+    would quietly let that bug back in.
+    """
+
+    def __getattr__(self, key):
+        if key not in self:
+            raise ValueError(f"Key {key} not in config")
+        return self[key]
+
+    def get_keys(self):
+        return dict(self)
+
+
+def _decode(latents):
+    """A deterministic stand-in for ``_decode_latents_to_video(_denormalize_latents(x))``.
+
+    The VAE needs the pipeline's weights; what this path must get right is the LAYOUT — one seam, both
+    sides, ``(batch, frames, H, W, 3)`` with enough spatial extent for SSIM's 7-pixel window.
+    """
+    values = np.asarray(latents, np.float32)
+    batch, channels, frames, height, width = values.shape
+    frame = values.mean(axis=1)  # (batch, frames, H, W)
+    frame = np.repeat(np.repeat(frame, 2, axis=2), 2, axis=3)
+    frame = 1.0 / (1.0 + np.exp(-frame))  # into [0, 1], as a decoded video is
+    del channels, height, width
+    return jnp.asarray(np.repeat(frame[..., None], 3, axis=-1).reshape(batch, frames, 2 * 4, 2 * 6, 3))
+
+
+@functools.lru_cache(maxsize=1)
+def _tiny_cfg_stack_bf16():
+    """The SAME construction as T3a's fixture, at bfloat16 — because that is what deployment runs.
+
+    ``weights_dtype`` is bfloat16 in the pinned config, so the deployed transformer emits bf16
+    velocities and the sampler's carry stays bf16 end to end. A float32 model fed bf16 inputs cannot
+    close that loop, which is itself evidence that the dtype boundary is a real property of the path
+    rather than a cast that could be applied anywhere.
+    """
+    from flax import nnx
+
+    from maxdiffusion.models.wan.side_adapter_wan import NNXWanSideAdapterStack
+    from maxdiffusion.models.wan.transformers.transformer_wan import WanModel
+
+    rules, mesh = _mesh_context()
+    with rules, mesh:
+        transformer = WanModel(
+            rngs=nnx.Rngs(jax.random.key(0)),
+            num_attention_heads=2,
+            attention_head_dim=8,
+            in_channels=_C,
+            out_channels=_C,
+            text_dim=_TEXT,
+            freq_dim=16,
+            ffn_dim=32,
+            num_layers=1,
+            attention="dot_product",
+            rope_max_seq_len=64,
+            scan_layers=False,
+            dtype=jnp.bfloat16,
+            weights_dtype=jnp.bfloat16,
+        )
+        adapters = NNXWanSideAdapterStack(
+            rngs=nnx.Rngs(jax.random.key(1)),
+            num_layers=1,
+            model_dim=16,
+            text_dim=_TEXT,
+            action_adapter_type="pre_context",
+            action_dim=7,
+            action_len=_ACTION_LEN,
+            action_repr="delta",
+            action_tokens=4,
+            action_hidden=16,
+            action_heads=2,
+            side_adapter_layers="0",
+            side_adapter_hidden=16,
+            side_adapter_heads=2,
+            pre_context_tokens=4,
+            pre_context_heads=2,
+            dtype=jnp.bfloat16,
+            weights_dtype=jnp.bfloat16,
+        )
+    return transformer, adapters
+
+
+def _backend(*, params=None, eval_dtype=None):
+    """The REAL ``DeviceBackend`` over the real tiny transformer + adapter stack."""
+    transformer, adapters = _tiny_cfg_stack_bf16() if eval_dtype == jnp.bfloat16 else _tiny_cfg_stack()
+    rules, mesh = _mesh_context()
+    with rules, mesh:
+        make_velocity_fn, adapter_params = build_cfg_velocity_fn(transformer, adapters)
+    from flax import nnx
+
+    frozen = nnx.split(transformer, nnx.Param, ...)
+
+    def velocity_for(bound, actions, adapter_enabled):
+        if adapter_enabled:
+            return make_velocity_fn(bound, actions=actions, guide_scale=_GUIDE)
+        model = nnx.merge(*frozen)
+
+        def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+            return model(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                deterministic=True,
+            )
+
+        return velocity_fn
+
+    sigmas, timesteps = overfit100_sampler_grid(
+        num_inference_steps=_STEPS, flow_shift=5.0, sigma_min=0.0, sigma_max=1.0, num_train_timesteps=1000
+    )
+    template = loop.RolloutTrainState(params=adapter_params, opt_state={"mu": jnp.zeros((2,), jnp.float32)}, step=0)
+    return anchor.DeviceBackend(
+        velocity_for=velocity_for,
+        decode_fn=_decode,
+        sigmas=sigmas,
+        timesteps=timesteps,
+        context=jnp.zeros((1, 7, _TEXT), jnp.float32),
+        guide_scale=_GUIDE,
+        template=template,
+        params=params if params is not None else adapter_params,
+        scope=_mesh_context,
+        eval_dtype=eval_dtype,
+    )
+
+
+def _write_checkpoint(root, *, step, template, arm="rollout", dev_metric=0.5):
+    """A REAL Orbax tree at ``root``, written through the production saver."""
+    manager = loop.build_checkpoint_manager(root)
+    state = loop.RolloutTrainState(params=template.params, opt_state=template.opt_state, step=step)
+    loop.save_checkpoint(
+        manager,
+        state,
+        dev_metric=dev_metric,
+        history=[loop.EvalRecord(step=step, dev_metric=dev_metric, train_metric=1.0)],
+        arm=arm,
+        k_b=2,
+    )
+    return root
+
+
+def _write_selection(root, *, step, template, arm, dev_metric):
+    manager = loop.build_selection_manager(root)
+    state = loop.RolloutTrainState(params=template.params, opt_state=template.opt_state, step=step)
+    loop.save_checkpoint(
+        manager,
+        state,
+        dev_metric=dev_metric,
+        history=[loop.EvalRecord(step=step, dev_metric=dev_metric, train_metric=1.0)],
+        arm=arm,
+        k_b=2,
+    )
+
+
+def _write_records(directory: Path, names):
+    """REAL TFRecord shards in the deployed schema, so the anchor's own reader is exercised."""
+    import tensorflow as tf
+
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "val-00000.tfrecord"
+    with tf.io.TFRecordWriter(str(path)) as writer:
+        for index, name in enumerate(names):
+            value = 0.05 * (index + 1)
+            z_i0 = np.full((_C, 1, _H, _W), value, np.float16)
+            z_video = np.full((_C, _F, _H, _W), value, np.float16)
+            actions = np.full((_ACTION_LEN, _ACTION_DIM), value, np.float32)
+            feature = {
+                "name": tf.train.Feature(bytes_list=tf.train.BytesList(value=[name.encode()])),
+                "z_i0": tf.train.Feature(bytes_list=tf.train.BytesList(value=[z_i0.tobytes()])),
+                "z_video": tf.train.Feature(bytes_list=tf.train.BytesList(value=[z_video.tobytes()])),
+                "actions": tf.train.Feature(bytes_list=tf.train.BytesList(value=[actions.tobytes()])),
+            }
+            writer.write(tf.train.Example(features=tf.train.Features(feature=feature)).SerializeToString())
+    return str(directory)
+
+
+def _config(tmp_path, **overrides):
+    values = {
+        "run_name": "e2e",
+        "code_sha": _SHA,
+        "pretrained_model_name_or_path": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        "pos_eval_phase": "anchor",
+        "base_output_directory": "gs://bucket/e2e/eval_anchor_att-1",
+        "checkpoint_dir": "",
+        "pos_run_report": "",
+        "pos_control_checkpoint_dir": "",
+        "pos_control_run_report": "",
+        "pos_dev_manifest": _DEV,
+        "pos_test_manifest": _TEST,
+        "eval_data_dir": "",
+        "latent_channels": _C,
+        "latent_frames": _F,
+        "latent_height": _H,
+        "latent_width": _W,
+        "action_len": _ACTION_LEN,
+        "action_dim": _ACTION_DIM,
+        "validation_seed": 0,
+        "validation_start_index": 0,
+        "side_adapter_sampling_steps": _STEPS,
+        "side_adapter_guide_scale": _GUIDE,
+    }
+    values.update(overrides)
+    del tmp_path
+    return _Config(values)
+
+
+def _requires_backend():
+    pytest.importorskip("torch")
+    pytest.importorskip("aqt")
+    pytest.importorskip("orbax.checkpoint")
+    pytest.importorskip("tensorflow")
+
+
+# =============================================================================================
+# 1. The anchor phase, on a real (tiny) model: restore -> rollout -> decode -> summarize -> certify.
+# =============================================================================================
+
+
+def test_the_anchor_phase_runs_the_WHOLE_path_on_a_real_tiny_model(tmp_path, fake_gs):
+    """Every stage executes: an Orbax restore through the production template, four TFRecords read by
+    the anchor's own reader, four 25-step CFG rollouts through the real transformer + adapter, the
+    decode seam on both sides, the aggregation, the reproduction verdict, and a published certificate.
+    """
+    _requires_backend()
+    backend = _backend()
+    run = anchor.HISTORICAL_ANCHOR.run_name
+    ckpt_dir = str(tmp_path / run / "checkpoints")
+    _write_checkpoint(ckpt_dir, step=anchor.HISTORICAL_ANCHOR.checkpoint_step, template=backend.template)
+    data_dir = _write_records(tmp_path / "val", anchor.HISTORICAL_ANCHOR.sample_names)
+
+    config = _config(tmp_path, checkpoint_dir=ckpt_dir, eval_data_dir=data_dir)
+    result = anchor.run_evaluation(config, backend=backend)
+
+    certificate, measurement = result["certificate"], result["measurement"]
+    assert result["phase"] == "anchor"
+    # The identity is DERIVED from the tree that was opened, not from anything the config said.
+    assert certificate["checkpoint"]["run_name"] == run and certificate["checkpoint"]["step"] == 30000
+    assert certificate["checkpoint"]["source"] == "historical"
+    assert certificate["sample_names"] == list(anchor.HISTORICAL_ANCHOR.sample_names)
+    assert certificate["num_steps"] == anchor.DEPLOYED_SAMPLING_STEPS
+    assert certificate["measurement_sha256"] == measurement.digest
+    assert all(np.isfinite(list(measurement.means.values())))
+
+    # The artifact landed in the BUCKET (gs:// through the storage layer), and reads back identically.
+    published = "gs://bucket/e2e/anchor_certificate.json"
+    assert published in fake_gs.blobs and not Path("gs:").exists()
+    assert anchor.load_certificate(published, protocol=anchor.ANCHOR_PROTOCOL)["measurement_sha256"] == (
+        measurement.digest
+    )
+
+    # A randomly initialised adapter is not the deployed one, so the wiring proof FAILS -- and every
+    # later phase is then refused. That refusal is plan §3c's ordering, executed.
+    assert not certificate["reproduced"], "a random tiny adapter must not reproduce the deployed 0.2946"
+    for phase in ("benchmark", "gates", "confirm"):
+        with pytest.raises(ValueError, match="did not reproduce"):
+            anchor.run_evaluation(
+                _config(tmp_path, pos_eval_phase=phase, base_output_directory=f"gs://bucket/e2e/eval_{phase}_att-1"),
+                backend=backend,
+            )
+
+
+def test_the_rollout_the_anchor_phase_runs_is_the_deployed_grid_and_the_seam_is_the_only_stub(tmp_path):
+    """The horizon cannot be shortened to make this test cheap: ``rollout_prediction`` takes no
+    ``num_steps``, and it refuses a grid that is not the deployed one."""
+    _requires_backend()
+    backend = _backend()
+    z_i0 = jnp.zeros((1, _C, 1, _H, _W), jnp.float32)
+    z_video = jnp.zeros((1, _C, _F, _H, _W), jnp.float32)
+    execution, metrics = backend.score(
+        z_i0=z_i0,
+        z_video=z_video,
+        actions=jnp.zeros((1, _ACTION_LEN, _ACTION_DIM), jnp.float32),
+        key=anchor.evaluation_draw_key("example"),
+    )
+    assert execution.num_steps == 25 and execution.grid_size == 26
+    assert execution.draw_key_sha256 == anchor.draw_key_digest(anchor.evaluation_draw_key("example"))
+    assert np.isfinite(metrics["ssim_avg"]) and np.isfinite(metrics["latent_mse"])
+    # frame 0 stays pinned to the conditioning frame, all the way through the rollout
+    assert np.allclose(np.asarray(execution.z_pred[:, :, :1], np.float32), np.asarray(z_i0, np.float32))
+
+    short, short_t = overfit100_sampler_grid(
+        num_inference_steps=10, flow_shift=5.0, sigma_min=0.0, sigma_max=1.0, num_train_timesteps=1000
+    )
+    with pytest.raises(ValueError, match="sigmas"):
+        anchor.rollout_prediction(
+            velocity_fn=lambda *a, **k: z_video,
+            sigmas=short,
+            timesteps=short_t,
+            context=backend.context,
+            z_i0=z_i0,
+            z_video=z_video,
+            key=anchor.evaluation_draw_key("x"),
+            guide_scale=_GUIDE,
+        )
+
+
+# =============================================================================================
+# 2. The rest of the protocol, from a reproducing anchor: benchmark -> gates -> TEST door.
+# =============================================================================================
+
+
+def _publish_reproducing_anchor(tmp_path, backend, root="gs://bucket/e2e"):
+    """A REAL anchor certificate for a run that did reproduce — built through the real path.
+
+    The restore, the aggregation, the verdict and the publication are all production code; only the
+    per-sample numbers are the recorded ones rather than a tiny model's. That is the honest way to put
+    the later phases in the state a successful anchor leaves behind.
+    """
+    run = anchor.HISTORICAL_ANCHOR.run_name
+    ckpt_dir = str(tmp_path / run / "checkpoints")
+    _write_checkpoint(ckpt_dir, step=anchor.HISTORICAL_ANCHOR.checkpoint_step, template=backend.template)
+    _, identity = anchor.restore_anchor_checkpoint(ckpt_dir, backend.template)
+    rows = [
+        {
+            "name": name,
+            "latent_mse": anchor.HISTORICAL_ANCHOR.mean_latent_mse,
+            "pixel_mse": anchor.HISTORICAL_ANCHOR.mean_pixel_mse,
+            "ssim_avg": anchor.HISTORICAL_ANCHOR.mean_ssim,
+            "num_steps": anchor.DEPLOYED_SAMPLING_STEPS,
+            "grid_sha256": anchor.DEPLOYED_GRID_SHA256,
+        }
+        for name in anchor.HISTORICAL_ANCHOR.sample_names
+    ]
+    measurement = anchor.summarize_samples(
+        rows, checkpoint=identity, code_sha=_SHA, model_revision="tiny", test_manifest_path=_TEST
+    )
+    verdict = anchor.reproduce_anchor(measurement)
+    assert verdict.reproduced
+    anchor.publish_certificate(anchor.anchor_certificate_path(root), anchor.anchor_certificate(verdict))
+    return ckpt_dir
+
+
+def _stub(high, low, template=None):
+    """A device stand-in whose SSIM depends on WHICH actions it was fed and WHICH parameters are bound.
+
+    ``_install_records`` gives an example's z_video and its actions the same fill, so "these actions
+    are this example's" is visible to the device without anyone telling it a name — a fair simulation
+    of action conditioning. And a checkpoint whose adapter parameters are all zero scores 0.10 lower,
+    which is how the matched-C0 arm is made distinguishable from R-B without touching identity.
+    """
+
+    def values(*, z_video, actions, adapter_enabled, params=None):
+        if not adapter_enabled:
+            return 0.10, 2.0
+        matched = np.isclose(float(np.mean(np.asarray(actions))), float(np.mean(np.asarray(z_video))))
+        alive = params is None or any(float(np.abs(np.asarray(leaf)).sum()) > 0 for leaf in jax.tree.leaves(params))
+        base = high if matched else low
+        return (base if alive else base - 0.10), 1.0
+
+    return _StubBackend(values, template=template), None
+
+
+def test_the_protocol_runs_end_to_end_from_a_reproducing_anchor(tmp_path, monkeypatch, fake_gs):
+    """benchmark → gates → confirm, with real Orbax restores, real cohorts, the real producer, real
+    digest-bound artifacts published through ``gs://``, real certificate consumption, and one TEST door.
+    """
+    _requires_backend()
+    real_backend = _backend()
+    _install_records(monkeypatch, instrument.load_dev_cohort(_DEV).rows)
+    historical = _publish_reproducing_anchor(tmp_path, real_backend)
+
+    stub, _ = _stub(0.40, 0.30, template=real_backend.template)
+
+    # --- benchmark: the deployed checkpoint's DEV-64 row, frozen -----------------------------
+    benchmark = anchor.run_evaluation(
+        _config(
+            tmp_path,
+            pos_eval_phase="benchmark",
+            base_output_directory="gs://bucket/e2e/eval_benchmark_att-1",
+            checkpoint_dir=historical,
+        ),
+        backend=stub,
+    )
+    row = benchmark["benchmark_row"]
+    assert row["cohort"] == "dev64" and row["example_count"] == 64 and row["num_steps"] == 25
+    assert row["checkpoint"]["run_name"] == anchor.HISTORICAL_ANCHOR.run_name
+    assert anchor.load_benchmark_row(anchor.benchmark_row_path("gs://bucket/e2e")) == row
+    assert "gs://bucket/e2e/eval_benchmark_att-1/tables/historical_true.json" in fake_gs.blobs
+    reloaded = anchor.load_score_table("gs://bucket/e2e/eval_benchmark_att-1/tables/historical_true.json")
+    assert reloaded.digest == benchmark["table"].digest, "a published table round-trips to the same artifact"
+
+    # --- gates: both arms, the full battery, the DEV certificate ------------------------------
+    arm_root = str(tmp_path / "rb" / "checkpoints")
+    control_root = str(tmp_path / "c0" / "checkpoints")
+    zeroed = loop.RolloutTrainState(
+        params=jax.tree.map(jnp.zeros_like, real_backend.template.params),
+        opt_state=real_backend.template.opt_state,
+        step=0,
+    )
+    for root, arm, metric, template in (
+        (arm_root, "rollout", 0.40, real_backend.template),
+        (control_root, "control", 0.44, zeroed),
+    ):
+        _write_checkpoint(root, step=1000, template=template, arm=arm, dev_metric=metric)
+        _write_selection(root, step=1000, template=template, arm=arm, dev_metric=metric)
+    reports = {}
+    for label, (root, arm, metric) in {
+        "arm": (arm_root, "rollout", 0.40),
+        "control": (control_root, "control", 0.44),
+    }.items():
+        report = loop.RunReport(
+            state=loop.RolloutTrainState(params=None, opt_state=None, step=1000),
+            history=(loop.EvalRecord(step=1000, dev_metric=metric, train_metric=1.0),),
+            verdict=loop.stop_verdict([loop.EvalRecord(step=1000, dev_metric=metric, train_metric=1.0)]),
+            retained_step=1000,
+            steps_run=1000,
+            draw_log=(),
+        )
+        reports[label] = f"gs://bucket/e2e/{label}_run_report.json"
+        anchor.publish_run_report(reports[label], report, arm=arm, k_b=2, num_steps=25)
+
+    gates_config = _config(
+        tmp_path,
+        pos_eval_phase="gates",
+        base_output_directory="gs://bucket/e2e/eval_gates_att-1",
+        checkpoint_dir=arm_root,
+        pos_run_report=reports["arm"],
+        pos_control_checkpoint_dir=control_root,
+        pos_control_run_report=reports["control"],
+    )
+    outcome = anchor.run_evaluation(gates_config, backend=stub)
+    certificate = outcome["certificate"]
+    assert certificate["certificate"] == gates.GATE_CERTIFICATE
+    assert certificate["cohort"] == "dev64" and certificate["coverage_ok"] and certificate["num_steps"] == 25
+    assert certificate["rollout_checkpoint"]["run_name"] == "rb"
+    assert certificate["control_checkpoint"]["run_name"] == "c0"
+    # The certificate is a real artifact: it re-loads through the strict schema and re-decides.
+    assert gates.load_dev_certificate(anchor.dev_certificate_path("gs://bucket/e2e"))["passed"] == (
+        certificate["passed"]
+    )
+    report = outcome["action_use"]
+    assert report["gate"].passed, "true actions beat the deranged donor's on identical noise"
+    assert report["reported"]["coverage_ok"] and "control_mean_delta_true_minus_zero" in report["reported"]
+    assert "passed" not in report["reported"]
+    for label in ("rollout", "control"):
+        for condition in ("true", "wrong", "zero"):
+            assert f"gs://bucket/e2e/eval_gates_att-1/tables/{label}_{condition}.json" in fake_gs.blobs
+
+    # --- confirm: the one TEST door, both gates, an independent TEST derangement ---------------
+    _install_records(monkeypatch, gates.load_test_cohort(_TEST).rows)
+    test_stub, _ = _stub(0.40, 0.30, template=real_backend.template)
+    confirmation = anchor.run_evaluation(
+        _config(
+            tmp_path,
+            pos_eval_phase="confirm",
+            base_output_directory="gs://bucket/e2e/eval_confirm_att-1",
+            checkpoint_dir=arm_root,
+            pos_run_report=reports["arm"],
+            pos_control_checkpoint_dir=control_root,
+            pos_control_run_report=reports["control"],
+        ),
+        backend=test_stub,
+    )["confirmation"]
+    assert confirmation["cohort"] == "test64"
+    assert confirmation["primary"].numbers["manifest_sha256"] == anchor.J0_TEST64_SHA256
+    assert confirmation["action_use"].numbers["derangement_sha256"] == confirmation["derangement_sha256"]
+    assert confirmation["dev_certificate_sha256"]
+    published = json.loads(fake_gs.blobs["gs://bucket/e2e/eval_confirm_att-1/test_confirmation.json"])
+    assert published["payload"]["primary"]["passed"] is confirmation["primary"].passed
+    assert published["payload"]["action_use"]["passed"] is confirmation["action_use"].passed
+
+
+def test_no_phase_can_be_reached_without_its_prerequisites(tmp_path, monkeypatch, fake_gs):
+    """The protocol's order, as refusals: the benchmark needs the anchor, and TEST needs the DEV gate."""
+    _requires_backend()
+    real_backend = _backend()
+    _install_records(monkeypatch, instrument.load_dev_cohort(_DEV).rows)
+    historical = _publish_reproducing_anchor(tmp_path, real_backend, root="gs://bucket/ordered")
+    stub, _ = _stub(0.40, 0.30, template=real_backend.template)
+
+    # The confirm phase runs only from a DEV certificate the gates phase issued -- none exists yet.
+    with pytest.raises(ValueError, match="there is no exp06.gates.v1 artifact"):
+        anchor.run_evaluation(
+            _config(
+                tmp_path,
+                pos_eval_phase="confirm",
+                base_output_directory="gs://bucket/ordered/eval_confirm_att-1",
+                checkpoint_dir=historical,
+                pos_run_report="gs://bucket/ordered/missing.json",
+                pos_control_checkpoint_dir=historical,
+                pos_control_run_report="gs://bucket/ordered/missing.json",
+            ),
+            backend=stub,
+        )
+    # ...and an artifact root that is not attempt-scoped for its phase is refused before anything runs.
+    with pytest.raises(ValueError, match="attempt-scoped"):
+        anchor.run_evaluation(
+            _config(tmp_path, pos_eval_phase="benchmark", base_output_directory="gs://bucket/ordered/whatever"),
+            backend=stub,
+        )
+
+
+# =============================================================================================
+# 3. F3a — deployment's bf16 INPUT BOUNDARY, proven at the PHASE level (re-review EV-1).
+#
+# The reviewer asked for this test in exactly these words: "Add a phase-level bf16 bitwise parity
+# test, not merely a direct `initial_latents(bf16)` test." The difference matters because the defect
+# was never in `initial_latents` — it was in what the PHASE handed it. The reader produces float32,
+# the deployed evaluator casts to `weights_dtype` before drawing, and T5a's own A13 measurement
+# showed the two draws are not close: they are unrelated sequences.
+# =============================================================================================
+
+
+class _RecordingBackend(anchor.DeviceBackend):
+    """The REAL backend, with a tap. Subclassing rather than substituting keeps the code path under
+    test the production one — what is recorded is what the phase actually executed."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.executions = []
+
+    def bound(self, params):
+        # PRODUCTION's `bound` does the derivation; this only re-wraps its result. An earlier version
+        # rebuilt the fields itself and so masked a mutant that dropped `eval_dtype` in `bound` —
+        # the tap must not be the thing under test (F3a battery, F06).
+        base = super().bound(params)
+        clone = _RecordingBackend(
+            velocity_for=base.velocity_for,
+            decode_fn=base.decode_fn,
+            sigmas=base.sigmas,
+            timesteps=base.timesteps,
+            context=base.context,
+            guide_scale=base.guide_scale,
+            template=base.template,
+            params=base.params,
+            scope=base.scope,
+            eval_dtype=base.eval_dtype,
+        )
+        clone.executions = self.executions
+        return clone
+
+    def score(self, **kwargs):
+        execution, metrics = super().score(**kwargs)
+        self.executions.append(execution)
+        return execution, metrics
+
+
+def _deployed_reference(backend, sample, key, dtype):
+    """Deployment's own construction, written out: cast all three inputs, THEN draw, then roll out.
+
+    This is `generate_wan_side_adapter._rollout_sample` lines 116-134 transcribed — the cast, the
+    draw in `z_video.dtype`, the frame-0 pin — with T3a's rollout advancing it.
+    """
+    from maxdiffusion.models.wan.side_adapter_wan import apply_first_frame_pin
+    from maxdiffusion.pos_rollout_step import cfg_rollout
+
+    z_i0 = jnp.asarray(sample["z_i0"])[None].astype(dtype)
+    z_video = jnp.asarray(sample["z_video"])[None].astype(dtype)
+    actions = jnp.asarray(sample["actions"])[None].astype(dtype)
+    context = jnp.asarray(backend.context).astype(dtype)
+    z = jax.random.normal(key, z_video.shape, dtype=z_video.dtype)
+    z = apply_first_frame_pin(z, z_i0)
+    rules, mesh = _mesh_context()
+    with rules, mesh:
+        velocity_fn = backend.velocity_for(backend.params, actions, True)
+        return cfg_rollout(
+            z,
+            velocity_fn=velocity_fn,
+            sigmas=backend.sigmas,
+            timesteps=backend.timesteps,
+            context=context,
+            z_i0=z_i0,
+            start=0,
+            num_steps=anchor.DEPLOYED_SAMPLING_STEPS,
+        )
+
+
+def test_the_anchor_PHASE_reproduces_deployments_bf16_boundary_BITWISE(tmp_path, fake_gs):
+    """EV-1 BLOCKER. The whole phase runs at ``eval_dtype=bfloat16``; every sample's prediction must
+    be BITWISE the array deployment's own construction produces — and must differ from the float32
+    one, so the assertion is not satisfied by a no-op cast."""
+    _requires_backend()
+    template = _backend(eval_dtype=jnp.bfloat16).template
+    run = anchor.HISTORICAL_ANCHOR.run_name
+    ckpt_dir = str(tmp_path / run / "checkpoints")
+    _write_checkpoint(ckpt_dir, step=anchor.HISTORICAL_ANCHOR.checkpoint_step, template=template)
+    data_dir = _write_records(tmp_path / "val", anchor.HISTORICAL_ANCHOR.sample_names)
+
+    plain = _backend(eval_dtype=jnp.bfloat16)
+    backend = _RecordingBackend(
+        velocity_for=plain.velocity_for,
+        decode_fn=plain.decode_fn,
+        sigmas=plain.sigmas,
+        timesteps=plain.timesteps,
+        context=plain.context,
+        guide_scale=plain.guide_scale,
+        template=plain.template,
+        params=plain.params,
+        scope=plain.scope,
+        eval_dtype=jnp.bfloat16,
+    )
+    config = _config(tmp_path, checkpoint_dir=ckpt_dir, eval_data_dir=data_dir)
+    anchor.run_evaluation(config, backend=backend)
+
+    samples = anchor.read_anchor_samples(config, count=4)
+    keys = anchor.anchor_sample_keys(0, 4)
+    assert len(backend.executions) == 4
+    for execution, sample, key in zip(backend.executions, samples, keys):
+        produced = np.asarray(execution.z_pred, np.float32)
+        assert execution.z_pred.dtype == jnp.bfloat16, "the rollout must run in the configured dtype"
+        reference = np.asarray(_deployed_reference(backend, sample, key, jnp.bfloat16), np.float32)
+        assert np.array_equal(produced, reference), "the phase is not deployment's bf16 construction"
+        # ...and the float32-fed construction is a DIFFERENT array, which is why this test exists.
+        other = np.asarray(_deployed_reference(backend, sample, key, jnp.float32), np.float32)
+        assert not np.array_equal(produced, other), "bf16 and float32 agree here — the test is vacuous"
+
+
+def test_the_bf16_boundary_covers_actions_and_context_not_only_the_latents(tmp_path):
+    """The deployed cast is on all THREE inputs plus the null context. A backend that cast only the
+    latents would draw the right noise and then condition the transformer in the wrong precision."""
+    _requires_backend()
+    seen = {}
+
+    def velocity_for(params, actions, adapter_enabled):
+        seen["actions"] = actions.dtype
+        del params, adapter_enabled
+
+        def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+            seen["context"] = encoder_hidden_states.dtype
+            seen["state"] = hidden_states.dtype
+            del timestep
+            return jnp.zeros_like(hidden_states)
+
+        return velocity_fn
+
+    plain = _backend()
+    backend = anchor.DeviceBackend(
+        velocity_for=velocity_for,
+        decode_fn=_decode,
+        sigmas=plain.sigmas,
+        timesteps=plain.timesteps,
+        context=jnp.zeros((1, 7, _TEXT), jnp.float32),
+        guide_scale=_GUIDE,
+        params={"w": jnp.zeros((1,), jnp.float32)},
+        eval_dtype=jnp.bfloat16,
+    )
+    backend.score(
+        z_i0=jnp.zeros((1, _C, 1, _H, _W), jnp.float32),
+        z_video=jnp.zeros((1, _C, _F, _H, _W), jnp.float32),
+        actions=jnp.zeros((1, _ACTION_LEN, _ACTION_DIM), jnp.float32),
+        key=anchor.evaluation_draw_key("x"),
+    )
+    assert seen["actions"] == jnp.bfloat16, "actions reach the adapter in the evaluation dtype"
+    assert seen["context"] == jnp.bfloat16, "the null context is cast, as deployment broadcasts-and-casts it"
+    assert seen["state"] == jnp.bfloat16, "the rollout state is the cast latents' dtype"
+
+
+def test_the_latent_MSE_uses_the_CAST_ground_truth_and_the_pixels_use_the_ORIGINAL(tmp_path):
+    """Deployment is asymmetric and the anchor's three recorded numbers come from both halves:
+    ``_rollout_sample`` differences against the ``weights_dtype``-cast ``z_video``, while ``run()``
+    decodes ``batch["z_video"].astype(jnp.float32)`` for the pixel metrics. Feeding one array to both
+    moves the latent MSE by the ground truth's bf16 rounding."""
+    _requires_backend()
+    deployed = (Path(anchor.__file__).parent / "generate_wan_side_adapter.py").read_text()
+    assert 'z_video = data["z_video"].astype(weights_dtype)' in deployed
+    assert 'gt_latents = batch["z_video"].astype(jnp.float32)' in deployed
+
+    decoded = []
+
+    def decode_fn(latents):
+        decoded.append(np.asarray(latents, np.float32).copy())
+        frames = np.asarray(latents, np.float32).mean(axis=1)
+        frames = np.repeat(np.repeat(frames, 2, axis=2), 2, axis=3)
+        return jnp.asarray(np.repeat(1.0 / (1.0 + np.exp(-frames))[..., None], 3, axis=-1))
+
+    plain = _backend()
+    backend = anchor.DeviceBackend(
+        velocity_for=lambda p, a, e: (
+            lambda hidden_states, timestep, encoder_hidden_states: jnp.zeros_like(hidden_states)
+        ),
+        decode_fn=decode_fn,
+        sigmas=plain.sigmas,
+        timesteps=plain.timesteps,
+        context=jnp.zeros((1, 7, _TEXT), jnp.float32),
+        guide_scale=_GUIDE,
+        params={"w": jnp.zeros((1,), jnp.float32)},
+        eval_dtype=jnp.bfloat16,
+    )
+    # A value bf16 cannot represent exactly, so "cast" and "original" are distinguishable.
+    z_video = jnp.full((1, _C, _F, _H, _W), 0.1234567, jnp.float32)
+    backend.score(
+        z_i0=jnp.zeros((1, _C, 1, _H, _W), jnp.float32),
+        z_video=z_video,
+        actions=jnp.zeros((1, _ACTION_LEN, _ACTION_DIM), jnp.float32),
+        key=anchor.evaluation_draw_key("x"),
+    )
+    ground_truth = decoded[-1]  # the SECOND decode is the ground-truth side
+    assert np.array_equal(ground_truth, np.asarray(z_video, np.float32)), "the pixel side sees the ORIGINAL"
+    assert not np.array_equal(ground_truth, np.asarray(z_video.astype(jnp.bfloat16), np.float32))
+
+
+def test_the_restored_backend_keeps_the_evaluation_dtype(tmp_path):
+    """F3a battery, F06: ``bound()`` is what a phase calls after the restore, so a ``bound`` that
+    drops the dtype means every scored example runs in float32 however the run was configured."""
+    _requires_backend()
+    backend = _backend(eval_dtype=jnp.bfloat16)
+    assert backend.eval_dtype == jnp.bfloat16
+    restored = backend.bound(backend.params)
+    assert restored.eval_dtype == jnp.bfloat16, "the dtype is part of the measurement, not of the template"
+    assert restored.guide_scale == backend.guide_scale and restored.scope is backend.scope
+
+
+def test_the_latent_MSE_itself_is_measured_against_the_CAST_ground_truth(tmp_path):
+    """F3a battery, F07: the asymmetry test checked which array the DECODER saw, and never which one
+    the latent difference used — so measuring the latent MSE against the original survived."""
+    _requires_backend()
+    plain = _backend()
+    backend = anchor.DeviceBackend(
+        velocity_for=lambda p, a, e: (
+            lambda hidden_states, timestep, encoder_hidden_states: jnp.zeros_like(hidden_states)
+        ),
+        decode_fn=_decode,
+        sigmas=plain.sigmas,
+        timesteps=plain.timesteps,
+        context=jnp.zeros((1, 7, _TEXT), jnp.float32),
+        guide_scale=_GUIDE,
+        params={"w": jnp.zeros((1,), jnp.float32)},
+        eval_dtype=jnp.bfloat16,
+    )
+    z_i0 = jnp.zeros((1, _C, 1, _H, _W), jnp.float32)
+    z_video = jnp.full((1, _C, _F, _H, _W), 0.1234567, jnp.float32)
+    execution, metrics = backend.score(
+        z_i0=z_i0,
+        z_video=z_video,
+        actions=jnp.zeros((1, _ACTION_LEN, _ACTION_DIM), jnp.float32),
+        key=anchor.evaluation_draw_key("x"),
+    )
+    pred = jnp.asarray(execution.z_pred).astype(jnp.float32)
+    against_cast = float(jnp.mean((pred - z_video.astype(jnp.bfloat16).astype(jnp.float32)) ** 2))
+    against_original = float(jnp.mean((pred - z_video) ** 2))
+    assert against_cast != against_original, "bf16 rounding must be visible, or the test proves nothing"
+    assert metrics["latent_mse"] == pytest.approx(against_cast, rel=0, abs=0), "deployment differences the CAST array"
+    assert metrics["latent_mse"] != pytest.approx(against_original, rel=0, abs=0)
+
+
+# =============================================================================================
+# 4. F3a-fix — the production LOADER, executed (re-review C3).
+#
+# The reviewer's item 8 said the end-to-end test "never executes `load_device_backend`", and its
+# first real defect was a config key that does not exist. A contract test over the loader's reads
+# catches that class; this test catches the rest of the class, by RUNNING the function against the
+# real `HyperParameters` with only the weights themselves stood in for.
+# =============================================================================================
+
+
+def _real_config(**overrides):
+    """The deployed ``HyperParameters``, bound to the rollout YAML's own keys."""
+    from maxdiffusion.tests.worklogs_yixun.test_pos_rollout_eval_anchor import (
+        _real_hyperparameters,
+        _yaml_keys,
+    )
+
+    return _real_hyperparameters({**_yaml_keys(), **overrides})
+
+
+class _FakeScheduler:
+    """What ``_create_scheduler`` returns, in the part the loader reads: ``scheduler.config``."""
+
+    def __init__(self, *, sigma_min=0.0, sigma_max=1.0, num_train_timesteps=1000):
+        self.config = SimpleNamespace(
+            sigma_min=sigma_min, sigma_max=sigma_max, num_train_timesteps=num_train_timesteps
+        )
+
+
+def _install_fake_trainer(monkeypatch, *, scheduler=None, mesh=None, dtype=None):
+    """Stand in for the WEIGHTS and nothing else: the transformer and adapter stack are REAL.
+
+    The trainer MODULE is replaced in ``sys.modules`` rather than patched on, because importing it
+    pulls ``jaxopt`` (absent here, and irrelevant to this loader). **Declared boundary:** this test
+    therefore proves the loader's own composition and config contract, not that the real trainer
+    class exposes these four methods — a separate tripwire below pins those names against the real
+    file's source, which is the part that could drift.
+    """
+    import sys
+    import types as _types
+
+    transformer, adapters = _tiny_cfg_stack_bf16() if dtype == jnp.bfloat16 else _tiny_cfg_stack()
+    mesh = mesh or jax.sharding.Mesh(np.array(jax.devices()).reshape(1, 1), ("data", "fsdp"))
+
+    class _Pipeline:
+        def __init__(self):
+            self.transformer = transformer
+            self.mesh = mesh
+
+        def _denormalize_latents(self, latents):
+            return latents
+
+        def _decode_latents_to_video(self, latents):
+            return _decode(latents)
+
+    class _Trainer:
+        def __init__(self, config):
+            self.config = config
+
+        def _load_wan_pipeline(self):
+            return _Pipeline()
+
+        def _compute_null_context(self, pipeline, mesh):
+            del pipeline, mesh
+            return jnp.zeros((1, 7, _TEXT), jnp.float32)
+
+        def _build_adapters(self, transformer):
+            del transformer
+            return adapters
+
+        def _create_scheduler(self):
+            return (scheduler or _FakeScheduler()), None
+
+    stub = _types.ModuleType("maxdiffusion.trainers.wan_ti2v_side_adapter_trainer")
+    stub.WanTI2VSideAdapterTrainer = _Trainer
+    monkeypatch.setitem(sys.modules, "maxdiffusion.trainers.wan_ti2v_side_adapter_trainer", stub)
+    return mesh
+
+
+def test_load_device_backend_RUNS_against_the_REAL_config_class(monkeypatch):
+    """C3 BLOCKER, executed. The loader used to read ``config.num_train_timesteps``; on a real
+    ``HyperParameters`` an undeclared key RAISES, so this function died before the anchor could
+    execute and before the grid check could ever run. Now it composes end to end and the backend it
+    returns carries deployment's dtype and deployment's grid."""
+    _requires_backend()
+    _install_fake_trainer(monkeypatch, dtype=jnp.bfloat16)
+    config = _real_config(logical_axis_rules=[], side_adapter_sampling_steps=25, weights_dtype="bfloat16")
+
+    backend = anchor.load_device_backend(config)
+
+    assert isinstance(backend, anchor.DeviceBackend)
+    assert backend.eval_dtype == jnp.bfloat16, "deployment's evaluation boundary, read from the config"
+    assert anchor.grid_digest(backend.sigmas, backend.timesteps) == anchor.DEPLOYED_GRID_SHA256
+    assert backend.template is not None and backend.guide_scale == float(config.side_adapter_guide_scale)
+    # ...and the backend it returns actually scores: the loader's composition is exercised, not just
+    # its construction.
+    scoring = backend.bound(backend.template.params)
+    execution, metrics = scoring.score(
+        z_i0=jnp.zeros((1, _C, 1, _H, _W), jnp.float32),
+        z_video=jnp.zeros((1, _C, _F, _H, _W), jnp.float32),
+        actions=jnp.zeros((1, _ACTION_LEN, _ACTION_DIM), jnp.float32),
+        key=anchor.evaluation_draw_key("x"),
+    )
+    assert execution.num_steps == 25 and execution.grid_sha256 == anchor.DEPLOYED_GRID_SHA256
+    assert execution.z_pred.dtype == jnp.bfloat16 and np.isfinite(metrics["ssim_avg"])
+
+
+def test_the_loader_fails_CLOSED_when_the_scheduler_disagrees_with_the_deployed_grid(monkeypatch):
+    """The judgment call the reviewer accepted, now reachable: a scheduler whose limits differ builds
+    a different schedule, and the loader refuses AT LOAD rather than after the first scored sample."""
+    _requires_backend()
+    _install_fake_trainer(monkeypatch, scheduler=_FakeScheduler(num_train_timesteps=500))
+    with pytest.raises(ValueError, match="different VALUES|timesteps do not correspond"):
+        anchor.load_device_backend(_real_config(logical_axis_rules=[]))
+
+    _install_fake_trainer(monkeypatch, scheduler=_FakeScheduler(sigma_min=0.1))
+    with pytest.raises(ValueError, match="terminal sigma|different VALUES"):
+        anchor.load_device_backend(_real_config(logical_axis_rules=[]))
+
+
+def test_the_loader_reads_no_key_the_rollout_yaml_does_not_declare(monkeypatch):
+    """The executable form of the contract test: a config carrying EXACTLY the YAML's keys and
+    nothing else. Any future read of an undeclared key raises here, at load, on the real class."""
+    _requires_backend()
+    _install_fake_trainer(monkeypatch)
+    config = _real_config(logical_axis_rules=[])
+    anchor.load_device_backend(config)  # must not raise "Requested key ..."
+
+    # ...and the trap is real: the same class refuses a key the YAML does not carry.
+    with pytest.raises(ValueError, match="Requested key"):
+        _ = config.a_key_that_is_not_declared
+
+
+def test_the_four_trainer_seams_the_loader_calls_exist_on_the_REAL_trainer():
+    """The stub above cannot prove these names exist, so they are pinned against the real file's
+    source — the drift that would make the loader's composition test a fiction."""
+    trainer_source = (Path(anchor.__file__).parent / "trainers" / "wan_ti2v_side_adapter_trainer.py").read_text()
+    for method in ("_load_wan_pipeline", "_compute_null_context", "_build_adapters", "_create_scheduler"):
+        assert f"def {method}(" in trainer_source, f"the loader calls {method}, which no longer exists"
+    loader = inspect.getsource(anchor.load_device_backend)
+    for method in ("_load_wan_pipeline", "_compute_null_context", "_build_adapters", "_create_scheduler"):
+        assert f".{method}(" in loader
+    # ...and the deployed evaluator reaches its scheduler the same way, which is why this is the seam.
+    deployed = (Path(anchor.__file__).parent / "generate_wan_side_adapter.py").read_text()
+    assert "trainer._create_scheduler()" in deployed, "deployment reaches its scheduler through the same seam"

@@ -41,6 +41,7 @@ import jax
 
 from maxdiffusion.pos_rollout_arms import ARMS
 from maxdiffusion.pos_rollout_stream import draw_step_for_batch
+from maxdiffusion.pos_rollout_support import require_finite
 from maxdiffusion.run_wan_null_inversion import optional_config_value
 
 __all__ = [
@@ -57,6 +58,8 @@ __all__ = [
     "build_checkpoint_manager",
     "build_selection_manager",
     "preserve_selection",
+    "require_finite",
+    "reconcile_selection",
     "restore_checkpoint",
     "restore_eval_history",
     "run_loop",
@@ -165,6 +168,9 @@ def stop_verdict(history: Sequence[EvalRecord], *, factor: float = STOP_FACTOR, 
     and the first eval can never trigger (no prior best, no previous train value). The retained
     checkpoint is the best DEV metric seen up to the decision — never one of the degraded evals.
     """
+    for record in history:
+        require_finite(record.dev_metric, f"the DEV metric at step {record.step}")
+        require_finite(record.train_metric, f"the train metric at step {record.step}")
     best_step = best_value = None
     streak = 0
     for index, record in enumerate(history):
@@ -237,6 +243,8 @@ def save_checkpoint(manager, state: RolloutTrainState, *, dev_metric=None, histo
     """
     import orbax.checkpoint as ocp
 
+    if dev_metric is not None:
+        require_finite(dev_metric, "the DEV metric being checkpointed")
     manager.save(
         int(state.step),
         args=ocp.args.Composite(
@@ -267,7 +275,14 @@ def read_checkpoint_json(manager, step: int) -> dict:
 def preserve_selection(
     manager, state: RolloutTrainState, *, dev_metric: float, history=(), arm: str, k_b: int
 ) -> bool:
-    """Write the selection checkpoint iff ``dev_metric`` STRICTLY improves. Ties keep the earliest."""
+    """Write the selection checkpoint iff ``dev_metric`` STRICTLY improves. Ties keep the earliest.
+
+    The refusal comes FIRST, before the incumbent is even read: ``nan >= previous`` is false, so a
+    non-finite metric reads as a strict improvement here and would be written as the selected
+    artifact (review BLOCKER 2). Relying on ``save_checkpoint`` to catch it would leave that
+    inversion live for anyone who later reorders these two lines.
+    """
+    require_finite(dev_metric, "the DEV metric offered to selection")
     incumbent = manager.latest_step()
     if incumbent is not None:
         previous = read_checkpoint_json(manager, incumbent).get(DEV_METRIC)
@@ -275,6 +290,65 @@ def preserve_selection(
             return False
     save_checkpoint(manager, state, dev_metric=dev_metric, history=history, arm=arm, k_b=k_b)
     return True
+
+
+def reconcile_selection(
+    selection_manager, state: RolloutTrainState, history: Sequence[EvalRecord], *, arm, k_b
+) -> str:
+    """Make the sibling selection artifact agree with the restored history BEFORE any step is taken.
+
+    The two trees are written by two managers, one after the other, so a crash in that window leaves
+    the best state ONLY in the resume tree — and startup is the last moment it can be recovered,
+    because the first optimizer step overwrites the parameters the sibling is missing. Without this,
+    a restart whose next evaluation is *worse* ships that worse checkpoint (empty sibling) or keeps a
+    stale one, while the run report names a step nobody holds (review BLOCKER B-2).
+
+    Two cases, and only two:
+
+    * the restored latest evaluation IS the strict historical best ⇒ we hold those parameters, so
+      the sibling is REPAIRED from them;
+    * otherwise the best is an earlier step whose parameters are gone ⇒ the sibling must already be
+      exactly that step, with the metric the history recorded, or this **fails closed**. Training on
+      would produce a run whose selected artifact cannot be reconstructed.
+
+    Returns ``"no_selection"`` / ``"empty"`` / ``"consistent"`` / ``"repaired"``.
+    """
+    if selection_manager is None:
+        return "no_selection"
+    incumbent = selection_manager.latest_step()
+    recorded = {int(record.step): float(record.dev_metric) for record in history}
+    if not recorded:
+        if incumbent is None:
+            return "empty"
+        raise RuntimeError(
+            f"the selection artifact cannot be reconciled: it holds step {incumbent} but there is no "
+            f"evaluation history behind it. Refusing to train into a checkpoint root whose selected "
+            f"artifact has no provenance."
+        )
+    verdict = stop_verdict(history)
+    best_step, best_value = int(verdict.best_step), float(verdict.best_value)
+    if incumbent is not None:
+        found = read_checkpoint_json(selection_manager, incumbent).get(DEV_METRIC)
+        if int(incumbent) not in recorded or found is None or float(found) != recorded[int(incumbent)]:
+            raise RuntimeError(
+                f"the selection artifact cannot be reconciled: the sibling holds step {incumbent} with "
+                f"{DEV_METRIC}={found!r}, which the restored history does not record. Refusing to train on."
+            )
+        if int(incumbent) == best_step:
+            return "consistent"
+    latest = int(history[-1].step)
+    if latest != best_step or int(state.step) != latest:
+        raise RuntimeError(
+            f"the selection artifact cannot be reconciled: the historical best is step {best_step} "
+            f"({DEV_METRIC}={best_value}), the sibling holds {incumbent}, and the restored state is step "
+            f"{int(state.step)} — those parameters are gone, so no correct artifact can be produced here."
+        )
+    save_checkpoint(selection_manager, state, dev_metric=best_value, history=history, arm=arm, k_b=k_b)
+    print(
+        f"[pos-rollout] repaired the selection artifact from the restored state: step {best_step} "
+        f"({DEV_METRIC}={best_value}) was saved to the resume tree but never to the sibling."
+    )
+    return "repaired"
 
 
 def restore_checkpoint(manager, state: RolloutTrainState) -> tuple[RolloutTrainState, int]:
@@ -302,7 +376,14 @@ def restore_eval_history(manager) -> list[EvalRecord]:
     if latest is None:
         return []
     rows = read_checkpoint_json(manager, latest).get("eval_history") or []
-    return [EvalRecord(step=int(s), dev_metric=float(d), train_metric=float(t)) for s, d, t in rows]
+    return [
+        EvalRecord(
+            step=int(step),
+            dev_metric=require_finite(dev, f"the restored DEV metric at step {step}"),
+            train_metric=require_finite(train, f"the restored train metric at step {step}"),
+        )
+        for step, dev, train in rows
+    ]
 
 
 def run_loop(
@@ -328,10 +409,38 @@ def run_loop(
         state, start_step = restore_checkpoint(manager, state)
         history = restore_eval_history(manager)
 
+    # BEFORE anything else: the sibling must agree with the restored history, because the parameters
+    # that can repair it are overwritten by the first optimizer step (review BLOCKER B-2).
+    reconcile_selection(selection_manager, state, history, arm=schedule.arm, k_b=schedule.k_b)
+
     verdict = stop_verdict(history)
+    if verdict.stop:
+        # The restored history has ALREADY decided. Training on would spend another eval_every steps
+        # -- 1,000 at production cadence -- and advance the resume state PAST the decision, so the
+        # next retry would resume from a checkpoint the rule never sanctioned (exp_05's S7 defect,
+        # review BLOCKER B-1). Return before the input pipeline is even built.
+        print(
+            f"[pos-rollout] reopened a TERMINAL checkpoint at step {start_step}: {verdict.reason}. "
+            f"No training step will be taken; the selected checkpoint is step {verdict.best_step}."
+        )
+        return RunReport(
+            state=state,
+            history=tuple(history),
+            verdict=verdict,
+            retained_step=verdict.best_step,
+            steps_run=0,
+            draw_log=(),
+        )
+
     draw_log: list[tuple[int, int, int, float]] = []
     iterator = batches(resume_seed(schedule.seed, start_step))
     steps_run = 0
+    # The train metric the stop rule reads is the mean over the window since the PREVIOUS evaluation,
+    # as S7's is: the rule asks whether training is *still falling*, so the two numbers it compares
+    # must cover disjoint windows (review BLOCKER B-3). One minibatch is noise, and a cumulative
+    # average smears the earliest steps into every later window. A resumed segment necessarily starts
+    # a fresh window -- per-step metrics are not checkpointed -- exactly as S7's does.
+    window: list[float] = []
 
     for offset in range(schedule.max_train_steps - start_step):
         # THE loop's own counter. `state.step` is NOT resume-safe and must never key randomness.
@@ -348,6 +457,7 @@ def run_loop(
         )
         state, train_metric = update_fn(state, batch_parts, draw_parts, schedule, global_step)
         state = dataclasses.replace(state, step=global_step)
+        window.append(float(train_metric))  # the host boundary: metrics are JAX scalars until here
         steps_run += 1
         first = draw_parts[0]
         draw_log.append(
@@ -358,10 +468,15 @@ def run_loop(
             history.append(
                 EvalRecord(
                     step=global_step,
-                    dev_metric=float(dev_metric_fn(state, global_step)),
-                    train_metric=float(train_metric),
+                    dev_metric=require_finite(
+                        dev_metric_fn(state, global_step), f"the DEV metric at step {global_step}"
+                    ),
+                    train_metric=require_finite(
+                        sum(window) / len(window), f"the train window mean at step {global_step}"
+                    ),
                 )
             )
+            window = []
             if manager is not None:
                 save_checkpoint(
                     manager,

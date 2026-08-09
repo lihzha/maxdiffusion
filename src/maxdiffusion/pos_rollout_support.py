@@ -31,6 +31,9 @@ in this file may drift from it without a recorded decision to advance the pin (p
 from __future__ import annotations
 
 import hashlib
+import math
+import pathlib
+import re
 
 import jax
 import jax.numpy as jnp
@@ -183,3 +186,76 @@ def rollout_support(*, seed: int, global_step, num_steps: int, k_b: int, support
         num_steps - int(k_b),
     )
     return start, start + int(k_b)
+
+
+def require_finite(value, what: str) -> float:
+    """A non-finite metric may not enter a decision, a checkpoint, or a history (review BLOCKER 2).
+
+    ``NaN`` compares false against everything, so a single NaN early in training becomes an
+    unbeatable running best: ``stop_verdict([nan, 0.1])`` retains the NaN step forever, no later
+    finite value can displace it, and yet ``preserve_selection`` still replaces the sibling on the
+    finite value. The run report and the shipped artifact then disagree, the next reconciliation
+    fails closed, and the whole run's selection was decided by one bad number nobody saw. The
+    infinities are the same defect with the sign known.
+    """
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(
+            f"{what} is {value!r}, which is not finite: a non-finite metric cannot be compared, so it "
+            f"would silently become an unbeatable best and decide the run's selection"
+        )
+    return number
+
+
+# ---------------------------------------------------------------------------------------------
+# Storage. Every exp_06 artifact root is a ``gs://`` URI in production (review pass 2, T5a BLOCKER 2).
+# ---------------------------------------------------------------------------------------------
+
+#: ``pathlib.Path("gs://bucket/x")`` is silently the LOCAL path ``gs:/bucket/x`` -- it does not
+#: raise, it writes, and the artifact is then invisible to everything that looks in the bucket. Every
+#: publication and every load in exp_06 went through pathlib before this.
+_SCHEME = re.compile(r"^[a-z][a-z0-9+.\-]*://")
+
+
+def is_remote(path) -> bool:
+    return bool(_SCHEME.match(str(path)))
+
+
+def _gfile(path):
+    """TensorFlow's filesystem, required for a remote URI and preferred for a local one."""
+    try:
+        from tensorflow.io import gfile
+    except Exception as error:  # noqa: BLE001 -- a local path must not need tensorflow
+        if is_remote(path):
+            raise RuntimeError(
+                f"{path} is a remote URI and tensorflow.io.gfile is unavailable ({error}); refusing to "
+                f"fall back to a local path, which is how a gs:// artifact silently becomes a local file"
+            ) from error
+        return None
+    return gfile
+
+
+def storage_read_bytes(path) -> bytes:
+    gfile = _gfile(path)
+    if gfile is None:
+        return pathlib.Path(str(path)).read_bytes()
+    return gfile.GFile(str(path), "rb").read()
+
+
+def storage_write_bytes(path, payload: bytes) -> None:
+    gfile = _gfile(path)
+    parent = str(path).rsplit("/", 1)[0] if "/" in str(path) else ""
+    if gfile is None:
+        target = pathlib.Path(str(path))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return
+    if parent and parent != str(path):
+        gfile.makedirs(parent)
+    with gfile.GFile(str(path), "wb") as handle:
+        handle.write(payload)
+
+
+def storage_exists(path) -> bool:
+    gfile = _gfile(path)
+    return pathlib.Path(str(path)).exists() if gfile is None else bool(gfile.exists(str(path)))
