@@ -1,7 +1,10 @@
 # pos_context_results — exp_05 P4′ (SOP artifact 10)
 
-**Status: DRAFT for review.** Written by the Coder; the Codex analysis review is deliberately deferred, so every
-judgment call is flagged inline with **[JUDGMENT]** and every deviation from plan v3 with **[DEVIATION]**.
+**Status: DRAFT — revision 2, after the Codex analysis review (`pos_context_codex_analysis_review.md`,
+REQUEST-REVISION).** Judgment calls are flagged **[JUDGMENT]**, deviations from plan v3 **[DEVIATION]**, and
+edits made in response to the review **[REV2]**. The reviewer independently reproduced the entire gate
+record — including the corrected B0 = 0.32147 and B1/B0 = 2.87022× — so the numbers below stand; three of the
+*analysis* document's conclusions did not.
 
 This document is the **factual record only**: what was predeclared, what ran (including the failed attempt and
 its classification), the numbers exactly as the gate module computed them, the gate verdicts, and the artifact
@@ -23,8 +26,8 @@ frames 1–8 ⇒ pixel frames 1–32); frame 0 is the pinned first-frame conditi
 | Plan of record | `plan_pos_context.md` **v3** (3 Codex review passes, all findings accepted, APPROVE-PLAN 2026-08-04); binds exp_04 plan v5 by reference for manifests / noise / gates / integrity / verifier contracts |
 | Phases executed | **P1′** (job K1 — positive reconstruction study + basin probe) |
 | Phases NOT executed | **P2′** (K2 target caching), **P3′** (K3 regression training, K4 eval) — stopped by the predeclared target-selection rule; **STOP honored by Yixun 2026-08-06** ("Honor the STOP for K2") |
-| Terminal verdict | **TARGET = STOP on both cohorts** — H1 PASS but the transfer floors fail; H2 FAIL on all four conjuncts |
-| Branch / tip | `claude-exp_05_pos_context-20260804` @ `0f505d3` (clean) |
+| Terminal verdict | **TARGET = STOP on both cohorts** — H1 PASS but the transfer floors fail; **and** H2 FAIL on all four conjuncts. **[REV2]** Both are required: the selection rule rejects B1 on the probe floors *and* rejects the B2 fallback because H2 failed. Unlike exp_04, this verdict was produced at the **adopted** recipe (§4.4), so it is the predeclared verdict, not an observation at an unadopted setting |
+| Tips **[REV2]** | STOP-decision tip `0f505d3` · report revision 1 committed at `2e4bc12` · reviewed HEAD at revision time `6f3146a`. Evidence-producing tip: K1-2 ran `bb845ea`. A branch tip plus "clean" is mutable and is not quoted as provenance |
 | Code state | S1–S8 + S10a complete and committed; **S9 held open** at the R14/R15 matrix stall (tripwired); S10's trainer launcher parked. Suite **1,417** tests |
 
 **The trainer stack that will not be used (yet).** S6 (gather/loss), S7 (regression trainer + checkpoint
@@ -77,11 +80,19 @@ inherited by reference).
 | Job | Date (UTC) | Tip | Outcome | Classification |
 |---|---|---|---|---|
 | **K1-1** | 2026-08-05T20:33Z | `9d326e8` | **FAILED** at attempt 2 (attempt 1 = infra preemption), 23 s into the command: `ValueError: Requested key code_sha, not in config` at `mode_kwargs` (`run_wan_null_inversion.py:654`). The positive-slot smoke reached backend load + revision resolution — the S10a launcher, preflights, HF prefetch and config **all worked** — then died at the first *shared-code* `code_sha` read. **Nothing published**; the `…/k1` root stayed clean | **REAL BUG — inherited stale copy.** Exactly the J1-1 defect class (issue #11: 3-arg `getattr` never falls back on `HyperParameters`). exp_05's copy of the shared entrypoint predated exp_04's fix `925ee17`: merge-interim took exp_04 at the R10 boundary, the fix landed *after*, and **no propagation step existed** |
-| — | 2026-08-06T02:05Z | `0d1f4a5` | **Remediation:** merge-interim-2, one-way exp_04 @ `27efcd1` → this branch (brings the fix + R11). Two dual-touch conflicts resolved additive-union; `optional_config_value` unified on exp_04's reviewed helper verbatim; combined suite **1,353** green; exp_04's AST guard `test_no_three_argument_getattr_on_config_survives` now enforces issue #11 on this branch | — |
+| — | **2026-08-06T01:22:54Z** **[REV2]** | `0d1f4a5` | **Remediation:** merge-interim-2, one-way exp_04 @ `27efcd1` → this branch (brings the fix + R11). Two dual-touch conflicts resolved additive-union; `optional_config_value` unified on exp_04's reviewed helper verbatim; combined suite **1,353** green; exp_04's AST guard `test_no_three_argument_getattr_on_config_survives` now enforces issue #11 on this branch | — |
 | **K1-2** | 2026-08-06T01:24Z | `bb845ea` | **SUCCEEDED** — all four phases; attempt 1 after one infra preemption. Same `submit_k1.sh` verbatim (the `…/k1` root was reusable because K1-1 published nothing) | — |
 
 `bb845eaf43de2f05abbf99dfd4344a51bc2930bc` is confirmed as the tip that actually ran: it is the `code_sha`
 recorded in the published shard headers.
+
+> **[REV2] Chronology correction — the remediation timestamp.** Revision 1 dated merge-interim-2 at
+> **02:05Z**, taken from the exp_05 worklog's entry heading. That is **impossible as written**: K1-2 launched at
+> **01:24:45Z** (per its queue job id `20260806-012445-…`), so the merge that enabled it cannot postdate it.
+> **`git log` gives commit `0d1f4a5` at `2026-08-05T21:22:54-04:00` = `2026-08-06T01:22:54Z`** — 111 seconds
+> before the launch, which is coherent. The worklog's `2026-08-06T02:05:00Z` heading is **erroneous**; because
+> the worklog is append-only, it has been annotated there with a correction entry rather than edited. The
+> ordering of events was correct throughout; only the stamp was wrong.
 
 **K1-2's four phases** (cohorts are one-per-invocation, so K1 is four launcher invocations — the reading
 ratified in the S10a follow-up review): smoke capacity (n=2) → adequacy_probe (first-8 DEV) → capacity dev64 →
@@ -129,14 +140,20 @@ Authoritative roots: `gs://v6_east1d/datasets/droid_wan_pos_context/k1/capacity`
 > ### [DEVIATION — RECORD, MATERIAL] B0 is **0.3215**, not "≈ 0.25"
 > The worklog's K1 reading (2026-08-06T16:35Z), the master tracker and CLAUDE.md all state the frozen-context
 > control at **"~0.25"** and derive **"~3.6× the frozen-context control"**. The published `gate_tables.json`
-> gives **B0 mean future-SSIM = 0.32147** (median 0.30456, min 0.01760, max 0.59364; full-SSIM 0.34203);
-> TRAINFIT B0 = 0.31153. The control pairing is confirmed by exact reproduction of the gate's own statistic:
-> median of `future_MSE(B0)/future_MSE(B1)` per example = **28.6320**, identical to `selection.json`'s
-> `median_ratio` to five decimals, so B0 *is* H1's control and 0.3215 *is* its mean.
+> gives **B0 mean future-SSIM = 0.32147** (median 0.30456, **min 0.01763, max 0.59362** **[REV2]**; full-SSIM
+> 0.34203); TRAINFIT B0 = 0.31153. The control pairing is confirmed by exact reproduction of the gate's own
+> statistic: median of `future_MSE(B0)/future_MSE(B1)` per example = **28.6320**, identical to `selection.json`'s
+> `median_ratio` to five decimals, so B0 *is* H1's control and 0.3215 *is* its mean. The reviewer independently
+> reproduced both 0.32147 and 2.87022×.
 > **Corrected multiples: B1 is 2.87× B0** (not 3.6×) and **3.13× the 0.2946 anchor** (that second figure was
-> right). No gate verdict changes — B0 is not a gate input, only a ratio denominator, and the ratio conjunct
-> passed by a wide margin either way. **[JUDGMENT]** I could not reconstruct where 0.25 came from; the nearest
-> published numbers are B2-probe 0.2118 and B2-0 0.2814. Flagged for the reviewer.
+> right).
+> **[REV2] What is and is not a gate input — revision 1 got this half wrong.** B0 **IS** a gate input: its
+> **future-MSE** (mean 0.8897) is the numerator of H1's `median_ratio` statistic. What is **not** a gate input is
+> **B0's future-SSIM** — the quantity corrected here — which appears only in prose multiples. That is why **no
+> gate verdict changes**: the corrected number never entered a conjunct, and the MSE that did enter was never in
+> dispute. Revision 1's phrasing ("B0 is not a gate input, only a ratio denominator") conflated the two.
+> **[JUDGMENT]** I could not reconstruct where 0.25 came from; the nearest published numbers are B2-probe 0.2118
+> and B2-0 0.2814. The reviewer did not identify a source either.
 
 ### 4.2 Gate verdicts as computed (`selection.json`)
 
@@ -149,7 +166,10 @@ Authoritative roots: `gs://v6_east1d/datasets/droid_wan_pos_context/k1/capacity`
 
 **Transfer (target-selection conjuncts):**
 
-| Cohort | B1-probe abs (floor 0.70) | B1-probe relative (0.7 × B1) | verdict |
+**[REV2]** Column 3 is the **ratio** `B1-probe / B1`, tested against 0.7 — revision 1 headed it "0.7 × B1",
+which named the threshold rather than the statistic.
+
+| Cohort | B1-probe abs (floor 0.70) | `B1-probe / B1` (≥ 0.7) | verdict |
 |---|---|---|---|
 | DEV-64 | **0.5254** ✗ | **0.5695** ✗ | fails; **the absolute floor is the binding constraint** |
 | TRAINFIT-16 | **0.4885** ✗ | **0.5371** ✗ | same |
@@ -171,7 +191,7 @@ contamination.)*
 - **H1 passes on every conjunct, with margin** — the median MSE ratio is 28.6× against a bar of 5, and 64/64 examples improved.
 - **H2 fails on every conjunct**, and its median ratio of **0.254 is below 1**: optimizing from fresh noise made the reconstruction **worse than the frozen-context control** on **0 of 64** examples improved.
 - The probe sits at 0.5254 against a 0.70 floor — a partial, not catastrophic, transfer loss.
-- The selection verdict rests **entirely on the transfer floors** — unlike exp_04, exp_05's capacity gate H1 *passed*.
+- **[REV2]** The verdict requires **both** legs of the selection rule: B1 is rejected on the transfer floors, **and** the B2 fallback is rejected because H2 failed. Revision 1 said the verdict rests "entirely on the transfer floors — unlike exp_04, exp_05's capacity gate H1 *passed*". **Both halves are removed**: the first is logically incomplete (the rule's B2 branch must also fail for STOP to be reached), and the second invites precisely the cross-experiment comparison §4.3 forbids.
 
 ### 4.3 Cross-experiment framing constraint (predeclared)
 
@@ -181,8 +201,13 @@ H1's PASS and exp_04's G1 FAIL are **not** a like-for-like slot comparison:
 (c) **the pivots are different objects** — exp_05 inverts at w=1 with the 8-token `C_init`, exp_04 with the
 512-row context, so the two experiments' inversion trajectories, controls and targets are not shared (plan §3,
 pinned by S4 mutant R2); and
-(d) **the two ran at different optimization budgets** — exp_05 at the adopted **J=50**, exp_04 at the default
-**J=10** (see exp_04 `null_adapter_results.md` §4.4). Descriptive side-by-side tables only.
+(d) **the two ran at different optimization budgets** — exp_05 at the **adopted J=50**, while **exp_04 ran the
+*unadopted* J=10 because of its launcher deviation** (`null_adequacy_uri` was never passed; exp_04
+`null_adapter_results.md` §4.4). **[REV2]** This is not a neutral difference of settings: exp_04's figures were
+produced at a recipe its own adequacy probe had rejected, which is why **exp_04's formal target selection is
+INDETERMINATE and a J=50 re-run is pending**, whereas exp_05's verdict is the predeclared one.
+
+Descriptive side-by-side tables only.
 
 ### 4.4 Adequacy probe — adopted **and honored**
 
@@ -285,7 +310,7 @@ over 0.2946 — reproduces **exactly**.
 1. **The 0.2946 anchor is not a quality baseline.** The deployed `pre_context` adapter's rollout SSIM 0.2946 comes from a **4-sample** validation at step 30,000, and those four samples are **four correlated windows of a single episode**. It is a wiring/sanity check. The "3.13×" multiple in §4.1 inherits that weakness entirely and must never be quoted as a controlled comparison.
 2. **B1 is an ORACLE, not a deployable system.** It optimizes a per-clip context against that clip's own ground-truth latents. It bounds what the 8-token channel can express; it says nothing directly about what an amortized, action-conditioned emitter can achieve.
 3. **The pivots are exp_05's own.** No B0/A0 or B2-0/A2-0 artifact is shared with exp_04 (8-token vs 512-row inversion contexts). Cross-experiment tables are descriptive, under the four constraints in §4.3.
-4. **H1's control is active-CFG** (B0), exp_04's is CFG-collapsed (A0) — the ratios 28.6× and 3.6× measure different things.
+4. **H1's control is active-CFG** (B0), exp_04's is CFG-collapsed (A0) — **[REV2]** H1's median **MSE** ratio of 28.6× and **exp_04's G1 median MSE ratio of 3.6×** measure different things. *(That 3.6× is exp_04's G1 statistic; it is unrelated to the "~3.6×" SSIM multiple corrected in §4.1, which was wrong and is now 2.87×. The two figures collide numerically by coincidence.)*
 5. **One cohort, one dataset, one backbone, one guidance scale (w = 5), one L_pos.** DEV-64/TRAINFIT-16 of DROID at 192×320×32f through Wan2.2 TI2V 5B. TEST-64 untouched.
 6. **No comparison videos and no HTML report yet** — the qualitative half of the evidence (what a 0.92-SSIM reconstruction and a 0.16-SSIM fresh-noise failure actually *look like*) has not been inspected by anyone.
 7. **σ₀ = 1.0** here vs **0.999** in the PyTorch reference (ratified deviation): prior-art numbers are directional context, not matched comparisons.
