@@ -1,0 +1,91 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>exp_04 null_adapter — 02 joint endpoint &amp; transfer</title><style>
+ body { font-family: -apple-system, sans-serif; margin: 2rem auto; max-width: 1080px; padding: 0 1rem; background:#111; color:#eee; }
+ h1 { font-size: 1.35rem } h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid #333; padding-bottom:.3rem }
+ h3 { font-size: 1rem; margin-top: 1.6rem }
+ .sub { color:#aaa; font-size:.9rem }
+ table { border-collapse:collapse; font-size:.82rem; color:#ccc; margin:.6rem 0 }
+ th,td { border:1px solid #333; padding:.22rem .5rem; text-align:center }
+ th { background:#232327; font-weight:600 } td.l { text-align:left }
+ td.hi { color:#7fd47f; font-weight:700 } td.lo { color:#e08a8a; font-weight:700 }
+ .note { background:#232327; border-left:4px solid #888; padding:.6rem .9rem; border-radius:6px; font-size:.9rem; margin:1rem 0 }
+ .warn { border-left-color:#c9a227 }
+ .badge { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.78rem; font-weight:700 }
+ .badge.warnb { background:#54430f; color:#ecd48a }
+ code { background:#232327; padding:.05rem .3rem; border-radius:4px; font-size:.85em }
+</style></head><body>
+<h1>exp_04 <code>null_adapter</code> — J1b joint endpoint optimization &amp; J1c transfer probe
+<span class="badge warnb">n = 8 · no CIs · descriptive</span></h1>
+<p class="sub">Presentation of <code>null_adapter_results.md</code> (rev 2) §5–§6 and
+<code>null_adapter_analysis.md</code> (rev 2) §1/§3. No new numbers. A3 = the null tensor optimized
+<b>jointly through the differentiable 25-step rollout</b> against the endpoint, from fresh ε₀ (300 Adam
+iterations, first 8 DEV clips, 3,237 s wall; fit-probe verdict "ok", peak HBM 14.43 GiB/device).</p>
+
+<h2>1 · J1b — per-clip latent future-MSE, all four regimes on the same 8 clips (lower is better)</h2>
+<table>
+<tr><th>Clip</th><th>A2-0 (do nothing, fresh ε₀)</th><th>A2 (greedy, fresh ε₀)</th><th>A3 final_loss</th><th>A3 final_endpoint</th><th>A1 (greedy, own basin)</th></tr>
+<tr><td>ep12399</td><td>5.157</td><td>0.499</td><td>0.6807</td><td class="lo">0.7029</td><td>0.0527</td></tr>
+<tr><td>ep45499</td><td>6.300</td><td>0.037</td><td class="hi">0.0067</td><td class="hi">0.0067</td><td>0.0039</td></tr>
+<tr><td>ep26599</td><td>4.520</td><td>0.491</td><td>0.2425</td><td>0.2417</td><td>0.0392</td></tr>
+<tr><td>ep19599</td><td>4.768</td><td>0.340</td><td>0.3522</td><td>0.3505</td><td>0.1478</td></tr>
+<tr><td>ep42299</td><td>4.766</td><td>0.449</td><td>0.3668</td><td>0.3667</td><td>0.1282</td></tr>
+<tr><td>ep67499</td><td>4.743</td><td>0.701</td><td class="hi">0.1265</td><td class="hi">0.1258</td><td>0.0449</td></tr>
+<tr><td>ep28899</td><td>4.716</td><td>0.566</td><td>0.2908</td><td>0.2905</td><td>0.1161</td></tr>
+<tr><td>ep21099</td><td>4.603</td><td>0.352</td><td class="hi">0.1007</td><td class="hi">0.1001</td><td>0.0534</td></tr>
+<tr><th>mean</th><th>4.946</th><th>0.4294</th><th>0.2709</th><th>0.2731</th><th>0.0733</th></tr>
+</table>
+<div class="note"><b>Readings (rev 2):</b> joint beats greedy on <b>6/8</b> clips, by up to <b>5.57×</b>
+(ep67499). <b>[REV2 retraction]</b> "3/8 reach own-basin quality" is <b>withdrawn</b> — <em>none</em> of the 8
+A3 endpoints beats its <b>paired</b> A1; three merely fall inside A1's pooled range [0.0039, 0.1478].
+Convergence is uneven: ep12399 stalls at 0.703, worse than its own-basin A0 control (0.4341); first-grad-norm
+range 6.5797–16.65 → final 0.0029–0.308. <code>final_loss</code> is the last pre-update objective;
+<code>final_endpoint</code> is the replayed quantity J1c re-measures (exact multiset match across jobs). J1b is
+latent-MSE only — no SSIM at this stage. <b>A3 ran at roughly 19× A2's per-example compute</b>, so
+objective-shape attribution is compute-confounded (analysis §3.2); a budget-matched greedy probe is required for
+causal attribution.</div>
+
+<h2>2 · J1c — the same A3 nulls locked and replayed under four noise settings (decoded; mean over 8 clips)</h2>
+<table>
+<tr><th>Setting</th><th>mean future-SSIM</th><th>mean full-SSIM</th><th>mean future-MSE</th></tr>
+<tr><td class="l">global(0) — own ε₀</td><td class="hi">0.6509</td><td>0.6615</td><td>0.2731</td></tr>
+<tr><td class="l">keyed(0) foreign</td><td>0.4709</td><td>0.4870</td><td>1.3148</td></tr>
+<tr><td class="l">keyed(1) foreign</td><td>0.4765</td><td>0.4923</td><td>1.4234</td></tr>
+<tr><td class="l">keyed(2) foreign</td><td>0.4784</td><td>0.4942</td><td>0.9891</td></tr>
+<tr><td class="l"><i>pooled keyed</i></td><td><i>0.4753</i></td><td><i>0.4912</i></td><td><i>1.2424</i></td></tr>
+</table>
+<p class="sub">Reference points on the same 8 clips: A1-probe (greedy nulls, foreign) = 0.1633; A2-0 (do
+nothing, fresh) MSE 4.946. The foreign A3 setting is <b>2.75×–2.91×</b> the greedy probes' SSIM.</p>
+<h3>Relative retention — estimator-dependent, all three given</h3>
+<table>
+<tr><th>Estimator</th><th>Value</th></tr>
+<tr><td class="l">keyed(0) mean ÷ own mean (the "~72%" figure)</td><td>0.7235</td></tr>
+<tr><td class="l">pooled keyed mean ÷ own mean</td><td>0.7301</td></tr>
+<tr><td class="l">mean of the 24 per-example paired ratios</td><td>0.7007 (individual ratios span 0.3856–0.9732)</td></tr>
+</table>
+<h3>Per-clip transfer (future-SSIM)</h3>
+<table>
+<tr><th>Clip</th><th>own global(0)</th><th>keyed(0)</th><th>keyed(1)</th><th>keyed(2)</th><th>mean retention</th></tr>
+<tr><td>ep45499</td><td class="hi">0.991</td><td>0.729</td><td>0.878</td><td>0.880</td><td>0.837</td></tr>
+<tr><td>ep21099</td><td>0.834</td><td>0.691</td><td>0.747</td><td>0.701</td><td>0.855</td></tr>
+<tr><td>ep67499</td><td>0.829</td><td>0.566</td><td>0.591</td><td>0.583</td><td>0.700</td></tr>
+<tr><td>ep28899</td><td>0.692</td><td>0.607</td><td>0.421</td><td>0.673</td><td>0.819</td></tr>
+<tr><td>ep26599</td><td>0.590</td><td>0.277</td><td>0.253</td><td>0.227</td><td>0.428</td></tr>
+<tr><td>ep42299</td><td>0.585</td><td>0.446</td><td>0.495</td><td>0.403</td><td>0.766</td></tr>
+<tr><td>ep19599</td><td>0.416</td><td>0.269</td><td>0.254</td><td>0.225</td><td>0.600</td></tr>
+<tr><td>ep12399</td><td class="lo">0.271</td><td>0.183</td><td>0.172</td><td>0.134</td><td>0.600</td></tr>
+</table>
+<div class="note"><b>Quantified (n=8, descriptive):</b> own-basin SSIM predicts <em>absolute</em> foreign SSIM
+strongly (Pearson +0.945, Spearman +0.976) but <em>relative retention</em> only weakly (+0.623 / +0.714) — the
+defensible statement is "better-optimized clips transfer to better absolute foreign quality". <b>[REV2]</b>
+"Floors unmet everywhere" restated precisely: <b>every aggregate setting mean missed the 0.70 floor</b>, while
+8 of the 32 individual observations exceed it. At 300 iterations the joint optimum is itself not
+deployment-grade.</div>
+
+<div class="note warn"><b>What this bought (analysis §1, rev 2):</b> joint endpoint optimization at
+substantially greater compute produced better n=8 capacity <em>and</em> transfer than per-step greedy — cutting
+fresh-noise endpoint MSE 0.429 → 0.273 and lifting foreign-basin SSIM 0.163 → 0.475. Objective shape is a
+promising explanation, not a demonstrated mechanism. <b>The experiment's durable contribution is the
+through-the-sampler research direction</b> — the program exp_06 amortizes — not a null-embedding adapter.</div>
+<p class="sub">Companion pages: <a href="null_adapter_01-capacity-gates_results.html" style="color:#8ab4f8">01 — capacity &amp; gates</a> ·
+<a href="null_adapter_03-video-gallery_results.html" style="color:#8ab4f8">03 — video gallery</a></p>
+</body></html>
