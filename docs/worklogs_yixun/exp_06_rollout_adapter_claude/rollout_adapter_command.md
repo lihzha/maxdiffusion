@@ -25,3 +25,12 @@ Yixun ordered the cancel in-conversation ("cancel the old M1 job"); executed via
 **What it must prove beyond M1-1's mandate:** the compile now completes inside the queue health window. First-minutes watch item: the `[M1] entering <cell>` line (printed unbuffered BEFORE each compile). If no cell line within ~30–40 min of jax init and the process dies at ~2 h again — the 32 Python-unrolled microbatch grad blocks (the reviewer's flagged residual) are the next suspect, and the remedy is a design change (scan over microbatches), not a retry.
 
 **Acceptance unchanged** (plan v2.8 §4-P1): digest-verified authorization table over the measured (arm, microbatch, k) cells; peak_source ∈ {runtime-reset, runtime-raised} per cell; step-time table + M2/M3 projections; M2 quotes only cells this probe authorizes.
+
+
+---
+
+## 2026-08-10 ~20:40Z — M1-2 diagnosis: cell-1 compile kills the VM — 4/4 same-phase deaths; F4 design round opened
+
+**Evidence:** attempts 3, 4, 6, 8 each passed backbone load (F3 threading PROVEN on real hardware — M1-1 never got here), printed `[M1] entering rollout microbatch=8 k=2: building and compiling`, then died 2–10 min later, all `TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE`, on four different VMs (attempts 1/2/5 were setup-phase preemptions; 7 SUSPENDED). Same-phase death across VMs = workload signature (the issue-#16 lesson applied in real time). The 10.18 GB constants are gone (F3 worked); the killer is now the **graph itself** — cell 1 unrolls 32 microbatch gradient blocks of the 5B forward+backward in Python, and XLA's compile of that graph exhausts the host. This was the F3c reviewer's flagged residual risk, now measured.
+
+**Action:** recommended Yixun cancel `20260810-174626-d126336b` (12 attempts remain on the cap; each burns ~20 min). **F4 design round dispatched:** replace the Python-unrolled microbatch accumulation with `lax.scan` over microbatch chunks — one gradient block compiled once, graph size O(1) in microbatch count instead of O(32). Parity of scanned vs unrolled gradients pinned by test; a graph-size guard asserts eqn count stays flat as microbatches grow. Review + battery + fresh package to follow; no relaunch without Yixun's approval.
