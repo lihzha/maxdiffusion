@@ -14,3 +14,14 @@
 ## 2026-08-10 ~15:25Z — M1-1 CANCELLED by Yixun's order (12 dead attempts)
 
 Yixun ordered the cancel in-conversation ("cancel the old M1 job"); executed via `tpu cancel 20260809-174108-67fe9b39-exp06-m1-fitprobe-yixun` (scheduler confirmed deletion of the queued resource + VM). Final tally: 12 attempts, all infrastructure-classified deaths (1 pre-start preemption + 11 health timeouts/unhealthy at ~2h each), zero cells measured, no artifacts published. Root cause was OURS, not the zone's: the frozen 5B was baked into the XLA program as 10.18GB of literal constants (pos_rollout_update closure design), so the first compile never finished inside the queue health window — diagnosed 2026-08-10, fixed as round F3 (frozen state as jit argument), hardened as F3b per the Codex review (evaluator seam + freeze semantics + guard blind spots). M1-2 relaunch package goes to Yixun at the post-F3b SHA. Issue #16's "zone flakiness" reading is RETRACTED for this job's kills (J1-5's single kill remains plausibly zone).
+
+
+---
+
+## 2026-08-10 ~17:46Z — M1-2 LAUNCHED (Yixun-approved via `!` submission)
+
+**Job:** `20260810-174626-d126336b-exp06-m1b-fitprobe-yixun` (v6e-8, worker0-only). Tip `7b3f10c` (ceremony commit `88dd491` + docs) — the F3–F3d captured-constants arc; guard verified the executable tree identical to RULED before submit. Root: `gs://v6_east1d/datasets/droid_wan_pos_rollout/m1/att-<ts>` (attempt-scoped, issue #13).
+
+**What it must prove beyond M1-1's mandate:** the compile now completes inside the queue health window. First-minutes watch item: the `[M1] entering <cell>` line (printed unbuffered BEFORE each compile). If no cell line within ~30–40 min of jax init and the process dies at ~2 h again — the 32 Python-unrolled microbatch grad blocks (the reviewer's flagged residual) are the next suspect, and the remedy is a design change (scan over microbatches), not a retry.
+
+**Acceptance unchanged** (plan v2.8 §4-P1): digest-verified authorization table over the measured (arm, microbatch, k) cells; peak_source ∈ {runtime-reset, runtime-raised} per cell; step-time table + M2/M3 projections; M2 quotes only cells this probe authorizes.
