@@ -1,8 +1,10 @@
 # null_adapter_analysis — exp_04 P4 (SOP artifact 11)
 
-**Status: DRAFT — revision 3.** Revision 2 answered the Codex analysis review
-(`null_adapter_codex_analysis_review.md`, REQUEST-REVISION); **revision 3 folds in the completed J1-5 clean-gate
-re-run**. Every interpretive step is labelled **[FINDING]** (artifact-backed), **[INFERENCE]** (a reading the
+**Status: FINAL — revision 4.** Revision 2 answered the Codex analysis review; revision 3 folded in the
+completed J1-5 clean-gate re-run; **revision 4 applies the closing review**
+(`null_adapter_codex_closing_review.md`, REQUEST-REVISION — *"the formal STOP at J=50 is valid and
+closure-grade"*, remaining items wording/scoping/staleness only, no new compute). All six items are applied and
+the review's adjudications are recorded in §8. **This document is submitted for closure adjudication.** Every interpretive step is labelled **[FINDING]** (artifact-backed), **[INFERENCE]** (a reading the
 artifacts support but do not compel), or **[HYPOTHESIS]** (a mechanism story *not* tested here); **[REV2]** /
 **[REV3]** mark edits by the round that made them. Numbers are not restated except where the argument turns on
 them — the record is `null_adapter_results.md`.
@@ -31,15 +33,21 @@ against a 0.70 floor, short by a factor of 4.2. **`target = STOP`, on DEV-64 and
 **This is the predeclared verdict, and it is clean.** Revision 2 had to record the selection as INDETERMINATE:
 plan v5 required the gates to run at the adopted J=50, and a launcher gap (issue #15) meant J1-4 ran them at
 J=10, leaving both branches of the selection rule unmeasured at the right recipe. **J1-5 closed that** — both
-branches were recomputed at J=50, both fail, and the two attempts of that job reproduced every gate number
-**byte-for-byte**. The STOP does not hinge on G1's near-miss: A1 is independently barred by its probe missing
-the absolute floor by 4.2×, and G2 fails both SSIM clauses. TRAINFIT-16 shows the same signature, so this is
-not a dev-set artifact and there is no memorization gap (in-basin 0.8847 vs 0.8868).
+branches were recomputed at J=50 and both fail. **[REV4]** Scope: STOP was measured on **both** cohorts, and
+**DEV-64's** gate/selection blocks reproduced **byte-for-byte** across the job's two attempts; TRAINFIT-16
+completed only in attempt 2, so it ran once. The STOP does not hinge on G1's near-miss: A1 is independently barred by its probe missing
+the absolute floor by 4.2×, and G2 fails both SSIM clauses. **[REV4]** TRAINFIT-16 shows the **same gate-failure signature**, and the observed A1 means were nearly equal
+(0.8847 vs 0.8868) — so the outcome is **not unique to DEV-64**. Revision 3's "no memorization gap" is
+withdrawn: equal cohort means show no *observed* separation, but per-clip oracles at TRAINFIT n=16 cannot
+establish the absence of a generalization gap.
 
 **Five-fold more optimization did not change the verdict — it sharpened the picture.** In-basin capacity rose
 (0.8523 → 0.8868); fresh-noise capacity rose a lot (0.4973 → 0.6638) but landed *level with the do-nothing
 locked-basin control* rather than past it (§2.4); and **transfer did not move at all** (0.1729 → 0.1666). The
-basin-specificity of greedy per-clip nulls is **budget-independent** over this range — which is the most
+**[REV4] neither cohort-wide probe improved between the measured J=10 and J=50 endpoints** (A1-probe
+0.1729 → 0.1666; A2-probe 0.2958 → 0.2510). Revision 3 called this "budget-independent over this range";
+that is withdrawn — two endpoints cannot exclude non-monotone or later improvement. What was measured is that
+**more greedy optimization bought in-basin quality and bought no transfer at either endpoint** — the most
 durable single fact exp_04 produced about the target family it set out to build.
 
 Two conditional follow-ons produced the more interesting result. Replacing per-step tracking with joint
@@ -123,7 +131,7 @@ arm, where it is gate-verified (0.1610 vs 0.2814, 0/64 improved), and appears to
 joint reading. The distinction matters for §5.1: *destructive* and *low-quality-but-not-measurably-harmful* are
 different geometries, and the opposite-geometries argument depends on keeping them apart.
 
-### 2.4 **[REV3]** A2 at J=50 converged **to** doing-nothing, not past it [FINDING → INFERENCE]
+### 2.4 **[REV3, retitled REV4]** A2 at J=50 **landed near** doing-nothing, not past it [FINDING → INFERENCE]
 
 The largest movement anywhere in the study is A2's: **0.4973 → 0.6638** when the optimization budget went 5×.
 Where it landed is the interesting part. **A0 — the locked-basin control that does no optimization at all —
@@ -135,10 +143,17 @@ Two things must be kept apart here, and revision 3 keeps them apart deliberately
 - **The A0 comparison is cross-arm and unmatched**, and is descriptive only: A0 replays from its own inversion endpoint with CFG collapsed, A2 from fresh ε₀. It is not a gate statistic and no verdict depends on it (results §4.5.3).
 
 With that caveat stated, the coincidence is worth recording. **[INFERENCE]** Five-fold more greedy optimization
-from a fresh basin bought a large improvement that terminated almost exactly at the quality obtainable by not
+from a fresh basin bought a large improvement that **landed near** — at J=50 — the quality obtainable by not
 optimizing at all in the *right* basin — and still **0.086 short of the 0.75 G2 bar**, with in-basin A1 a
-further 0.22 above it. Combined with the flat probe (§2.3), the shape of the J=10 → J=50 movement is:
-**greedy per-clip optimization converts budget into in-basin quality, and converts none of it into transfer.**
+further 0.22 above it. Combined with the probe (§2.3), the shape of the J=10 → J=50 movement is:
+**greedy per-clip optimization converted budget into in-basin quality, and converted none of it into transfer at
+either measured endpoint.**
+
+> **[REV4] Wording, and a ledger correction that is already on the record.** "Converged to" and "terminated"
+> imply a measured plateau; **only two budget points exist**, so the supported verb is **"landed near, at
+> J=50"**. The same correction has already been appended to `null_adapter_command.md` (which additionally
+> withdraws that ledger's "statistically indistinguishable from doing nothing" — no cross-arm test was run);
+> it is referenced here rather than duplicated.
 
 **[HYPOTHESIS — untested]** If the greedy per-step objective's reachable set from a foreign basin is bounded by
 something like "recover the pivot trajectory's own dynamics", then A0 is exactly that bound, and more iterations
@@ -186,31 +201,43 @@ confound runs against the observed effect. The reviewer rejected that, and I acc
 counter-mechanism is straightforward and I did not consider it: **more greedy iterations might first learn
 transferable, shared corrections before beginning to overfit basin-specific detail.** Under that trajectory,
 extra greedy compute would *improve* transfer over the J=10 measurement, and the observed 0.163 → 0.475 gap
-would shrink for reasons that have nothing to do with objective shape. Nothing in the artifacts distinguishes
-the two trajectories, because greedy transfer was only ever measured at one budget.
+would shrink for reasons that have nothing to do with objective shape. **[REV4]** At revision 2 nothing in the
+artifacts bore on this, because greedy transfer had been measured at only one budget. **J1-5 supplied a second
+endpoint** — see the box below.
 
 **Standing conclusion:** J1c is *cleaner* evidence about transfer than J1b is about capacity — it at least
 compares locked tensors under identical replay conditions — but **it is not causal either.** The proposed sign
 of the confound is **plausible, not established**. Any future write-up should lead with transfer *and* state the
 confound in the same breath.
 
-> **[REV3] NEW DATA BEARING ON THIS SECTION — recorded, conclusion deliberately NOT changed.**
-> J1-5 measured both greedy probes at **J=50**, which is a partial instance of the budget-matched greedy probe
-> this section asks for. Both went **down**, not up:
-> **A2-probe** (greedy from ε₀, replayed foreign — the arm *matched in starting basin* to J1c's joint nulls)
-> **0.2958 → 0.2510**; **A1-probe** 0.1729 → 0.1666. J1c's joint nulls from the same ε₀ score **0.4753**.
-> On its face this runs **against** the reviewer's counter-mechanism (that extra greedy compute would first buy
-> transferable shared corrections), and it narrows the compute gap from ~19× to ~10×.
-> **It is not a clean resolution and I am not treating it as one:** J=50 greedy (~40.2 s/example) is still
-> ~10× cheaper than A3 (~405 s/example), so the probe is *closer to* but not *at* budget parity; and two points
-> (J=10, J=50) cannot establish that greedy transfer is monotone in budget.
-> **The hedged conclusion above stands unchanged.** This is flagged for the next analysis review as the first
-> item in §8, together with the question of whether a J=200-greedy probe would close the gap outright.
+> **[REV3, tightened REV4] J1-5's second budget endpoint — recorded; the hedge above stands unchanged.**
+>
+> J1-5 measured both greedy probes at **J=50**, a partial step toward the budget-matched probe this section
+> asks for. **Neither improved:**
+>
+> | greedy transfer, same cohort throughout | J=10 | J=50 |
+> |---|---|---|
+> | A1-probe, DEV-64 (n=64) | 0.1729 | **0.1666** |
+> | A2-probe, DEV-64 (n=64) | 0.2958 | **0.2510** |
+> | **A2-probe, first-eight (J1c-matched, n=8)** | 0.2809 | **0.2220** |
+>
+> **[REV4] Cohort-matched comparison.** Revision 3 set the DEV-64 A2-probe (0.2510) beside J1c's **n=8** mean
+> (0.4753); those aggregates are cohort-unmatched. Derived from the published `gate_tables.json`, the **J=50
+> A2-probe restricted to J1c's first eight clips is 0.2220** — so on identical clips, identical foreign-noise
+> settings and the same ε₀ start, greedy scores **0.2220** against joint's **0.4753**.
+>
+> **What this does and does not do.** It **disfavours the simple monotone form** of the reviewer's
+> counter-mechanism (that extra greedy compute would first buy transferable shared corrections) across the
+> J=10→J=50 interval, and narrows the compute gap from ~19× to ~10×. It **cannot eliminate a later or
+> non-monotone improvement at A3-equivalent compute** — two endpoints do not characterise a curve, and greedy
+> at J=50 is still ~10× cheaper than A3. **The causal hedge above therefore remains correct and unchanged**,
+> which is also the closing reviewer's explicit ruling.
 
-**The experiment that would settle it, and was never run:** the greedy arm at the adopted J=50 (or higher) on the
-same 8 clips, re-probed for transfer — a **budget-matched greedy probe**. **[JUDGMENT]** ~1 v6e-8-hour, and it is
-the difference between a research direction and a demonstrated mechanism. It is now priority 2 in §7, and the
-approved J=50 clean-gate re-run (§4.1) is a natural vehicle for it.
+**[REV4] The experiment that would settle it — now defined at the right budget.** J=50 has since been run
+(box below) and does **not** settle it, because A3 still carries roughly **10×** more per-example compute than
+J=50 greedy. The outstanding measurement is a **compute-matched greedy probe at J ≈ 200+** — greedy optimization
+at ~405 s/example, A3's budget — re-probed for transfer. **[JUDGMENT]** ~1–2 v6e-8-hours, and it remains the
+difference between a research direction and a demonstrated mechanism. It is priority 1 in §7.
 
 ### 3.3 Transfer tracks *absolute* quality, not *retention* [FINDING]
 
@@ -271,7 +298,7 @@ the record keeps both halves.
 **[REV3] What the re-run also strengthened, beyond closing the deviation:**
 - **Robustness:** the STOP does not rest on G1's near-miss. A1 is barred by a probe missing its floor by **4.2×**, and G2 fails **both** SSIM clauses. Every non-STOP path fails a clause that is nowhere near its bar.
 - **Reproducibility:** two attempts of J1-5 produced **byte-equal** `g1`/`g2`/`selection` number blocks, and the deterministic controls A0/A2-0 are **per-example bitwise identical** to J1-4's — exact cross-run comparability, three days and two code tips apart.
-- **Cohort generality:** TRAINFIT-16 reproduces the failure signature exactly, with in-basin capacity 0.8847 vs DEV's 0.8868 — **no memorization gap**, so the STOP is not a dev-set artifact.
+- **Cohort generality [REV4]:** TRAINFIT-16 shows the **same gate-failure signature**, with observed A1 means nearly equal (0.8847 vs DEV's 0.8868) — the outcome is **not unique to DEV-64**. No claim about a memorization/generalization gap is made: cohort-mean equality is not evidence of absence, least of all for per-clip oracles at n=16.
 - **Cross-experiment comparability [REV3]:** exp_04's A1 is now **0.8868 @ J=50** against exp_05's B1 **0.9227 @ J=50** — the budget mismatch of §5.2(b) is **gone**, though the control, representation and pivot mismatches all remain, so the comparison stays descriptive.
 
 **Process reading.** The R10 follow-up review installed a fail-closed guard against precisely this
@@ -348,9 +375,10 @@ revision 2 recorded: the null slot improves **15.7×** while the positive slot d
 picture inverts once more: positive **0.9227**, null **0.8868** — a gap that narrowed from 0.070 to **0.036**
 once the budgets were matched.
 
-**[REV2]** Revision 1 concluded from this that "the positive channel is the more powerful and the more dangerous;
+**[REV4]** The two rows no longer differ in recipe. **[REV2]** Revision 1 concluded from this that "the positive channel is the more powerful and the more dangerous;
 the null channel is weaker and better behaved." **That conclusion is withdrawn.** It attributes a
-between-row difference to the *slot*, when the rows also differ in recipe (J=10 vs J=50), context construction
+between-row difference to the *slot*, when the rows **[REV4]** (as of revision 2) also differed in recipe
+(J=10 vs J=50 — a mismatch J1-5 has since removed) and still differ in context construction
 (16 rows inside 512 vs 8 tokens as the whole context), pivots (not shared), and control design. **Comparing the
 two rows is descriptive, not a controlled slot contrast.** What survives is the pair of within-row observations
 — and they are genuinely opposite in direction, which is what makes the pair worth recording at all.
@@ -362,20 +390,21 @@ unconditional **−4**, and in exp_05 the conditional is an 8-token context agai
 is also structurally the *lighter* tensor with the *larger* lever). A greedy per-step objective asks the channel
 to jump to a pivot that, from a foreign basin, is far away — which demands a large velocity correction. **More
 per-step authority applied greedily from the wrong basin produces more damage, not less.** That would explain
-why the same procedure improves the low-authority null slot 9.7× and degrades the high-authority positive slot
-4.0×. It is consistent with every number in both experiments, and it is **untested**: no arm in either experiment
+why the same procedure improves the low-authority null slot **15.7×** **[REV4]** (the authoritative J=50
+figure; 9.7× was the J=10-era number) and degrades the high-authority positive slot 4.0×. It is consistent with every number in both experiments, and it is **untested**: no arm in either experiment
 varies w, varies L, or measures per-step step magnitude. I would not put it in a paper without the ablation.
 **[REV2]** Note also that it is a story about the *slot*, and §5.1 no longer licenses a slot attribution — so
-this hypothesis now rests on even less than when it was written, and would need the recipe held constant before
-it could be tested at all.
+this hypothesis rests on less than when it was written. **[REV4]** The recipe-held-constant condition revision 2
+attached to it **is now met** (both slots at J=50); the remaining obstacles to testing it are the control,
+representation and pivot mismatches, plus the absence of any arm varying w, L, or per-step step magnitude.
 
 ### 5.3 Why exp_04's G1 FAIL and exp_05's H1 PASS are not a slot comparison [FINDING]
 
 Their controls measure different things. exp_04's A0 collapses CFG to identity and therefore replays at the same
 w = 1 the pivots were computed at (§2.1) — a near-self-consistent, strong control (MSE 0.335). exp_05's B0 keeps
 CFG active (8-token conditional ≠ 512-row unconditional) and so replays w = 5 dynamics against w = 1 pivots — a
-mismatched, weak control (MSE 0.890). Ratios of 3.6× and 28.6× against those two controls are simply not the
-same statistic. **This was predeclared** in exp_05's plan §4 H1 interpretation note; it is repeated here because
+mismatched, weak control (MSE 0.890). Ratios of **4.681×** (exp_04's authoritative J=50 G1; **[REV4]** — the
+historical J=10 figure was 3.605×) and 28.6× against those two controls are simply not the same statistic. **This was predeclared** in exp_05's plan §4 H1 interpretation note; it is repeated here because
 the two numbers are the ones most likely to be quoted side by side.
 
 **[REV2] The full mismatch list is four items, not two**, and it applies to §5.1 as well as to the H1/G1 pair:
@@ -446,12 +475,12 @@ work.
 
 | Priority | Action | Cost | Why |
 |---|---|---|---|
-| **✅ DONE** **[REV3]** | ~~The approved J=50 clean-gate re-run~~ — **J1-5 ran 2026-08-09/10; STOP retained on both cohorts, reproduced byte-exactly across two attempts** | 10,582 s v6e-8 | §4.1, results §4.5. The formal outcome is measured |
+| **✅ DONE** **[REV3/4]** | ~~The approved J=50 clean-gate re-run~~ — **J1-5 ran 2026-08-09/10; STOP retained on both cohorts; DEV-64 reproduced byte-exactly across two attempts (TRAINFIT-16 ran once)** | 10,582 s v6e-8 | §4.1, results §4.5. The formal outcome is measured |
 | **✅ DONE** **[REV3]** | ~~The launcher fix~~ — `null_adequacy_uri` wired; adoption confirmed live end-to-end in J1-5's shard headers (`{50, 0.01}`) | — | Issue #15 closed |
-| **1** **[REV3, was 2]** | A **fully budget-matched greedy transfer probe** — greedy from ε₀ at a budget matched to A3's ~405 s/example (J≈200+), replayed under `keyed{0,1,2}` | ~1–2 h v6e-8 | §3.2. J1-5's J=50 probes moved *down* (A2-probe 0.2958 → 0.2510), which points against the reviewer's counter-mechanism but does **not** settle it at ~10× remaining compute gap. Still the one measurement that would make the objective-shape claim causal |
+| **1** **[REV3, was 2]** | A **compute-matched greedy transfer probe at J ≈ 200+** — greedy from ε₀ at A3's ~405 s/example budget, replayed under `keyed{0,1,2}` | ~1–2 h v6e-8 | §3.2. J1-5's J=50 probes moved *down* (DEV-64 A2-probe 0.2958 → 0.2510; on J1c's own eight clips 0.2809 → 0.2220), which disfavours the monotone counter-mechanism over J=10→50 but does **not** settle it at the ~10× remaining compute gap. Still the one measurement that would make the objective-shape claim causal |
 | **2** **[REV3]** | A **budget sweep on A2** (J = 100, 200) to test whether fresh-noise greedy optimization plateaus at A0's 0.6665 or eventually passes it | ~1 h v6e-8 | §2.4 — the new hypothesis J1-5 generated. Cheap, and it would characterise the greedy objective's reachable set |
 | **3** | Add a **base-null `keyed(k)` control arm** if the probe comparison is ever load-bearing | small | §2.3 — the missing matched control that leaves the probe's incremental effect unmeasurable |
-| **4** | Pull the published `videos/` and write the P4 HTML report (SOP artifact 12) | host-only | Nobody has looked at what a 0.89 vs 0.66 vs 0.17 reconstruction *looks like*; the qualitative half of the evidence is unexamined |
+| **✅ DONE** **[REV4]** | ~~Videos + HTML report~~ — the capacity-videos job (`20260809-173808-13c3cadc-capvideos-yixun`) rendered A2 and A1-probe k=0 (16 mp4s, `…/j1r2/videos_att-0809-173808/`, cross-check CLEAN), and the three HTML reports (SOP artifact 12) are committed in-repo and updated for J1-5 in this revision | ~1 h v6e-8 | Note the rendered arms carry **J1-4 (`3bdbd2a`) provenance**, i.e. they visualise the **J=10-era** arms; the J=50 verdict is not re-rendered. Optional follow-ups: a J=50 re-render, and a row-order re-render (the subset is the 8 lowest-`ordinal` clips) |
 | **—** | **exp_06 is not blocked** by any of the above — but its motivating claim (E2) should be stated as "not refuted, n=8 motivating oracle, compute-confounded", not as a demonstrated mechanism | — | §6.2 |
 | **—** | **Do NOT** revive P2/P3 as planned | ~225+ v6e-8-h for A3-caching TRAIN-2000 alone | §5.4. Any revival is an **exp_07-scale new proposal** with its own gates |
 
@@ -470,11 +499,23 @@ resolutions travel with the document:
 | 4 | Should headline numbers carry a J=10 annotation everywhere? | **Yes — every headline, table and terminal-status statement** | results §1, §4.1, §4.4, §9; analysis §5.1 |
 | 5 | Is the static-vs-rollout distinction strong enough? | **Visually prominent but scientifically too binary** — scope "failed" to the tested greedy targets; list robust multi-noise static targets among the untested | §5.4, §6.2 |
 
-### Open questions for the NEXT review (raised at revision 3)
+### **[REV4] Closing-review adjudications (2026-08-10) — recorded per the review's item 6**
 
-1. **[REV3 — the priority question] Does J1-5's greedy-probe movement bear on §3.2's confound, and how much?** Both greedy probes fell at 5× budget (A2-probe 0.2958 → 0.2510; A1-probe 0.1729 → 0.1666) — the *opposite* of the reviewer's counter-mechanism, which posited that extra greedy compute would first buy transferable shared corrections. I deliberately did **not** touch §3.2's hedged conclusion on this basis: A3 still has ~10× more compute than J=50 greedy, and two budget points cannot establish monotonicity. **Is the hedge still right, should it be softened, or does it need the J≈200 probe first?**
-2. **[REV3]** §2.4 records A2 landing 0.0027 below A0 as a cross-arm, unmatched coincidence, and offers a reachable-set hypothesis. Is even that framing too suggestive for a comparison with no matched control?
-3. **[REV3]** Mismatch (b) of §5.2 is now removed (both slots at J=50), leaving (a), (c), (d). Does removing one of four mismatches change what §5.1 may say, or is the controls mismatch alone still disqualifying for any slot attribution?
-4. Does §5.1 still overreach by keeping the two rows adjacent — is adjacency itself the problem, as the exp_05 reviewer judged it for H1/G1?
-5. Is §6.2's "not refuted, n=8 motivating oracle, not validated" still the right status line for exp_06's motivation now that the null slot's own verdict is measured and clean?
-6. **[REV3]** Should the mechanism sections (§3, §5, §6) carry an explicit banner that they rest on **J=10-era** J1b/J1c baselines, since neither follow-on was re-run at J=50?
+The closing review (`null_adapter_codex_closing_review.md`) ruled: **"the formal STOP at J=50 is valid and
+closure-grade"**, with all remaining items wording/scoping/staleness and **no new compute required**. It also
+adjudicated the questions revision 3 left open:
+
+| Question (revision 3) | Closing-review adjudication | Applied |
+|---|---|---|
+| 1. Does J1-5's greedy-probe movement resolve §3.2's confound? | **No — keep the hedge.** The movement "disfavors the simple monotone counter-mechanism over J=10→50, but cannot eliminate a later or non-monotone improvement at A3-equivalent compute." Integrate more precisely; define the outstanding experiment as **J≈200+** | §3.2, §7 priority 1 |
+| 2. Is §2.4's reachable-set framing too suggestive? | The cross-arm flag is **adequate**; the *convergence wording* is not — use **"landed near at J=50"**, no plateau was measured | §2.4 |
+| 3. Does removing mismatch (b) change what §5.1 may say? | **No.** Mismatches (a), (c), (d) "remain sufficient to prohibit slot attribution" | §5.1, §5.2 |
+| 4. Is adjacency itself the problem? | **No — adjacency is acceptable**, because each row is internally matched and the comparison is repeatedly marked descriptive | §5.1 retained as written |
+| 5. Is "not refuted, n=8 motivating oracle, not validated" still right for exp_06? | Not contested; the §6.2 status line stands | §6.2 |
+| 6. Should the mechanism sections carry a J=10-era banner? | Effectively **yes** — J1-4 must lose "the primary result" title and J=10-era evidence must be labelled | results §4 title, §9 caveat 4 |
+
+### Open questions carried into closure adjudication (raised at revision 4)
+
+1. **The one open scientific question is priced and unfunded:** the compute-matched **J≈200+** greedy transfer probe (§3.2, §7 priority 1, ~1–2 v6e-8-hours). Closing exp_04 without it means the objective-shape claim stays a **promising explanation**, not a demonstrated mechanism — which is what §6.2 already says. Is that acceptable at closure, or should the probe run first?
+2. The comparison videos and HTML render the **J=10-era** arms (J1-4 provenance `3bdbd2a`); the J=50 verdict has no video. Is a J=50 re-render wanted before closure, or is the numeric record sufficient?
+3. **[REV4]** J1b/J1c were never re-run at J=50, so §3, §5 and §6 rest on J=10-era greedy baselines even though the verdict is J=50. Results §9 caveat 4 says so. Is that split acceptable in a closed report, or should the mechanism sections carry their own banner?
