@@ -120,9 +120,9 @@ L=16 stays fixed by plan N5.</p>
 <tr><td>J1-1</td><td class="l">FAILED — 3-arg <code>getattr</code> on HyperParameters</td><td class="l">REAL BUG → fix <code>925ee17</code> (issue #11)</td></tr>
 <tr><td>J1-2</td><td class="l">FAILED at smoke→verify wiring (n=2 gates STOP by design)</td><td class="l">Planner runbook design flaw</td></tr>
 <tr><td>J1-3</td><td class="l">FAILED — non-idempotent runbook under queue auto-retry</td><td class="l">Planner runbook flaw (issue #13 → attempt-scoped roots)</td></tr>
-<tr><td>J1-4</td><td class="l">SUCCEEDED — the primary result (tip <code>3bdbd2a</code>)</td><td class="l">—</td></tr>
+<tr><td>J1-4</td><td class="l">SUCCEEDED at the <b>unadopted J=10</b> (tip <code>3bdbd2a</code>) — historical; superseded as the verdict by J1-5</td><td class="l">issue #15</td></tr>
 <tr><td>J1b-1 / J1c-1</td><td class="l">SUCCEEDED — see page 02</td><td class="l">—</td></tr>
-<tr><td>J1-5</td><td class="l">LAUNCHED 2026-08-09 — clean-gate rerun @ J=50</td><td class="l">decides the formal verdict</td></tr>
+<tr><td>J1-5</td><td class="l"><b>SUCCEEDED</b> (attempt 2) — clean-gate rerun @ the adopted <b>J=50</b>, both cohorts (tip <code>a5aa6bc</code>)</td><td class="l"><b>the formal verdict: STOP</b>; attempt 1 killed by <code>TPU_VM_HEALTH_TIMEOUT</code> (infra, issue #16)</td></tr>
 </table></details>
 
 <div class="note"><b>Bounding caveats (results §9):</b> all arms are per-clip oracles; one cohort, one dataset,
