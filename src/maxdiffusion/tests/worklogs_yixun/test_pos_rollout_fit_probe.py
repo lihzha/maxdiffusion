@@ -1594,7 +1594,7 @@ def test_the_shared_update_accumulates_every_microbatch_before_one_optimizer_ste
 
     seen = []
 
-    def loss_fn(params, batch, context, *, draws):
+    def loss_fn(params, batch, context, *, frozen_state, draws):
         seen.append(batch["x"])
         return (params["w"] * batch["x"]).sum(), {}
 
@@ -1604,7 +1604,9 @@ def test_the_shared_update_accumulates_every_microbatch_before_one_optimizer_ste
     update = build_logical_update(loss_fn, optimizer, context=None)
     micro = ({"x": jnp.ones((3,), jnp.float32)}, {"x": jnp.ones((3,), jnp.float32) * 3.0})
     nothing = (jnp.int32(0), jnp.int32(2), jnp.zeros((1,), jnp.float32), jnp.zeros((1,), jnp.int32))
-    new_params, _, loss = update(params, opt_state, micro, (nothing, nothing))
+    # F3: `frozen_state` is the SECOND POSITIONAL argument of the update and reaches the loss
+    # keyword-only; this primitive threads it and never differentiates it.
+    new_params, _, loss = update(params, None, opt_state, micro, (nothing, nothing))
     assert len(seen) == 2, "every microbatch contributed"
     # gradient of the MEAN loss is the mean of the gradients: (1 + 3) / 2 = 2, and sgd(1.0) steps -2.
     assert jnp.allclose(new_params["w"], jnp.full((3,), -2.0)), new_params
@@ -2212,7 +2214,7 @@ def test_the_adapter_only_optimizer_never_touches_the_frozen_backbone(tmp_path):
     backbone = _TinySource().load(config)
     transformer = backbone.transformer
     adapters = build_adapter_stack(config, transformer)
-    _, adapter_params = build_arm("rollout", transformer, adapters)
+    _, adapter_params, _ = build_arm("rollout", transformer, adapters)
     optimizer, _ = build_optimizer(config, num_steps=100)
     opt_state = optimizer.init(adapter_params)
 

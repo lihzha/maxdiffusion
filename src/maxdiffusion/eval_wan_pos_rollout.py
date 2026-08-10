@@ -723,8 +723,90 @@ class RolloutExecution:
     grid_sha256: str = ""
 
 
+def build_velocity_builder(*, make_velocity_fn, frozen_graphdef, guide_scale):
+    """The velocity the kernel builds INSIDE itself — one origin, shared with the guard (F3c).
+
+    Module-level on purpose. The regression guard must trace *the production kernel*, and a guard
+    that rebuilt this builder locally would be a second construction agreeing by coincidence -- which
+    is exactly how the evaluator finding survived two rounds. ``load_device_backend`` calls this and
+    so does the guard, so there is nothing to keep in step.
+
+    It closes over ``frozen_graphdef`` -- STRUCTURE, no arrays -- and never over a ``FrozenBackbone``:
+    that object is a registered pytree, so holding it would make its state reachable from this
+    closure (the reviewer measured 4 MiB reachable that way) even though only the graphdef is read.
+    """
+    from flax import nnx
+
+    def velocity_builder(params, frozen_state, actions, adapter_enabled):
+        if adapter_enabled:
+            return make_velocity_fn(params, frozen_state=frozen_state, actions=actions, guide_scale=float(guide_scale))
+        model = nnx.merge(frozen_graphdef, frozen_state)
+
+        def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+            return model(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                deterministic=True,
+            )
+
+        return velocity_fn
+
+    return velocity_builder
+
+
+def build_rollout_kernel(velocity_builder, *, num_steps: int = DEPLOYED_SAMPLING_STEPS):
+    """THE compiled evaluation kernel — one ``jax.jit`` boundary, and the weights cross it as an ARG.
+
+    **Why this exists (F3c — the evaluator finding, third form).** F3 claimed the evaluator was eager
+    and exempt. F3b threaded the weights but left ``rollout_prediction`` un-jitted, so the only staged
+    region was ``cfg_rollout``'s loop and the velocity was built *eagerly* while assembling its
+    arguments — while the guard jitted a function of its own with ``frozen_state`` already a tracer.
+    **Both times the guard and production crossed different boundaries, and both times the guard was
+    green while a real spelling captured the backbone.**
+
+    The fix is to stop having two boundaries. This builds the one compiled object the evaluator runs,
+    with ``params`` and ``frozen_state`` as explicit JIT arguments, and ``DeviceBackend.score`` and
+    the regression guard both obtain it **from this same builder**. A guard that traces the production
+    kernel cannot drift from production, because there is only one thing to trace.
+
+    ``adapter_enabled`` is static — it selects between two graphs, not two values — so each variant
+    compiles once. Everything else is an argument, so the kernel compiles **once per shape rather
+    than once per sample**, and nothing is donated: ``frozen_state`` is reused on every call.
+    """
+    import functools
+
+    @functools.partial(jax.jit, static_argnames=("adapter_enabled",))
+    def kernel(params, frozen_state, z_init, z_i0, context, actions, sigmas, timesteps, *, adapter_enabled):
+        velocity_fn = velocity_builder(params, frozen_state, actions, adapter_enabled)
+        return cfg_rollout(
+            z_init,
+            velocity_fn=velocity_fn,
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            z_i0=z_i0,
+            start=0,
+            num_steps=num_steps,
+        )
+
+    return kernel
+
+
 def rollout_prediction(
-    *, velocity_fn, sigmas, timesteps, context, z_i0, z_video, key, guide_scale
+    *,
+    kernel,
+    params,
+    frozen_state,
+    actions,
+    adapter_enabled,
+    sigmas,
+    timesteps,
+    context,
+    z_i0,
+    z_video,
+    key,
+    guide_scale,
 ) -> RolloutExecution:
     """The prediction a score is computed from — T3a's rollout, at the DEPLOYED horizon only.
 
@@ -732,19 +814,25 @@ def rollout_prediction(
     measured on the deployed 25-step grid, so a rollout at any other horizon is not a cheaper version
     of this measurement, it is a different one. The sigma grid is checked for the same reason: 25
     steps taken on a grid built for 10 is not a 25-step rollout.
+
+    **It invokes the COMPILED KERNEL and never binds a velocity itself** (F3c). Passing a pre-bound
+    ``velocity_fn`` was the spelling that captured the backbone; passing a factory still left the
+    binding to happen eagerly outside the compiled region. Both are gone: the weights are an argument
+    of :func:`build_rollout_kernel`'s jitted function, and this function only supplies them.
     """
     sigmas = jnp.asarray(sigmas)
     timesteps = jnp.asarray(timesteps)
     grid_sha256 = assert_deployed_grid(sigmas, timesteps)
-    z_pred = cfg_rollout(
+    z_pred = kernel(
+        params,
+        frozen_state,
         initial_latents(key, z_video, z_i0),
-        velocity_fn=velocity_fn,
-        sigmas=sigmas,
-        timesteps=timesteps,
-        context=context,
-        z_i0=z_i0,
-        start=0,
-        num_steps=DEPLOYED_SAMPLING_STEPS,
+        z_i0,
+        context,
+        actions,
+        sigmas,
+        timesteps,
+        adapter_enabled=adapter_enabled,
     )
     return RolloutExecution(
         z_pred=z_pred,
@@ -1293,8 +1381,11 @@ def load_certificate(path: str, *, protocol: str) -> dict:
 class DeviceBackend:
     """Real weights and a real VAE, composed. **No identity passes through it.**
 
-    ``velocity_for(params, actions, adapter_enabled)`` returns the ``velocity_fn`` T3a's rollout
-    consumes; ``decode_fn`` is deployment's
+    ``kernel`` is the COMPILED rollout from :func:`build_rollout_kernel`, taking ``params`` and
+    ``frozen_state`` as explicit JIT arguments (F3c). The backend deliberately exposes **no
+    bound-velocity seam**: handing out a callable with the weights already bound is precisely the
+    spelling that let ``jax.jit(lambda z: cfg_rollout(z, velocity_fn=bound, ...))`` bake the whole
+    backbone, so there is nothing to bind and nothing to wrap. ``decode_fn`` is deployment's
     ``pipeline._decode_latents_to_video(pipeline._denormalize_latents(x))``. Everything else about a
     measurement — which example, whose actions, which noise key, which checkpoint, which horizon —
     is derived by the caller from the cohort, the derangement artifact and the restore, so a backend
@@ -1305,7 +1396,7 @@ class DeviceBackend:
     def __init__(
         self,
         *,
-        velocity_for,
+        kernel,
         decode_fn,
         sigmas,
         timesteps,
@@ -1315,8 +1406,9 @@ class DeviceBackend:
         params=None,
         scope=None,
         eval_dtype=None,
+        frozen_state=None,
     ):
-        self.velocity_for = velocity_for
+        self.kernel = kernel
         self.decode_fn = decode_fn
         self.sigmas = sigmas
         self.timesteps = timesteps
@@ -1324,6 +1416,10 @@ class DeviceBackend:
         self.guide_scale = float(guide_scale)
         self.template = template
         self.params = params
+        #: The frozen backbone's WEIGHTS, held as data and handed to the rollout as an argument
+        #: (F3b/F3c). Held here as data and handed to the compiled kernel as an argument, so that
+        #: the compiled region receives them instead of embedding them.
+        self.frozen_state = frozen_state
         #: **Deployment's input boundary** (re-review EV-1). ``_rollout_sample`` casts ``z_i0``,
         #: ``z_video``, ``actions`` and the null context to ``weights_dtype`` -- bfloat16 in the
         #: pinned config -- BEFORE it draws the noise, and the noise is drawn in ``z_video.dtype``.
@@ -1341,7 +1437,7 @@ class DeviceBackend:
         """The same device, with the restored adapter parameters bound. Immutable, so a phase cannot
         score half its cohort with one checkpoint and half with another."""
         return DeviceBackend(
-            velocity_for=self.velocity_for,
+            kernel=self.kernel,
             decode_fn=self.decode_fn,
             sigmas=self.sigmas,
             timesteps=self.timesteps,
@@ -1351,6 +1447,7 @@ class DeviceBackend:
             params=params,
             scope=self.scope,
             eval_dtype=self.eval_dtype,
+            frozen_state=self.frozen_state,
         )
 
     def score(self, *, z_i0, z_video, actions, key, adapter_enabled: bool = True):
@@ -1367,9 +1464,14 @@ class DeviceBackend:
         with contextlib.ExitStack() as stack:
             for manager in () if self.scope is None else self.scope():
                 stack.enter_context(manager)
-            velocity_fn = self.velocity_for(self.params, cast_actions, adapter_enabled)
+            # THE COMPILED KERNEL, invoked with the weights as an argument (F3c). Nothing is bound
+            # here, so there is no closure for a later `jax.jit` to bake the backbone into.
             execution = rollout_prediction(
-                velocity_fn=velocity_fn,
+                kernel=self.kernel,
+                params=self.params,
+                frozen_state=self.frozen_state,
+                actions=cast_actions,
+                adapter_enabled=adapter_enabled,
                 sigmas=self.sigmas,
                 timesteps=self.timesteps,
                 context=cast_context,
@@ -1392,7 +1494,6 @@ def load_device_backend(config):  # pragma: no cover -- real Wan weights, a real
     IMPLEMENTED rather than stubbed — the failure an operator sees here is a missing model or a
     missing device, not missing code.
     """
-    from flax import nnx
     from flax.linen import partitioning as nn_partitioning
 
     from maxdiffusion.models.wan.side_adapter_wan import _dtype
@@ -1408,23 +1509,31 @@ def load_device_backend(config):  # pragma: no cover -- real Wan weights, a real
     null_context = trainer._compute_null_context(pipeline, mesh)
     adapters = trainer._build_adapters(pipeline.transformer)
     with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-        make_velocity_fn, adapter_params = build_cfg_velocity_fn(pipeline.transformer, adapters)
-        frozen = nnx.split(pipeline.transformer, nnx.Param, ...)
+        # F3: ONE split, the builder's own -- the second `nnx.split` that used to live here was a
+        # second construction of the same thing, and the null branch below now merges the same pair.
+        make_velocity_fn, adapter_params, frozen = build_cfg_velocity_fn(pipeline.transformer, adapters)
 
-    def velocity_for(params, actions, adapter_enabled):
-        if adapter_enabled:
-            return make_velocity_fn(params, actions=actions, guide_scale=float(config.side_adapter_guide_scale))
-        model = nnx.merge(*frozen)
+    # THE WEIGHTS ARE A PARAMETER, AND THE GRAPHDEF IS EXTRACTED FIRST (F3c).
+    #
+    # Two separate leaks lived in this function, each one level below the last fix. F3 closed over
+    # `frozen.state` outright. F3b passed the state but still referenced `frozen` for its graphdef --
+    # and because `FrozenBackbone` is now a registered pytree, that reference made the whole object,
+    # STATE INCLUDED, reachable from this closure: the reviewer's probe found all 4 MiB of a dummy
+    # backbone still reachable here. It never became a JAX literal (only `graphdef` is read), but
+    # "no closure holds the backbone" was false, and the next refactor that touched a state leaf
+    # would have made it a literal again.
+    #
+    # So the graphdef is pulled out into its own local BEFORE the builder is defined, and the builder
+    # closes over that local and nothing else. `frozen` itself does not appear below this line.
+    frozen_graphdef = frozen.graphdef
+    frozen_state = frozen.state
+    del frozen
 
-        def velocity_fn(hidden_states, timestep, encoder_hidden_states):
-            return model(
-                hidden_states=hidden_states,
-                timestep=timestep,
-                encoder_hidden_states=encoder_hidden_states,
-                deterministic=True,
-            )
-
-        return velocity_fn
+    _velocity_builder = build_velocity_builder(
+        make_velocity_fn=make_velocity_fn,
+        frozen_graphdef=frozen_graphdef,
+        guide_scale=float(config.side_adapter_guide_scale),
+    )
 
     # THE SCHEDULER IS THE AUTHORITY ON THE SCHEDULE, and deployment reads it there
     # (`generate_wan_side_adapter.py:121-127`). The previous version read
@@ -1447,13 +1556,15 @@ def load_device_backend(config):  # pragma: no cover -- real Wan weights, a real
     from maxdiffusion.pos_rollout_loop import RolloutTrainState
 
     return DeviceBackend(
-        velocity_for=velocity_for,
         decode_fn=lambda x: pipeline._decode_latents_to_video(pipeline._denormalize_latents(x)),
         sigmas=sigmas,
         timesteps=timesteps,
         context=null_context,
         guide_scale=float(config.side_adapter_guide_scale),
+        kernel=build_rollout_kernel(_velocity_builder),
         template=RolloutTrainState(params=adapter_params, opt_state=None, step=0),
+        # The backbone travels as DATA on the backend, applied inside the compiled region (F3b).
+        frozen_state=frozen_state,
         # The Wan blocks constrain their activations' sharding, so the mesh must be in context for
         # every forward -- the deployed evaluator wraps its rollout in exactly this pair.
         scope=lambda: (mesh, nn_partitioning.axis_rules(config.logical_axis_rules)),

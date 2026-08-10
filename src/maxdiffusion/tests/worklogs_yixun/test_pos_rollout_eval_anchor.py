@@ -300,9 +300,21 @@ def test_the_prediction_is_T3as_rollout_and_this_module_cannot_re_implement_one(
         for alias in node.names
     }
     assert "cfg_rollout" in imported, "the scoring rollout must be T3a's"
+    # F3c moved the rollout one function outward: `rollout_prediction` now invokes the COMPILED
+    # kernel, and `build_rollout_kernel` is what calls `cfg_rollout` -- because the weights had to
+    # become explicit JIT arguments of a real kernel rather than being bound outside it. The property
+    # this test defends is unchanged (this module uses T3a's rollout and may not grow its own), so it
+    # is checked where the rollout now lives, and `rollout_prediction` is pinned to reach it.
+    kernel_builder = _function_node(source, "build_rollout_kernel")
+    kernel_calls = {
+        node.func.id for node in ast.walk(kernel_builder) if isinstance(node, ast.Call) and hasattr(node.func, "id")
+    }
+    assert "cfg_rollout" in kernel_calls, "the compiled kernel must roll out with T3a's cfg_rollout"
     predict = _function_node(source, "rollout_prediction")
-    calls = {node.func.id for node in ast.walk(predict) if isinstance(node, ast.Call) and hasattr(node.func, "id")}
-    assert "cfg_rollout" in calls
+    predict_calls = {
+        node.func.id for node in ast.walk(predict) if isinstance(node, ast.Call) and hasattr(node.func, "id")
+    }
+    assert "kernel" in predict_calls, "rollout_prediction must invoke the compiled kernel, not bind its own velocity"
     # No second loop can exist in this module: a private rollout is exactly the drift §5-5 forbids.
     for forbidden in ("fori_loop", "while_loop", "lax.scan", "overfit100_sampler_step", "overfit100_euler_update"):
         assert forbidden not in source, forbidden
@@ -1119,6 +1131,23 @@ def test_the_grid_is_bound_to_the_DEPLOYED_VALUES_not_merely_to_its_length():
     zeros = jnp.zeros((anchor.DEPLOYED_SAMPLING_STEPS,), jnp.float32)
     z_i0 = jnp.zeros((1, 4, 1, 2, 2), jnp.float32)
     z_video = jnp.zeros((1, 4, 2, 2, 2), jnp.float32)
+
+    def kernel(params, frozen_state, z_init, z_i0, context, actions, sigmas, timesteps, *, adapter_enabled):
+        """The F3c kernel shape around the same constant velocity this test always used. It is never
+        reached: the grid is checked before the kernel is invoked, which is exactly the claim."""
+        from maxdiffusion.pos_rollout_step import cfg_rollout
+
+        return cfg_rollout(
+            z_init,
+            velocity_fn=lambda *a, **k: z_video,
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            z_i0=z_i0,
+            start=0,
+            num_steps=anchor.DEPLOYED_SAMPLING_STEPS,
+        )
+
     for bad_sigmas, bad_timesteps, message in (
         (ones, zeros, "terminal|deployed grid"),
         (sigmas, zeros, "timestep"),
@@ -1126,7 +1155,11 @@ def test_the_grid_is_bound_to_the_DEPLOYED_VALUES_not_merely_to_its_length():
     ):
         with pytest.raises(ValueError, match=message):
             anchor.rollout_prediction(
-                velocity_fn=lambda *a, **k: z_video,
+                kernel=kernel,
+                params=None,
+                frozen_state=None,
+                actions=jnp.zeros((1, 4, 7), jnp.float32),
+                adapter_enabled=True,
                 sigmas=bad_sigmas,
                 timesteps=bad_timesteps,
                 context=jnp.zeros((1, 7, 8), jnp.float32),

@@ -1341,6 +1341,7 @@ def build_probe_program(config, cell: FitCell, *, model_source=None):
         eval_draws=one_draws,
         scope=program.scope,
         context=program.context,
+        frozen=program.frozen,
     )
 
 
@@ -1376,6 +1377,12 @@ class ProbeProgram:
     #: The ``ArmContext`` the step was compiled against — the shared one, exposed so an oracle can
     #: compare it with the trainer's rather than dig it out of a closure (W3).
     context: Any = None
+    #: The frozen backbone this program's step is compiled against, from the shared program (F3).
+    #: Exposed for exactly the reason ``context`` is: since F3 the 5B is an ARGUMENT of the update
+    #: rather than a constant inside it, so it now decides what is compiled — and an oracle comparing
+    #: M1's program with the trainer's must be able to read it on BOTH sides rather than borrow one
+    #: side's and assume the other matches.
+    frozen: Any = None
 
 
 class ProductionModelSource:
@@ -1467,6 +1474,15 @@ def _measure_under_mesh(*, cell, context, config, telemetry, source, started) ->
 
     import jax
 
+    # ANNOUNCE THE CELL BEFORE COMPILING IT, not after measuring it (F3).
+    # Every other `[M1]` line in this file reports a FINISHED cell, so a probe that hangs inside its
+    # first XLA compile prints nothing at all. That is precisely what happened: three M1 attempts on
+    # v6e-8 each ran ~2h and died on `TPU_VM_HEALTH_TIMEOUT` with no `[M1]` line ever emitted, and
+    # the logs could not say whether the job was compiling, loading, or wedged. Unbuffered stdout was
+    # not the missing piece -- `PYTHONUNBUFFERED=1` was already exported by the launcher -- there was
+    # simply no statement to flush. One line before the long-running call is what makes the next
+    # failure diagnosable from the log alone.
+    print(f"[M1] entering {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: building and compiling", flush=True)
     program = build_probe_program(config, cell, model_source=source)
     # THE DEPLOYED SCOPE — mesh AND logical axis rules — around everything that is measured (W3).
     # Compilation, the timed steps, the scoring pass and the checkpoint all happen inside it, because
@@ -1532,9 +1548,18 @@ def _program_bytes(program: "ProbeProgram", params, opt_state) -> int | None:
     """The compiled update's OWN footprint — arguments + temporaries + output, per executable.
 
     ``Compiled.memory_analysis()`` is a supported XLA facility and it is cell-local by construction:
-    it describes this program, not this process's history. It is a floor rather than the whole story
-    (weights closed over as constants are not arguments), which is why the caller takes the maximum
-    of it and the attributable runtime high-water mark.
+    it describes this program, not this process's history. The caller still takes the maximum of it
+    and the attributable runtime high-water mark, because a static account is not a run.
+
+    **F3 made this number strictly better, and the caveat that used to stand here is now obsolete.**
+    It read "weights closed over as constants are not arguments" — true when written, and a symptom
+    of the defect that killed M1: the frozen 5B was a captured CONSTANT, so ``argument_size_in_bytes``
+    could not see the ten gigabytes the program really carried, and no oracle in this file could have
+    reported them. The backbone is now an explicit argument of the compiled update, so those bytes
+    are counted where they belong. Nothing is double-counted (the caller MAXes rather than sums), and
+    an authorization measured before F3 is not comparable with one measured after — already enforced,
+    because every authorization carries the ``code_sha`` it was measured on and the launcher refuses
+    a training job whose SHA differs.
     """
     try:
         compiled = program.step.lower(params, opt_state, program.batch, program.draws).compile()

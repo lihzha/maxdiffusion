@@ -239,7 +239,7 @@ def test_the_one_step_arm_equals_the_settled_denoising_objective_in_value_and_gr
     graphdef, _, rest = nnx.split(adapters, nnx.Param, ...)
     rules, mesh = _mesh_context()
     with rules, mesh:
-        loss_fn, params = arms.build_arm("one_step", transformer, adapters)
+        loss_fn, params, frozen = arms.build_arm("one_step", transformer, adapters)
         for t_idx in (jnp.zeros((_B,), jnp.int32), jnp.asarray([3, 17], jnp.int32)):
             dropout = jax.random.key(5)
 
@@ -248,6 +248,7 @@ def test_the_one_step_arm_equals_the_settled_denoising_objective_in_value_and_gr
                     p,
                     _batch(data),
                     context,
+                    frozen_state=frozen.state,
                     draws=dataclasses.replace(data["draws"], t_idx=t),
                     seed=0,
                     global_step=7,
@@ -310,11 +311,13 @@ def test_production_dropout_is_zero_and_the_dropout_key_is_therefore_inert():
     context = _context(sigmas, timesteps, data["null_context"])
     rules, mesh = _mesh_context()
     with rules, mesh:
-        loss_fn, params = arms.build_arm("one_step", transformer, adapters)
+        loss_fn, params, frozen = arms.build_arm("one_step", transformer, adapters)
 
         def with_key(key):
             def value(p):
-                return loss_fn(p, _batch(data), context, draws=data["draws"], dropout_rng=key)[0]
+                return loss_fn(
+                    p, _batch(data), context, frozen_state=frozen.state, draws=data["draws"], dropout_rng=key
+                )[0]
 
             return float(value(params)), jax.grad(value)(params)
 
@@ -371,7 +374,7 @@ def test_the_one_step_stop_gradients_are_inert_which_is_why_they_are_correct_her
     context = _context(sigmas, timesteps, data["null_context"])
     rules, mesh = _mesh_context()
     with rules, mesh:
-        make_velocity_fn, params = arms.build_one_step_velocity_fn(transformer, adapters)
+        make_velocity_fn, params, frozen = arms.build_one_step_velocity_fn(transformer, adapters)
         graphdef, _, rest = nnx.split(adapters, nnx.Param, ...)
 
         def without_stop_grads(p):
@@ -398,12 +401,23 @@ def test_the_one_step_stop_gradients_are_inert_which_is_why_they_are_correct_her
                 return v_uncond + _GUIDE * (v_cond - v_uncond)
 
             return arms.one_step_denoising_loss(
-                p, lambda *a, **k: velocity_fn, _batch(data), context, draws=data["draws"]
+                p,
+                lambda *a, **k: velocity_fn,
+                _batch(data),
+                context,
+                frozen_state=frozen.state,
+                draws=data["draws"],
             )[0]
 
         def with_stop_grads(p):
             return arms.one_step_denoising_loss(
-                p, make_velocity_fn, _batch(data), context, draws=data["draws"], dropout_rng=jax.random.key(5)
+                p,
+                make_velocity_fn,
+                _batch(data),
+                context,
+                frozen_state=frozen.state,
+                draws=data["draws"],
+                dropout_rng=jax.random.key(5),
             )[0]
 
         kept, dropped = jax.grad(with_stop_grads)(params), jax.grad(without_stop_grads)(params)
@@ -431,11 +445,13 @@ def test_the_rollout_arm_is_exactly_t2s_kernel_over_t3as_velocity():
     context = _context(sigmas, timesteps, data["null_context"])
     rules, mesh = _mesh_context()
     with rules, mesh:
-        loss_fn, params = arms.build_arm("rollout", transformer, adapters)
-        make_velocity_fn, reference_params = build_cfg_velocity_fn(transformer, adapters)
+        loss_fn, params, frozen = arms.build_arm("rollout", transformer, adapters)
+        make_velocity_fn, reference_params, reference_frozen = build_cfg_velocity_fn(transformer, adapters)
 
         def mine(p):
-            return loss_fn(p, _batch(data), context, draws=data["draws"], seed=0, global_step=7)[0]
+            return loss_fn(
+                p, _batch(data), context, frozen_state=frozen.state, draws=data["draws"], seed=0, global_step=7
+            )[0]
 
         def reference(p):
             value, _ = rollout_endpoint_loss(
@@ -445,7 +461,12 @@ def test_the_rollout_arm_is_exactly_t2s_kernel_over_t3as_velocity():
                 sigmas=sigmas,
                 timesteps=timesteps,
                 context=jnp.broadcast_to(data["null_context"], (_B, *data["null_context"].shape[1:])),
-                velocity_fn=make_velocity_fn(p, actions=data["actions"].astype(jnp.float32), guide_scale=_GUIDE),
+                velocity_fn=make_velocity_fn(
+                    p,
+                    frozen_state=reference_frozen.state,
+                    actions=data["actions"].astype(jnp.float32),
+                    guide_scale=_GUIDE,
+                ),
                 weights_dtype=jnp.float32,
                 num_train_timesteps=_NUM_TRAIN_TIMESTEPS,
                 support_start=data["draws"].support_start,
@@ -497,8 +518,8 @@ def test_both_arms_expose_the_identical_parameter_tree():
     transformer, adapters = _tiny_cfg_stack()
     rules, mesh = _mesh_context()
     with rules, mesh:
-        _, rollout_params = arms.build_arm("rollout", transformer, adapters)
-        _, one_step_params = arms.build_arm("one_step", transformer, adapters)
+        _, rollout_params, _ = arms.build_arm("rollout", transformer, adapters)
+        _, one_step_params, _ = arms.build_arm("one_step", transformer, adapters)
     assert jax.tree.structure(rollout_params) == jax.tree.structure(one_step_params)
     for left, right in zip(jax.tree.leaves(rollout_params), jax.tree.leaves(one_step_params)):
         assert np.array_equal(np.asarray(left), np.asarray(right)), "the arms start from different weights"
@@ -521,12 +542,13 @@ def test_switching_arms_changes_the_loss_and_nothing_else():
     values = {}
     with rules, mesh:
         for arm in arms.ARMS:
-            loss_fn, params = arms.build_arm(arm, transformer, adapters)
+            loss_fn, params, frozen = arms.build_arm(arm, transformer, adapters)
             batch = _RecordingBatch(_batch(data))
             value, _ = loss_fn(
                 params,
                 batch,
                 context,
+                frozen_state=frozen.state,
                 draws=data["draws"],
                 seed=0,
                 global_step=7,
@@ -582,12 +604,13 @@ def test_the_one_step_arm_refuses_to_invent_its_sigma_index():
     data, sigmas, timesteps = _fixture()
     rules, mesh = _mesh_context()
     with rules, mesh:
-        loss_fn, params = arms.build_arm("one_step", transformer, adapters)
+        loss_fn, params, frozen = arms.build_arm("one_step", transformer, adapters)
         with pytest.raises(ValueError, match="t_idx"):
             loss_fn(
                 params,
                 _batch(data),
                 _context(sigmas, timesteps, data["null_context"]),
+                frozen_state=frozen.state,
                 draws=dataclasses.replace(data["draws"], t_idx=None),
                 seed=0,
                 global_step=7,
@@ -616,12 +639,19 @@ def test_the_accumulated_update_equals_the_full_batch_update(arm):
     context = _context(sigmas, timesteps, data["null_context"])
     rules, mesh = _mesh_context()
     with rules, mesh:
-        loss_fn, params = arms.build_arm(arm, transformer, adapters)
+        loss_fn, params, frozen = arms.build_arm(arm, transformer, adapters)
 
         def gradient_of(batch, part_draws):
             def value(p):
                 return loss_fn(
-                    p, batch, context, draws=part_draws, seed=0, global_step=7, dropout_rng=jax.random.key(5)
+                    p,
+                    batch,
+                    context,
+                    frozen_state=frozen.state,
+                    draws=part_draws,
+                    seed=0,
+                    global_step=7,
+                    dropout_rng=jax.random.key(5),
                 )[0]
 
             return jax.grad(value)(params)

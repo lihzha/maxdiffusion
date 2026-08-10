@@ -68,6 +68,13 @@ elif [ -f "maxdiffusion_venv/bin/activate" ]; then
   source maxdiffusion_venv/bin/activate
 fi
 
+# Unbuffered stdout, so per-cell progress reaches the teed log as it happens rather than at exit.
+# F3 note: this was ALREADY here during the three blind M1 attempts, so buffering was not why those
+# logs were empty -- the probe had no statement to print until a cell FINISHED, and no cell ever did
+# (it was stuck compiling a module carrying 10.18 GB of captured constants). The fix for the silence
+# is `[M1] entering ...` in pos_rollout_fit_probe._measure_under_mesh, not a flag here. Adding `-u`
+# to the interpreter would be redundant with this and would shift argv, which three launcher contract
+# tests read.
 export PYTHONUNBUFFERED=1
 export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu,cpu}"
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"

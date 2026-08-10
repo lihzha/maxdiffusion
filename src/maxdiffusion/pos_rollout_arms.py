@@ -117,22 +117,31 @@ class ArmContext:
 
 
 def build_one_step_velocity_fn(transformer, adapters):
-    """``(make_velocity_fn, adapter_params)`` for the DEPLOYED one-step CFG forward.
+    """``(make_velocity_fn, adapter_params, frozen)`` for the DEPLOYED one-step CFG forward.
 
-    Same closure seam as T3a (the frozen backbone is captured, never an argument, so it cannot
-    receive a gradient), but the CFG branch is the one-step trainer's, stop-grads included. Those
-    stop-grads are CORRECT here — a one-step objective's noisy latent is parameter-independent, so
-    cutting the gradient through the unconditional branch costs nothing and matches ``../Wan2.2`` —
-    and they are exactly what T3a's rollout forward must not copy. Keeping the two forwards in
-    separate builders is how the experiment holds both truths at once.
+    Same freeze seam as T3a — the frozen backbone is keyword-only and therefore undifferentiable,
+    and only its array-free graph definition is captured (F3; see
+    :class:`~maxdiffusion.pos_rollout_step.FrozenBackbone`) — but the CFG branch is the one-step
+    trainer's, stop-grads included. Those stop-grads are CORRECT here — a one-step objective's noisy
+    latent is parameter-independent, so cutting the gradient through the unconditional branch costs
+    nothing and matches ``../Wan2.2`` — and they are exactly what T3a's rollout forward must not
+    copy. Keeping the two forwards in separate builders is how the experiment holds both truths at
+    once.
     """
     from flax import nnx
 
-    adapter_graphdef, adapter_params, adapter_rest = nnx.split(adapters, nnx.Param, ...)
-    frozen = nnx.split(transformer, nnx.Param, ...)
+    from maxdiffusion.pos_rollout_step import split_frozen_backbone
 
-    def make_velocity_fn(params, *, actions, guide_scale, deterministic: bool = False, dropout_rng=None):
-        model = nnx.merge(*frozen)
+    adapter_graphdef, adapter_params, adapter_rest = nnx.split(adapters, nnx.Param, ...)
+    frozen = split_frozen_backbone(transformer)
+    frozen_graphdef = frozen.graphdef
+
+    def make_velocity_fn(params, *, frozen_state, actions, guide_scale, deterministic: bool = False, dropout_rng=None):
+        # Same enforcement as the rollout builder, same reason (F3b, review MAJOR-1): keyword-only
+        # placement is syntax; `stop_gradient` is autodiff. Identity in the forward pass, so
+        # matched-C0's bitwise equality with the settled `_denoising_loss` is unaffected.
+        frozen_state = jax.tree.map(jax.lax.stop_gradient, frozen_state)
+        model = nnx.merge(frozen_graphdef, frozen_state)
         adapter = nnx.merge(adapter_graphdef, params, adapter_rest)
         guided = abs(float(guide_scale) - 1.0) > CFG_IDENTITY_TOLERANCE
         rngs = None if dropout_rng is None else nnx.Rngs(dropout=dropout_rng)
@@ -161,7 +170,7 @@ def build_one_step_velocity_fn(transformer, adapters):
 
         return velocity_fn
 
-    return make_velocity_fn, adapter_params
+    return make_velocity_fn, adapter_params, frozen
 
 
 def one_step_denoising_loss(
@@ -170,6 +179,7 @@ def one_step_denoising_loss(
     batch: Mapping[str, jax.Array],
     context: ArmContext,
     *,
+    frozen_state,
     draws: StepDraws,
     dropout_rng=None,
 ) -> tuple[jax.Array, dict]:
@@ -197,7 +207,12 @@ def one_step_denoising_loss(
     z_t = z_t_f32.astype(context.weights_dtype)
 
     velocity_fn = make_velocity_fn(
-        params, actions=actions, guide_scale=context.guide_scale, deterministic=False, dropout_rng=dropout_rng
+        params,
+        frozen_state=frozen_state,
+        actions=actions,
+        guide_scale=context.guide_scale,
+        deterministic=False,
+        dropout_rng=dropout_rng,
     )
     v_pred = velocity_fn(z_t, timestep_2d, null_context)
 
@@ -222,6 +237,7 @@ def rollout_arm_loss(
     batch: Mapping[str, jax.Array],
     context: ArmContext,
     *,
+    frozen_state,
     draws: StepDraws,
 ) -> tuple[jax.Array, dict]:
     """R-B — T2's endpoint kernel over T3a's CFG velocity. Composition only; nothing re-derived.
@@ -243,7 +259,10 @@ def rollout_arm_loss(
         # per-batch null context would make accumulation change the objective.
         context=context.broadcast_null_context(z_video_f32.shape[0]),
         velocity_fn=make_velocity_fn(
-            params, actions=batch["actions"].astype(context.weights_dtype), guide_scale=context.guide_scale
+            params,
+            frozen_state=frozen_state,
+            actions=batch["actions"].astype(context.weights_dtype),
+            guide_scale=context.guide_scale,
         ),
         weights_dtype=context.weights_dtype,
         num_train_timesteps=context.num_train_timesteps,
@@ -285,11 +304,17 @@ def assert_dropout_is_zero(*modules, dropout_rate=None) -> None:
 
 
 def build_arm(arm: str, transformer, adapters, *, dropout_rate=PRODUCTION_DROPOUT_RATE):
-    """``(loss_fn, adapter_params)`` for one arm — and the parameter tree is arm-independent.
+    """``(loss_fn, adapter_params, frozen)`` for one arm — and the parameter tree is arm-independent.
 
     Both arms split THE SAME adapter module, so the trainable tree, its structure and its initial
     values are identical by construction rather than by matching two configurations. The only thing
     that differs downstream of this call is which loss runs.
+
+    ``frozen`` is the third return value for the same reason the adapter parameters are the second:
+    it is DATA the caller must thread, not something this module may keep. Both arms' ``loss_fn``
+    take ``frozen_state`` keyword-only, so both are undifferentiable in the backbone and neither can
+    be jitted into a module carrying the weights as literals (F3;
+    :class:`~maxdiffusion.pos_rollout_step.FrozenBackbone`).
     """
     if arm not in ARMS:
         raise ValueError(f"unknown arm {arm!r}; declared arms are {list(ARMS)}")
@@ -297,23 +322,33 @@ def build_arm(arm: str, transformer, adapters, *, dropout_rate=PRODUCTION_DROPOU
     assert_dropout_is_zero(transformer, adapters, dropout_rate=dropout_rate)
 
     if arm == "rollout":
-        make_velocity_fn, adapter_params = build_cfg_velocity_fn(transformer, adapters)
+        make_velocity_fn, adapter_params, frozen = build_cfg_velocity_fn(transformer, adapters)
 
-        def loss_fn(params, batch, context, *, draws, seed=None, global_step=None, dropout_rng=None, **extra):
+        def loss_fn(
+            params, batch, context, *, frozen_state, draws, seed=None, global_step=None, dropout_rng=None, **extra
+        ):
             # seed/global_step are accepted so both arms share one call signature, and DELETED here:
             # every random quantity R-B uses is already in `draws`.
             del seed, global_step, dropout_rng, extra
-            return rollout_arm_loss(params, make_velocity_fn, batch, context, draws=draws)
+            return rollout_arm_loss(params, make_velocity_fn, batch, context, frozen_state=frozen_state, draws=draws)
 
     else:
-        make_velocity_fn, adapter_params = build_one_step_velocity_fn(transformer, adapters)
+        make_velocity_fn, adapter_params, frozen = build_one_step_velocity_fn(transformer, adapters)
 
-        def loss_fn(params, batch, context, *, draws, seed=None, global_step=None, dropout_rng=None, **extra):
+        def loss_fn(
+            params, batch, context, *, frozen_state, draws, seed=None, global_step=None, dropout_rng=None, **extra
+        ):
             del seed, global_step, extra
             if draws.t_idx is None:
                 raise ValueError("the one_step arm needs its sigma index t_idx from the stream layer")
             return one_step_denoising_loss(
-                params, make_velocity_fn, batch, context, draws=draws, dropout_rng=dropout_rng
+                params,
+                make_velocity_fn,
+                batch,
+                context,
+                frozen_state=frozen_state,
+                draws=draws,
+                dropout_rng=dropout_rng,
             )
 
-    return loss_fn, adapter_params
+    return loss_fn, adapter_params, frozen

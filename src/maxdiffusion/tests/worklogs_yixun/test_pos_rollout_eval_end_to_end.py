@@ -149,19 +149,46 @@ def _tiny_cfg_stack_bf16():
     return transformer, adapters
 
 
+def _kernel_from(velocity_for):
+    """The F3c kernel shape wrapped around a stub's ``velocity_for``, with the velocity untouched.
+
+    ``DeviceBackend`` and ``rollout_prediction`` take the COMPILED rollout now rather than a velocity
+    or a velocity factory, so a stub that used to hand over a velocity hands over this instead: the
+    same velocity function, built the same way, driving the same ``cfg_rollout`` at the same deployed
+    horizon. Deliberately NOT jitted — these stubs record dtypes and count decodes eagerly, and
+    staging them would change what they observe (and what the bitwise reference computes).
+    """
+    from maxdiffusion.pos_rollout_step import cfg_rollout
+
+    def kernel(params, frozen_state, z_init, z_i0, context, actions, sigmas, timesteps, *, adapter_enabled):
+        return cfg_rollout(
+            z_init,
+            velocity_fn=velocity_for(params, frozen_state, actions, adapter_enabled),
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            z_i0=z_i0,
+            start=0,
+            num_steps=anchor.DEPLOYED_SAMPLING_STEPS,
+        )
+
+    return kernel
+
+
 def _backend(*, params=None, eval_dtype=None):
     """The REAL ``DeviceBackend`` over the real tiny transformer + adapter stack."""
     transformer, adapters = _tiny_cfg_stack_bf16() if eval_dtype == jnp.bfloat16 else _tiny_cfg_stack()
     rules, mesh = _mesh_context()
     with rules, mesh:
-        make_velocity_fn, adapter_params = build_cfg_velocity_fn(transformer, adapters)
+        make_velocity_fn, adapter_params, frozen_backbone = build_cfg_velocity_fn(transformer, adapters)
     from flax import nnx
 
     frozen = nnx.split(transformer, nnx.Param, ...)
 
-    def velocity_for(bound, actions, adapter_enabled):
+    def velocity_for(bound, frozen_state, actions, adapter_enabled):
+        del frozen_state
         if adapter_enabled:
-            return make_velocity_fn(bound, actions=actions, guide_scale=_GUIDE)
+            return make_velocity_fn(bound, frozen_state=frozen_backbone.state, actions=actions, guide_scale=_GUIDE)
         model = nnx.merge(*frozen)
 
         def velocity_fn(hidden_states, timestep, encoder_hidden_states):
@@ -179,7 +206,7 @@ def _backend(*, params=None, eval_dtype=None):
     )
     template = loop.RolloutTrainState(params=adapter_params, opt_state={"mu": jnp.zeros((2,), jnp.float32)}, step=0)
     return anchor.DeviceBackend(
-        velocity_for=velocity_for,
+        kernel=_kernel_from(velocity_for),
         decode_fn=_decode,
         sigmas=sigmas,
         timesteps=timesteps,
@@ -189,6 +216,7 @@ def _backend(*, params=None, eval_dtype=None):
         params=params if params is not None else adapter_params,
         scope=_mesh_context,
         eval_dtype=eval_dtype,
+        frozen_state=frozen_backbone.state,
     )
 
 
@@ -351,7 +379,11 @@ def test_the_rollout_the_anchor_phase_runs_is_the_deployed_grid_and_the_seam_is_
     )
     with pytest.raises(ValueError, match="sigmas"):
         anchor.rollout_prediction(
-            velocity_fn=lambda *a, **k: z_video,
+            kernel=_kernel_from(lambda p, s, a, e: (lambda *args, **kwargs: z_video)),
+            params=None,
+            frozen_state=None,
+            actions=jnp.zeros((1, _ACTION_LEN, _ACTION_DIM), jnp.float32),
+            adapter_enabled=True,
             sigmas=short,
             timesteps=short_t,
             context=backend.context,
@@ -583,7 +615,7 @@ class _RecordingBackend(anchor.DeviceBackend):
         # the tap must not be the thing under test (F3a battery, F06).
         base = super().bound(params)
         clone = _RecordingBackend(
-            velocity_for=base.velocity_for,
+            kernel=base.kernel,
             decode_fn=base.decode_fn,
             sigmas=base.sigmas,
             timesteps=base.timesteps,
@@ -593,6 +625,7 @@ class _RecordingBackend(anchor.DeviceBackend):
             params=base.params,
             scope=base.scope,
             eval_dtype=base.eval_dtype,
+            frozen_state=base.frozen_state,
         )
         clone.executions = self.executions
         return clone
@@ -610,7 +643,6 @@ def _deployed_reference(backend, sample, key, dtype):
     draw in `z_video.dtype`, the frame-0 pin — with T3a's rollout advancing it.
     """
     from maxdiffusion.models.wan.side_adapter_wan import apply_first_frame_pin
-    from maxdiffusion.pos_rollout_step import cfg_rollout
 
     z_i0 = jnp.asarray(sample["z_i0"])[None].astype(dtype)
     z_video = jnp.asarray(sample["z_video"])[None].astype(dtype)
@@ -620,16 +652,16 @@ def _deployed_reference(backend, sample, key, dtype):
     z = apply_first_frame_pin(z, z_i0)
     rules, mesh = _mesh_context()
     with rules, mesh:
-        velocity_fn = backend.velocity_for(backend.params, actions, True)
-        return cfg_rollout(
+        return backend.kernel(
+            backend.params,
+            backend.frozen_state,
             z,
-            velocity_fn=velocity_fn,
-            sigmas=backend.sigmas,
-            timesteps=backend.timesteps,
-            context=context,
-            z_i0=z_i0,
-            start=0,
-            num_steps=anchor.DEPLOYED_SAMPLING_STEPS,
+            z_i0,
+            context,
+            actions,
+            backend.sigmas,
+            backend.timesteps,
+            adapter_enabled=True,
         )
 
 
@@ -646,7 +678,7 @@ def test_the_anchor_PHASE_reproduces_deployments_bf16_boundary_BITWISE(tmp_path,
 
     plain = _backend(eval_dtype=jnp.bfloat16)
     backend = _RecordingBackend(
-        velocity_for=plain.velocity_for,
+        kernel=plain.kernel,
         decode_fn=plain.decode_fn,
         sigmas=plain.sigmas,
         timesteps=plain.timesteps,
@@ -656,6 +688,7 @@ def test_the_anchor_PHASE_reproduces_deployments_bf16_boundary_BITWISE(tmp_path,
         params=plain.params,
         scope=plain.scope,
         eval_dtype=jnp.bfloat16,
+        frozen_state=plain.frozen_state,
     )
     config = _config(tmp_path, checkpoint_dir=ckpt_dir, eval_data_dir=data_dir)
     anchor.run_evaluation(config, backend=backend)
@@ -679,9 +712,9 @@ def test_the_bf16_boundary_covers_actions_and_context_not_only_the_latents(tmp_p
     _requires_backend()
     seen = {}
 
-    def velocity_for(params, actions, adapter_enabled):
+    def velocity_for(params, frozen_state, actions, adapter_enabled):
         seen["actions"] = actions.dtype
-        del params, adapter_enabled
+        del params, frozen_state, adapter_enabled
 
         def velocity_fn(hidden_states, timestep, encoder_hidden_states):
             seen["context"] = encoder_hidden_states.dtype
@@ -693,7 +726,7 @@ def test_the_bf16_boundary_covers_actions_and_context_not_only_the_latents(tmp_p
 
     plain = _backend()
     backend = anchor.DeviceBackend(
-        velocity_for=velocity_for,
+        kernel=_kernel_from(velocity_for),
         decode_fn=_decode,
         sigmas=plain.sigmas,
         timesteps=plain.timesteps,
@@ -701,6 +734,7 @@ def test_the_bf16_boundary_covers_actions_and_context_not_only_the_latents(tmp_p
         guide_scale=_GUIDE,
         params={"w": jnp.zeros((1,), jnp.float32)},
         eval_dtype=jnp.bfloat16,
+        frozen_state=None,
     )
     backend.score(
         z_i0=jnp.zeros((1, _C, 1, _H, _W), jnp.float32),
@@ -733,8 +767,8 @@ def test_the_latent_MSE_uses_the_CAST_ground_truth_and_the_pixels_use_the_ORIGIN
 
     plain = _backend()
     backend = anchor.DeviceBackend(
-        velocity_for=lambda p, a, e: (
-            lambda hidden_states, timestep, encoder_hidden_states: jnp.zeros_like(hidden_states)
+        kernel=_kernel_from(
+            lambda p, s, a, e: (lambda hidden_states, timestep, encoder_hidden_states: jnp.zeros_like(hidden_states))
         ),
         decode_fn=decode_fn,
         sigmas=plain.sigmas,
@@ -743,6 +777,7 @@ def test_the_latent_MSE_uses_the_CAST_ground_truth_and_the_pixels_use_the_ORIGIN
         guide_scale=_GUIDE,
         params={"w": jnp.zeros((1,), jnp.float32)},
         eval_dtype=jnp.bfloat16,
+        frozen_state=None,
     )
     # A value bf16 cannot represent exactly, so "cast" and "original" are distinguishable.
     z_video = jnp.full((1, _C, _F, _H, _W), 0.1234567, jnp.float32)
@@ -774,8 +809,8 @@ def test_the_latent_MSE_itself_is_measured_against_the_CAST_ground_truth(tmp_pat
     _requires_backend()
     plain = _backend()
     backend = anchor.DeviceBackend(
-        velocity_for=lambda p, a, e: (
-            lambda hidden_states, timestep, encoder_hidden_states: jnp.zeros_like(hidden_states)
+        kernel=_kernel_from(
+            lambda p, s, a, e: (lambda hidden_states, timestep, encoder_hidden_states: jnp.zeros_like(hidden_states))
         ),
         decode_fn=_decode,
         sigmas=plain.sigmas,
@@ -784,6 +819,7 @@ def test_the_latent_MSE_itself_is_measured_against_the_CAST_ground_truth(tmp_pat
         guide_scale=_GUIDE,
         params={"w": jnp.zeros((1,), jnp.float32)},
         eval_dtype=jnp.bfloat16,
+        frozen_state=None,
     )
     z_i0 = jnp.zeros((1, _C, 1, _H, _W), jnp.float32)
     z_video = jnp.full((1, _C, _F, _H, _W), 0.1234567, jnp.float32)
@@ -946,3 +982,78 @@ def test_the_four_trainer_seams_the_loader_calls_exist_on_the_REAL_trainer():
     # ...and the deployed evaluator reaches its scheduler the same way, which is why this is the seam.
     deployed = (Path(anchor.__file__).parent / "generate_wan_side_adapter.py").read_text()
     assert "trainer._create_scheduler()" in deployed, "deployment reaches its scheduler through the same seam"
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+@pytest.mark.parametrize("adapter_enabled", [True, False])
+def test_the_PRODUCTION_JITTED_kernel_is_BITWISE_the_eager_rollout(batch, adapter_enabled):
+    """F3d, review MINOR-2: the new compiled boundary itself, compared bitwise to the eager one.
+
+    The existing bf16 anchor test is genuinely bitwise, but it runs through ``_kernel_from`` -- the
+    deliberately EAGER stub kernel -- so it pins the rollout's math and not the JIT boundary F3c
+    introduced. Adding ``jax.jit`` around the evaluator changes fusion, and a fused reduction that
+    reassociates would move the last bits of a score without failing anything we had. Nothing in the
+    suite compared the object ``DeviceBackend.score`` actually calls against the eager form.
+
+    So this builds BOTH from the same production factory -- ``build_velocity_builder`` +
+    ``build_rollout_kernel`` for the jitted one, the same velocity driven through ``cfg_rollout``
+    eagerly for the reference -- and requires ``np.array_equal``: not close, EQUAL. Both batch widths
+    and both adapter branches, because the branches are different graphs and batch 1 is the shape the
+    DEV instrument actually scores.
+    """
+    _requires_backend()
+    from maxdiffusion.pos_rollout_step import cfg_rollout
+
+    transformer, adapters = _tiny_cfg_stack_bf16()
+    rules, mesh = _mesh_context()
+    with rules, mesh:
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
+    rules, mesh = _mesh_context()  # fresh managers: a context manager cannot be re-entered
+
+    builder = anchor.build_velocity_builder(
+        make_velocity_fn=make_velocity_fn, frozen_graphdef=frozen.graphdef, guide_scale=_GUIDE
+    )
+    kernel = anchor.build_rollout_kernel(builder)
+
+    keys = jax.random.split(jax.random.key(4242), 4)
+    z_init = jax.random.normal(keys[0], (batch, _C, _F, _H, _W), jnp.bfloat16)
+    z_i0 = jax.random.normal(keys[1], (batch, _C, 1, _H, _W), jnp.bfloat16)
+    actions = jax.random.normal(keys[2], (batch, _ACTION_LEN, _ACTION_DIM), jnp.bfloat16)
+    context = jax.random.normal(keys[3], (batch, 7, _TEXT), jnp.bfloat16)
+    sigmas, timesteps = overfit100_sampler_grid(
+        num_inference_steps=_STEPS, flow_shift=5.0, sigma_min=0.0, sigma_max=1.0, num_train_timesteps=1000
+    )
+
+    with rules, mesh:
+        jitted = kernel(
+            params,
+            frozen.state,
+            z_init,
+            z_i0,
+            context,
+            actions,
+            sigmas,
+            timesteps,
+            adapter_enabled=adapter_enabled,
+        )
+        eager = cfg_rollout(
+            z_init,
+            velocity_fn=builder(params, frozen.state, actions, adapter_enabled),
+            sigmas=sigmas,
+            timesteps=timesteps,
+            context=context,
+            z_i0=z_i0,
+            start=0,
+            num_steps=anchor.DEPLOYED_SAMPLING_STEPS,
+        )
+
+    left, right = np.asarray(jitted), np.asarray(eager)
+    assert left.shape == right.shape
+    assert np.all(np.isfinite(left.astype(np.float32))), "a NaN rollout would make equality vacuous"
+    assert np.array_equal(left, right), (
+        f"the production JITTED kernel and the eager rollout disagree (batch={batch}, "
+        f"adapter_enabled={adapter_enabled}): max |diff| = "
+        f"{np.max(np.abs(left.astype(np.float32) - right.astype(np.float32)))}. Jitting the "
+        f"evaluator changed its arithmetic, so every anchor and certificate measured before F3c is "
+        f"a different measurement."
+    )

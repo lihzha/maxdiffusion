@@ -15,7 +15,11 @@ frozen split and the block-0 stop-grad — both properties of the real module tr
 
 * **(i) adapter parameters only.** The gradient tree is compared leaf-for-leaf against the adapter's
   own parameter tree, the frozen backbone's leaves are shown bit-unchanged across a gradient step,
-  and — structurally — the backbone is shown never to be an argument of anything differentiated.
+  and — structurally — the backbone is shown to be unreachable by ``argnums``: since round F3 it IS
+  an argument, but a **keyword-only** one, and ``value_and_grad`` differentiates positional
+  arguments only. (Before F3 it was captured in a closure. That delivered the same guarantee and
+  caused a fatal one: ``jax.jit`` bakes captured arrays into the lowered module, so the real 5B
+  entered XLA as 10.18 GB of literals and three M1 attempts died in compilation.)
 * **(ii) both branches differentiate the rollout state.** Three oracles, because each reaches
   somewhere the others do not:
   - **The isolated-unconditional finite difference** — the plan's §3a obligation, discharged
@@ -289,10 +293,12 @@ def test_the_cfg_rollout_reproduces_the_deployed_evaluator_bitwise(guide_scale):
             config=_Config(guide_scale),
             z=z0,
         )
-        make_velocity_fn, params = build_cfg_velocity_fn(transformer, adapters)
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
         got = cfg_rollout(
             z0,
-            velocity_fn=make_velocity_fn(params, actions=data["actions"], guide_scale=guide_scale),
+            velocity_fn=make_velocity_fn(
+                params, frozen_state=frozen.state, actions=data["actions"], guide_scale=guide_scale
+            ),
             sigmas=sigmas,
             timesteps=timesteps,
             context=data["null_context"],
@@ -356,9 +362,9 @@ def test_the_identity_guide_scale_returns_the_conditional_velocity_exactly():
     sigmas, timesteps = _grid()
     rules, mesh = _mesh_context()
     with rules, mesh:
-        make_velocity_fn, params = build_cfg_velocity_fn(transformer, adapters)
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
         timestep_2d = _build_per_token_timestep(jnp.broadcast_to(timesteps[3], (_B,)), _F, _H, _W, n_hist=1)
-        guided = make_velocity_fn(params, actions=data["actions"], guide_scale=1.0)(
+        guided = make_velocity_fn(params, frozen_state=frozen.state, actions=data["actions"], guide_scale=1.0)(
             data["z"], timestep_2d, data["null_context"]
         )
         expected = wan_action_adapter_forward(
@@ -379,10 +385,12 @@ def test_the_identity_guide_scale_returns_the_conditional_velocity_exactly():
 # =============================================================================================
 
 
-def _scalar_loss(params, make_velocity_fn, data, sigmas, timesteps, *, start=_FD_START, steps=_FD_K, guide=_GUIDE):
+def _scalar_loss(
+    params, make_velocity_fn, data, sigmas, timesteps, *, frozen_state, start=_FD_START, steps=_FD_K, guide=_GUIDE
+):
     out = cfg_rollout(
         apply_first_frame_pin(data["z"], data["z_i0"]),
-        velocity_fn=make_velocity_fn(params, actions=data["actions"], guide_scale=guide),
+        velocity_fn=make_velocity_fn(params, frozen_state=frozen_state, actions=data["actions"], guide_scale=guide),
         sigmas=sigmas,
         timesteps=timesteps,
         context=data["null_context"],
@@ -396,8 +404,10 @@ def _scalar_loss(params, make_velocity_fn, data, sigmas, timesteps, *, start=_FD
 def test_only_adapter_parameters_appear_in_the_gradient_tree():
     """The freeze contract, on the real module tree.
 
-    The backbone is closed over rather than passed, so this is not "the filter worked" -- there is no
-    combined tree that a filter could have got wrong. What is checked is that the seam holds: the
+    The backbone is PASSED, not closed over (round F3) -- but it is passed **keyword-only**, and
+    ``argnums`` addresses positional arguments only. So this is still not "the filter worked": there
+    is no combined tree a filter could have got wrong, because the frozen and trainable trees arrive
+    through argument slots that autodiff cannot conflate. What is checked is that the seam holds: the
     gradient has exactly the adapter's structure, every frozen leaf is bit-unchanged, and the
     gradient is not trivially zero (a freeze test that differentiates nothing proves nothing).
     """
@@ -413,8 +423,8 @@ def test_only_adapter_parameters_appear_in_the_gradient_tree():
             np.asarray(leaf, np.float32).copy() for leaf in jax.tree.leaves(nnx.split(transformer, nnx.Param, ...)[1])
         ]
         adapter_params = nnx.split(adapters, nnx.Param, ...)[1]
-        make_velocity_fn, params = build_cfg_velocity_fn(transformer, adapters)
-        grads = jax.grad(_scalar_loss)(params, make_velocity_fn, data, sigmas, timesteps)
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
+        grads = jax.grad(_scalar_loss)(params, make_velocity_fn, data, sigmas, timesteps, frozen_state=frozen.state)
         frozen_after = jax.tree.leaves(nnx.split(transformer, nnx.Param, ...)[1])
 
     assert frozen_before, "the fixture has no frozen side, so this proves nothing"
@@ -427,28 +437,47 @@ def test_only_adapter_parameters_appear_in_the_gradient_tree():
 
 
 def test_the_frozen_backbone_is_never_an_argument_of_a_differentiated_function():
-    """Structural clause (i): the closure seam, checked in the source rather than inferred.
+    """Structural clause (i) — and round F3 changed HOW it holds, so read the docstring before the code.
 
-    ``build_cfg_velocity_fn`` binds the backbone's split state to a local name; the function it
-    returns takes ``params`` and never the backbone. If the backbone were ever threaded through an
-    argument, a caller could differentiate it -- which is the failure mode the closure prevents.
+    **Before F3** the backbone was CAPTURED in ``build_cfg_velocity_fn``'s closure, and this test
+    asserted exactly that: the builder splits the transformer, binds the split to a local, and the
+    returned function takes ``params`` and nothing else. The guarantee was real, and its mechanism
+    caused the production failure of round F3 — ``jax.jit`` bakes captured arrays into the lowered
+    module, so the real 5B entered XLA as 10.18 GB of literals and three M1 attempts died in
+    compilation without ever reaching a step.
+
+    **After F3** the arrays are threaded and only the array-free graph definition is captured, so
+    "the backbone is not an argument" is no longer TRUE and no longer what protects the gradient.
+    What protects it is stronger and is what this test now asserts: ``frozen_state`` is a
+    **keyword-only** argument, and ``jax.value_and_grad``/``jax.grad`` take ``argnums`` over
+    *positional* arguments only. A caller cannot ask for a gradient with respect to a keyword
+    argument, so differentiating the backbone is not a mistake that can be made — it is a call that
+    cannot be spelled. The old assertion would now pass for the wrong reason, which is why it was
+    replaced rather than deleted.
     """
     source = _MODULE_PATH.read_text(encoding="utf-8")
-    builder = _function_node(source, "build_cfg_velocity_fn")
-    splits = [
-        node for node in ast.walk(builder) if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "split"
-    ]
-    assert splits, "the backbone must be split (and captured) inside the builder"
     inner = _function_node(source, "make_velocity_fn", within="build_cfg_velocity_fn")
     positional = [argument.arg for argument in inner.args.args]
     assert positional == ["params"], positional
     keyword_only = {argument.arg for argument in inner.args.kwonlyargs}
-    assert not keyword_only & {"transformer", "adapters", "frozen", "model"}
-    # ...and no function in the module takes the backbone as a differentiable-looking argument.
+    assert "frozen_state" in keyword_only, "the backbone must arrive keyword-only, where argnums cannot reach it"
+    assert not keyword_only & {"transformer", "adapters", "model"}
+
+    # The DIFFERENTIATED functions -- the velocity maker and the velocity itself -- take the module
+    # object nowhere. Only the BUILD-TIME factories do, and they run once, outside every transform.
+    factories = {"build_cfg_velocity_fn", "split_frozen_backbone"}
     for node in ast.walk(ast.parse(source)):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != "build_cfg_velocity_fn":
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name not in factories:
             names = {argument.arg for argument in node.args.args + node.args.kwonlyargs}
             assert "transformer" not in names, f"{node.name} takes the frozen backbone as an argument"
+
+    # ...and the runtime signature agrees with the AST, on the object a caller actually receives.
+    _requires_backend()
+    transformer, adapters = _tiny_cfg_stack()
+    rules, mesh = _mesh_context()
+    with rules, mesh:
+        make_velocity_fn, _params, _frozen = build_cfg_velocity_fn(transformer, adapters)
+    assert inspect.signature(make_velocity_fn).parameters["frozen_state"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 # =============================================================================================
@@ -467,10 +496,11 @@ def _truncated_velocity_builder(transformer, adapters, *, cut_uncond=False, cut_
     from flax import nnx
 
     adapter_graphdef, adapter_params, adapter_rest = nnx.split(adapters, nnx.Param, ...)
-    frozen = nnx.split(transformer, nnx.Param, ...)
+    frozen = step_module.split_frozen_backbone(transformer)
+    frozen_graphdef = frozen.graphdef
 
-    def make_velocity_fn(params, *, actions, guide_scale):
-        model = nnx.merge(*frozen)
+    def make_velocity_fn(params, *, frozen_state, actions, guide_scale):
+        model = nnx.merge(frozen_graphdef, frozen_state)
         adapter = nnx.merge(adapter_graphdef, params, adapter_rest)
 
         def velocity_fn(hidden_states, timestep, encoder_hidden_states):
@@ -500,7 +530,7 @@ def _truncated_velocity_builder(transformer, adapters, *, cut_uncond=False, cut_
     def make_velocity_fn_inner(velocity_fn):
         return velocity_fn
 
-    return make_velocity_fn, adapter_params
+    return make_velocity_fn, adapter_params, frozen
 
 
 def _rollout_with_cut_carry(z, *, velocity_fn, sigmas, timesteps, context, z_i0, start, num_steps):
@@ -521,7 +551,9 @@ def _rollout_with_cut_carry(z, *, velocity_fn, sigmas, timesteps, context, z_i0,
     )
 
 
-def _isolated_unconditional_term(params, make_velocity_fn, transformer, data, sigmas, timesteps, *, start=_FD_START):
+def _isolated_unconditional_term(
+    params, make_velocity_fn, transformer, data, sigmas, timesteps, *, frozen_state, start=_FD_START
+):
     """The second-step contribution of the UNCONDITIONAL branch, in closed form.
 
     One rollout step produces ``z_1(theta)``. The next step's velocity is
@@ -540,7 +572,7 @@ def _isolated_unconditional_term(params, make_velocity_fn, transformer, data, si
     z1 = overfit100_sampler_step(
         z0,
         start,
-        velocity_fn=make_velocity_fn(params, actions=data["actions"], guide_scale=_GUIDE),
+        velocity_fn=make_velocity_fn(params, frozen_state=frozen_state, actions=data["actions"], guide_scale=_GUIDE),
         sigmas=sigmas,
         timesteps=timesteps,
         context=data["null_context"],
@@ -570,21 +602,19 @@ def _discrimination_table():
     rules, mesh = _mesh_context()
     rows = []
     with rules, mesh:
-        make_velocity_fn, params = build_cfg_velocity_fn(transformer, adapters)
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
         cuts = {
-            "uncond": _truncated_velocity_builder(transformer, adapters, cut_uncond=True)[0],
-            "cond": _truncated_velocity_builder(transformer, adapters, cut_cond=True)[0],
-            "one_step_pattern": _truncated_velocity_builder(transformer, adapters, cut_uncond=True, cut_v_uncond=True)[
-                0
-            ],
+            "uncond": _truncated_velocity_builder(transformer, adapters, cut_uncond=True),
+            "cond": _truncated_velocity_builder(transformer, adapters, cut_cond=True),
+            "one_step_pattern": _truncated_velocity_builder(transformer, adapters, cut_uncond=True, cut_v_uncond=True),
         }
         for seed in _FD_SEEDS:
             data = _inputs(seed)
 
-            def loss(p, maker=make_velocity_fn, roll=cfg_rollout, d=data):
+            def loss(p, maker=make_velocity_fn, roll=cfg_rollout, d=data, fstate=frozen.state):
                 out = roll(
                     apply_first_frame_pin(d["z"], d["z_i0"]),
-                    velocity_fn=maker(p, actions=d["actions"], guide_scale=_GUIDE),
+                    velocity_fn=maker(p, frozen_state=fstate, actions=d["actions"], guide_scale=_GUIDE),
                     sigmas=sigmas,
                     timesteps=timesteps,
                     context=d["null_context"],
@@ -596,7 +626,10 @@ def _discrimination_table():
 
             grad_full = jax.grad(loss)(params)
             grad_carry = jax.grad(functools.partial(loss, roll=_rollout_with_cut_carry))(params)
-            grad_cut = {name: jax.grad(functools.partial(loss, maker=maker))(params) for name, maker in cuts.items()}
+            grad_cut = {
+                name: jax.grad(functools.partial(loss, maker=maker, fstate=cut_frozen.state))(params)
+                for name, (maker, _cut_params, cut_frozen) in cuts.items()
+            }
             relative = {
                 name: _tree_norm(jax.tree.map(lambda a, b: a - b, grad_full, gradient)) / _tree_norm(grad_full)
                 for name, gradient in grad_cut.items()
@@ -615,7 +648,9 @@ def _discrimination_table():
             isolated_direction = jax.tree.map(lambda leaf: leaf / isolated_scale, isolated_difference)
 
             def isolated(p, d=data):
-                return _isolated_unconditional_term(p, make_velocity_fn, transformer, d, sigmas, timesteps)
+                return _isolated_unconditional_term(
+                    p, make_velocity_fn, transformer, d, sigmas, timesteps, frozen_state=frozen.state
+                )
 
             iso_h = _ISO_H_REL * _tree_norm(params) / _tree_norm(isolated_direction)
             iso_fd = (
@@ -710,25 +745,63 @@ def test_the_state_dependence_of_each_cfg_branch_is_present_in_the_gradient():
         assert row["relative"]["one_step_pattern"] >= _MIN_REL_UNCOND, row
 
 
-def test_the_module_applies_no_stop_gradient_anywhere():
+def test_the_module_applies_no_stop_gradient_except_the_frozen_weight_freeze():
     """The cheap guard. It is NOT the load-bearing one -- see the note about obfuscation below.
 
     Checked on the AST, not the raw source, because the module's docstring legitimately discusses the
-    stop-gradient it does not perform. An AST guard is evadable by construction (``getattr(jax.lax,
-    "stop_" + "gradient")`` never spells the name), which is why the exact-contrast oracle above is
-    the real gate; this test additionally forbids the dynamic-attribute route so the two guards do
-    not share a blind spot.
+    stop-gradients it does not perform. An AST guard is evadable by construction (``getattr(jax.lax,
+    "stop_" + "gradient")`` never spells the name), which is why the exact-contrast finite-difference
+    oracle above is the real gate; this test additionally forbids the dynamic-attribute route so the
+    two guards do not share a blind spot.
+
+    **NARROWED IN F3b, and the narrowing is the test's subject rather than a weakening of it.**
+    Until F3b this module contained no ``stop_gradient`` at all, so "none anywhere" was an exact
+    restatement of clause (ii). F3b adds exactly one, on a different subject: the FROZEN WEIGHTS,
+    which is what makes the freeze a fact about autodiff rather than about argument syntax (review
+    MAJOR-1 demonstrated 42 frozen gradient leaves with a nonzero norm straight through the old
+    keyword-only claim). Clause (ii) is about the ROLLOUT STATE -- ``hidden_states`` must reach both
+    CFG branches undetached -- and freezing the weights neither states nor implies anything about it.
+
+    So the guard permits precisely one construction, ``frozen_state = jax.tree.map(
+    jax.lax.stop_gradient, frozen_state)``, and forbids every other ``stop_gradient`` exactly as
+    before: one on ``hidden_states`` or on ``v_uncond`` still fails here, and
+    ``test_the_state_dependence_of_each_cfg_branch_is_present_in_the_gradient`` still measures the
+    property directly. The permitted construction is also asserted PRESENT, so deleting the freeze
+    fails this test instead of silently relaxing it back to "none anywhere".
     """
     tree = ast.parse(_MODULE_PATH.read_text(encoding="utf-8"))
+
+    # The ONE permitted construction, matched structurally rather than by substring.
+    permitted: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and node.attr == "stop_gradient":
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        call = node.value
+        if ast.unparse(call.func) not in {"jax.tree.map", "jax.tree_util.tree_map"}:
+            continue
+        if len(call.args) != 2 or ast.unparse(call.args[0]) != "jax.lax.stop_gradient":
+            continue
+        if ast.unparse(call.args[1]) != "frozen_state":
+            continue
+        if [ast.unparse(target) for target in node.targets] != ["frozen_state"]:
+            continue
+        for inner in ast.walk(call.args[0]):
+            permitted.add(id(inner))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "stop_gradient" and id(node) not in permitted:
             raise AssertionError(f"clause (ii) forbids a stop_gradient here: {ast.unparse(node)}")
-        if isinstance(node, ast.Name) and node.id == "stop_gradient":
+        if isinstance(node, ast.Name) and node.id == "stop_gradient" and id(node) not in permitted:
             raise AssertionError("clause (ii) forbids a stop_gradient here")
         # No dynamic attribute lookup at all: this module has no legitimate use for one, and it is
         # the documented way an AST guard gets walked past (T2's N08).
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") in {"getattr", "eval", "exec"}:
             raise AssertionError(f"dynamic attribute access is forbidden here: {ast.unparse(node)}")
+
+    assert permitted, (
+        "the frozen-weight stop_gradient is gone from this module: without it the backbone is "
+        "differentiable through any wrapper (review MAJOR-1) and the freeze is a claim again"
+    )
 
 
 def test_the_one_step_trainers_stop_gradient_pattern_is_the_one_not_copied():
@@ -786,7 +859,7 @@ def test_the_velocity_fn_plugs_into_the_t2_endpoint_kernel_and_is_differentiable
     sigmas, timesteps = _grid()
     rules, mesh = _mesh_context()
     with rules, mesh:
-        make_velocity_fn, params = build_cfg_velocity_fn(transformer, adapters)
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
         eps = jax.random.normal(jax.random.key(23), (_B, _C, _F, _H, _W), jnp.float32)
 
         def loss(p):
@@ -797,7 +870,9 @@ def test_the_velocity_fn_plugs_into_the_t2_endpoint_kernel_and_is_differentiable
                 sigmas=sigmas,
                 timesteps=timesteps,
                 context=data["null_context"],
-                velocity_fn=make_velocity_fn(p, actions=data["actions"], guide_scale=_GUIDE),
+                velocity_fn=make_velocity_fn(
+                    p, frozen_state=frozen.state, actions=data["actions"], guide_scale=_GUIDE
+                ),
                 weights_dtype=jnp.float32,
                 num_train_timesteps=_NUM_TRAIN_TIMESTEPS,
                 support_start=jnp.asarray(3, jnp.int32),
@@ -820,8 +895,10 @@ def test_the_velocity_fn_has_the_shared_sampler_signature():
     transformer, adapters = _tiny_cfg_stack()
     rules, mesh = _mesh_context()
     with rules, mesh:
-        make_velocity_fn, params = build_cfg_velocity_fn(transformer, adapters)
-        velocity_fn = make_velocity_fn(params, actions=_inputs(3)["actions"], guide_scale=_GUIDE)
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
+        velocity_fn = make_velocity_fn(
+            params, frozen_state=frozen.state, actions=_inputs(3)["actions"], guide_scale=_GUIDE
+        )
     assert list(inspect.signature(velocity_fn).parameters) == [
         "hidden_states",
         "timestep",
@@ -840,10 +917,12 @@ def test_the_rollout_pins_frame_zero_at_every_step():
     sigmas, timesteps = _grid()
     rules, mesh = _mesh_context()
     with rules, mesh:
-        make_velocity_fn, params = build_cfg_velocity_fn(transformer, adapters)
+        make_velocity_fn, params, frozen = build_cfg_velocity_fn(transformer, adapters)
         out = cfg_rollout(
             apply_first_frame_pin(data["z"], data["z_i0"]),
-            velocity_fn=make_velocity_fn(params, actions=data["actions"], guide_scale=_GUIDE),
+            velocity_fn=make_velocity_fn(
+                params, frozen_state=frozen.state, actions=data["actions"], guide_scale=_GUIDE
+            ),
             sigmas=sigmas,
             timesteps=timesteps,
             context=data["null_context"],

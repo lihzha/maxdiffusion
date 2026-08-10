@@ -1129,6 +1129,8 @@ from maxdiffusion.models.wan.transformers.transformer_wan import WanModel
 
 CONFIG, DEVICES = sys.argv[1], int(sys.argv[2])
 _C, _F, _H, _W, _TEXT, _NULL = 48, 9, 12, 20, 32, 8
+#: The DEPLOYED logical-axis rules, read from the same YAML the loader reads (F3d, MINOR-1).
+LOGICAL_AXIS_RULES = yaml.safe_load(open(CONFIG).read())["logical_axis_rules"]
 _LOGICAL, _MICRO, _STEPS, _K = DEVICES, DEVICES, 4, 2
 
 
@@ -1154,11 +1156,36 @@ TRANSFORMER = []
 def transformer():
     if not TRANSFORMER:
         with mesh():
-            TRANSFORMER.append(WanModel(
+            model = WanModel(
                 rngs=nnx.Rngs(jax.random.key(0)), num_attention_heads=2, attention_head_dim=8,
                 in_channels=_C, out_channels=_C, text_dim=_TEXT, freq_dim=16, ffn_dim=32,
                 num_layers=1, attention="dot_product", rope_max_seq_len=64, scan_layers=False,
-                dtype=jnp.float32, weights_dtype=jnp.float32))
+                dtype=jnp.float32, weights_dtype=jnp.float32)
+            # COMMIT the weights to the mesh, as the deployed pipeline does when it loads them
+            # (F3b, review MINOR-1). Without this the fake backbone's leaves are UNCOMMITTED
+            # single-device arrays, so "the compiled contract equals the sharding the weights
+            # actually carry" would be checked against a placement production never has, and the
+            # frozen-input assertions below would be testing the fixture rather than the program.
+            # THE LOADER'S OWN MAPPING, not a rule of our own (F3d, review MINOR-1).
+            # F3c committed by a synthetic rule -- P("fsdp") when the leading dim divided the mesh --
+            # and only 18 of 42 placements matched what production actually produces: biases and
+            # kernels were frequently split on the wrong axis. An oracle that asserts the compiled
+            # contract against a sharding production never creates is checking a fiction. This is
+            # `wan_pipeline.py`'s own three lines (`get_partition_spec` -> `logical_to_mesh_sharding`
+            # over the config's `logical_axis_rules`), so `checks["frozen"]` now asserts the LOADER's
+            # contract.
+            from flax import linen as nn_linen
+
+            _graphdef, state = nnx.split(model)
+            logical_spec = nnx.get_partition_spec(state)
+            state_sharding = nn_linen.logical_to_mesh_sharding(
+                logical_spec, mesh(), LOGICAL_AXIS_RULES
+            )
+            nnx.update(
+                model,
+                jax.tree.map(lambda leaf, sh: jax.device_put(leaf, sh), state, state_sharding),
+            )
+            TRANSFORMER.append(model)
     return TRANSFORMER[0]
 
 
@@ -1277,20 +1304,49 @@ def main():
         with program.scope():
             lowered[name] = program.step.lower(*operands[name]).compile()
 
+    def _compiled_reference(program, operand):
+        # F3: `step.lower` still takes the four operands above, but the program it lowers takes
+        # `frozen_state` as its SECOND POSITIONAL argument, so the tuple the compiled input shardings
+        # are read against carries it between `params` and `opt_state`.
+        #
+        # EACH SIDE'S OWN frozen state, never one side's for both. The two do reach the backbone
+        # through the shared loader, but "they must be the same" is the claim this oracle exists to
+        # TEST, and an oracle that assumes it cannot fail when it stops being true -- the exact
+        # symmetric-move blind spot W3 and W4 closed for the other operands.
+        return (operand[0], program.frozen.state, operand[1], operand[2], operand[3])
+
+    compiled_operands = {
+        name: _compiled_reference(program, operands[name]) for name, program in (("trainer", left), ("m1", right))
+    }
+
     def _absolute(compiled, operand):
         # Every compiled input sharding against the INDEPENDENT expectation for its own argument.
         args = compiled.input_shardings[0]
         checks = {}
-        for index, (name, want) in enumerate(
-            (("params", expected_replicated), ("opt", expected_replicated), ("batch", expected_batch))
+        for index, (name, want) in (
+            (0, ("params", expected_replicated)),
+            (2, ("opt", expected_replicated)),
+            (3, ("batch", expected_batch)),
         ):
             leaves_ = jax.tree.leaves(args[index])
             shapes = jax.tree.leaves(operand[index])
             checks[name] = bool(leaves_) and all(
                 got.is_equivalent_to(want, np.ndim(ref)) for got, ref in zip(leaves_, shapes)
             )
-        draw_leaves = jax.tree.leaves(args[3])
-        draw_refs = jax.tree.leaves(operand[3])
+        # INDEX 1 IS THE FROZEN BACKBONE, and skipping it was the gap (F3b, review MINOR-1). It is
+        # asserted against the sharding the state ACTUALLY CARRIES rather than against a constant
+        # expectation, because that is the property worth having: the compiled program must accept
+        # the backbone exactly where the loader already put it. Any divergence here is a per-call
+        # reshard of the whole 5B -- the regression a "10 GB copy" would show up as -- and the
+        # reviewer demonstrated that with a sharded-backbone fake this oracle stayed green purely
+        # because index 1 was omitted.
+        frozen_leaves = jax.tree.leaves(args[1])
+        frozen_refs = jax.tree.leaves(operand[1])
+        checks["frozen"] = bool(frozen_leaves) and all(
+            got.is_equivalent_to(ref.sharding, np.ndim(ref)) for got, ref in zip(frozen_leaves, frozen_refs)
+        )
+        draw_leaves = jax.tree.leaves(args[4])
+        draw_refs = jax.tree.leaves(operand[4])
         checks["draws"] = bool(draw_leaves) and all(
             got.is_equivalent_to(expected_replicated if position % 4 < 2 else expected_batch, np.ndim(ref))
             for position, (got, ref) in enumerate(zip(draw_leaves, draw_refs))
@@ -1323,6 +1379,12 @@ def main():
         )
         return program.params, one, one_draws
 
+    def _scorer_reference(program, operand):
+        # F3, on the scorer: `score.lower` takes the three operands above and threads `frozen_state`
+        # second, so the reference tuple its input shardings are read against carries it there too --
+        # and it is THIS program's own state, for the reason `_compiled_reference` gives.
+        return (operand[0], program.frozen.state, operand[1], operand[2])
+
     scorers = {}
     for name, program, batch, draws in (
         ("trainer", left, trainer_batch, trainer_draws),
@@ -1347,12 +1409,28 @@ def main():
 
     def _scorer_absolute(compiled, operand):
         # Every scorer input against an INDEPENDENTLY constructed expectation. The DEV instrument
-        # feeds batch-one host arrays and the parameters are the replicated adapter tree, so the whole
-        # scorer contract is replicated -- measured, then asserted, rather than compared side to side.
-        leaves_ = jax.tree.leaves(compiled.input_shardings[0])
-        refs = jax.tree.leaves(operand)
-        return bool(leaves_) and all(
-            got.is_equivalent_to(expected_replicated, np.ndim(ref)) for got, ref in zip(leaves_, refs)
+        # feeds batch-one host arrays and the parameters are the replicated adapter tree, so those
+        # inputs are replicated -- measured, then asserted, rather than compared side to side.
+        #
+        # ...but NOT the frozen state at argument 1 (F3b, review MINOR-1). "Everything is replicated"
+        # was true only while the backbone was invisible to this oracle; it is not the load-time
+        # contract for a SHARDED backbone, and asserting it would either fail on a real FSDP load or,
+        # worse, pass while a per-call reshard of the 5B went unnoticed. Argument 1 is therefore
+        # checked against the sharding its own leaves carry, exactly as the step oracle does.
+        per_argument = compiled.input_shardings[0]
+        frozen_leaves = jax.tree.leaves(per_argument[1])
+        frozen_refs = jax.tree.leaves(operand[1])
+        frozen_ok = bool(frozen_leaves) and all(
+            got.is_equivalent_to(ref.sharding, np.ndim(ref)) for got, ref in zip(frozen_leaves, frozen_refs)
+        )
+        others = [value for index, value in enumerate(per_argument) if index != 1]
+        other_refs = [value for index, value in enumerate(operand) if index != 1]
+        leaves_ = jax.tree.leaves(others)
+        refs = jax.tree.leaves(other_refs)
+        return (
+            frozen_ok
+            and bool(leaves_)
+            and all(got.is_equivalent_to(expected_replicated, np.ndim(ref)) for got, ref in zip(leaves_, refs))
         )
 
     def _leafwise_equivalent(one, other, operand):
@@ -1381,8 +1459,8 @@ def main():
         "trainer_contract": _contract(*operands["trainer"]),
         "m1_contract": _contract(*operands["m1"]),
         # ABSOLUTE, per side, against expectations built in this test.
-        "trainer_absolute": _absolute(lowered["trainer"], operands["trainer"]),
-        "m1_absolute": _absolute(lowered["m1"], operands["m1"]),
+        "trainer_absolute": _absolute(lowered["trainer"], compiled_operands["trainer"]),
+        "m1_absolute": _absolute(lowered["m1"], compiled_operands["m1"]),
         # Each side really did lower a COMPLETE tuple of its own, and the tuples really differ.
         "operand_trees_match": str(jax.tree.structure(operands["trainer"]))
         == str(jax.tree.structure(operands["m1"])),
@@ -1406,13 +1484,17 @@ def main():
             and jax.tree.leaves(operands["m1"][2])[0].sharding != expected_batch
         ),
         "step_leafwise_equivalent": _leafwise_equivalent(
-            lowered["trainer"], lowered["m1"], operands["m1"]
+            lowered["trainer"], lowered["m1"], compiled_operands["m1"]
         ),
         # Both shared scorers LOWERED and compared, plus M1's arity on M1's OWN parameters.
-        "score_absolute_trainer": _scorer_absolute(scorers["trainer"], _eval_operands(left, trainer_batch, trainer_draws)),
-        "score_absolute_m1": _scorer_absolute(scorers["m1"], _eval_operands(right, right.batch, right.draws)),
+        "score_absolute_trainer": _scorer_absolute(
+            scorers["trainer"], _scorer_reference(left, _eval_operands(left, trainer_batch, trainer_draws))
+        ),
+        "score_absolute_m1": _scorer_absolute(
+            scorers["m1"], _scorer_reference(right, _eval_operands(right, right.batch, right.draws))
+        ),
         "score_leafwise_equivalent": _leafwise_equivalent(
-            scorers["trainer"], scorers["m1"], _eval_operands(right, right.batch, right.draws)
+            scorers["trainer"], scorers["m1"], _scorer_reference(right, _eval_operands(right, right.batch, right.draws))
         ),
         "score_returns_aux": _score_arity(left, right),
         "m1_score_returns_aux": _probe_score_arity(right),
@@ -1430,7 +1512,7 @@ def _score_arity(left, right):
 
     with left.scope():
         out = jax.eval_shape(
-            lambda p, b, d: left.loss_fn(p, b, left.context, draws=_draws(d)),
+            lambda p, b, d: left.loss_fn(p, b, left.context, frozen_state=left.frozen.state, draws=_draws(d)),
             left.params,
             {k: v[:1] for k, v in right.batch[0].items()},
             tuple(x[:1] if getattr(x, "ndim", 0) else x for x in right.draws[0]),
@@ -1503,6 +1585,12 @@ def test_M1_compiles_the_TRAINERS_EXACT_sharded_program_on_a_multi_device_mesh(t
         assert contract["opt"], f"{side}: every optimizer-state leaf must be compiled replicated"
         assert contract["batch"], f"{side}: the batch must be compiled against the loader's example split"
         assert contract["draws"], f"{side}: scalar supports replicated, per-example draws split like the data"
+        # F3b computed this and never asserted it, so a false result was silently ignored -- the
+        # oracle reported on the frozen input without ever gating on it (F3c, review MINOR-1).
+        assert contract["frozen"], (
+            f"{side}: the frozen backbone must be compiled against the sharding it already carries; "
+            f"any difference is a per-call reshard of the whole 5B"
+        )
     for side in ("trainer_contract", "m1_contract"):
         contract = report[side]
         assert all(contract.values()), f"{side}: the placement contract is {contract}"

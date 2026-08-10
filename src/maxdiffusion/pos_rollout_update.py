@@ -95,14 +95,23 @@ def build_logical_update(loss_fn, optimizer, context) -> Any:
     The mean over microbatches is the accumulation identity the trainer relies on: with equal-width
     microbatches, the mean of the per-microbatch gradients is the gradient of the mean loss over the
     logical batch, so accumulation does not change the objective.
+
+    **``frozen_state`` is the SECOND POSITIONAL argument, and that position is deliberate** (F3).
+    The frozen 5B has to be an input of the compiled program rather than a value inside it — as a
+    capture, ``jax.jit`` bakes 10.18 GB of bf16 weights into the lowered module as literals, and XLA
+    spent over two hours on that module without finishing, three times, until the TPU health window
+    reaped the VM. It sits next to ``params`` because it is the same kind of thing (a device-resident
+    weight tree) and is handed straight through to a loss that takes it **keyword-only**: the
+    gradient below names ``argnums`` 0 only, and ``value_and_grad`` cannot name a keyword argument at
+    all, so the freeze split survives as an unconstructible rather than as a convention.
     """
 
-    def update(params, opt_state, micro_batches, micro_draws):
+    def update(params, frozen_state, opt_state, micro_batches, micro_draws):
         grads = None
         total = 0.0
         for batch, values in zip(micro_batches, micro_draws):
             (loss, _), grad = jax.value_and_grad(loss_fn, has_aux=True)(
-                params, batch, context, draws=draws_from_arrays(values)
+                params, batch, context, frozen_state=frozen_state, draws=draws_from_arrays(values)
             )
             grads = grad if grads is None else jax.tree.map(lambda a, b: a + b, grads, grad)
             total = total + loss
@@ -380,14 +389,60 @@ class TrainingProgram:
     example_shape: tuple
     mesh: Any
     scope: Any
+    #: The frozen 5B as DATA (:class:`~maxdiffusion.pos_rollout_step.FrozenBackbone`): the graph
+    #: definition this program captures and the weight arrays it passes as an argument. Held on the
+    #: program because it is part of what the program IS — an oracle that cannot see the weights
+    #: cannot check that they stay out of the module (F3).
+    frozen: Any = None
+
+
+def assert_optimizer_covers_only_the_adapter(adapter_params, opt_state) -> None:
+    """The freeze split, said out loud at build time (F3, defect (c)).
+
+    The split is structural first — ``frozen_state`` is keyword-only on every loss and
+    ``value_and_grad`` cannot name a keyword argument — so this cannot fire while that shape holds.
+    It exists because the shape is now *threading* rather than *absence*, and a threading design
+    degrades quietly: someone adds ``frozen_state`` to the differentiated operand, everything still
+    runs, and the only symptom is an optimizer that silently grew slots for five billion parameters.
+    That symptom is cheap to check and catastrophic to miss, so it is checked.
+    """
+
+    # Two-argument reads only (issue #11): a three-argument `getattr` never falls back on a pyconfig
+    # `HyperParameters`, and the exp_06 tripwire forbids the spelling everywhere rather than asking
+    # each author to know where it is safe.
+    def _nbytes(leaf) -> int:
+        return int(leaf.nbytes) if hasattr(leaf, "nbytes") else 0
+
+    adapter_bytes = sum(_nbytes(leaf) for leaf in jax.tree.leaves(adapter_params))
+    slot_bytes = sum(_nbytes(leaf) for leaf in jax.tree.leaves(opt_state))
+    # Adam keeps two moments per parameter; anything beyond a small multiple of the adapter tree
+    # means the optimizer was initialised on something bigger than the adapter.
+    if adapter_bytes and slot_bytes > 8 * adapter_bytes:
+        raise ValueError(
+            f"the optimizer holds {slot_bytes} bytes of slots for an adapter tree of {adapter_bytes} "
+            f"bytes: the FREEZE SPLIT has broken and the frozen backbone entered the differentiated "
+            f"tree. Only adapter parameters may reach `optimizer.init`."
+        )
 
 
 def build_training_program(config, backbone: LoadedBackbone, *, arm: str, k_b: int, num_steps: int, dropout_rate=None):
     """Adapter, optimizer, shardings, scope and jitted step — the whole program, built ONCE.
 
-    The FREEZE SPLIT is structural and comes from ``build_arm``: the frozen transformer is captured in
-    the loss closure and never enters the differentiated tree, so the optimizer is initialised on
-    adapter parameters alone. There is no "exclude the backbone" step for a later edit to forget.
+    The FREEZE SPLIT is structural and comes from ``build_arm``: the frozen transformer reaches the
+    loss as a **keyword-only** ``frozen_state`` argument, and ``jax.value_and_grad`` takes
+    ``argnums`` over positional arguments only — so the backbone cannot enter the differentiated
+    tree, and the optimizer is initialised on adapter parameters alone. There is no "exclude the
+    backbone" step for a later edit to forget.
+
+    **What round F3 changed, and why it is not a weakening.** Until F3 that guarantee was delivered
+    by CAPTURING the backbone in the loss closure. The guarantee held; the cost was fatal. ``jax.jit``
+    bakes captured arrays into the lowered module as literals, so the real 5B made every compiled
+    program carry **10.18 GB of constants** — and the M1 fit probe died three consecutive times on
+    ``TPU_VM_HEALTH_TIMEOUT``, never once finishing its first XLA compile, before a single optimizer
+    step existed to measure. The weights are now threaded as an argument
+    (:class:`~maxdiffusion.pos_rollout_step.FrozenBackbone`), which keeps the differentiation
+    guarantee, makes it *stronger* (unspellable rather than merely unconstructed), and leaves the
+    module small enough to compile.
     """
     from maxdiffusion.pos_rollout_arms import PRODUCTION_DROPOUT_RATE, build_arm
 
@@ -396,7 +451,7 @@ def build_training_program(config, backbone: LoadedBackbone, *, arm: str, k_b: i
 
     with program_scope(config, backbone.mesh):
         adapters = build_adapter_stack(config, backbone.transformer)
-        loss_fn, adapter_params = build_arm(str(arm), backbone.transformer, adapters, dropout_rate=rate)
+        loss_fn, adapter_params, frozen = build_arm(str(arm), backbone.transformer, adapters, dropout_rate=rate)
         # REPLICATED, as the settled trainer replicates them (`_shard_state`): adapter parameters are
         # small and carry action-length axes the transformer's logical rules would otherwise shard
         # over context. M1 used to leave them on one device, which is a different program.
@@ -410,36 +465,74 @@ def build_training_program(config, backbone: LoadedBackbone, *, arm: str, k_b: i
             # EVERY leaf, explicitly: `optimizer.init` does not promise to inherit its argument's
             # sharding, and the scalar count leaves demonstrably do not (final re-ruling, MAJOR 2).
             opt_state = jax.tree.map(lambda leaf: jax.device_put(leaf, replicated), opt_state)
+        assert_optimizer_covers_only_the_adapter(adapter_params, opt_state)
+        # NOT donated, and there is no `donate_argnums` here at all: the frozen state is the same
+        # tree on every step of the run, and donating it would free the 5B after the first update
+        # (defect (a)). A behavioural guard runs two consecutive steps and reads the buffers after.
         compiled = jax.jit(build_logical_update(loss_fn, optimizer, context))
+
+        def _placed(params, opt_state_, micro_batches, micro_draws):
+            """The compiled call's ACTUAL arguments, in order — ONE construction, all three entries.
+
+            ``frozen.state`` is threaded in here and deliberately does NOT go through
+            :func:`place_step_inputs`. Those four inputs are re-placed at every call, which is free
+            for arrays already where they belong — but the backbone is 10 GB and the pipeline already
+            loaded it under production's own logical-axis rules, so routing it through the per-call
+            placement would be either a no-op we pay to discover or a full reshard we pay for, every
+            step. It is placed once, by the loader that produced it, and referenced thereafter
+            (defects (b), (d)).
+
+            Running, lowering and tracing share this function so an oracle cannot be shown a
+            different argument list from the one the run executes — the W3/W4 lesson, applied to the
+            argument that F3 added.
+            """
+            placed_params, placed_opt, placed_batches, placed_draws = place_step_inputs(
+                backbone.mesh,
+                params=params,
+                opt_state=opt_state_,
+                micro_batches=micro_batches,
+                micro_draws=micro_draws,
+            )
+            return (placed_params, frozen.state, placed_opt, placed_batches, placed_draws)
 
         def step(params, opt_state_, micro_batches, micro_draws):
             """The step BOTH paths take, over inputs BOTH paths place identically."""
-            return compiled(
-                *place_step_inputs(
-                    backbone.mesh,
-                    params=params,
-                    opt_state=opt_state_,
-                    micro_batches=micro_batches,
-                    micro_draws=micro_draws,
-                )
-            )
+            return compiled(*_placed(params, opt_state_, micro_batches, micro_draws))
 
         def _lower(params, opt_state_, micro_batches, micro_draws):
             """Lowering goes through the same placement, so an oracle sees the compiled contract."""
-            return compiled.lower(
-                *place_step_inputs(
-                    backbone.mesh,
-                    params=params,
-                    opt_state=opt_state_,
-                    micro_batches=micro_batches,
-                    micro_draws=micro_draws,
-                )
-            )
+            return compiled.lower(*_placed(params, opt_state_, micro_batches, micro_draws))
+
+        def _trace(params, opt_state_, micro_batches, micro_draws):
+            """The jaxpr THIS program traces — the seam the captured-constants oracle needs.
+
+            ``lower`` already exposes the compiled contract, but a ``Lowered`` reports shardings, not
+            what was BAKED IN: the 10.18 GB of frozen weights that killed the first three M1 attempts
+            were invisible to every oracle we had because they lived in ``jaxpr.consts`` rather than
+            in an input signature. This returns the same object ``jax.jit`` lowers from, so the guard
+            in ``tests/worklogs_yixun/test_pos_rollout_captured_constants.py`` can sum exactly what
+            XLA would have had to serialize.
+            """
+            return compiled.trace(*_placed(params, opt_state_, micro_batches, micro_draws))
 
         step.lower = _lower
-        scorer = jax.jit(
-            lambda params, batch, values: loss_fn(params, batch, context, draws=draws_from_arrays(values))
+        step.trace = _trace
+
+        # The DEV scorer takes the backbone the same way, for the same reason: it is a second jitted
+        # program over the same 5B, and it would have baked the same 10.18 GB (final re-ruling,
+        # MAJOR 3 gave it its shape; F3 gives it its inputs).
+        compiled_score = jax.jit(
+            lambda params, frozen_state, batch, values: loss_fn(
+                params, batch, context, frozen_state=frozen_state, draws=draws_from_arrays(values)
+            )
         )
+
+        def scorer(params, batch, values):
+            """``(loss, aux)`` for one microbatch — the caller's signature is unchanged by F3."""
+            return compiled_score(params, frozen.state, batch, values)
+
+        scorer.trace = lambda params, batch, values: compiled_score.trace(params, frozen.state, batch, values)
+        scorer.lower = lambda params, batch, values: compiled_score.lower(params, frozen.state, batch, values)
 
     def update_fn(state, batch_parts, draw_parts, schedule, global_step):
         """``run_loop``'s update signature over the shared step. No arm branch, no second program."""
@@ -480,4 +573,5 @@ def build_training_program(config, backbone: LoadedBackbone, *, arm: str, k_b: i
         ),
         mesh=backbone.mesh,
         scope=lambda: program_scope(config, backbone.mesh),
+        frozen=frozen,
     )

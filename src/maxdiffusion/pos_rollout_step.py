@@ -15,11 +15,19 @@ the same operator rather than two copies that agree today.
 
 **The gradient contract (§3a), clause by clause.**
 
-* **(i) The gradient tree contains ADAPTER PARAMETERS ONLY, structurally.** The frozen backbone's
-  split state is captured in :func:`build_cfg_velocity_fn`'s closure and never appears as an
-  argument to anything differentiated — the S7 closure-seam pattern, reused deliberately. This is
-  *not* a filter over a combined tree: there is no combined tree to filter, so a frozen leaf cannot
-  receive a gradient even by misconfiguration.
+* **(i) The gradient tree contains ADAPTER PARAMETERS ONLY, structurally.** The frozen backbone
+  reaches every loss as a **keyword-only** ``frozen_state`` argument, and ``jax.value_and_grad``
+  takes ``argnums`` over *positional* arguments only — so a frozen leaf cannot receive a gradient
+  even by misconfiguration, because the call that would ask for one cannot be written. This is
+  *not* a filter over a combined tree: there is no combined tree to filter.
+
+  **Round F3 changed HOW this is achieved, and strengthened it.** Until F3 the backbone was captured
+  in :func:`build_cfg_velocity_fn`'s closure (the S7 closure-seam pattern). That delivered clause (i)
+  and simultaneously caused the production failure F3 exists to fix: ``jax.jit`` bakes captured
+  arrays into the lowered module as literals, so the real 5B entered XLA as **10.18 GB of
+  constants** and three M1 attempts died in compilation without reaching a single step. The arrays
+  are now threaded as data (:class:`FrozenBackbone`) while only the array-free graph definition is
+  captured — the differentiation guarantee is preserved *and* the module is small.
 * **(ii) BOTH branches' dependence on the current rollout state is differentiated.** ``hidden_states``
   (the rollout state ``z_i``) enters the conditional and the unconditional branch with no
   ``stop_gradient`` on either. **The site NOT copied is**
@@ -44,6 +52,9 @@ parity with it is proven by test, against a verbatim copy held honest by an AST 
 
 from __future__ import annotations
 
+import dataclasses
+from typing import Any
+
 import jax
 
 from maxdiffusion.models.wan.overfit100_sampling import overfit100_sampler_step
@@ -51,9 +62,11 @@ from maxdiffusion.models.wan.side_adapter_wan import wan_action_adapter_forward
 
 __all__ = [
     "CFG_IDENTITY_TOLERANCE",
+    "FrozenBackbone",
     "build_cfg_velocity_fn",
     "cfg_rollout",
     "combine_cfg",
+    "split_frozen_backbone",
 ]
 
 # The deployed evaluator treats a guide scale within this of 1.0 as "no CFG" and skips the second
@@ -72,26 +85,114 @@ def combine_cfg(v_uncond: jax.Array, v_cond: jax.Array, guide_scale) -> jax.Arra
     return v_uncond + guide_scale * (v_cond - v_uncond)
 
 
+@dataclasses.dataclass(frozen=True)
+class FrozenBackbone:
+    """The frozen 5B, split into the part that may be CAPTURED and the part that must be PASSED.
+
+    **Registered as a pytree, and that registration is a correctness property, not convenience**
+    (F3b, review MAJOR-3a). As a plain dataclass this object was OPAQUE to ``jax.tree`` — so
+    ``jax.tree.leaves(frozen)`` returned **zero leaves while holding every weight in the model**, and
+    a detector that walked closures looking for arrays would have reported a clean 0 bytes with the
+    whole backbone sitting inside. A guard that cannot see the thing it guards is worse than no
+    guard, because it is believed. ``state`` is the single child; ``graphdef`` is static metadata,
+    which is also what makes this object safe to pass through a jit boundary if anyone ever does.
+
+    **This split is the whole of round F3, and it is a hardware lesson.** The M1 fit probe died three
+    times on ``TPU_VM_HEALTH_TIMEOUT`` without ever finishing its first XLA compile, each attempt's
+    log ending on ``A large amount of constants were captured during lowering (10.18GB total)``. The
+    backbone was bound into the loss closure, so ``jax.jit`` promoted every bf16 weight to a LITERAL
+    inside the lowered module and XLA was asked to serialize and optimize a ten-gigabyte program.
+
+    So the two halves are separated by what they are, and named for what may be done with them:
+
+    * :attr:`graphdef` is STRUCTURE -- module classes, attribute names, shapes. It holds no arrays,
+      so capturing it in a closure costs nothing and it is what makes the tracing side work.
+    * :attr:`state` is the ARRAYS, and it crosses every ``jax.jit`` boundary as an **argument**. As
+      an argument the weights are a device-resident input the compiler sees only by shape; as a
+      capture they are ten gigabytes of literal.
+
+    The freeze split the earlier rounds established is preserved, but **not by the argument position**
+    -- F3 claimed that and F3b's review disproved it. Keyword-only placement stops ``argnums`` from
+    naming the backbone in the production update; it does NOT stop a caller from wrapping the builder
+    and differentiating the state it passes in, which the reviewer demonstrated (42 frozen gradient
+    leaves, aggregate norm ~2209). What actually holds the freeze is the leafwise ``stop_gradient``
+    applied to ``frozen_state`` inside every velocity builder, where no caller can opt out of it.
+    """
+
+    graphdef: Any
+    state: Any
+
+    def merge(self):
+        """The live module, rebuilt from this pair. For callers that hold both halves already.
+
+        Deliberately NOT the seam a jitted function uses: inside a transform the state arrives as an
+        argument, and the merge there is ``nnx.merge(graphdef, that_argument)``. A convenience that
+        merged ``self.state`` inside a traced function would silently re-capture the weights, which
+        is the whole defect F3 removed.
+        """
+        from flax import nnx
+
+        return nnx.merge(self.graphdef, self.state)
+
+
+# ``state`` is the DATA child and ``graphdef`` is static structure. Registered explicitly rather than
+# by bare decorator: the decorator's default treats every field as data, which would put the graph
+# definition into the leaf list and hand it to any `tree.map` -- structure is not data.
+jax.tree_util.register_dataclass(FrozenBackbone, data_fields=["state"], meta_fields=["graphdef"])
+
+
+def split_frozen_backbone(transformer) -> FrozenBackbone:
+    """THE one splitter, so structure and arrays have a single origin.
+
+    A second ``nnx.split`` somewhere else would be a second construction that agrees by coincidence
+    -- the failure mode W1 and W3 both closed for the adapter and the program. One function, one
+    pair, and every caller threads the pair it was given.
+    """
+    from flax import nnx
+
+    graphdef, state = nnx.split(transformer)
+    return FrozenBackbone(graphdef=graphdef, state=state)
+
+
 def build_cfg_velocity_fn(transformer, adapters):
-    """``(make_velocity_fn, adapter_params)`` — the frozen split, made structural.
+    """``(make_velocity_fn, adapter_params, frozen)`` — the frozen split, made structural.
 
-    ``transformer``'s split state is bound HERE, in this closure, and never becomes an argument of a
-    differentiated function; only ``adapter_params`` is passed back for the caller to differentiate.
-    That is the whole of clause (i): the backbone is not filtered out of a gradient tree, it is never
-    in one.
+    Only ``adapter_params`` is differentiable, and only the backbone's GRAPHDEF is captured: its
+    arrays leave through ``frozen`` for the caller to pass back as an argument. That is clause (i)
+    made stronger than it was -- the backbone is not filtered out of a gradient tree, it is never in
+    one, AND it is never in the compiled module either (see :class:`FrozenBackbone`).
 
-    ``make_velocity_fn(params, *, actions, guide_scale, ...)`` returns a
+    ``make_velocity_fn(params, *, frozen_state, actions, guide_scale, ...)`` returns a
     ``velocity_fn(hidden_states, timestep, encoder_hidden_states)`` — the signature T1's sampler step
     and T2's endpoint kernel already consume, so nothing downstream needs to know a CFG combination
     happened. Both branches read ``hidden_states`` directly (clause (ii)).
+
+    ``frozen_state`` is REQUIRED and keyword-only. A default would have been convenient and is
+    exactly the defect to avoid: it would keep the arrays in this closure, so a caller who forgot to
+    thread them would silently recreate the ten-gigabyte capture and nothing would fail until a TPU
+    did. Forgetting is a ``TypeError`` instead.
     """
     from flax import nnx
 
     adapter_graphdef, adapter_params, adapter_rest = nnx.split(adapters, nnx.Param, ...)
-    frozen = nnx.split(transformer, nnx.Param, ...)
+    frozen = split_frozen_backbone(transformer)
+    frozen_graphdef = frozen.graphdef
 
-    def make_velocity_fn(params, *, actions, guide_scale, deterministic: bool = True, rngs=None):
-        model = nnx.merge(*frozen)
+    def make_velocity_fn(params, *, frozen_state, actions, guide_scale, deterministic: bool = True, rngs=None):
+        # THE FREEZE, ENFORCED RATHER THAN CLAIMED (F3b, review MAJOR-1). F3 argued that a
+        # keyword-only argument made differentiating the backbone "unspellable". That was FALSE, and
+        # the reviewer spelled it: a caller wraps this function and makes `frozen_state` its OWN
+        # differentiated positional argument --
+        #     jax.grad(lambda s: make_velocity_fn(p, frozen_state=s, ...)(...).sum())(frozen.state)
+        # -- which produced 42 frozen gradient leaves, aggregate norm ~2209, on the tiny Wan stack.
+        # Keyword-only is a fact about SYNTAX; it was never a fact about autodiff.
+        #
+        # `stop_gradient` leafwise IS the fact about autodiff. Applied at the BUILDER boundary so no
+        # caller can opt out; identity in the forward pass, so no value, bitwise-parity or
+        # finite-difference claim moves; and it cuts only the path INTO the weights -- the gradient
+        # with respect to `hidden_states`, which clause (ii) exists to preserve, is untouched.
+        frozen_state = jax.tree.map(jax.lax.stop_gradient, frozen_state)
+        model = nnx.merge(frozen_graphdef, frozen_state)
         adapter = nnx.merge(adapter_graphdef, params, adapter_rest)
         guided = abs(float(guide_scale) - 1.0) > CFG_IDENTITY_TOLERANCE
 
@@ -121,7 +222,7 @@ def build_cfg_velocity_fn(transformer, adapters):
 
         return velocity_fn
 
-    return make_velocity_fn, adapter_params
+    return make_velocity_fn, adapter_params, frozen
 
 
 def cfg_rollout(
