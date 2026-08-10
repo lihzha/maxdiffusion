@@ -105,8 +105,29 @@ class FlaxResnetBlock2D(nn.Module):
   norm_num_groups: int = 32
   norm_eps: float = 1e-5
   precision: jax.lax.Precision = None
+  # How the time embedding is injected. Mirrors Diffusers' ResnetBlock2D
+  # ``time_embedding_norm``:
+  #   "default"     — project temb and ADD it before norm2, i.e.
+  #                   ``norm2(h + shift)``. The shift moves the group mean and
+  #                   inflates the group std, so GroupNorm normalises much of it
+  #                   straight back out.
+  #   "scale_shift" — AdaGN (Dhariwal & Nichol, "Diffusion Models Beat GANs"):
+  #                   apply a scale and a shift AFTER norm2,
+  #                   ``norm2(h) * (1 + scale) + shift``. This is the UNet
+  #                   analogue of a DiT's AdaLN modulation — the conditioning
+  #                   becomes multiplicative and survives the norm.
+  # NEVER set directly from config. The only caller that sets it is
+  # FlaxVideoUNet, which turns it on iff ``action_cond_mode == 'adaln'`` (see
+  # ``FlaxVideoUNet.adagn``). It defaults to "default" so the SD UNet
+  # (unet_2d_blocks_flax.py), which shares this block, keeps loading unchanged.
+  time_embedding_norm: str = "default"
 
   def setup(self):
+    if self.time_embedding_norm not in ("default", "scale_shift"):
+      raise ValueError(
+          "FlaxResnetBlock2D.time_embedding_norm must be 'default' or "
+          f"'scale_shift', got {self.time_embedding_norm!r}"
+      )
     out_channels = self.in_channels if self.out_channels is None else self.out_channels
 
     self.norm1 = nn.GroupNorm(
@@ -150,6 +171,25 @@ class FlaxResnetBlock2D(nn.Module):
 
     self.time_emb_proj = nn.Dense(out_channels, dtype=self.dtype, param_dtype=self.weights_dtype, precision=self.precision)
 
+    # AdaGN scale. Deliberately a SEPARATE Dense rather than widening
+    # time_emb_proj to 2*out_channels: the pretrained SVD checkpoint's
+    # (temb_dim, out_channels) kernel then still loads verbatim and goes on
+    # serving as the AdaGN *shift*, so the only fresh parameters are this one.
+    # Zero-init means scale == 0 at step 0, i.e. (1 + scale) == 1 — the
+    # multiplicative path is inert until training moves it, matching the
+    # zero-init discipline the action encoder's linear_3 already follows.
+    if self.time_embedding_norm == "scale_shift":
+      self.adagn_scale_proj = nn.Dense(
+          out_channels,
+          dtype=self.dtype,
+          param_dtype=self.weights_dtype,
+          precision=self.precision,
+          kernel_init=nn.initializers.zeros,
+          bias_init=nn.initializers.zeros,
+      )
+    else:
+      self.adagn_scale_proj = None
+
     self.conv2 = nn.Conv(
         out_channels,
         kernel_size=(3, 3),
@@ -170,13 +210,18 @@ class FlaxResnetBlock2D(nn.Module):
     hidden_states = self.conv1(hidden_states)
     hidden_states = nn.with_logical_constraint(hidden_states, ("conv_batch", "height", "keep_2", "out_channels"))
     temb = nn.swish(temb)
-    temb = self.time_emb_proj(temb)
+    shift = self.time_emb_proj(temb)
+    shift = jnp.expand_dims(jnp.expand_dims(shift, 1), 1)
 
-    temb = jnp.expand_dims(jnp.expand_dims(temb, 1), 1)
+    if self.adagn_scale_proj is not None:
+      # AdaGN: modulate AFTER the norm so the conditioning is multiplicative and
+      # is not partially normalised away.
+      scale = self.adagn_scale_proj(temb)
+      scale = jnp.expand_dims(jnp.expand_dims(scale, 1), 1)
+      hidden_states = self.norm2(hidden_states) * (1 + scale) + shift
+    else:
+      hidden_states = self.norm2(hidden_states + shift)
 
-    hidden_states = hidden_states + temb
-
-    hidden_states = self.norm2(hidden_states)
     hidden_states = nn.swish(hidden_states)
     hidden_states = self.dropout(hidden_states, deterministic)
     hidden_states = self.conv2(hidden_states)

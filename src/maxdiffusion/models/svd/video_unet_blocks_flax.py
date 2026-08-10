@@ -73,6 +73,9 @@ class FlaxCrossAttnDownVideoBlock(nn.Module):
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
   precision: jax.lax.Precision = None
+  # "default" | "scale_shift" (AdaGN); set by FlaxVideoUNet only when
+  # action_cond_mode == "adaln". See FlaxResnetBlock2D.time_embedding_norm.
+  time_embedding_norm: str = "default"
   quant: Quant = None
 
   def setup(self):
@@ -92,6 +95,7 @@ class FlaxCrossAttnDownVideoBlock(nn.Module):
               dtype=self.dtype,
               weights_dtype=self.weights_dtype,
               precision=self.precision,
+              time_embedding_norm=self.time_embedding_norm,
           )
       )
       attentions.append(
@@ -167,6 +171,9 @@ class FlaxDownVideoBlock(nn.Module):
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
   precision: jax.lax.Precision = None
+  # "default" | "scale_shift" (AdaGN); set by FlaxVideoUNet only when
+  # action_cond_mode == "adaln". See FlaxResnetBlock2D.time_embedding_norm.
+  time_embedding_norm: str = "default"
 
   def setup(self):
     resnets = []
@@ -184,6 +191,7 @@ class FlaxDownVideoBlock(nn.Module):
               dtype=self.dtype,
               weights_dtype=self.weights_dtype,
               precision=self.precision,
+              time_embedding_norm=self.time_embedding_norm,
           )
       )
     self.resnets = resnets
@@ -245,6 +253,9 @@ class FlaxCrossAttnUpVideoBlock(nn.Module):
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
   precision: jax.lax.Precision = None
+  # "default" | "scale_shift" (AdaGN); set by FlaxVideoUNet only when
+  # action_cond_mode == "adaln". See FlaxResnetBlock2D.time_embedding_norm.
+  time_embedding_norm: str = "default"
   quant: Quant = None
 
   def setup(self):
@@ -265,6 +276,7 @@ class FlaxCrossAttnUpVideoBlock(nn.Module):
               dtype=self.dtype,
               weights_dtype=self.weights_dtype,
               precision=self.precision,
+              time_embedding_norm=self.time_embedding_norm,
           )
       )
       attentions.append(
@@ -342,6 +354,9 @@ class FlaxUpVideoBlock(nn.Module):
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
   precision: jax.lax.Precision = None
+  # "default" | "scale_shift" (AdaGN); set by FlaxVideoUNet only when
+  # action_cond_mode == "adaln". See FlaxResnetBlock2D.time_embedding_norm.
+  time_embedding_norm: str = "default"
 
   def setup(self):
     resnets = []
@@ -360,6 +375,7 @@ class FlaxUpVideoBlock(nn.Module):
               dtype=self.dtype,
               weights_dtype=self.weights_dtype,
               precision=self.precision,
+              time_embedding_norm=self.time_embedding_norm,
           )
       )
     self.resnets = resnets
@@ -414,6 +430,9 @@ class FlaxVideoMidBlock2DCrossAttn(nn.Module):
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
   precision: jax.lax.Precision = None
+  # "default" | "scale_shift" (AdaGN); set by FlaxVideoUNet only when
+  # action_cond_mode == "adaln". See FlaxResnetBlock2D.time_embedding_norm.
+  time_embedding_norm: str = "default"
   quant: Quant = None
 
   def setup(self):
@@ -429,6 +448,7 @@ class FlaxVideoMidBlock2DCrossAttn(nn.Module):
             dtype=self.dtype,
             weights_dtype=self.weights_dtype,
             precision=self.precision,
+            time_embedding_norm=self.time_embedding_norm,
         )
     ]
     attentions = []
@@ -467,6 +487,7 @@ class FlaxVideoMidBlock2DCrossAttn(nn.Module):
               dtype=self.dtype,
               weights_dtype=self.weights_dtype,
               precision=self.precision,
+              time_embedding_norm=self.time_embedding_norm,
           )
       )
     self.resnets = resnets

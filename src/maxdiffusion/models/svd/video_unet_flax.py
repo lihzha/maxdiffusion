@@ -109,6 +109,21 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
   video_kernel_size: Tuple[int, int, int] = (3, 1, 1)
   merge_strategy: str = "learned_with_images"
 
+  # AdaGN (Dhariwal & Nichol) instead of the default additive time-embedding
+  # injection: every spatial and temporal resnet applies
+  # ``norm2(h) * (1 + scale) + shift`` from t_emb rather than ``norm2(h + shift)``.
+  #
+  # This exists ONLY to make the SVD arm a like-for-like comparison against the
+  # WAN arm, whose DiT blocks modulate multiplicatively via AdaLN. It is set
+  # exclusively by CtrlWorldTrainer when ``action_cond_mode == 'adaln'`` — in
+  # that mode the action is summed into t_emb, so AdaGN is what carries the
+  # action into the network. Leave it False everywhere else: with
+  # ``action_cond_mode='cross_attn'`` the UNet must stay bit-identical to
+  # pretrained SVD, and the base/VAE paths have no action signal at all.
+  #
+  # Adds one zero-init Dense per resnet (~52M params on the stock SVD UNet).
+  adagn: bool = False
+
   attention_kernel: str = "dot_product"
   temporal_attention_kernel: str = "dot_product"
   # Chunked-query attention path (jax_memory_efficient_attention). Enables
@@ -140,6 +155,8 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
 
     num_attention_heads = self._resolve_num_heads()
     transformer_layers = self._resolve_transformer_layers()
+    # Single derivation point for the resnet conditioning form; see ``adagn``.
+    resnet_tnorm = "scale_shift" if self.adagn else "default"
 
     # Input conv (8 -> 320).
     self.conv_in = nn.Conv(
@@ -205,6 +222,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
                 weights_dtype=self.weights_dtype,
                 precision=self.precision,
                 quant=self.quant,
+                time_embedding_norm=resnet_tnorm,
             )
         )
       elif btype in ("DownBlock2D", "DownBlockSpatioTemporal"):
@@ -221,6 +239,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
                 dtype=self.dtype,
                 weights_dtype=self.weights_dtype,
                 precision=self.precision,
+                time_embedding_norm=resnet_tnorm,
             )
         )
       else:
@@ -248,6 +267,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
         weights_dtype=self.weights_dtype,
         precision=self.precision,
         quant=self.quant,
+        time_embedding_norm=resnet_tnorm,
     )
 
     # Up blocks.
@@ -288,6 +308,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
                 weights_dtype=self.weights_dtype,
                 precision=self.precision,
                 quant=self.quant,
+                time_embedding_norm=resnet_tnorm,
             )
         )
       elif btype in ("UpBlock2D", "UpBlockSpatioTemporal"):
@@ -305,6 +326,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
                 dtype=self.dtype,
                 weights_dtype=self.weights_dtype,
                 precision=self.precision,
+                time_embedding_norm=resnet_tnorm,
             )
         )
       else:

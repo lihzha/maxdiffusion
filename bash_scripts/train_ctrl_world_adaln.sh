@@ -5,6 +5,20 @@
 # For the original per-frame cross-attention conditioning use
 # bash_scripts/train_ctrl_world.sh.
 #
+# action_cond_mode=adaln ALSO switches every spatial and temporal resnet from
+# the default additive time-embedding injection (``norm2(h + shift)``, whose
+# shift GroupNorm largely normalises away) to AdaGN
+# (``norm2(h) * (1 + scale) + shift``). That is deliberate: t_emb is the action
+# pathway in this mode, and AdaGN is the UNet analogue of the multiplicative
+# AdaLN modulation the WAN arm uses, so the two arms are comparable. It costs
+# +51.6M params (one zero-init Dense per resnet, +3.4%) and ~0.6 GB of extra
+# fp32 AdamW state. cross_attn mode is unaffected and stays bit-identical to
+# pretrained SVD.
+#
+# NOT checkpoint-compatible with adaln runs from before AdaGN landed: the tree
+# gains 88 adagn_scale_proj leaves, so an old checkpoint fails the orbax restore.
+# Start a fresh RUN_TAG (section 3b).
+#
 # Pre-requisites (one-time):
 #   1. Pre-encoded data uploaded to gs://<bucket>/ctrl_world_droid/{train,val}/
 #      and gs://<bucket>/ctrl_world_droid/stats.json. See
@@ -162,7 +176,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     save_optimizer=True \
     checkpoint_max_to_keep=3 \
     reshuffle_data_on_restart=True \
-    wandb_project='svd-ac-adaln' \
+    wandb_project='svd-ac-adagn' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=25 \

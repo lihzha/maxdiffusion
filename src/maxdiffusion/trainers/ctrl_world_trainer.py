@@ -39,6 +39,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 from flax.linen import partitioning as nn_partitioning
 from flax.linen.spmd import LogicallyPartitioned
+from flax.traverse_util import flatten_dict, unflatten_dict
 from flax.training import train_state
 from jax.sharding import NamedSharding, PartitionSpec as P
 from safetensors.torch import load_file as load_torch_safetensors
@@ -142,6 +143,47 @@ def _cast_weight(path, x, dtype):
     if any(k in key for k in _F32_PARAM_KEYWORDS):
         return x.astype(jnp.float32)
     return x.astype(dtype)
+
+
+def _fill_adagn_params(abstract, loaded, dtype):
+    """Materialise the AdaGN scale projections no SVD checkpoint can supply.
+
+    With ``adagn=True`` every spatial and temporal resnet gains an
+    ``adagn_scale_proj`` Dense that the pretrained weights know nothing about.
+    ``from_pretrained`` does no missing-key reconciliation here — it returns
+    exactly what the torch converter produced — and ``_rebox_like``'s
+    ``tree_map`` requires both trees to have the same structure, so the new
+    leaves have to be created explicitly.
+
+    Zeros are not a placeholder: they are what the module's own initialiser
+    would produce (``kernel_init=zeros``), and scale=0 makes ``(1 + scale)``
+    exactly 1, so the multiplicative path is inert until training moves it.
+
+    Any *other* missing key is a real load failure and raises rather than being
+    silently zero-filled.
+    """
+    flat_a = flatten_dict(abstract)
+    flat_l = flatten_dict(loaded)
+
+    unexpected = sorted(k for k in flat_l if k not in flat_a)
+    if unexpected:
+        raise ValueError(
+            f"[ctrl_world] checkpoint has {len(unexpected)} params the UNet does not "
+            f"declare, e.g. {unexpected[:3]}"
+        )
+    missing = sorted(k for k in flat_a if k not in flat_l)
+    not_adagn = [k for k in missing if "adagn_scale_proj" not in k]
+    if not_adagn:
+        raise ValueError(
+            f"[ctrl_world] {len(not_adagn)} non-AdaGN params missing from the "
+            f"checkpoint, e.g. {not_adagn[:3]} — this is a load failure, not a "
+            "new-parameter case."
+        )
+    for k in missing:
+        a = flat_a[k]
+        spec = a.value if isinstance(a, LogicallyPartitioned) else a
+        flat_l[k] = jnp.zeros(spec.shape, dtype)
+    return unflatten_dict(flat_l), len(missing)
 
 
 def _rebox_like(abstract, loaded):
@@ -277,12 +319,19 @@ class CtrlWorldTrainer:
         max_logging.log(
             f"[ctrl_world] loading UNet from {self.config.pretrained_model_name_or_path}/unet"
         )
+        # AdaGN is tied to the conditioning mode, not exposed as its own knob:
+        # in adaln mode the action rides t_emb, so the resnets' t_emb injection
+        # IS the action pathway and it needs to be multiplicative to match the
+        # WAN arm's AdaLN. In cross_attn mode the action never touches t_emb, so
+        # the UNet stays exactly as pretrained.
+        adagn = self.train_cfg.action_cond_mode == "adaln"
         with mesh:
             unet, unet_params = FlaxVideoUNet.from_pretrained(
                 self.config.pretrained_model_name_or_path,
                 subfolder="unet",
                 dtype=self.dtype,
                 weights_dtype=self.weights_dtype,
+                adagn=adagn,
                 from_pt=self.config.from_pt,
                 use_safetensors=True,
                 attention_kernel=self.config.attention,
@@ -320,6 +369,17 @@ class CtrlWorldTrainer:
         with mesh:
             abstract_unet_params = unet.init_weights(
                 jax.random.PRNGKey(self.config.seed), eval_only=True
+            )
+        unet_params, n_adagn = _fill_adagn_params(
+            abstract_unet_params, unet_params, self.weights_dtype
+        )
+        if adagn:
+            max_logging.log(
+                f"[ctrl_world] AdaGN enabled (action_cond_mode=adaln): every resnet now "
+                f"applies norm2(h)*(1+scale)+shift instead of norm2(h+shift); "
+                f"{n_adagn} zero-init adagn_scale_proj leaves added. The pretrained "
+                f"time_emb_proj is reused as the shift, but it now acts AFTER the norm, "
+                f"so step 0 is close to — not identical to — pretrained SVD."
             )
         unet_params = _rebox_like(abstract_unet_params, unet_params)
 

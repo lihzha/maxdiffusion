@@ -216,6 +216,10 @@ class FlaxVideoResBlockUNet(nn.Module):
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
   precision: jax.lax.Precision = None
+  # "default" | "scale_shift" (AdaGN), applied to BOTH branches so the action
+  # signal modulates the temporal path too. Set only by FlaxVideoUNet when
+  # ``action_cond_mode == 'adaln'``.
+  time_embedding_norm: str = "default"
 
   def setup(self):
     out_c = self.in_channels if self.out_channels is None else self.out_channels
@@ -229,6 +233,7 @@ class FlaxVideoResBlockUNet(nn.Module):
         dtype=self.dtype,
         weights_dtype=self.weights_dtype,
         precision=self.precision,
+        time_embedding_norm=self.time_embedding_norm,
     )
     # Named `temporal_res_block` to match Diffusers' SpatioTemporalResBlock.
     # temb_channels is set so the temporal block has a `time_emb_proj` Dense
@@ -243,6 +248,7 @@ class FlaxVideoResBlockUNet(nn.Module):
         eps=self.norm_eps,
         dtype=self.dtype,
         weights_dtype=self.weights_dtype,
+        time_embedding_norm=self.time_embedding_norm,
     )
     self.time_mixer = FlaxAlphaBlender(
         merge_strategy=self.merge_strategy,

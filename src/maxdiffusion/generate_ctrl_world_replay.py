@@ -56,6 +56,7 @@ from maxdiffusion.models.svd.video_unet_flax import FlaxVideoUNet
 from maxdiffusion.models.svd.video_autoencoder_flax import FlaxSVDAutoencoderKL
 import orbax.checkpoint as ocp
 from flax.serialization import from_bytes
+from flax.traverse_util import flatten_dict, unflatten_dict
 from maxdiffusion.models.svd.action_encoder_flax import (
     FlaxActionAdaLNProjector,
     FlaxActionEncoder,
@@ -357,6 +358,9 @@ def run_replay(args) -> None:
             subfolder="unet",
             dtype=dtype,
             weights_dtype=weights_dtype,
+            # Mirrors CtrlWorldTrainer._load_modules: adaln runs train AdaGN
+            # resnets, so the orbax restore below needs those leaves in the tree.
+            adagn=args.action_cond_mode == "adaln",
             from_pt=True,
             use_safetensors=True,
             attention_kernel="flash",
@@ -412,6 +416,20 @@ def run_replay(args) -> None:
             jax.random.PRNGKey(0), batch=1, num_frames=1,
             hidden_size=action_encoder.hidden_size,
         )
+        # The converted upstream weights predate AdaGN, so from_pretrained left
+        # every adagn_scale_proj leaf out of the tree. Materialise them as zeros:
+        # that is both the correct restore-template structure below and, on the
+        # no-orbax path, the only sensible value — scale 0 makes (1 + scale) == 1,
+        # so the modulation is inert rather than random.
+        with mesh:
+            abstract = unet.init_weights(jax.random.PRNGKey(0), eval_only=True)
+        flat_a, flat_l = flatten_dict(abstract), flatten_dict(unet_params)
+        for k in flat_a:
+            if k not in flat_l and "adagn_scale_proj" in k:
+                spec = flat_a[k]
+                spec = spec.value if hasattr(spec, "value") else spec
+                flat_l[k] = jnp.zeros(spec.shape, weights_dtype)
+        unet_params = unflatten_dict(flat_l)
 
     if args.orbax_checkpoint_dir:
         # Trained here: take every trained tensor from the orbax tree. The VAE is

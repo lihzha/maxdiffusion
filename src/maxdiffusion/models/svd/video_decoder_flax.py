@@ -204,8 +204,18 @@ class FlaxTemporalResBlock3D(nn.Module):
   eps: float = 1e-6
   dtype: jnp.dtype = jnp.float32
   weights_dtype: jnp.dtype = jnp.float32
+  # "default" | "scale_shift" (AdaGN). See FlaxResnetBlock2D.time_embedding_norm
+  # — same semantics, and likewise only ever set by FlaxVideoUNet when
+  # ``action_cond_mode == 'adaln'``. Ignored when ``temb_channels is None``
+  # (the VAE case, which has no time embedding at all).
+  time_embedding_norm: str = "default"
 
   def setup(self):
+    if self.time_embedding_norm not in ("default", "scale_shift"):
+      raise ValueError(
+          "FlaxTemporalResBlock3D.time_embedding_norm must be 'default' or "
+          f"'scale_shift', got {self.time_embedding_norm!r}"
+      )
     out_c = self.in_channels if self.out_channels is None else self.out_channels
     pads = tuple((k // 2, k // 2) for k in self.kernel_size)
 
@@ -224,8 +234,21 @@ class FlaxTemporalResBlock3D(nn.Module):
       self.time_emb_proj = nn.Dense(
           out_c, dtype=self.dtype, param_dtype=self.weights_dtype
       )
+      # AdaGN scale; separate zero-init Dense so the pretrained time_emb_proj
+      # still loads and serves as the shift. See FlaxResnetBlock2D.setup.
+      if self.time_embedding_norm == "scale_shift":
+        self.adagn_scale_proj = nn.Dense(
+            out_c,
+            dtype=self.dtype,
+            param_dtype=self.weights_dtype,
+            kernel_init=nn.initializers.zeros,
+            bias_init=nn.initializers.zeros,
+        )
+      else:
+        self.adagn_scale_proj = None
     else:
       self.time_emb_proj = None
+      self.adagn_scale_proj = None
     self.norm2 = nn.GroupNorm(
         num_groups=self.groups, epsilon=self.eps, dtype=self.dtype, param_dtype=self.weights_dtype
     )
@@ -264,11 +287,16 @@ class FlaxTemporalResBlock3D(nn.Module):
     if self.time_emb_proj is not None and temb is not None:
       # temb: (B, T, C_temb) → project → (B, T, C_out) → (B, T, 1, 1, C_out)
       t = nn.swish(temb)
-      t = self.time_emb_proj(t)
-      t = t[:, :, None, None, :]  # broadcast over H, W
-      x = x + t
+      shift = self.time_emb_proj(t)[:, :, None, None, :]  # broadcast over H, W
+      if self.adagn_scale_proj is not None:
+        # AdaGN: modulate after norm2 instead of adding before it.
+        scale = self.adagn_scale_proj(t)[:, :, None, None, :]
+        x = self.norm2(x) * (1 + scale) + shift
+      else:
+        x = self.norm2(x + shift)
+    else:
+      x = self.norm2(x)
 
-    x = self.norm2(x)
     x = nn.swish(x)
     x = self.dropout_layer(x, deterministic)
     x = self.conv2(x)
