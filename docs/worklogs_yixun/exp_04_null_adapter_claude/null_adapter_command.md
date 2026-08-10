@@ -142,3 +142,13 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 **TRAINFIT-16 (G2' fit check):** same failure signature as DEV-64 — G1 fails only `median_ratio` (4.064 vs >=5; in-basin mean SSIM 0.8847, CI [0.8596, 0.9075]); G2 fails `mean_ssim`/`ssim_ci_low` (0.6379, CI-low 0.5644); all four selection reasons identical. **The STOP is not a dev-set artifact**: the training cohort's own basin shows the same capacity-without-transfer shape (trainfit in-basin 0.8847 vs dev 0.8868 — no memorization gap either).
 
 **Formal state:** the plan-compliant target selection is now measured, reproduced, and cohort-consistent: **STOP**. Report fold-in dispatched (results section 1/section 4 + analysis supersede notes). Closure adjudication remains Yixun's.
+
+
+---
+
+## 2026-08-10 — closing-review correction to the two entries above (append-only)
+
+The closing Codex pass (verdict: STOP-valid-and-closure-grade; REQUEST-REVISION on wording) corrected two phrases in my 2026-08-09/10 entries:
+1. "A2 ... statistically indistinguishable from doing nothing" — WITHDRAWN as stated: no cross-arm test was run; A2 vs A0 is an unmatched, descriptive comparison. Correct statement: A2's mean landed 0.0027 below A0's at J=50.
+2. "converged to the control, not past it" — "converged"/"terminated" imply a measured plateau; only two budget points exist. Correct statement: A2 **landed near the control at J=50**; convergence is an untested hypothesis.
+3. "reproduction exact ... trainfit same signature" (2026-08-10 entry) — reproduction applies to **DEV-64 only** (published by both attempts, byte-for-byte equal); TRAINFIT-16 ran once (attempt 2) and was not reproduced.
