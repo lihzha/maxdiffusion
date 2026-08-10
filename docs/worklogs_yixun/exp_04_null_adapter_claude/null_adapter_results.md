@@ -1,23 +1,26 @@
 # null_adapter_results — exp_04 P4 (SOP artifact 10)
 
-**Status: DRAFT — revision 2, after the Codex analysis review (`null_adapter_codex_analysis_review.md`,
-REQUEST-REVISION).** Judgment calls are flagged **[JUDGMENT]**, deviations from plan v5 **[DEVIATION]**, and
-edits made in response to the review **[REV2]**.
+**Status: DRAFT — revision 3.** Revision 2 answered the Codex analysis review
+(`null_adapter_codex_analysis_review.md`, REQUEST-REVISION); **revision 3 folds in the completed J1-5 clean-gate
+re-run**. Judgment calls are flagged **[JUDGMENT]**, deviations from plan v5 **[DEVIATION]**, and edits are
+marked **[REV2]** / **[REV3]** by the round that made them.
 
-> **⚠ THE HEADLINE VERDICT IS PROVISIONAL.** The reviewer overturned the argument that the predeclared STOP
-> survived the recipe deviation of §4.4. **Every number in this document was produced at J=10, not the adopted
-> J=50**, so the observed STOP stands as an observation while the *plan-compliant* selection is **unmeasured**.
-> A **J=50 clean-gate re-run is approved and pending**; §1, §4.2 and §4.4 are written to be superseded by it.
+> **✅ THE FORMAL VERDICT IS NOW MEASURED: `target = STOP`, at the adopted J=50 recipe.**
+> Revision 2 recorded the selection as INDETERMINATE, because the gates had only ever run at the un-adopted
+> J=10 (§4.4, issue #15). **J1-5 re-ran both cohorts at the adopted J=50/lr=0.01 with the launcher fix live, and
+> the predeclared STOP was retained** — on DEV-64 and TRAINFIT-16 alike, reproduced across two independent
+> attempts. **§4.5 is the measured record of that run.** The J=10 numbers are retained throughout as the
+> account of **issue #15**, clearly marked, and are no longer the verdict.
 
 This document is the **factual record only**: what was predeclared, what ran (including every failed attempt and
 its classification), the numbers exactly as the gate module computed them, the gate verdicts, and the artifact
 URIs with their recorded digests. Interpretation lives in `null_adapter_analysis.md`.
 
-**Verification basis.** Every number below was re-derived from the published artifacts pulled from GCS on
-2026-08-08 (cached locally for the write-up), not from the worklog readings. Where a worklog figure and the
-artifact disagree, the artifact wins and the discrepancy is recorded in §8. Gate metric = **`future_ssim` /
-`future_mse`** — the non-pinned latent frames (latent frames 1–8 ⇒ pixel frames 1–32); frame 0 is the pinned
-first-frame condition and is excluded from every primary statistic.
+**Verification basis.** Every number below was re-derived from the published artifacts, not from the worklog or
+ledger readings — J1-4/J1b/J1c pulled 2026-08-08, **[REV3]** J1-5 pulled 2026-08-09/10. Where a worklog figure
+and the artifact disagree, the artifact wins and the discrepancy is recorded in §8. Gate metric =
+**`future_ssim` / `future_mse`** — the non-pinned latent frames (latent frames 1–8 ⇒ pixel frames 1–32); frame 0
+is the pinned first-frame condition and is excluded from every primary statistic.
 
 ---
 
@@ -29,10 +32,10 @@ first-frame condition and is excluded from every primary statistic.
 | Plan of record | `plan_null_adapter.md` **v5** (5 Codex review passes, all findings accepted, APPROVE-PLAN 2026-08-04) |
 | Phases executed | J0 (cohorts) → **P1** (J1 capacity + basin probe) → **P1b** (J1b joint direct optimization) → **P1c** (J1c transfer probe) |
 | Phases NOT executed | **P2** (target caching), **P3** (null-embedding adapter), J2–J5 — not advanced |
-| **Observed verdict** | **`target = "stop"` on both cohorts at the recipe that actually ran (J=10, lr=0.01).** The gate module returned STOP; no arm qualified for caching |
-| **Formal verdict** **[REV2]** | **INDETERMINATE.** Plan v5 §4-P1 requires G1/G2 to be evaluated on the *adopted* recipe (J=50); they were evaluated at J=10 (§4.4). A J=50 A1 yields different optimized nulls and therefore a different A1-probe, and **A2's J=50 G2 result is unmeasured** — so the plan-compliant target selection cannot be read off these artifacts either way. The decision not to advance to P2/P3 was **discretionary**, taken on the observed J=10 result |
-| **Resolution in flight** **[REV2]** | A **J=50 clean-gate re-run is APPROVED (Yixun) and PENDING**; the launcher fix is in preparation. **§1, §4.2 and §4.4 will be superseded by its result** — which will either restore the predeclared STOP or name a target |
-| Evidence-producing tips | J0-2 `7199feb` · J1-4 `3bdbd2a` · J1b `db8c3dc` · J1c `9213585` (§8.1) |
+| **FORMAL VERDICT** **[REV3]** | **`target = "stop"`, measured at the adopted J=50/lr=0.01 recipe** on **both** cohorts (job J1-5, 2026-08-09/10), **reproduced exactly across two independent attempts**. The predeclared verdict stands clean; no arm qualified for caching. **§4.5** |
+| Prior observation (issue #15) **[REV3]** | `target = "stop"` was *also* returned at the un-adopted **J=10** (J1-4, §4.1–§4.2). Retained as the record of the launcher deviation, **not** as the verdict. Revision 2 correctly ruled that observation **INDETERMINATE** as to the plan-compliant selection (§4.4); J1-5 resolved it |
+| Closure adjudication **[REV3]** | The gates fired; **whether the experiment is CLOSED is Yixun's call** (announcement 03). This document reports the measured outcome against the predeclared bars and does not adjudicate |
+| Evidence-producing tips | J0-2 `7199feb` · J1-4 `3bdbd2a` · J1b `db8c3dc` · J1c `9213585` · **[REV3]** J1-5 `a5aa6bc` (§8.1) |
 | Report commit **[REV2]** | revision 1 of this document was committed at `6aefa6c`. A branch tip plus "clean" is mutable and is deliberately **not** quoted as provenance |
 | Code state | R1–R11 + the `hyperparameters-config-access` fix + R12-lite `transfer-probe`; suite **989** tests |
 
@@ -90,6 +93,7 @@ and the worklog.
 | **J1-4** | 2026-08-06T16:18Z | `3bdbd2a` (see §8.1) | **SUCCEEDED** — attempt 0, zero preemptions. Capacity-only (phases 1–3 adopted from the standing artifacts), attempt-scoped roots | — |
 | **J1b-1** | 2026-08-06T20:15Z | `db8c3dc` | **SUCCEEDED** — attempt 2; two spot preemptions absorbed cleanly by the attempt-scoped design. 300 iters, 3,237 s wall | — |
 | **J1c-1** | 2026-08-07T01:28Z | `9213585` | **SUCCEEDED-BY-ARTIFACT** — attempt 0 published the complete `transfer_probe.json` before a teardown-window preemption; the queue's redundant retry was cancelled | — |
+| **J1-5** **[REV3]** | 2026-08-09T17:56Z | `a5aa6bc` | **SUCCEEDED** at attempt 2 — the clean-gate re-run at the adopted **J=50**, both cohorts. Attempt 1 published the DEV capacity phase, then was killed at 21:08Z by `TPU_VM_HEALTH_TIMEOUT`; attempt 2 re-ran the full runbook into fresh attempt-scoped roots and completed (`seconds 10582`). **Both attempts' gate numbers are byte-equal** | Attempt 1's kill = **infrastructure** (issue #16). Zero code defects. The attempt-scoped-root pattern (issue #13's remedy) absorbed it as designed — its first real test by churn |
 
 **Three runbook-class lessons in one campaign** (phase-2 wiring, missing TRAINFIT cohort half, idempotency under
 auto-retry) — all Planner-authored orchestration errors, **zero code defects across J1-2/3/4** (identical
@@ -110,6 +114,8 @@ Authoritative roots (both published 2026-08-06):
 `coverage_ok: true`** on every gate in both cohorts.
 
 ### 4.1 Per-arm means — **all values at J=10, lr=0.01 (NOT the adopted J=50; §4.4)** **[REV2]**
+
+> **[REV3] These are the issue-#15 numbers, kept for the record. The authoritative measurement is §4.5.**
 
 **DEV-64 @ J=10** (n = 64; probe arms average over k ∈ {0,1,2} ⇒ 192 observations)
 
@@ -167,7 +173,8 @@ was a single example's value. Corrected below to true `future_pixel_mse` means, 
 - G2 failed on both absolute-SSIM conjuncts; its ratio and improvement conjuncts both cleared.
 - A1-probe sits at **0.1729** against a 0.70 floor — a factor of four short, i.e. **very low absolute quality**.
 - **[DEVIATION — RECORD, revised at REV2]** The worklog's J1 reading calls these nulls "actively destructive, WORSE than doing nothing". **The artifacts do not support that**: the nearest do-nothing reference, A2-0, is **0.1423**, and A1-probe is **+0.031 above** it. The phrase is gate-verified for exp_05's B2 (0.1610 vs 0.2814, 0/64 improved) and appears to have been transposed. **The supported statement is narrower than either "destructive" or "inert":** A1-probe has very low absolute quality and is **+0.031 above the nearest *unmatched* do-nothing proxy; its matched incremental benefit or harm was not measured.** The proxy is unmatched because A1-probe replays from `keyed(k)` while A2-0 replays from `global(0)` — **no base-null `keyed(k)` control arm exists**, so neither an inertness nor a harm claim is available.
-- **[REV2]** The selection is **NOT over-determined**, contrary to revision 1. A1-probe is a function of A1, so a J=50 A1 produces different locked nulls and a different probe; and A2's J=50 G2 outcome is unmeasured, leaving the A2 fallback branch of the selection rule open. **What the artifacts license: `target="stop"` was returned at J=10. What they do not license: that the plan-compliant selection is STOP.** See §4.4.
+- **[REV2]** The selection is **NOT over-determined**, contrary to revision 1. A1-probe is a function of A1, so a J=50 A1 produces different locked nulls and a different probe; and A2's J=50 G2 outcome is unmeasured, leaving the A2 fallback branch of the selection rule open. **What these artifacts license: `target="stop"` was returned at J=10. What they do not license: that the plan-compliant selection is STOP.**
+- **[REV3] Resolved by measurement, not by argument.** J1-5 ran both branches at the adopted J=50: a J=50 A1 *was* recomputed (0.8868) with its own probe (0.1666), and A2's J=50 G2 *was* measured (0.6638). **Both branches fail, so the plan-compliant selection is STOP** (§4.5). Revision 2's reasoning above stands as written — it was correct that the J=10 artifacts could not settle the question; it is simply no longer the last word.
 
 ### 4.3 Adequacy probe (`…/j1r2/adequacy/adequacy_report.json`, published by J1-3 attempt 1)
 
@@ -222,12 +229,90 @@ Same adoption logic, same adopted cell, opposite outcome, because of one missing
   2. **The A2 fallback branch is unmeasured.** Even if a J=50 A1 still failed its probe, the selection rule then asks whether G2 passes at J=50. No such measurement exists.
   3. **No monotonicity is guaranteed.** Revision 1 asserted "a stronger optimizer could only have raised A2" — **that claim is withdrawn.** Tracking loss and decoded SSIM need not move together, in either direction.
   ⇒ The artifacts genuinely say `target="stop"` **at J=10**; the **plan-compliant target selection is unmeasured**. Advancing no further was a **discretionary decision on the observed result**, not the firing of a predeclared gate.
-- **[REV2] Resolution.** A **J=50 clean-gate re-run is approved and pending**; its result restores a formal verdict — either the predeclared STOP or a named target. This subsection is written to be superseded by it.
-- **Every headline number in this document therefore carries "@ J=10"**, not only this subsection.
+- **[REV3] RESOLVED — the re-run happened and the verdict is measured.** J1-5 (job `20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun`, v6e-8, tip `a5aa6bc`) re-ran capacity on **both** cohorts at the adopted **J=50/lr=0.01** with the launcher fix live, and **the predeclared STOP was retained**. Full record in **§4.5**. The paragraphs above stand as the account of issue #15 — the deviation was real, the indeterminacy ruling was correct, and it is now discharged **by measurement rather than by argument**.
+- **Every J1-4 number in this document therefore carries "@ J=10"** and is historical; §4.5's numbers are the verdict.
 - **Cross-experiment comparability is compromised:** exp_04's A1 (0.8523 @ J=10) and exp_05's B1 (0.9227 @ J=50) were optimized at **different budgets**. See analysis §5.2.
 - **Not recorded anywhere before this document** — not in the worklog, `_command.md`, the tracker, or CLAUDE.md. `null_adapter_params_set_up.md` states "FULL CAPACITY … at the production recipe (adoption consumed via `NULL_ADEQUACY_URI`)", which was never achievable through the shipped launcher.
 
-### 4.5 L_null ablation (diagnostic-only, plan v5 §4-P1 N5)
+### 4.5 **[REV3] J1-5 — THE CLEAN-GATE RE-RUN AT THE ADOPTED RECIPE (the formal verdict)**
+
+Job `20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun` (v6e-8), tip `a5aa6bc` (the `adequacy-wiring` fix
+`a520e9d` + ledger). Both capacity cohorts, both adopting the standing `…/j1r2/adequacy` artifact — which now
+actually reaches the runner through the fixed launcher.
+
+**Provenance — the entire point of the re-run, verified bound in the artifacts (not merely in the log):**
+every shard `header.json` carries `"optimization_config": {"inner_iters": 50, "lr": 0.01}` and
+`code_sha a5aa6bc`; `run_report.json` carries the same `recipe`; `manifest_hash 433f8691…` matches
+`selection.json`. Issue #15's fix is confirmed live end-to-end.
+
+**Job trail.** Attempt 1 published the DEV capacity phase, then was killed at 21:08Z by `TPU_VM_HEALTH_TIMEOUT`
+(**infrastructure**, issue #16). Attempt 2 re-ran the full runbook into fresh attempt-scoped roots and
+**SUCCEEDED** (`seconds: 10582`). Authoritative roots (those carrying the run-level JSON):
+`…/j1r2/cleangate_att-0809-211639/` (DEV-64) and `…/j1r2/cleangate_trainfit_att-0809-211639/` (TRAINFIT-16).
+Attempt 1's DEV root `…/cleangate_att-0809-180640/` is retained as the reproduction control.
+
+**Reproduction check.** Attempt 2 vs attempt 1 on DEV-64: **the `g1`, `g2` and `selection` number blocks are
+byte-for-byte equal** — not merely equal to 4 decimals. The pipeline is deterministic end-to-end.
+
+#### 4.5.1 Per-arm means at J=50 (mean future-SSIM; probes over k ∈ {0,1,2})
+
+| Arm | **DEV-64 @ J=50** | J=10 (J1-4) | movement | **TRAINFIT-16 @ J=50** |
+|---|---|---|---|---|
+| A0 (control) | **0.6665** | 0.6665 | **per-example bitwise identical** — a deterministic control, so cross-run comparability is exact | — |
+| **A1** | **0.8868** | 0.8523 | **+0.0345** — more iterations buy more in-basin capacity | **0.8847** |
+| A1-probe | **0.1666** | 0.1729 | **−0.0064** — transfer does **not** improve with J | 0.1677 |
+| A2-0 (control) | **0.1423** | 0.1423 | **per-example bitwise identical** | — |
+| **A2** | **0.6638** | 0.4973 | **+0.1665** — the largest movement in the study | **0.6379** |
+| A2-probe | 0.2510 | 0.2958 | −0.0448 | — |
+
+#### 4.5.2 Gate verdicts at J=50 — **STOP on both cohorts**
+
+| Gate | Cohort | median ratio (≥ 5) | frac improved (≥ 0.80) | mean SSIM | 95 % CI | verdict |
+|---|---|---|---|---|---|---|
+| **G1** (A1 vs A0) | DEV-64 | **4.6812** ✗ | 1.0000 ✓ | 0.8868 ✓ (≥0.80) | [0.8711, 0.9010] ✓ (low ≥0.75) | **FAIL** — `median_ratio` only |
+| **G1** | TRAINFIT-16 | **4.0641** ✗ | 1.0000 ✓ | 0.8847 ✓ | [0.8596, 0.9075] ✓ | **FAIL** — `median_ratio` only |
+| **G2** (A2 vs A2-0) | DEV-64 | 17.8058 ✓ | 1.0000 ✓ | **0.6638** ✗ (<0.75) | **[0.6312, 0.6949]** ✗ (low <0.70) | **FAIL** — `mean_ssim`, `ssim_ci_low` |
+| **G2** | TRAINFIT-16 | 17.5953 ✓ | 1.0000 ✓ | **0.6379** ✗ | **[0.5644, 0.7061]** ✗ | **FAIL** — `mean_ssim`, `ssim_ci_low` |
+
+| Cohort | A1-probe abs (floor 0.70) | `A1-probe / A1` (≥ 0.7) | verdict |
+|---|---|---|---|
+| DEV-64 | **0.1666** ✗ (short by 4.2×) | **0.1879** ✗ | fails; the absolute floor is the binding constraint |
+| TRAINFIT-16 | **0.1677** ✗ | **0.1896** ✗ | same |
+
+**Selection: `target = "stop"` on both cohorts**, with reasons identical across cohorts *and* identical to
+J1-4's:
+
+```
+"G1 failed (median_ratio)"
+"A1-probe below 0.7x the A1 mean (transfer)"
+"A1-probe below the 0.70 absolute floor"
+"G2 failed (mean_ssim, ssim_ci_low)"
+```
+
+**Robustness — the STOP does not hinge on G1's near-miss.** G1's `median_ratio` (4.681) is the only clause that
+lands close to its bar. Every path to a non-STOP outcome fails on at least one clause that is nowhere near its
+bar: A1's selection is independently barred by the probe missing its absolute floor by **4.2×**, and G2 fails
+**both** SSIM clauses (0.6638 vs 0.75; CI-low 0.6312 vs 0.70). A G1 pass alone could not have selected A1.
+
+**Cohort consistency.** TRAINFIT-16 reproduces the DEV-64 failure signature exactly — G1 failing only
+`median_ratio`, G2 failing both SSIM clauses, all four selection reasons identical. **The STOP is not a
+dev-set artifact**, and in-basin capacity is essentially equal across cohorts (trainfit 0.8847 vs dev 0.8868),
+so there is **no memorization gap** between the training-fit and held-out cohorts.
+
+**One-line readings (no interpretation beyond the gates; §5-level interpretation is in the analysis doc):**
+- The predeclared verdict is **retained at the adopted recipe**: five-fold more optimization did not change the outcome.
+- **In-basin capacity rose** (0.8523 → 0.8868) while **transfer stayed flat** (0.1729 → 0.1666).
+- **A2 moved furthest** (0.4973 → 0.6638) and landed at **0.6638 against A0's 0.6665** — see §4.5.3.
+
+#### 4.5.3 A note on what A2's 0.6638 is and is not being compared to **[JUDGMENT]**
+
+A2's **matched** control is **A2-0** (0.1423), and against it A2 passes both of G2's relative clauses decisively
+(median ratio 17.8, 64/64 improved). The observation that A2 (0.6638) now sits level with **A0** (0.6665) is a
+**cross-arm, unmatched** comparison — A0 replays from its own inversion endpoint with CFG collapsed, A2 replays
+from fresh ε₀ — and it is recorded here as descriptive only. It is *not* a gate statistic and no verdict
+depends on it. The interpretation is in the analysis doc §2.4.
+
+### 4.6 L_null ablation (diagnostic-only, plan v5 §4-P1 N5)
 
 Same 8 DEV examples, recipe [10, 0.01], `diagnostic_only: true`:
 
@@ -236,7 +321,7 @@ Same 8 DEV examples, recipe [10, 0.01], `diagnostic_only: true`:
 | L_nat = **1** | 0.00302201 | the natural (non-padding) length of the T5("") context is **1 row** |
 | L_null = **16** | 0.00213840 | 1.41× better; **L=16 stays fixed for P2/P3 regardless** (plan N5) |
 
-### 4.6 A3 single-update measurement (`a3_measurement.json`, plan v5 §4-P1 F11 stops)
+### 4.7 A3 single-update measurement (`a3_measurement.json`, plan v5 §4-P1 F11 stops)
 
 | Quantity | Value | Predeclared stop | Verdict |
 |---|---|---|---|
@@ -381,9 +466,12 @@ Corrected here rather than by editing the append-only ledger.
 | Artifact | URI | Digest / key provenance |
 |---|---|---|
 | J0 cohort manifests | `gs://v6_east1d/datasets/droid_wan_null_adapter/manifests/j0/` (+ committed under `j0_manifests/`) | listing checksum `5827f4da…0d14` |
-| DEV-64 capacity | `…/j1r2/capacity_att-0806-164625/` — `selection.json`, `gate_tables.json`, `run_report.json`, `a3_measurement.json`, `a1/`, `a2/`, `videos/` | `manifest_hash 433f8691…3f76fa` |
-| TRAINFIT-16 capacity | `…/j1r2/capacity_trainfit_att-0806-164625/` (same set minus A3) | `manifest_hash b4e62fc9…45abb66` |
-| Adequacy | `…/j1r2/adequacy/adequacy_report.json` | published by J1-3 attempt 1; adopted by J1-4 |
+| **[REV3] DEV-64 capacity @ J=50 — AUTHORITATIVE (the formal verdict)** | `…/j1r2/cleangate_att-0809-211639/` — `selection.json`, `gate_tables.json`, `run_report.json`, `a1/`, `a2/` | `code_sha a5aa6bc`; `optimization_config {50, 0.01}`; `manifest_hash 433f8691…3f76fa`; `seconds 10582` |
+| **[REV3] TRAINFIT-16 capacity @ J=50 — AUTHORITATIVE** | `…/j1r2/cleangate_trainfit_att-0809-211639/` | `code_sha a5aa6bc`; `optimization_config {50, 0.01}`; `manifest_hash b4e62fc9…45abb66` |
+| **[REV3] DEV-64 capacity @ J=50 — attempt 1** | `…/j1r2/cleangate_att-0809-180640/` | Same run, killed by `TPU_VM_HEALTH_TIMEOUT` after publishing capacity. **Retained as the reproduction control**: its `g1`/`g2`/`selection` number blocks are byte-equal to the authoritative root's |
+| DEV-64 capacity @ J=10 (issue #15) | `…/j1r2/capacity_att-0806-164625/` — `selection.json`, `gate_tables.json`, `run_report.json`, `a3_measurement.json`, `a1/`, `a2/`, `videos/` | `manifest_hash 433f8691…3f76fa`; `optimization_config {10, 0.01}` — **historical, superseded by the J=50 roots for the verdict** |
+| TRAINFIT-16 capacity @ J=10 (issue #15) | `…/j1r2/capacity_trainfit_att-0806-164625/` (same set minus A3) | `manifest_hash b4e62fc9…45abb66`; historical |
+| Adequacy | `…/j1r2/adequacy/adequacy_report.json` | published by J1-3 attempt 1; **adopted (unsuccessfully) by J1-4, and successfully by J1-5** |
 | J1b | `…/j1r2/j1b_att-0806-211405/` — `a3_direct_opt.json`, `a3_nulls.npz` | `code_sha db8c3dc`; npz `sha256 677502c5…eb768` |
 | J1c | `…/j1r2/j1c_att-0807-020621/transfer_probe.json` | `code_sha 9213585`; binds the npz sha256 above |
 | Superseded | `…/j1r2/capacity/` (J1-3 attempt-1 partial, no run-level JSON); `…/j1r2/smoke/`; `…/j1/` (J1-1/J1-2 era) | retained for the record |
@@ -396,7 +484,7 @@ Corrected here rather than by editing the append-only ledger.
 |---|---|---|
 | Worklog J1b table, tracker | J1b mean 0.270 | `final_loss` **0.2709** ✓; but `final_endpoint` (the replayed quantity) is **0.2731** — §5 |
 | Worklog J1c, tracker | "~72 % retention", "2.8×" | estimator-dependent: **0.7235 / 0.7301 / 0.7007**; **2.75× / 2.91×** — §6.2 |
-| Worklog J1 reading | A3 "peak HBM ~15.5 GB" | **15,492,600,832 B = 15.49 GB = 14.43 GiB** — §4.6 |
+| Worklog J1 reading | A3 "peak HBM ~15.5 GB" | **15,492,600,832 B = 15.49 GB = 14.43 GiB** — §4.7 |
 | Worklog J1 reading, tracker | A1-probe "actively destructive, WORSE than doing nothing" | A1-probe **0.1729** vs the A2-0 do-nothing proxy **0.1423** — the probe is **+0.031 above** it. The claim holds for exp_05's B2, not for exp_04's probe — §4.2 |
 | `params_set_up.md` | capacity ran "at the production recipe (adoption consumed)" | ran at the **default J=10** — §4.4 |
 | `_command.md` J1-4 | tip `27efcd1` | artifacts record `3bdbd2a` (docs-only descendant, identical `src/`) — §8.1 |
@@ -420,7 +508,7 @@ document quotes has been checked against the artifacts; no claim is made about f
 1. **The 0.2946 anchor is not a quality baseline.** The deployed `pre_context` adapter's rollout SSIM 0.2946 comes from a **4-sample** validation at step 30,000 — and those four samples are **four correlated windows of a single episode**. It is a **wiring/sanity check**, never a statistically meaningful quality baseline, and no comparison in this document or the analysis treats it as one.
 2. **A1/A2/A3 are ORACLES, not deployable systems.** Every arm optimizes conditioning **per clip against that clip's own ground-truth latents**. They bound what the conditioning channel can express; they say nothing directly about what an amortized, action-conditioned predictor can achieve.
 3. **J1b/J1c are n = 8**, first-8-DEV, **no confidence intervals**, no multiplicity control. J1b is **latent-MSE only**; SSIM appears only in J1c. The n=8 correlations in §6.3 are descriptive.
-4. **The gates ran at a recipe the experiment's own adequacy probe rejected** (§4.4) — the single largest threat to the quantitative claims here, and the reason the **formal selection is INDETERMINATE** rather than STOP. **Every number in this document is a J=10 number.** **[REV2]**
+4. **[REV3 — resolved] The J1-4 gates ran at a recipe the experiment's own adequacy probe rejected** (§4.4, issue #15). That made the plan-compliant selection **INDETERMINATE**, which was revision 2's standing caveat. **J1-5 discharged it by measurement**: both cohorts re-run at the adopted J=50, **STOP retained**, reproduced across two attempts (§4.5). **Residual caveat:** the J1-4/J1b/J1c numbers throughout §4.1–§4.3 and §5–§6 remain **J=10 numbers** and are historical; only §4.5 carries the verdict. **J1b and J1c were never re-run at J=50**, so the mechanism sections (§5, §6) still rest on J=10-era greedy baselines.
 5. **Exp_05's method pivots were never shared with exp_04.** exp_05 inverts with an **8-token** context; exp_04 with the **512-row padded** context with 16 rows replaced. The trajectories, controls, and pivots are different objects; cross-experiment tables are descriptive only (exp_05 plan §4's H1 interpretation note, and its `A0` vs `B0` control asymmetry — A0 collapses CFG to identity, B0 does not).
 6. **One cohort, one dataset, one backbone, one guidance scale (w = 5).** DEV-64/TRAINFIT-16 of DROID at 192×320×32f through Wan2.2 TI2V 5B. TEST-64 was never touched — correctly, since selection stopped at P1.
 7. **σ₀ = 1.0** here vs **0.999** in the PyTorch reference (ratified deviation, plan §8 register): no cross-repo artifacts were exchanged, so prior-art numbers are directional context, not matched comparisons.
