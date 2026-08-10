@@ -15,27 +15,37 @@
  .badge.warnb { background:#54430f; color:#ecd48a }
  code { background:#232327; padding:.05rem .3rem; border-radius:4px; font-size:.85em }
  details { background:#1b1b1f; border-radius:8px; padding:.5rem .8rem; margin:.8rem 0 }
+ .note.ok{border-left:4px solid #2f6f45}
  summary { cursor:pointer; font-weight:600 }
+ .okb{background:#1f3f2a;border-color:#2f6f45}
  .pass:after{content:" ✓"; color:#7fd47f} .fail:after{content:" ✗"; color:#e08a8a}
 </style></head><body>
 <h1>exp_04 <code>null_adapter</code> — P1 capacity study &amp; gates
-<span class="badge warnb">observed STOP @ J=10 · formal verdict INDETERMINATE pending J1-5</span></h1>
-<p class="sub">Presentation of <code>null_adapter_results.md</code> (rev 2) §1–§4 and
-<code>null_adapter_analysis.md</code> (rev 2) §1–§2. No new numbers. Plan of record v5; branch
+<span class="badge okb">FORMAL VERDICT: STOP @ J=50 (J1-5, measured)</span></h1>
+<p class="sub">Presentation of <code>null_adapter_results.md</code> (rev 4, FINAL) §1–§4.5 and
+<code>null_adapter_analysis.md</code> (rev 4, FINAL) §1–§2. No new numbers. Plan of record v5; branch
 <code>claude-exp_04_null_adapter-20260803</code>; frozen Wan2.2 TI2V 5B
 (<code>@b8fff7315c…</code>), guide scale 5.0, L=16 null rows inside the 512-row T5("") context,
 25-step σ grid (shift 5.0, σ₀=1.0), DEV-64 / TRAINFIT-16 of DROID 192×320×32f.</p>
 
-<div class="note warn"><b>Why "INDETERMINATE":</b> plan v5 required the gates to run at the recipe the adequacy
-probe adopted (<b>J=50, lr=0.01</b>). A launcher gap (<code>null_adequacy_uri</code> never passed —
-results §4.4) meant J1-4's gates ran at the <b>default J=10</b>. The J=10 observations below are real and
-fully verified; the <em>plan-compliant</em> target selection is unmeasured. The <b>J1-5 clean-gate rerun</b>
-at the adopted recipe (job <code>20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun</code>, tip
-<code>a5aa6bc</code> with the launcher fix <code>a520e9d</code>) was launched 2026-08-09 under Yixun's
-approval and <b>will decide the formal outcome</b>; this page will be superseded in place when it lands.</div>
+<div class="note ok"><b>RESOLVED — the formal verdict is measured.</b> Plan v5 required the gates to run at the
+recipe the adequacy probe adopted (<b>J=50, lr=0.01</b>). A launcher gap (<code>null_adequacy_uri</code> never
+passed — results §4.4, issue #15) meant J1-4's gates ran at the <b>default J=10</b>, which left the
+plan-compliant selection <em>indeterminate</em>. The <b>J1-5 clean-gate rerun</b> (job
+<code>20260809-175610-fc3a3414-exp04-j1-5-cleangate-yixun</code>, tip <code>a5aa6bc</code> with the launcher fix
+<code>a520e9d</code>) re-ran <b>both cohorts at the adopted recipe</b> and
+<b>the predeclared STOP was retained</b>. Provenance is bound in every shard header
+(<code>optimization_config {inner_iters: 50, lr: 0.01}</code>). DEV-64's gate/selection blocks reproduced
+<b>byte-for-byte</b> across the job's two attempts; TRAINFIT-16 completed once, in attempt 2.
+<br><br><b>J=50 gate summary (DEV-64):</b> G1 fails <em>only</em> <code>median_ratio</code> 4.681 vs &ge;5
+(A1 mean 0.8868, CI-low 0.8711 — both absolute clauses pass); A1-probe 0.1666 misses the 0.70 floor by 4.2&times;;
+G2 fails both SSIM clauses (0.6638 vs &ge;0.75; CI-low 0.6312 vs &ge;0.70) while its ratio 17.8 and 64/64 improved
+pass. TRAINFIT-16 shows the same signature (G1 ratio 4.064, A1 0.8847; G2 0.6379, CI-low 0.5644).
+<b>Selection: <code>target = stop</code> on both cohorts.</b>
+<br><br>The J=10 numbers below are retained as the <b>record of issue #15</b>, not as the verdict.</div>
 
-<h2>1 · The verdict in one paragraph (analysis §1, rev 2)</h2>
-<div class="note">At J=10 the observed answers are <b>a qualified yes and a clear no</b>: optimized nulls reach
+<h2>1 · The verdict in one paragraph (analysis §1, rev 4)</h2>
+<div class="note"><b>Historical (J=10, issue #15).</b> At J=10 the observed answers were <b>a qualified yes and a clear no</b>: optimized nulls reach
 <b>0.8523</b> own-basin SSIM — clearing G1's absolute conditions — while G1's <em>ratio</em> conjunct against a
 strong CFG-collapsed control failed (3.605 vs 5); fresh-noise optimization reached <b>0.4973</b> against a 0.75
 bar; and locked nulls under foreign noise reached <b>0.1729</b> against a 0.70 floor (+0.031 above the nearest
