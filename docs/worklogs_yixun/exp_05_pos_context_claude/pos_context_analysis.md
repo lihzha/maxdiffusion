@@ -1,9 +1,11 @@
 # pos_context_analysis — exp_05 P4′ (SOP artifact 11)
 
-**Status: DRAFT — revision 2, after the Codex analysis review (`pos_context_codex_analysis_review.md`,
-REQUEST-REVISION).** Every interpretive step is labelled **[FINDING]** (artifact-backed), **[INFERENCE]**
+**Status: FINAL — revision 3.** Revision 2 answered the first Codex analysis review; **revision 3 applies the
+closing review** (`pos_context_codex_closing_review.md`, REQUEST-REVISION — *"the exp_05 STOP and gate record
+remain valid"*; two scoping leaks, the exp_04-J=50 fold-in, and artifact-index staleness; no new compute). All
+four items are applied. **This document is submitted for closure adjudication.** Every interpretive step is labelled **[FINDING]** (artifact-backed), **[INFERENCE]**
 (supported but not compelled), or **[HYPOTHESIS]** (a mechanism story this experiment does *not* test);
-**[REV2]** marks an edit made in response to the review. Numbers are not restated except where the argument
+**[REV2]** / **[REV3]** mark edits by the round that made them. Numbers are not restated except where the argument
 turns on them — the record is `pos_context_results.md`.
 
 > **⚠ THREE CONCLUSIONS FROM REVISION 1 WERE NARROWED OR WITHDRAWN.** (1) B2-probe > B2 does **not** rule out
@@ -17,7 +19,9 @@ turns on them — the record is `pos_context_results.md`.
 ## 1. The verdict in one paragraph
 
 Yixun's question was sharp: *is the `pre_context` adapter's poor rollout quality a limit of its capacity or of
-its training signal?* exp_05 answers it. **Capacity is not the limit.** Per-clip optimized 8-token contexts —
+its training signal?* exp_05 answers it, at a scope worth stating precisely. **[REV3] Output-channel
+expressivity is not limiting on these clips; head function capacity remains untested.** Per-clip optimized
+8-token contexts —
 the exact tensor the deployed head emits, passed exactly as deployment passes it — drive the **frozen** Wan2.2
 5B to **0.9227 mean SSIM**, with 64/64 clips improved and a 28.6× median MSE reduction over the frozen-context
 control. The deployed channel, unchanged, is capable of near-reconstruction. **But that capability is bound to
@@ -25,9 +29,11 @@ the noise basin it was optimized in, and bound hard.** Re-optimizing per-step fr
 underperform — it lands at 0.1610, **worse than doing nothing** (0.2814), with **0 of 64** clips improved and a
 median ratio of 0.254. Locked contexts under foreign noise fall to 0.5254 against a 0.70 floor. The predeclared
 rule stopped the experiment before any of the ~14.80 GiB cache was written, and Yixun honored the STOP.
-**The finding is not "the positive slot is weak" — it is that a per-clip conditioning tensor is the wrong
-object to regress onto, because the tensor that works is a function of the noise draw and the training-time noise
-draw is fresh every step.**
+**[REV3] The finding is not "the positive slot is weak" — it is that the tested single-basin greedy-pivot
+cached-target family was rejected for K2/K3**, because the tensor that works is a function of the noise draw and
+the training-time noise draw is fresh every step. **Robust/multi-noise static targets and state-conditioned
+emitters remain untested.** *(Revision 2 said "a per-clip conditioning tensor is the wrong object to regress
+onto" — broader than what was tested, and narrowed here.)*
 
 ---
 
@@ -136,9 +142,14 @@ Restricting every arm to the **same 8 clips** J1b/J1c used (mean future-SSIM), *
 
 | Conditioning, replayed under **foreign** noise | **retention** | absolute | own-basin |
 |---|---|---|---|
-| exp_04 A1-probe — **greedy null**, locked | 0.183 | 0.1633 | 0.8911 |
-| exp_05 B1-probe — **greedy positive**, locked | 0.489 | 0.4586 | 0.9379 |
-| **exp_04 J1c — JOINT null, locked** | **0.730** | 0.4753 | 0.6509 |
+| exp_04 A1-probe — **greedy null**, locked · **J=10-era** | 0.183 | 0.1633 | 0.8911 |
+| exp_05 B1-probe — **greedy positive**, locked · J=50 | 0.489 | 0.4586 | 0.9379 |
+| **exp_04 J1c — JOINT null, locked** · **J=10-era** | **0.730** | 0.4753 | 0.6509 |
+
+**[REV3] The two exp_04 rows are J=10-era J1b/J1c evidence.** Neither follow-on was re-run at J=50, so — unlike
+§5.1's clean-gate comparison, which is now recipe-matched — this table's exp_04 rows remain at the J=10 budget
+and the J=10-vs-J=50 caveat still applies to them. They are preserved rather than overwritten because the
+joint-null result has no J=50 counterpart.
 
 **The retention ordering is the informative half:** jointly-optimized tensors keep **0.730** of their own-basin
 quality against **0.489** for greedily-optimized ones — about 1.5× — and they do so from a channel that is
@@ -148,8 +159,9 @@ quality against **0.489** for greedily-optimized ones — about 1.5× — and th
 **[REV2] The absolute-quality comparison is inconclusive and no longer carries a conclusion.** 0.4753 vs 0.4586
 is a gap of 0.017 at **n = 8 with no CIs**, on a subset **unfavourable to the positive slot** (B1-probe scores
 0.4586 here against 0.5254 on all 64), across **different slots**, **different optimization budgets** (J=10 vs
-J=50), and different pivots. On the full cohort the positive probe would likely lead, and no 64-clip joint-null
-counterpart exists.
+J=50), and different pivots. **[REV3]** No 64-clip joint-null counterpart exists, so no full-cohort ordering can
+be inferred either way. *(Revision 2 speculated the positive probe "would likely lead" on the full cohort; that
+extrapolation is unsupported and is deleted.)*
 
 **[REV2] Revision 1 concluded "on the transfer axis, which objective you optimize matters more than which slot
 you optimize" and called it the campaign's central lesson. That is withdrawn.** The supported statement is:
@@ -163,42 +175,50 @@ you optimize" and called it the campaign's central lesson. That is withdrawn.** 
 
 ### 5.1 The two experiments' fresh-noise arms moved in opposite directions [FINDING — observation only] **[REV2 — retitled and de-causalised]**
 
-From a **fresh** basin, on the **same 64 clips** (identical `manifest_hash 433f8691…`) — **but at different
-optimization budgets, in different representations, against differently-constructed controls, on non-shared
-pivots** (§5.2):
+From a **fresh** basin, on the **same 64 clips** (identical `manifest_hash 433f8691…`) — **[REV3] and, since
+exp_04's J1-5 clean-gate rerun, at the same adopted J=50 recipe** — but still in different representations,
+against differently-constructed controls, and on non-shared pivots (§5.2):
 
 | | recipe | do-nothing control (MSE) | after per-step greedy optimization | effect | clips improved |
 |---|---|---|---|---|---|
-| **Null slot** (exp_04, A2-0 → A2) | **J=10** (unadopted) | 4.743 | 0.490 | **9.7× better** | 64/64 |
+| **Null slot** (exp_04, A2-0 → A2) **[REV3]** | **J=50** (adopted) | 4.743 | **0.303** | **15.7× better** | 64/64 |
 | **Positive slot** (exp_05, B2-0 → B2) | **J=50** (adopted) | 1.418 | 5.625 | **4.0× worse** | **0/64** |
+| *(null slot at J=10 — superseded by J1-5, retained for continuity)* | J=10 | 4.743 | 0.490 | 9.7× better | 64/64 |
 
 The positive slot's *do-nothing* control is 3.3× better than the null slot's — the frozen 8-token context is
 already doing useful work, whereas base nulls collapse CFG to identity and do none. Greedy optimization then
-inverts the ordering. In-basin the picture inverts once more: positive 0.9227 vs null 0.8523.
+inverts the ordering. **[REV3]** In-basin the picture inverts once more: positive **0.9227** vs null **0.8868**
+— a **0.036** gap, now measured at the same recipe (it was 0.070 against exp_04's J=10 A1 of 0.8523).
 
 **[REV2] Revision 1 concluded "the positive channel is the more powerful and the more dangerous; the null
 channel is weaker and better behaved." That is withdrawn** — it attributes a between-row difference to the
-*slot* when the rows also differ in recipe, representation, pivots and control design. **Each row is internally
+*slot* when the rows differ in representation, pivots and control design. **[REV3]** (Recipe was a fourth
+mismatch at revision 2; exp_04's J1-5 removed it. The remaining three still prohibit slot attribution.) **Each row is internally
 matched** (same cohort, same ε₀, each arm against its own control) **and is a sound finding on its own;
 comparing the two rows remains descriptive, not a controlled slot contrast.** What survives is that the two
 directions are genuinely opposite, which is why the pair is worth recording.
 
 ### 5.2 What must NOT be compared [FINDING — predeclared]
 
-exp_05's H1 PASS and exp_04's G1 FAIL are **not** a slot comparison, for four independent reasons:
+exp_05's H1 PASS and exp_04's G1 FAIL are **not** a slot comparison. **[REV3]** Revision 2 listed four reasons;
+exp_04's J1-5 clean-gate rerun removed the budget one, so **three remain — and they are sufficient**:
 (a) **controls differ in kind** — exp_04's A0 collapses CFG (effective w = 1, replaying pivots computed at w = 1:
 a near-self-consistent, strong control at MSE 0.335), exp_05's B0 keeps CFG active and replays w = 5 dynamics
-against w = 1 pivots (a mismatched, weak control at MSE 0.890). Ratios of 3.6× and 28.6× against those two
-controls are different statistics. This was predeclared in plan §4's H1 interpretation note;
+against w = 1 pivots (a mismatched, weak control at MSE 0.890). **[REV3]** Ratios of **4.681×** (exp_04's
+authoritative J=50 G1; the historical J=10 figure was 3.605×) and 28.6× against those two controls are
+different statistics. This was predeclared in plan §4's H1 interpretation note;
 (b) **representations differ** — 8 tokens as the whole context vs 16 rows inside a 512-row padded one;
 (c) **pivots are not shared** — exp_05 inverts with `C_init` at 8 tokens, so its trajectories, controls and
 targets are different objects (pinned by S4 mutant R2); and
-(d) **budgets differ, and not innocently** — **[REV2]** exp_05 honored the **adopted J=50**, while **exp_04 ran
-the *unadopted* J=10 because of its launcher deviation** (`null_adequacy_uri` was never passed by
-`run_wan_null_inversion.sh`; exp_04 `null_adapter_results.md` §4.4). exp_04's figures were therefore produced at
-a recipe its own adequacy probe had rejected — which is why exp_04's **formal target selection is
-INDETERMINATE** with a J=50 re-run pending, while exp_05's verdict is the predeclared one. Comparing a
-predeclared verdict against an unadopted-recipe observation is not a slot comparison in any sense.
+**[REV3] (d) budgets — RESOLVED, no longer a mismatch.** Historically exp_05 honored the **adopted J=50**
+while **exp_04's J1-4 ran the *unadopted* J=10** because its launcher never passed `null_adequacy_uri`
+(exp_04 `null_adapter_results.md` §4.4, issue #15), leaving exp_04's formal selection INDETERMINATE.
+**exp_04's J1-5 clean-gate rerun fixed the launcher and re-ran both cohorts at J=50, retaining the predeclared
+STOP** — so both experiments' verdicts are now predeclared verdicts at the adopted recipe, and the budget
+mismatch is gone. Retained here because it explains why earlier revisions of these reports treated exp_04 as
+J=10-only evidence; the sentence that followed it — that comparing a predeclared verdict against an
+unadopted-recipe observation is not a slot comparison — no longer applies, because both are now predeclared
+verdicts.
 
 **[REV2]** And the same discipline applies one section up: **each row of §5.1 is internally matched; comparing
 the two rows remains descriptive, not a controlled slot contrast.** Revision 1 said §5.1's comparisons were
@@ -213,8 +233,9 @@ The supported conclusion, at the scope of what was actually tested:
 > **greedy pivot tracking** — is **rejected for K2/K3 under these conditions.**
 
 The supporting evidence is real: both fresh-noise arms failed their predeclared gates (positive 0.1610, worse
-than its control; null 0.4973 against a 0.75 bar) and both experiments' locked contexts degrade across basins
-(positive 0.525, null 0.173).
+than its control; **[REV3]** null **0.6638** against a 0.75 bar, CI-low 0.6312 against 0.70 — exp_04's
+authoritative J=50 figures) and both experiments' locked contexts degrade across basins (positive 0.525, null
+**0.1666**).
 
 **What this does NOT reject, and must not be swept in [REV2]:**
 - **Multi-noise / robust joint optimization of a static tensor.** Neither experiment ever optimized one tensor against several noise draws simultaneously. "A tensor fitted to one basin doesn't transfer" is not "no static tensor can transfer".
@@ -231,7 +252,7 @@ static formulation can work.
 2. **B1 is an oracle, not a system** (§2.2). exp_05 has **zero** evidence about amortization: K3 never ran, so the question Yixun actually asked — can the head *learn* to emit these? — is unanswered by measurement. Only the *precondition* (the channel can express a solution) is established.
 3. **The state-conditioned caveat was flagged at the time and remains live.** K3's regression conditions on cached `z̄_t` states — a *state-conditioned emitter*, not a fixed context — which H2 and the probe do not directly measure. The worklog's own reading called this out and then argued it is "substantially weakened" by B2's failure. **I think that argument is right but weaker than it sounds**, and §7.2 explains why the distinction it points at is load-bearing rather than a technicality.
 4. **The 0.2946 anchor cannot carry the "3.13×" claim.** That anchor is a **4-sample** validation over **four correlated windows of one episode** — a wiring check. The qualitative claim (the deployed adapter sits far below what the channel expresses) survives; the ratio should not be quoted as a measurement.
-5. **Nobody has looked at the videos.** K1 deliberately published none (ruled not K1-blocking). No human or model has seen what a 0.92-SSIM reconstruction or a 0.16-SSIM fresh-noise failure looks like. Numeric SSIM is a weak proxy for video quality, and a systematic artifact could hide behind these means undetected.
+5. **[REV3 — largely resolved] The videos now exist and have been cross-checked.** K1 itself published none (ruled not K1-blocking), but the post-STOP capacity-videos job (`20260809-173808-13c3cadc-capvideos-yixun`) rendered **B1, B2 and B1-probe k=0** over 8 clips — **24 mp4s** at `gs://v6_east1d/datasets/droid_wan_pos_context/k1/videos_att-0809-173808/` — and both HTML pages are committed. The numeric cross-check is **CLEAN** (recomputed per-clip future-SSIM matches `gate_tables.json` within fp16-storage tolerance, max |Δ| 0.052 on b2; 8-clip means b1 0.923, b2 0.178, b1_probe_k0 0.439). **Residual caveat:** the rendered subset is the **8 lowest-`ordinal` DEV clips**, and no systematic qualitative review by a human has been recorded — so a systematic artifact hiding behind the means is *less* likely than at revision 2, not excluded.
 6. **Narrowness.** One dataset, one backbone, one resolution, one guidance scale, one L_pos, DEV/TRAINFIT only (TEST-64 correctly untouched). σ₀ = 1.0 vs the reference's 0.999 (ratified deviation) means prior-art numbers are directional context, not matched comparisons.
 7. **What went right, for calibration.** Coverage complete, invalid pairs zero (so the imputation machinery is production-untested), quarantines zero, parity audit clean across 11 positive-slot deltas plus the inherited core, **the adopted recipe actually applied** (the thing exp_04's launcher silently failed to do), and the two measurements that could have silently corrupted everything — the non-no-op bf16 cast and the false fp16→bf16 value-preservation premise — were both caught by measurement rather than assumption. The one real bug (K1-1) was an **inherited stale copy**, an integration failure, not a defect in exp_05's own code.
 
@@ -256,7 +277,7 @@ static formulation can work.
    | | measured and refuted | **untested** — neither refuted nor validated |
    |---|---|---|
    | **Target form** | a *fixed per-clip, per-timestep tensor sequence* from **greedy pivot tracking**, cached and regressed onto | a *state-conditioned emitter* reading `z_t` and re-emitting every step; **also** robust/multi-noise joint optimization of a static tensor — **[REV2]** neither was ever attempted |
-   | **Objective form** | *per-step greedy tracking* of inversion pivots, with **no endpoint term** | *through-the-sampler* optimization of the rollout endpoint — better on both axes at n=8, **[REV2]** at ~19× the compute, so the mechanism is unattributed |
+   | **Objective form** | *per-step greedy tracking* of inversion pivots, with **no endpoint term** | *through-the-sampler* optimization of the rollout endpoint — better on both axes at n=8, **[REV2]** at ~19× the compute, so the mechanism is unattributed. **[REV3]** This is **J=10-era J1b/J1c evidence**; neither was re-run at J=50 |
    | **Training signal** | teacher-forced regression onto a cache | a differentiable rollout loss computed live, no cache at all |
    | **Evidence status** | gates fired: 0.1610 / 0/64 improved / probes below floor | §4.1: joint nulls retain **0.730** vs greedy's 0.489 — suggestive on the transfer axis; absolute quality inconclusive |
 
@@ -279,7 +300,7 @@ static formulation can work.
 |---|---|---|---|
 | **1** **[REV2]** | Read `per_step_final_losses` from **all eight** published `b2` shards (the full DEV-64 cohort) and compare **B2's final tracking-loss distribution against B1's** | host-only | §3.3. Low surrogate loss with a bad endpoint would establish surrogate/endpoint mismatch — the thing §3.2 can no longer show. Revision 1 said "one shard"; one shard is 8 examples and cannot carry a distributional claim |
 | **2** **[REV2]** | Propagate **both** corrections into the tracker and CLAUDE.md: B0 = 0.3215 / 2.87×, **and** the narrowed conclusion — *"the planned single-basin greedy cache target was rejected; state-conditioned live rollout training remains untested and risky, but was not refuted"* | minutes | §6.1, §7.2. A wrong number and an over-broad conclusion are both live in the handoff documents |
-| **3** | Generate comparison videos for a handful of DEV clips across B0 / B1 / B2 / B1-probe from the published records, then write the P4′ HTML report (SOP artifact 12) | ~1 v6e-8-h + host | §6.5 — the qualitative half of the evidence is entirely unexamined; the records are self-contained and replayable |
+| **✅ DONE** **[REV3]** | ~~Comparison videos + the P4′ HTML report~~ — job `20260809-173808-13c3cadc` rendered B1/B2/B1-probe k=0 (24 mp4s, cross-check CLEAN); `pos_context_01-capacity-gates_results.html` and `pos_context_02-video-gallery_results.html` (+ assets) are committed | ~1 v6e-8-h + host | §6.5. Optional follow-up: a **row-order** re-render (the subset is the 8 lowest-`ordinal` clips, a recorded deviation), and a human qualitative pass |
 | **4** | Run the cross-example cosine/PCA structure diagnostic on B1's optimized contexts | host-only | §4 — characterizes the ~0.53-SSIM basin-independent component. Was scheduled for K2 and never ran |
 | **5** | Keep S1–S9 on the branch, unmerged | — | Per SOP, a stopped experiment's code stays on its branch. If exp_06 succeeds, S7's trainer + S9's certificate machinery are the natural starting point for a rollout-trained variant |
 | **—** | **Do NOT** revive K2/K3 as planned | ~14.80 GiB cache + training | §5.3, and Yixun's STOP is honored. Any revival is a new proposal with its own gates |

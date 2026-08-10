@@ -1,8 +1,10 @@
 # pos_context_results — exp_05 P4′ (SOP artifact 10)
 
-**Status: DRAFT — revision 2, after the Codex analysis review (`pos_context_codex_analysis_review.md`,
-REQUEST-REVISION).** Judgment calls are flagged **[JUDGMENT]**, deviations from plan v3 **[DEVIATION]**, and
-edits made in response to the review **[REV2]**. The reviewer independently reproduced the entire gate
+**Status: FINAL — revision 3.** Revision 2 answered the first Codex analysis review; **revision 3 applies the
+closing review** (`pos_context_codex_closing_review.md`, REQUEST-REVISION — *"the exp_05 STOP and gate record
+remain valid"*; two scoping leaks, the exp_04-J=50 fold-in, and artifact-index staleness; no new compute). All
+four items are applied. **This document is submitted for closure adjudication.** Judgment calls are flagged
+**[JUDGMENT]**, deviations from plan v3 **[DEVIATION]**, and edits are marked **[REV2]** / **[REV3]**. The reviewer independently reproduced the entire gate
 record — including the corrected B0 = 0.32147 and B1/B0 = 2.87022× — so the numbers below stand; three of the
 *analysis* document's conclusions did not.
 
@@ -26,8 +28,8 @@ frames 1–8 ⇒ pixel frames 1–32); frame 0 is the pinned first-frame conditi
 | Plan of record | `plan_pos_context.md` **v3** (3 Codex review passes, all findings accepted, APPROVE-PLAN 2026-08-04); binds exp_04 plan v5 by reference for manifests / noise / gates / integrity / verifier contracts |
 | Phases executed | **P1′** (job K1 — positive reconstruction study + basin probe) |
 | Phases NOT executed | **P2′** (K2 target caching), **P3′** (K3 regression training, K4 eval) — stopped by the predeclared target-selection rule; **STOP honored by Yixun 2026-08-06** ("Honor the STOP for K2") |
-| Terminal verdict | **TARGET = STOP on both cohorts** — H1 PASS but the transfer floors fail; **and** H2 FAIL on all four conjuncts. **[REV2]** Both are required: the selection rule rejects B1 on the probe floors *and* rejects the B2 fallback because H2 failed. Unlike exp_04, this verdict was produced at the **adopted** recipe (§4.4), so it is the predeclared verdict, not an observation at an unadopted setting |
-| Tips **[REV2]** | STOP-decision tip `0f505d3` · report revision 1 committed at `2e4bc12` · reviewed HEAD at revision time `6f3146a`. Evidence-producing tip: K1-2 ran `bb845ea`. A branch tip plus "clean" is mutable and is not quoted as provenance |
+| Terminal verdict | **TARGET = STOP on both cohorts** — H1 PASS but the transfer floors fail; **and** H2 FAIL on all four conjuncts. **[REV2]** Both are required: the selection rule rejects B1 on the probe floors *and* rejects the B2 fallback because H2 failed. This verdict was produced at the **adopted** recipe (§4.4), so it is the predeclared verdict. **[REV3]** *(Revision 2 added "unlike exp_04"; exp_04's J1-5 clean-gate rerun has since produced its verdict at the adopted recipe too, so the contrast is removed.)* |
+| Tips **[REV2, updated REV3]** | STOP-decision tip `0f505d3` · report revision 1 `2e4bc12` · revision 2 `d9a306e` · capacity-videos code + HTML `6f3146a`. **Evidence-producing tip: K1-2 ran `bb845ea`**; the capacity-videos job ran the same. A branch tip plus "clean" is mutable and is not quoted as provenance |
 | Code state | S1–S8 + S10a complete and committed; **S9 held open** at the R14/R15 matrix stall (tripwired); S10's trainer launcher parked. Suite **1,417** tests |
 
 **The trainer stack that will not be used (yet).** S6 (gather/loss), S7 (regression trainer + checkpoint
@@ -201,13 +203,15 @@ H1's PASS and exp_04's G1 FAIL are **not** a like-for-like slot comparison:
 (c) **the pivots are different objects** — exp_05 inverts at w=1 with the 8-token `C_init`, exp_04 with the
 512-row context, so the two experiments' inversion trajectories, controls and targets are not shared (plan §3,
 pinned by S4 mutant R2); and
-(d) **the two ran at different optimization budgets** — exp_05 at the **adopted J=50**, while **exp_04 ran the
-*unadopted* J=10 because of its launcher deviation** (`null_adequacy_uri` was never passed; exp_04
-`null_adapter_results.md` §4.4). **[REV2]** This is not a neutral difference of settings: exp_04's figures were
-produced at a recipe its own adequacy probe had rejected, which is why **exp_04's formal target selection is
-INDETERMINATE and a J=50 re-run is pending**, whereas exp_05's verdict is the predeclared one.
+**[REV3] (d) budgets — RESOLVED, no longer a mismatch.** Historically exp_05 ran at the **adopted J=50** while
+exp_04's J1-4 ran the **unadopted J=10** (its launcher never passed `null_adequacy_uri`; exp_04
+`null_adapter_results.md` §4.4, issue #15), which left exp_04's formal selection INDETERMINATE. **exp_04's J1-5
+clean-gate rerun fixed the launcher, re-ran both cohorts at J=50, and retained the predeclared STOP** — so both
+experiments' headline numbers are now at the **same adopted recipe**, and exp_04's authoritative figures are
+A1 **0.8868**, A2 **0.6638**, A1-probe **0.1666**, G1 ratio **4.681×**.
 
-Descriptive side-by-side tables only.
+**Three mismatches remain and they are sufficient:** (a) controls, (b) representations, (c) pivots.
+**Descriptive side-by-side tables only.**
 
 ### 4.4 Adequacy probe — adopted **and honored**
 
@@ -224,7 +228,7 @@ Descriptive side-by-side tables only.
 
 - Threshold = 0.5 × default = **0.00281770**; J=50/lr=0.01 qualifies ⇒ `adopted: true`; `projection_seconds_per_example` = **34.127** s.
 - Plateau: J=25→50 improvement **34.31 %** ≥ 10 % ⇒ **`plateau: "recipe-limited"`**.
-- **Adoption was actually applied**, unlike exp_04's: `run_report.json` → `"recipe": {"inner_iters": 50, "lr": 0.01}`, and the shard provenance header `…/k1/capacity/b1/shard_00000/header.json` → `"optimization_config": {"inner_iters": 50, "lr": 0.01}`. The mechanism is `run_wan_pos_inversion.sh:318` (`pos_adequacy_uri="${POS_ADEQUACY_URI}"`) plus `submit_k1.sh`'s discovery step — **the exact wiring exp_04's launcher lacks.** Plan v3's inherited clause "*G1/G2 are evaluated once, on the adopted recipe only*" is **satisfied here**.
+- **Adoption was actually applied**, unlike exp_04's: `run_report.json` → `"recipe": {"inner_iters": 50, "lr": 0.01}`, and the shard provenance header `…/k1/capacity/b1/shard_00000/header.json` → `"optimization_config": {"inner_iters": 50, "lr": 0.01}`. The mechanism is `run_wan_pos_inversion.sh:318` (`pos_adequacy_uri="${POS_ADEQUACY_URI}"`) plus `submit_k1.sh`'s discovery step — **[REV3]** the wiring exp_04's launcher **lacked at J1-4** and **gained in the `adequacy-wiring` fix (`a520e9d`) that J1-5 ran on**. Plan v3's inherited clause "*G1/G2 are evaluated once, on the adopted recipe only*" is **satisfied here**, and — as of J1-5 — in exp_04 as well.
 
 ### 4.5 L_pos ablation (diagnostic-only)
 
@@ -286,7 +290,9 @@ corrupted the result if missed):
 | Adequacy | `…/k1/adequacy/adequacy_report.json` | consumed by **both** capacity phases |
 | Smoke | `…/k1/smoke/` | n=2, retained for the record |
 | Common | `code_sha bb845eaf43de2f05abbf99dfd4344a51bc2930bc`; model revision `Wan-AI/Wan2.2-TI2V-5B-Diffusers@b8fff7315c768468a5333511427288870b2e9635`; `base_context_fingerprint 6c79000e…373b`; `guide_scale 5.0`; `l_pos 8`; `embedding_slot "positive"`; `dtype_policy fp16`; 25-step σ grid, shift 5.0, σ₀ = 1.0 | |
-| Comparison videos | **None published** — K1 deliberately deferred video generation (the decisions ride on tables/selection); the plan review ruled them not K1-blocking. Outstanding for the P4′ HTML report (SOP artifact 12) |
+| **[REV3]** Comparison videos | `gs://v6_east1d/datasets/droid_wan_pos_context/k1/videos_att-0809-173808/` — **24 mp4s** (B1, B2, B1-probe k=0 over 8 clips) + `videos_report.json`, from the post-STOP capacity-videos job `20260809-173808-13c3cadc-capvideos-yixun` (v6e-8, SUCCEEDED attempt 2). K1 itself published none — deferred by design, ruled not K1-blocking. **Cross-check CLEAN:** recomputed per-clip future-SSIM matches the published `gate_tables.json` within fp16-storage tolerance (max \|Δ\| 0.052 on b2; means +0.002–0.006); 8-clip means **b1 0.923, b2 0.178, b1_probe_k0 0.439**. Provenance binds `bb845ea` (K1-2) |
+| **[REV3] [DEVIATION — RECORD]** rendered subset | the **8 lowest-`ordinal` DEV clips**, not a first-8-by-manifest-row subset — `subset_records` sorts by the record's `ordinal`, a global dataset ordinal rather than row position. All 8 are valid DEV-64 clips and the three arms are same-clip comparable with each other. A row-order re-render is a cheap optional follow-up |
+| **[REV3]** HTML reports (SOP artifact 12) | `pos_context_01-capacity-gates_results.html` and `pos_context_02-video-gallery_results.html` (+ `…_02…_assets/`, 24 mp4s) — **committed in-repo** |
 
 ---
 
@@ -310,8 +316,8 @@ over 0.2946 — reproduces **exactly**.
 1. **The 0.2946 anchor is not a quality baseline.** The deployed `pre_context` adapter's rollout SSIM 0.2946 comes from a **4-sample** validation at step 30,000, and those four samples are **four correlated windows of a single episode**. It is a wiring/sanity check. The "3.13×" multiple in §4.1 inherits that weakness entirely and must never be quoted as a controlled comparison.
 2. **B1 is an ORACLE, not a deployable system.** It optimizes a per-clip context against that clip's own ground-truth latents. It bounds what the 8-token channel can express; it says nothing directly about what an amortized, action-conditioned emitter can achieve.
 3. **The pivots are exp_05's own.** No B0/A0 or B2-0/A2-0 artifact is shared with exp_04 (8-token vs 512-row inversion contexts). Cross-experiment tables are descriptive, under the four constraints in §4.3.
-4. **H1's control is active-CFG** (B0), exp_04's is CFG-collapsed (A0) — **[REV2]** H1's median **MSE** ratio of 28.6× and **exp_04's G1 median MSE ratio of 3.6×** measure different things. *(That 3.6× is exp_04's G1 statistic; it is unrelated to the "~3.6×" SSIM multiple corrected in §4.1, which was wrong and is now 2.87×. The two figures collide numerically by coincidence.)*
+4. **H1's control is active-CFG** (B0), exp_04's is CFG-collapsed (A0) — H1's median **MSE** ratio of 28.6× and **[REV3] exp_04's authoritative J=50 G1 median MSE ratio of 4.681×** measure different things. *(exp_04's historical J=10 G1 ratio was 3.605×. Neither is related to the "~3.6×" SSIM multiple corrected in §4.1, which was wrong and is now 2.87× — those figures collided numerically by coincidence.)*
 5. **One cohort, one dataset, one backbone, one guidance scale (w = 5), one L_pos.** DEV-64/TRAINFIT-16 of DROID at 192×320×32f through Wan2.2 TI2V 5B. TEST-64 untouched.
-6. **No comparison videos and no HTML report yet** — the qualitative half of the evidence (what a 0.92-SSIM reconstruction and a 0.16-SSIM fresh-noise failure actually *look like*) has not been inspected by anyone.
+6. **[REV3 — largely resolved] Videos and HTML reports now exist.** The capacity-videos job rendered B1/B2/B1-probe k=0 (24 mp4s) with a **CLEAN** numeric cross-check, and both HTML pages are committed. **Residual caveats:** the rendered subset is the **8 lowest-`ordinal`** DEV clips (a recorded deviation), and **no systematic human qualitative review has been recorded** — so the risk that a systematic visual artifact hides behind these means is reduced, not eliminated.
 7. **σ₀ = 1.0** here vs **0.999** in the PyTorch reference (ratified deviation): prior-art numbers are directional context, not matched comparisons.
 8. **The K1-1 failure means the smoke rung's first pass never ran on the K1-2 code path at n>2 before the full job** — in practice K1-2 re-ran all four phases from scratch, so this is recorded for completeness rather than as an open risk.
