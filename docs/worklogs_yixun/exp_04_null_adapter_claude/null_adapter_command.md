@@ -129,3 +129,16 @@ PYTHONPATH=src <venv>/bin/python <scratchpad>/j0_driver.py 2>&1 | tee docs/workl
 **Formal consequence (per the analysis review's indeterminacy ruling):** the plan-compliant target selection, previously INDETERMINATE because the gates had only ever run at un-adopted J=10, is now **measured at the adopted recipe: STOP**. The predeclared verdict stands clean. Adjudication of closure is Yixun's (announcement 03) — reported to him this session.
 
 **Pending in this run:** trainfit-16 cohort (G2' fit-check) still executing; report drop-in rows (results §1/§4) will be folded in one commit when it lands.
+
+
+---
+
+## 2026-08-10 ~02:20Z — J1-5 COMPLETE (job SUCCEEDED): reproduction exact, trainfit-16 same signature — exp_04 data collection CLOSED
+
+**Job trail:** attempt 1 killed 21:08Z by `TPU_VM_HEALTH_TIMEOUT` (issue #16) after publishing capacity; attempt 2 re-ran the full runbook into fresh roots and SUCCEEDED. Authoritative roots (run-level JSON): `cleangate_att-0809-211639/` (capacity, `seconds: 10582`) + `cleangate_trainfit_att-0809-211639/`.
+
+**Reproduction check (attempt 2 vs attempt 1 capacity, DEV-64):** every gate number IDENTICAL to 4+ decimals — G1 ratio 4.6812, A1 0.8868, probe 0.1666, A2 0.6638 CI [0.6312, 0.6949], target `stop`. The pipeline is deterministic end-to-end; the 2026-08-09 DEV-64 ledger entry stands unchanged as the verdict of record.
+
+**TRAINFIT-16 (G2' fit check):** same failure signature as DEV-64 — G1 fails only `median_ratio` (4.064 vs >=5; in-basin mean SSIM 0.8847, CI [0.8596, 0.9075]); G2 fails `mean_ssim`/`ssim_ci_low` (0.6379, CI-low 0.5644); all four selection reasons identical. **The STOP is not a dev-set artifact**: the training cohort's own basin shows the same capacity-without-transfer shape (trainfit in-basin 0.8847 vs dev 0.8868 — no memorization gap either).
+
+**Formal state:** the plan-compliant target selection is now measured, reproduced, and cohort-consistent: **STOP**. Report fold-in dispatched (results section 1/section 4 + analysis supersede notes). Closure adjudication remains Yixun's.
