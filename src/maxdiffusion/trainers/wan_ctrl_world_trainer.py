@@ -143,6 +143,69 @@ def _apply_cfg_dropout(
     return action_tokens * keep
 
 
+def _pool_text_tokens(text_embeds: jnp.ndarray) -> jnp.ndarray:
+    """``(B, S, D)`` T5 token sequence → ``(B, D)`` masked mean.
+
+    Only needed in ``cross_attn`` mode, where the per-frame locking in
+    ``WanTransformerBlock`` reshapes the cross-attention K/V to
+    ``(B*F_lat, K, D)`` — a shared 512-token text sequence cannot be
+    concatenated into that layout without breaking the reshape. Pooling to one
+    vector lets the text ride along as a per-sample bias on the action tokens,
+    which is exactly how the SVD arm's cross_attn mode carries text.
+
+    Padding rows are all-zero in the stored T5 tensor, so mean over only the
+    non-zero tokens keeps short prompts from being scaled down by the padding.
+    Falls back to the plain mean if a row is entirely zero (empty prompt).
+    """
+    keep = (jnp.abs(text_embeds).sum(axis=-1) > 0).astype(text_embeds.dtype)  # (B, S)
+    n = jnp.maximum(keep.sum(axis=-1, keepdims=True), 1.0)                    # (B, 1)
+    return (text_embeds * keep[..., None]).sum(axis=1) / n                    # (B, D)
+
+
+def _text_routes(
+    text_embeds: jnp.ndarray | None,
+    use_task_instructions: bool,
+    action_cond_mode: str,
+) -> tuple[jnp.ndarray | None, jnp.ndarray | None]:
+    """Decide where the task instruction goes, if anywhere.
+
+    Returns ``(pooled_bias, cross_attn_tokens)``:
+
+    * ``pooled_bias`` — ``(B, wan_text_dim)`` pooled text, added to the action
+      tokens by ``_add_text_bias``. Used in ``cross_attn`` mode only.
+    * ``cross_attn_tokens`` — the raw ``(B, S, wan_text_dim)`` T5 sequence, used
+      as the cross-attention context in ``adaln`` mode (where it replaces the
+      all-zero placeholder, since the action has moved to the timestep
+      embedding).
+
+    Both are ``None`` when instructions are off, which reproduces the original
+    action-only behaviour exactly. This split mirrors the SVD trainer's, so
+    "text on" means the same thing in both arms of the comparison.
+    """
+    if not use_task_instructions or text_embeds is None:
+        return None, None
+    if action_cond_mode == "adaln":
+        return None, text_embeds
+    return _pool_text_tokens(text_embeds), None
+
+
+def _add_text_bias(action_tokens: jnp.ndarray, text_bias: jnp.ndarray | None) -> jnp.ndarray:
+    """Broadcast-add the pooled instruction onto every action token.
+
+    Called AFTER ``_apply_cfg_dropout``, deliberately: the instruction is
+    present in every training sample and at every inference call, so there is
+    nothing to gain from teaching the model a no-text branch. Keeping it out of
+    the dropout also means CFG scales the *action* alone — the instruction is
+    identical in the cond and uncond branches and cancels out of the delta.
+
+    In ``adaln`` mode there is nothing to do here: the instruction is its own
+    cross-attention sequence and never passes through the dropout either.
+    """
+    if text_bias is None:
+        return action_tokens
+    return action_tokens + text_bias[:, None, :].astype(action_tokens.dtype)
+
+
 def _route_action_conditioning(
     action_tokens: jnp.ndarray,
     action_adaln_proj: NNXWanActionAdaLNProjector | None,
@@ -150,15 +213,21 @@ def _route_action_conditioning(
     tokens_per_frame_k: int,
     H_lat: int,
     W_lat: int,
+    text_tokens: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray | None]:
     """Route encoded action tokens to cross-attention or AdaLN conditioning.
 
     ``"cross_attn"`` (default): action tokens pass through unchanged as the
     transformer's cross-attention K/V; no AdaLN conditioning is added.
-    ``"adaln"``: cross-attention gets all-zero tokens (a no-op — the same
-    state used for CFG-uncond) and the action tokens are projected per latent
-    frame, then repeated across each frame's spatial patch tokens to align
-    with the per-token timestep embedding they get summed into.
+    ``"adaln"``: the action tokens are projected per latent frame, then
+    repeated across each frame's spatial patch tokens to align with the
+    per-token timestep embedding they get summed into. Cross-attention is then
+    free, so it carries ``text_tokens`` when task instructions are enabled, and
+    all-zero tokens otherwise (a no-op — the same state used for CFG-uncond).
+
+    ``text_tokens`` is ignored in cross-attention mode: there the instruction
+    has already been folded into ``action_tokens`` as a pooled bias, because
+    per-frame locking leaves no room for a second K/V sequence.
 
     Returns ``(encoder_hidden_states, action_hidden_states)`` — the second
     element is ``None`` in cross-attention mode.
@@ -170,7 +239,11 @@ def _route_action_conditioning(
         action_temb = action_adaln_proj(grouped)                       # (B, F_lat, inner_dim)
         spatial_tokens_per_frame = (H_lat // 2) * (W_lat // 2)
         action_hidden_states = jnp.repeat(action_temb, spatial_tokens_per_frame, axis=1)
-        return jnp.zeros_like(action_tokens), action_hidden_states
+        if text_tokens is not None:
+            enc = text_tokens.astype(action_tokens.dtype)
+        else:
+            enc = jnp.zeros_like(action_tokens)
+        return enc, action_hidden_states
     return action_tokens, None
 
 
@@ -349,15 +422,22 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         )
         timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
+        action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
+        text_bias, text_tokens = _text_routes(
+            micro_data.get("text_embeds", None)[:bsz]
+            if micro_data.get("text_embeds", None) is not None else None,
+            getattr(config, "use_task_instructions", False),
+            action_cond_mode,
+        )
         action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat*K, 4096)
         cfg_rng, do_rng = jax.random.split(d_rng)
         action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
+        action_tokens = _add_text_bias(action_tokens, text_bias)  # after dropout — never dropped
 
-        action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
         cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
         enc_tokens, action_hidden_states = _route_action_conditioning(
             action_tokens, model.action_adaln_proj, action_cond_mode,
-            cond_tokens_per_frame, H_lat, W_lat,
+            cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
         )
 
         want_attn_diag = bool(getattr(config, "log_attn_activation_stats", False))
@@ -805,6 +885,15 @@ class WanCtrlWorldTrainer:
             max_logging.log(f"  Effective batch size: {config.global_batch_size_to_train_on * grad_accum_steps}")
             max_logging.log(f"  Max train steps: {config.max_train_steps}")
             max_logging.log(f"  Output dir: {config.output_dir}")
+            _acm = getattr(config, "action_cond_mode", "cross_attn")
+            if max_utils.config_get(config, "use_task_instructions", False):
+                _route = ("pooled into the action tokens" if _acm != "adaln"
+                          else "the cross-attention context")
+                max_logging.log(
+                    f"  Task instructions: ON — T5 text is {_route}; not CFG-dropped"
+                )
+            else:
+                max_logging.log("  Task instructions: OFF — action-only conditioning")
 
         self._wandb_run = None
         if jax.process_index() == 0 and getattr(config, "wandb_project", ""):
@@ -1197,13 +1286,21 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     timestep_2d = _build_per_token_timestep(timesteps, F_lat, H_lat, W_lat, n_hist)
     timestep_2d = jax.lax.with_sharding_constraint(timestep_2d, P(("data", "fsdp", "context"), None))
 
-    action_tokens = model.action_encoder(actions_grouped, None)     # (B, F_lat*K, 4096)
-
     action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
+    text_bias, text_tokens = _text_routes(
+        data.get("text_embeds", None)[:bsz] if data.get("text_embeds", None) is not None else None,
+        getattr(config, "use_task_instructions", False),
+        action_cond_mode,
+    )
+    # No CFG dropout on the eval path, so this is just the plain conditional.
+    action_tokens = _add_text_bias(
+        model.action_encoder(actions_grouped, None), text_bias
+    )  # (B, F_lat*K, 4096)
+
     cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
     enc_tokens, action_hidden_states = _route_action_conditioning(
         action_tokens, model.action_adaln_proj, action_cond_mode,
-        cond_tokens_per_frame, H_lat, W_lat,
+        cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
     )
 
     model_pred = model.transformer(
@@ -1249,7 +1346,12 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
 
     b, _, F_lat, H_lat, W_lat = latents.shape
     actions_grouped = _group_actions(actions, F_lat)
-    action_tokens = model.action_encoder(actions_grouped, None)
+    text_bias, text_tokens = _text_routes(
+        data.get("text_embeds", None)[:bsz] if data.get("text_embeds", None) is not None else None,
+        getattr(config, "use_task_instructions", False),
+        getattr(config, "action_cond_mode", "cross_attn"),
+    )
+    action_tokens = _add_text_bias(model.action_encoder(actions_grouped, None), text_bias)
 
     action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
     cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
@@ -1281,7 +1383,7 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
         def _velocity(tokens):
             enc_tokens, action_hidden_states = _route_action_conditioning(
                 tokens, model.action_adaln_proj, action_cond_mode,
-                cond_tokens_per_frame, H_lat, W_lat,
+                cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
             )
             return model.transformer(
                 hidden_states=roll_input,
@@ -1297,7 +1399,12 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
 
         v_pred = _velocity(action_tokens)
         if guidance_scale > 1.0:
-            v_uncond = _velocity(jnp.zeros_like(action_tokens))
+            # Uncond drops the ACTION only, keeping the instruction — the same
+            # split training uses, where _add_text_bias runs after the dropout.
+            # zeros_like would also blank the pooled text that is baked into
+            # action_tokens, guiding on action+text and putting the uncond branch
+            # out of distribution.
+            v_uncond = _velocity(_add_text_bias(jnp.zeros_like(action_tokens), text_bias))
             v_pred = v_uncond + guidance_scale * (v_pred - v_uncond)
 
         # Euler step: x_{t_to} = x_{t_from} + (σ_{t_to} - σ_{t_from}) * v

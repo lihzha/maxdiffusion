@@ -1,17 +1,31 @@
-# Launch action-conditioned SVD (Ctrl-World) training on TPU.
+# Launch action-conditioned SVD (Ctrl-World) training on TPU with AdaLN action
+# conditioning (action_cond_mode=adaln): action tokens are projected per frame
+# and summed into the UNet's timestep embedding, the per-frame cross-attention
+# route is dropped, and cross-attention carries the text embedding on its own.
+# For the original per-frame cross-attention conditioning use
+# bash_scripts/train_ctrl_world.sh.
+#
+# action_cond_mode=adaln ALSO switches every spatial and temporal resnet from
+# the default additive time-embedding injection (``norm2(h + shift)``, whose
+# shift GroupNorm largely normalises away) to AdaGN
+# (``norm2(h) * (1 + scale) + shift``). That is deliberate: t_emb is the action
+# pathway in this mode, and AdaGN is the UNet analogue of the multiplicative
+# AdaLN modulation the WAN arm uses, so the two arms are comparable. It costs
+# +51.6M params (one zero-init Dense per resnet, +3.4%) and ~0.6 GB of extra
+# fp32 AdamW state. cross_attn mode is unaffected and stays bit-identical to
+# pretrained SVD.
+#
+# NOT checkpoint-compatible with adaln runs from before AdaGN landed: the tree
+# gains 88 adagn_scale_proj leaves, so an old checkpoint fails the orbax restore.
+# Start a fresh RUN_TAG (section 3b).
 #
 # Pre-requisites (one-time):
 #   1. Pre-encoded data uploaded to gs://<bucket>/ctrl_world_droid/{train,val}/
 #      and gs://<bucket>/ctrl_world_droid/stats.json. See
 #      docs/ctrl_world_data_format.md for the schema.
-#   2. (Optional) Convert a pretrained Ctrl-World torch checkpoint into the
-#      JAX-loadable HF Diffusers layout to warm-start training:
-#          python scripts/convert_ctrl_world_ckpt.py \
-#              --in_pt /path/to/checkpoint-10000.pt \
-#              --svd_template_dir /path/to/stable-video-diffusion-img2vid \
-#              --out_dir gs://<bucket>/ctrl_world/jax-ckpt
-#      The same script also dumps an action_encoder.safetensors that you can
-#      pass via action_encoder_init_path=... at training time.
+#   2. The action encoder is ALWAYS cold-started here; adaln has no warm-start
+#      path (see the note above the launch command). scripts/convert_ctrl_world_ckpt.py
+#      and its action_encoder.safetensors apply to the cross_attn script only.
 #
 # Resuming: re-run this script verbatim. Checkpoints live in
 # $output_dir/checkpoints (unless checkpoint_dir is set) and the trainer always
@@ -71,31 +85,22 @@ if [ ! -f "$SVD_MODEL_DIR/unet/config.json" ]; then
 fi
 echo "Using SVD_MODEL_DIR=$SVD_MODEL_DIR"
 
-# Action encoder: fresh-init by default (no warm-start). linear_3 is zero-init,
-# so the encoder emits no action signal at step 0 and the pretrained UNet starts
-# undisturbed; the action pathway is learned from there.
-# To warm-start from a converted Ctrl-World checkpoint instead:
-#   ACTION_ENCODER_INIT=$GCS_MOUNT/ctrl_world/jax-ckpt/action_encoder.safetensors bash $0
-export ACTION_ENCODER_INIT="${ACTION_ENCODER_INIT:-}"
-if [ -n "$ACTION_ENCODER_INIT" ] && [ ! -f "$ACTION_ENCODER_INIT" ]; then
-  # Hard failure rather than a silent fall back to scratch: if you asked for a
-  # warm-start, a missing file (e.g. gcsfuse not mounted yet) is a bug, not a
-  # reason to quietly train a different model.
-  echo "ERROR: ACTION_ENCODER_INIT=$ACTION_ENCODER_INIT does not exist."
-  exit 1
-fi
-if [ -z "$ACTION_ENCODER_INIT" ]; then
-  echo "Action encoder: fresh init (zero-init output projection), no warm-start."
-else
-  echo "Action encoder: warm-starting from $ACTION_ENCODER_INIT"
-fi
+# Action encoder: always cold start in adaln mode — there is no warm-start path.
+# linear_3 is zero-init, so the encoder emits no action signal at step 0 and the
+# pretrained UNet starts undisturbed; that zero is also what makes the adaln
+# projector's normal-init kernel a no-op at step 0, so the run begins exactly at
+# the pretrained operating point. (The converted Ctrl-World weights were trained
+# to drive cross-attention and their linear_3 is non-zero, which is why
+# CtrlWorldTrainer rejects warm-start + adaln outright. Use
+# bash_scripts/train_ctrl_world.sh if you want to warm-start.)
+echo "Action encoder: cold start (zero-init output projection); adaln projector fresh too."
 
 # --- 3b. Run identity ---
 # The trainer always resumes from $output_dir/checkpoints if anything is there,
 # which would restore an old action encoder and discard the fresh init above.
 # So a genuinely fresh run needs its own tag; bump RUN_TAG (never reuse one).
 # RUN_TAG also names the W&B run (it is passed through as run_name).
-export RUN_TAG="${RUN_TAG:-ctrl-world}"
+export RUN_TAG="${RUN_TAG:-adaln-no-text}"
 export OUTPUT_DIR="gs://$GCS_BUCKET/checkpoints/svd_ac"
 echo "RUN_TAG=$RUN_TAG"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
@@ -140,10 +145,11 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_ctrl_world.py \
     src/maxdiffusion/configs/base_ctrl_world.yml \
+    action_cond_mode='adaln' \
     run_name=$RUN_TAG \
     output_dir=$OUTPUT_DIR \
     pretrained_model_name_or_path=$SVD_MODEL_DIR \
-    action_encoder_init_path=$ACTION_ENCODER_INIT \
+    action_encoder_init_path='' \
     dataset_type=ctrl_world \
     train_data_dir=$TRAIN_DATA_DIR \
     eval_data_dir=$EVAL_DATA_DIR \
@@ -170,14 +176,14 @@ python src/maxdiffusion/train_ctrl_world.py \
     save_optimizer=True \
     checkpoint_max_to_keep=3 \
     reshuffle_data_on_restart=True \
-    wandb_project='svd-ac-ctrl-world' \
+    wandb_project='svd-ac-adagn-no-text' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=25 \
     wandb_video_guidance_scale=2.5 \
-    use_task_instructions=True
+    use_task_instructions=False 
 
 # --- 7. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name train_ac_svd_ctrl_world -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ctrl_world.sh
+# tpu create v6 --name train_ac_svd_adaln_no_text -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ctrl_world_adaln_no_text.sh

@@ -180,7 +180,8 @@ python src/maxdiffusion/train_ctrl_world.py \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=25 \
-    wandb_video_guidance_scale=2.5
+    wandb_video_guidance_scale=2.5 \
+    use_task_instructions=True
 
 # --- 7. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"

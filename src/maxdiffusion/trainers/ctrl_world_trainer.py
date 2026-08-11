@@ -78,6 +78,7 @@ def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
         his_cond_zero=config.ctrl_his_cond_zero,
         action_cond_mode=max_utils.config_get(config, "action_cond_mode", "cross_attn"),
         time_embed_dim=_unet_time_embed_dim(config),
+        use_task_instructions=max_utils.config_get(config, "use_task_instructions", True),
     )
 
 
@@ -429,6 +430,18 @@ class CtrlWorldTrainer:
                 "[ctrl_world] action_cond_mode=adaln: action tokens are summed into "
                 f"t_emb (width {self.train_cfg.time_embed_dim}); cross-attention "
                 "carries the text embedding only and per-frame cross-attn is off"
+            )
+
+        if self.train_cfg.use_task_instructions:
+            route = ("the cross-attention context" if adaln
+                     else "tiled into the action tokens")
+            max_logging.log(
+                f"[ctrl_world] task instructions: ON — CLIP text is {route}; "
+                "not CFG-dropped"
+            )
+        else:
+            max_logging.log(
+                "[ctrl_world] task instructions: OFF — action-only conditioning"
             )
 
         return unet, unet_params, action_encoder, ae_params, adaln_proj, adaln_params

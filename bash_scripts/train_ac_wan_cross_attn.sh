@@ -21,8 +21,12 @@ if ! command -v gcsfuse >/dev/null; then
   export GCSFUSE_REPO="gcsfuse-${DISTRO}"
   echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-  sudo apt-get -o DPkg::Lock::Timeout=-1 update
-  sudo apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse || { echo "gcsfuse install failed on $(hostname)"; exit 1; }
+  # NEEDRESTART_MODE=l keeps needrestart in "list only" mode so the apt install
+  # does NOT bounce tpu-runtime.service (the occasional crash that a restart
+  # "fixes"). It must be passed THROUGH sudo (env is reset across sudo), not just
+  # exported. DEBIAN_FRONTEND avoids the debconf dialog prompts.
+  sudo NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=-1 update
+  sudo NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=-1 install -y gcsfuse || { echo "gcsfuse install failed on $(hostname)"; exit 1; }
 fi
 
 mkdir -p "$GCS_MOUNT" /dev/shm/gcsfuse-cache
@@ -64,30 +68,52 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 --xla_tpu_relayout_group_size_threshold_for_reduce_scatter=1 \
 --xla_tpu_assign_all_reduce_scatter_layout=true'
 
-# --- 5. Launch training ---
+# --- 5. Launch I2V training ---
 #
-# Same as train_ac_wan.sh, but with action_cond_mode=adaln: action tokens are
-# summed into the transformer's per-token AdaLN modulation instead of being
-# used as cross-attention K/V (cross-attention gets zeroed tokens). Not
-# checkpoint-compatible with cross_attn-mode runs — kept as a separate script
-# rather than a flag on train_ac_wan.sh so the two runs' checkpoints/wandb
-# projects never collide.
+# dataset_type options:
+#   synthetic  — no data needed; smoke-test that the train step compiles
+#   tfrecord   — pre-encoded latents/condition; set train_data_dir to TFRecord GCS path
+#   droid      — on-the-fly encoding from DROID TFDS records; set train_data_dir to TFDS parent dir
+#
+# Uncomment and set the right dataset_type / train_data_dir for your run.
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
+# python src/maxdiffusion/train_wan.py \
+#     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
+#     run_name=i2v-test-run-1 \
+#     output_dir=gs://v6_east1d/i2v-test-run-1 \
+#     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
+#     dataset_type=synthetic \
+#     attention=flash \
+#     weights_dtype=bfloat16 \
+#     activations_dtype=bfloat16 \
+#     remat_policy=FULL \
+#     ici_fsdp_parallelism=2 \
+#     ici_data_parallelism=1 \
+#     ici_tensor_parallelism=1 \
+#     ici_context_parallelism=4 \
+#     scan_layers=True \
+#     max_train_steps=1000 \
+#     per_device_batch_size=0.25 \
+#     height=720 \
+#     width=1280 \
+#     num_frames=81 \
+#     flash_min_seq_length=0
 
 source ./maxdiffusion_venv/bin/activate
 ulimit -n 65536
 
-# --- TFRecord path ---
+# --- TFRecord path (uncomment to use) ---
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-    run_name=ac_wan_droid_adaln \
+    run_name=ac_wan_droid_cross_attn \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
     train_data_dir=gs://v6_east1d/datasets/droid_wan_2.2_192_320/train \
     eval_data_dir=gs://v6_east1d/datasets/droid_wan_2.2_192_320/val \
     action_stats_path=gs://v6_east1d/datasets/droid_wan_2.2_192_320/stats.json \
-    action_cond_mode=adaln \
     cache_latents_text_encoder_outputs=True \
     attention=tokamax_flash \
     weights_dtype=float32 \
@@ -122,13 +148,39 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     log_attn_param_stats=False \
     log_attn_activation_stats=False \
-    wandb_project='wan-ac-adaln' \
+    wandb_project='wan-ac-cross-attn' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=20 \
     use_task_instructions=True 
 
+# --- DROID path (uncomment to use) ---
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
+# python src/maxdiffusion/train_wan.py \
+#     src/maxdiffusion/configs/base_wan_i2v_14b.yml \
+#     run_name=i2v-droid-run-1 \
+#     output_dir=gs://v6_east1d/i2v-droid-run-1 \
+#     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
+#     dataset_type=droid \
+#     train_data_dir=gs://v6_east1d/OXE \
+#     droid_clip_stride=8 \
+#     attention=flash \
+#     weights_dtype=bfloat16 \
+#     activations_dtype=bfloat16 \
+#     remat_policy=FULL \
+#     ici_fsdp_parallelism=8 \
+#     ici_data_parallelism=1 \
+#     ici_tensor_parallelism=1 \
+#     ici_context_parallelism=1 \
+#     scan_layers=True \
+#     max_train_steps=1000 \
+#     per_device_batch_size=0.25 \
+#     height=480 \
+#     width=832 \
+#     num_frames=49 \
+#     flash_min_seq_length=0
+
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name train_ac_wan_adaln -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ac_wan_adaln.sh
+# tpu create v6 --name train_ac_wan_cross_attn -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ac_wan_cross_attn.sh

@@ -272,6 +272,24 @@ ctrl_his_cond_zero: False
 # across modes. Rejected together with action_encoder_init_path: those upstream
 # weights were trained for the cross-attention route.
 action_cond_mode: 'cross_attn'
+
+# Whether the DROID task instruction (the pre-computed CLIP text embedding in
+# the batch) reaches the model at all. False makes the run action-only.
+#
+# Default True = what this model has always done. The WAN arm defaults to False
+# for the same reason (it has always been text-free), so the two defaults
+# differ — set this explicitly and identically in both when comparing the two
+# models, otherwise the language signal is a confound.
+#
+# Route when enabled, matched exactly by the WAN trainer:
+#   cross_attn — tiled to hidden_size and added to the action tokens, sharing
+#                their cross-attention route.
+#   adaln      — carried by cross-attention alone (the action has moved to the
+#                timestep embedding).
+# Never CFG-dropped in either mode, and costs no parameters, so it is safe to
+# flip between runs without breaking checkpoint compatibility.
+use_task_instructions: True
+
 # Each cam latent is 24 rows tall; 3 cams stacked = 72.
 latent_height_per_cam: 24
 num_views: 3

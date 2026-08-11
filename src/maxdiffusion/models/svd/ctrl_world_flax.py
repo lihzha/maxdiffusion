@@ -92,6 +92,21 @@ class CtrlWorldTrainConfig:
     # UNet timestep-embedding width; only read in 'adaln' mode (block_out_channels[0]*4).
     time_embed_dim: int = 1280
 
+    # Whether the DROID task instruction (the pre-computed CLIP text embedding)
+    # is fed to the model at all. False makes the run action-only, which is what
+    # the WAN arm has always done — see ``use_task_instructions`` in
+    # base_ctrl_world.yml for why the two models' defaults differ.
+    #
+    # Where the text goes when enabled depends on action_cond_mode, and the WAN
+    # trainer mirrors this exactly so the two arms stay comparable:
+    #   'cross_attn' — tiled to hidden_size and broadcast-added to the action
+    #                  tokens inside the action encoder, i.e. it shares the
+    #                  action's cross-attention route (and its CFG dropout).
+    #   'adaln'      — carried by cross-attention on its own, since the action
+    #                  has moved to the timestep embedding. Not CFG-dropped.
+    # Costs no parameters either way, so it is safe to flip between runs.
+    use_task_instructions: bool = True
+
 
 def _build_concat_stream(
     rng: jax.Array,
@@ -190,6 +205,13 @@ def action_world_train_step(
     latents = batch["latent"]
     actions = batch["action"]
     text_embeds = batch.get("text_embeds", None)
+    if not cfg.use_task_instructions:
+        # Single gate for BOTH conditioning modes: downstream, cross_attn skips
+        # the tiled-text add inside the action encoder and adaln falls back to a
+        # zero cross-attention context. Dropping text costs no parameters —
+        # ``tile_text_to_hidden`` is a pure reshape — so the checkpoint tree is
+        # identical either way and the flag can be flipped between runs.
+        text_embeds = None
 
     b, t_total = latents.shape[:2]
     t_future = cfg.num_frames
@@ -250,13 +272,28 @@ def action_world_train_step(
             text_ctx.astype(action_hidden.dtype), t_total, axis=0
         )  # (B*T, 1, hidden_size)
     else:
+        # Text is added AFTER the dropout, not folded in by the encoder, so the
+        # instruction is never dropped — it is present in every sample and at
+        # every inference call, and keeping it out of the mask means CFG scales
+        # the action alone (the text term is identical in both branches and
+        # cancels out of the delta).
+        #
+        # NOTE: this deviates from upstream Ctrl-World, whose mask is literally
+        # named ``text_mask`` and blanks the combined action+text hidden state.
+        # Runs trained before this change learned a no-text branch; adaln mode
+        # was always on the current behaviour (its text never entered the mask).
         action_hidden = apply_fns["action_encoder"](
             {"params": params["action_encoder"]},
             actions,
-            text_embeds,
-            True,  # frame_level_cond
+            None,   # text added below, outside the dropout
+            True,   # frame_level_cond
         )  # (B, T, hidden_size)
         action_hidden = _apply_cfg_dropout(rng_action_drop, action_hidden, cfg.cfg_drop_prob)
+        if text_embeds is not None and cfg.text_embed_dim is not None:
+            tiled = tile_text_to_hidden(
+                text_embeds, cfg.hidden_size, cfg.text_embed_dim
+            )  # (B, 1, hidden_size)
+            action_hidden = action_hidden + tiled.astype(action_hidden.dtype)
         encoder_hidden_states = action_hidden
         action_hidden_states = None
 

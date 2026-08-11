@@ -95,7 +95,7 @@ fi
 # which would restore an old action encoder and discard the fresh init above.
 # So a genuinely fresh run needs its own tag; bump RUN_TAG (never reuse one).
 # RUN_TAG also names the W&B run (it is passed through as run_name).
-export RUN_TAG="${RUN_TAG:-ctrl-world}"
+export RUN_TAG="${RUN_TAG:-ctrl-world-no-text}"
 export OUTPUT_DIR="gs://$GCS_BUCKET/checkpoints/svd_ac"
 echo "RUN_TAG=$RUN_TAG"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
@@ -170,14 +170,15 @@ python src/maxdiffusion/train_ctrl_world.py \
     save_optimizer=True \
     checkpoint_max_to_keep=3 \
     reshuffle_data_on_restart=True \
-    wandb_project='svd-ac-ctrl-world' \
+    wandb_project='svd-ac-ctrl-world-no-text' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=25 \
     wandb_video_guidance_scale=2.5 \
-    use_task_instructions=True
+    use_task_instructions=False 
+
 
 # --- 7. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name train_ac_svd_ctrl_world -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ctrl_world.sh
+# tpu create v6 --name train_ac_svd_ctrl_world_no_text -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ctrl_world_no_text.sh

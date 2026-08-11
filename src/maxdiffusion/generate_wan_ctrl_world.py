@@ -79,9 +79,12 @@ def _denoise_step(
     timestep_2d = _build_per_token_timestep(t_batch, F_lat, H_lat, W_lat, n_hist)
 
     def _route(tokens):
+        # text_tokens=None: this script is action-only. run_wan_ctrl_world_inference
+        # refuses to start on a use_task_instructions=True config rather than
+        # silently evaluating a text-trained checkpoint without its instruction.
         return _route_action_conditioning(
             tokens, model.action_adaln_proj, action_cond_mode,
-            cond_tokens_per_frame, H_lat, W_lat,
+            cond_tokens_per_frame, H_lat, W_lat, text_tokens=None,
         )
 
     if guidance_scale > 1.0:
@@ -456,6 +459,21 @@ def _save_per_view_videos(
 def run(argv: Sequence[str]) -> None:
     pyconfig.initialize(argv)
     config = pyconfig.config
+
+    if max_utils.config_get(config, "use_task_instructions", False):
+        # This script never loads text_embeds from the dataset, so it can only
+        # produce action-only rollouts. Running a checkpoint that was trained
+        # with the instruction would put the model out of distribution and
+        # quietly understate its quality, so refuse instead.
+        raise NotImplementedError(
+            "generate_wan_ctrl_world.py does not support use_task_instructions=True: "
+            "it does not read text_embeds from the dataset, so the rollout would be "
+            "action-only while the checkpoint expects an instruction. Either evaluate "
+            "with use_task_instructions=False (matching an action-only checkpoint) or "
+            "extend this script to thread text through _encode_actions and "
+            "run_denoising, mirroring _text_routes/_add_text_bias in "
+            "wan_ctrl_world_trainer.py."
+        )
 
     num_inference_steps = int(getattr(config, "num_inference_steps", 20))
     guidance_scale = float(getattr(config, "guidance_scale", 1.0))

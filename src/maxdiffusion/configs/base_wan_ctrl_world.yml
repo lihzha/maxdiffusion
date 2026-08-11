@@ -209,7 +209,30 @@ skip_his_zero_prob: 0.15 #inline with ctrl_world
 action_stats_path: 'droid_wan_tfrecords_test/stats.json'
 
 # CFG dropout probability on action tokens (zeroed for 5% of samples).
+# Applies to the ACTION only — the task instruction, when enabled below, is
+# added after this mask and is never dropped.
 ctrl_cfg_drop_prob: 0.05
+
+# Whether the DROID task instruction (the T5 token sequence already carried in
+# the batch as text_embeds) reaches the model at all.
+#
+# Default False = what this model has always done: the action encoder was called
+# with text_embed=None in both modes and the T5 tensor was loaded, sharded, and
+# then ignored. The SVD ctrl_world arm defaults to True for the same
+# preserve-existing-behaviour reason, so the two defaults differ — set this
+# explicitly and identically in both when comparing the two models.
+#
+# Route when enabled, matched exactly by the SVD trainer:
+#   cross_attn — masked-mean-pooled to (B, wan_text_dim) and added to the action
+#                tokens. Pooled rather than concatenated because per-frame
+#                locking reshapes the K/V to (B*F_lat, K, D), which a shared
+#                512-token sequence cannot join.
+#   adaln      — the full T5 sequence becomes the cross-attention context,
+#                replacing the all-zero placeholder (the action has moved to the
+#                timestep embedding, so cross-attention is free).
+# Costs no parameters in either mode, so it does not affect checkpoint
+# compatibility.
+use_task_instructions: False
 
 # ── History noise augmentation ─────────────────────────────────────────────────
 # Corrupt history latent frames with flow-matching noise, each frame at its own

@@ -80,7 +80,7 @@ ulimit -n 65536
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-    run_name=ac_wan_droid_adaln \
+    run_name=ac_wan_droid_adaln_no_text \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -122,13 +122,13 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     log_attn_param_stats=False \
     log_attn_activation_stats=False \
-    wandb_project='wan-ac-adaln' \
+    wandb_project='wan-ac-adaln-no-text' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=20 \
-    use_task_instructions=True 
+    use_task_instructions=False 
 
 # --- 6. Unmount ---
 fusermount -u "$GCS_MOUNT" || fusermount -uz "$GCS_MOUNT"
 
-# tpu create v6 --name train_ac_wan_adaln -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ac_wan_adaln.sh
+# tpu create v6 --name train_ac_wan_adaln_no_text -n 32 --setup-cmd "" --priority 0 --max-attempts 40 -- bash bash_scripts/train_ac_wan_adaln_no_text.sh

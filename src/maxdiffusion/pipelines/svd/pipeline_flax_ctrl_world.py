@@ -392,10 +392,15 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
                 text_ctx.astype(action_temb.dtype), t_total, axis=0
             )
         else:
+            # Encode the action WITHOUT text, mirroring training: the CFG uncond
+            # branch drops the action only, and the instruction is added to both
+            # branches afterwards. Folding text in here and then zeroing for
+            # uncond would blank the instruction too, which no longer matches how
+            # the model was trained.
             action_hidden = self.action_encoder.apply(
                 {"params": params["action_encoder"]},
                 action,
-                text_embeds,
+                None,
                 frame_level_cond,
             )  # (B, T, 1024) where T = num_history + num_frames
             b = action_hidden.shape[0]
@@ -404,6 +409,14 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
                 action_hidden_all = jnp.concatenate([uncond_hidden, action_hidden], axis=0)
             else:
                 action_hidden_all = action_hidden
+            if text_embeds is not None and self.action_encoder.text_embed_dim is not None:
+                tiled = tile_text_to_hidden(
+                    text_embeds, self.action_encoder.hidden_size,
+                    self.action_encoder.text_embed_dim,
+                )  # (B, 1, 1024), broadcasts over T
+                if do_cfg:
+                    tiled = jnp.concatenate([tiled, tiled], axis=0)
+                action_hidden_all = action_hidden_all + tiled.astype(action_hidden_all.dtype)
             action_hidden_states_all = None
 
         # 2. Channel-concat conditioning stream.
