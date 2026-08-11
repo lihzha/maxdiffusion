@@ -45,3 +45,14 @@ Yixun ordered the cancel in-conversation ("cancel the old M1 job"); executed via
 **M1-3:** `20260811-034649-b29039ef-exp06-m1c-fitprobe-yixun` (v6e-8, worker0-only), tip `5ca0fe5` — F3 (constants-as-arguments) + F4 (scan accumulation, graph 4,805 eqns flat) both aboard; submit guard verified the executable tree identical to RULED. Root: `gs://v6_east1d/datasets/droid_wan_pos_rollout/m1/att-<ts>`.
 
 **Proof point this run owns:** the first cell RESULT line within ~15–30 min of its `[M1] entering` line proves both compile fixes end-to-end; M1-2 already proved backbone load + the entering line. Acceptance unchanged (plan v2.8 §4-P1): digest-verified authorization table over measured (arm, microbatch, k) cells, peak_source per cell, step-time table + M2/M3 projections.
+
+
+---
+
+## 2026-08-11 ~16:15Z — M1-3 attempt 2: 24/32 cells measured, then a chip-level fatal; RETRIED under the auto-resubmit rule
+
+**The good:** the F3+F4 fixes are fully validated. Attempt 2 measured the ENTIRE rollout arm (mb 8/16/32/64 x k 2/4, two trials each — peaks 32.4/18.4/12.9/19.4 GB, k=2 steps 25.35/15.63/14.22/11.05 s; mb=32 is the efficiency sweet spot) plus one_step through mb=16 (peak 10.75 GB flat, ~3.12 s — k-invariant as expected). Trial-to-trial deltas <=0.01 s; compile minutes per cell.
+
+**The failure:** at `one_step microbatch=32 k=2`, during the per-cell backbone reload, the TPU runtime dumped `bad_smem_address` (tc_scalar_program_errors — chip-level scalar-memory fault) and the worker exited 1 at 07:39Z. No Python traceback; the queue classified it program-failure and went terminal. **Planner ruling: infra** (hardware-fault family; the same arm's smaller cells measured clean seconds before; fatal fired in a load path exercised 11 times prior). Retried via `tpu retry` (same spec, same SHA `5ca0fe5`, zero changes) under announcement 02's auto-resubmit rule; a same-cell repeat on a fresh VM would overturn the ruling to deterministic ⇒ stop + fix round.
+
+**Formal state:** `fit_probe/` is EMPTY — the authorization table publishes at completion, so NO cells are authorized; the 24 measurements are log evidence only. (Design note for a possible F5, not this round: publish-at-end means a 3.5 h ladder that dies at cell 12/16 authorizes nothing — per-cell incremental publication with a terminal digest would fit the issue-#13 lesson.)
