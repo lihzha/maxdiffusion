@@ -34,3 +34,14 @@ Yixun ordered the cancel in-conversation ("cancel the old M1 job"); executed via
 **Evidence:** attempts 3, 4, 6, 8 each passed backbone load (F3 threading PROVEN on real hardware — M1-1 never got here), printed `[M1] entering rollout microbatch=8 k=2: building and compiling`, then died 2–10 min later, all `TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE`, on four different VMs (attempts 1/2/5 were setup-phase preemptions; 7 SUSPENDED). Same-phase death across VMs = workload signature (the issue-#16 lesson applied in real time). The 10.18 GB constants are gone (F3 worked); the killer is now the **graph itself** — cell 1 unrolls 32 microbatch gradient blocks of the 5B forward+backward in Python, and XLA's compile of that graph exhausts the host. This was the F3c reviewer's flagged residual risk, now measured.
 
 **Action:** recommended Yixun cancel `20260810-174626-d126336b` (12 attempts remain on the cap; each burns ~20 min). **F4 design round dispatched:** replace the Python-unrolled microbatch accumulation with `lax.scan` over microbatch chunks — one gradient block compiled once, graph size O(1) in microbatch count instead of O(32). Parity of scanned vs unrolled gradients pinned by test; a graph-size guard asserts eqn count stays flat as microbatches grow. Review + battery + fresh package to follow; no relaunch without Yixun's approval.
+
+
+---
+
+## 2026-08-11 ~03:47Z — M1-2 CANCELED by Yixun (14 dead attempts); M1-3 LAUNCHED
+
+**M1-2 final tally:** 14 attempts, zero cells measured — 3 setup preemptions, the rest killed 2–10 min into cell-1's compile (the unrolled-graph killer F4 removed). Canceled by Yixun in-conversation.
+
+**M1-3:** `20260811-034649-b29039ef-exp06-m1c-fitprobe-yixun` (v6e-8, worker0-only), tip `5ca0fe5` — F3 (constants-as-arguments) + F4 (scan accumulation, graph 4,805 eqns flat) both aboard; submit guard verified the executable tree identical to RULED. Root: `gs://v6_east1d/datasets/droid_wan_pos_rollout/m1/att-<ts>`.
+
+**Proof point this run owns:** the first cell RESULT line within ~15–30 min of its `[M1] entering` line proves both compile fixes end-to-end; M1-2 already proved backbone load + the entering line. Acceptance unchanged (plan v2.8 §4-P1): digest-verified authorization table over measured (arm, microbatch, k) cells, peak_source per cell, step-time table + M2/M3 projections.
