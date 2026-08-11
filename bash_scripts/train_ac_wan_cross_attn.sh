@@ -107,7 +107,7 @@ ulimit -n 65536
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
 python src/maxdiffusion/train_wan.py \
     src/maxdiffusion/configs/base_wan_ctrl_world.yml \
-    run_name=ac_wan_droid_cross_attn \
+    run_name=ac_wan_droid_cross_attn_with_text \
     output_dir=gs://v6_east1d/checkpoints/wan-ac \
     pretrained_model_name_or_path=$WAN_TI2V_MODEL_DIR \
     dataset_type=tfrecord \
@@ -148,7 +148,7 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     log_attn_param_stats=False \
     log_attn_activation_stats=False \
-    wandb_project='wan-ac-cross-attn' \
+    wandb_project='wan-ac-cross-attn-with-text' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=20 \
