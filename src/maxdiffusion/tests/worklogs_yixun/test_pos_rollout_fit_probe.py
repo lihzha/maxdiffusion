@@ -1607,8 +1607,15 @@ def test_the_shared_update_accumulates_every_microbatch_before_one_optimizer_ste
     # F3: `frozen_state` is the SECOND POSITIONAL argument of the update and reaches the loss
     # keyword-only; this primitive threads it and never differentiates it.
     new_params, _, loss = update(params, None, opt_state, micro, (nothing, nothing))
-    assert len(seen) == 2, "every microbatch contributed"
-    # gradient of the MEAN loss is the mean of the gradients: (1 + 3) / 2 = 2, and sgd(1.0) steps -2.
+    # F4 changed what this line can mean. The accumulation is a `lax.scan`, so the body is TRACED
+    # ONCE however many microbatches it runs — that is the entire point of the rewrite (the Python
+    # `for` it replaced emitted one 5B forward+backward into the jaxpr per microbatch, and XLA
+    # compiling 32 of them killed four TPU hosts). So a trace count of 2 is no longer evidence that
+    # both microbatches contributed; it would now be evidence the graph defect was back.
+    assert len(seen) == 1, "ONE gradient block must be traced, not one per microbatch (F4)"
+    # The contract the old trace count stood for is asserted numerically, and STRICTLY: the gradient
+    # of the MEAN loss is the mean of the gradients, (1 + 3) / 2 = 2, so sgd(1.0) steps -2. Dropping
+    # either microbatch lands on -1 or -3 instead, so a lost microbatch still fails here.
     assert jnp.allclose(new_params["w"], jnp.full((3,), -2.0)), new_params
     assert float(loss) == pytest.approx(((1 * 0) + (3 * 0)) / 2)
 

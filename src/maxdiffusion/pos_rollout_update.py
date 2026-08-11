@@ -107,15 +107,33 @@ def build_logical_update(loss_fn, optimizer, context) -> Any:
     """
 
     def update(params, frozen_state, opt_state, micro_batches, micro_draws):
-        grads = None
-        total = 0.0
-        for batch, values in zip(micro_batches, micro_draws):
+        import jax.numpy as jnp
+
+        # ONE gradient block, compiled ONCE (F4). The Python `for` this replaces emitted a fresh
+        # forward+backward of the 5B into the jaxpr per microbatch: measured on the fake stack the
+        # graph grew 4,813 -> 8,472 -> 15,790 equations for 1 -> 2 -> 4 microbatches, so the pilot's
+        # 32 (GBS 256 / microbatch 8) was a ~118,000-equation program. M1-2 got past the constants
+        # fix, printed its first `[M1] entering` line, and then died 2-10 minutes into that first
+        # compile on four different VMs -- the host exhausted by XLA, reported as a maintenance
+        # health failure. `lax.scan` makes the graph O(1) in the microbatch count.
+        #
+        # The accumulation is UNCHANGED in arithmetic: scan is sequential, the carry starts at exact
+        # zeros, and `0 + g1` is exactly `g1`, so the summation order is the Python loop's and the
+        # result is bitwise identical -- asserted, not assumed.
+        stacked_batches = jax.tree.map(lambda *parts: jnp.stack(parts), *micro_batches)
+        stacked_draws = jax.tree.map(lambda *parts: jnp.stack(parts), *micro_draws)
+        count = len(micro_batches)
+
+        def body(carry, chunk):
+            grads_acc, running = carry
+            batch, values = chunk
             (loss, _), grad = jax.value_and_grad(loss_fn, has_aux=True)(
                 params, batch, context, frozen_state=frozen_state, draws=draws_from_arrays(values)
             )
-            grads = grad if grads is None else jax.tree.map(lambda a, b: a + b, grads, grad)
-            total = total + loss
-        count = len(micro_batches)
+            return (jax.tree.map(lambda a, b: a + b, grads_acc, grad), running + loss), None
+
+        zeros = jax.tree.map(jnp.zeros_like, params)
+        (grads, total), _ = jax.lax.scan(body, (zeros, jnp.zeros((), jnp.float32)), (stacked_batches, stacked_draws))
         grads = jax.tree.map(lambda leaf: leaf / count, grads)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         import optax
