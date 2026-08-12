@@ -63,3 +63,14 @@ Yixun ordered the cancel in-conversation ("cancel the old M1 job"); executed via
 ## 2026-08-12 ~00:00Z — Yixun chose (c): hybrid — F5 `cell-publication` round OPENED while the churn continues
 
 Zone tally for M1-3: 7 dead attempts today (health events at 30min–2h lifetimes vs the 3.5h ladder); every re-measured cell byte-identical across attempts — the waste is structural (publish-at-end). Yixun approved option (c). F5 Coder dispatched: per-cell incremental publication (digest-bound cell JSONs to the attempt root as each cell completes) + adopt-if-published on restart (digest + recipe-fingerprint + job-identity verified; refusal paths re-measure), final authorization table unchanged in semantics with measured/adopted provenance recorded. The queue keeps churning attempt 8+ in the background; whichever lands first wins — a lucky completed churn attempt moots F5 for M1 but the machinery stays for M1' (v6e-64) and any future ladder.
+
+
+---
+
+## 2026-08-12 ~04:27Z — M1-3 CANCELED (13 dead attempts, all zone infra post-proof); M1-4 LAUNCHED with F5 banking
+
+**M1-4:** `20260812-042726-a43aeec0-exp06-m1d-fitprobe-yixun` (v6e-8), tip `6eda654` — F3 (constants-as-arguments) + F4 (scan accumulation) + F5 (per-cell banking + manifest-bound adoption) all aboard. RUN_NAME pinned `exp06-m1-fitprobe` (constant across resubmissions so banked cells adopt cross-job); `POS_FIT_ADOPTION_ROOT=$M1ROOT`. Submit guard verified executable tree == RULED.
+
+**What changes operationally:** every completed cell now banks immediately; any restart adopts verified banked cells and measures only the remainder — the ladder accumulates across zone kills instead of restarting. Note: M1-3's log measurements (24 unique cells) are NOT adoptable (pre-F5 code, no banked artifacts; and the manifest binding would rightly refuse them) — M1-4 re-measures from zero, banking as it goes.
+
+**Trust decision riding with Yixun (non-blocking):** accept the bucket-ACL anchor (recommended for M1/M2) vs commission artifact signing before M3; the battery carries the residual as its 1 DECLARED verdict.
