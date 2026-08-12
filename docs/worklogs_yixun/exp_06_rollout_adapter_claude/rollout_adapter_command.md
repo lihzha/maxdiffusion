@@ -96,3 +96,12 @@ Zone tally for M1-3: 7 dead attempts today (health events at 30min–2h lifetime
 ## 2026-08-12 ~15:45Z — F6 review: my "~30-min adoption" claim was WRONG (append-only correction)
 
 The F6 reviewer reproduced both manifests and proved the point: F6 changes manifest-covered files, so M1-5's context cannot match the F5-era banked cells — adoption will correctly REFUSE all 12. That is the manifest binding working as designed; a migration rule would reopen the different-code-adoption hole F5b/F5c closed, and is rejected. **Corrected M1-5 profile: re-measures the 12 reachable cells (~2–2.5 h per attempt), banking as it goes; attempts at the SAME new SHA adopt each other's cells, so zone churn converges instead of restarting.** The 2026-08-12 ~13:50Z entry's "adopts the 12 banked cells and publishes the table in ~30 min" is retracted.
+
+
+---
+
+## 2026-08-12 ~16:02Z — M1-5 LAUNCHED (Yixun approved the 4-cell exclusion deviation + the launch in one submission)
+
+**Job:** `20260812-160205-4a3dc8a8-exp06-m1e-fitprobe-yixun` (v6e-8), tip `a8a0b78` (F3+F4+F5+F6). Exclusion ARMED in the job env: `one_step:32:2, one_step:32:4, one_step:64:2, one_step:64:4`, reason bound (issue #18). RUN_NAME `exp06-m1-fitprobe`; adoption root `$M1ROOT`.
+
+**Expected:** re-measures the 12 reachable cells (~2–2.5 h/attempt; F5-era banked cells correctly refuse cross-build), banking as it goes; same-SHA attempts adopt each other; publishes the v4 table with 12 authorized/refused + 4 EXCLUDED. On success → acceptance verification (peak_source per cell) → M2 package.
