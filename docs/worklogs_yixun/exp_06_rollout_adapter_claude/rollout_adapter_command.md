@@ -74,3 +74,18 @@ Zone tally for M1-3: 7 dead attempts today (health events at 30min–2h lifetime
 **What changes operationally:** every completed cell now banks immediately; any restart adopts verified banked cells and measures only the remainder — the ladder accumulates across zone kills instead of restarting. Note: M1-3's log measurements (24 unique cells) are NOT adoptable (pre-F5 code, no banked artifacts; and the manifest binding would rightly refuse them) — M1-4 re-measures from zero, banking as it goes.
 
 **Trust decision riding with Yixun (non-blocking):** accept the bucket-ACL anchor (recommended for M1/M2) vs commission artifact signing before M3; the battery carries the residual as its 1 DECLARED verdict.
+
+
+---
+
+## 2026-08-12 ~13:50Z — M1-4 attempt 1: F5 banking PROVEN in production; the one_step mb=32 chip fault is DETERMINISTIC (2/2); F6 opened; infra ruling overturned
+
+**F5 worked:** 12/16 cells banked (`att-0812-053153/.../cells/`, full-digest names + sidecars) — the complete rollout arm (mb 8/16/32/64 × k 2/4) plus one_step mb=8/16 × k 2/4. Any future attempt adopts these in minutes.
+
+**The killer is deterministic:** attempt 1 died at `one_step microbatch=32 k=2` with `bad_smem_address` (tc_scalar_program_errors) — the IDENTICAL cell and fault as M1-3 attempt 2, on different VMs on different days. 2/2 = the 2026-08-11 "infra" ruling is OVERTURNED (append-only correction): this is a workload-triggered XLA codegen fault. Signature: the one_step loss under F4's scan at chunk width 32 (256/32 = 8 iterations) on v6e-8; the same width works on the rollout arm, and one_step works at widths 8/16. Recorded as issue #18 material.
+
+**Consequence:** one_step mb∈{32,64} (4 cells) have never measured on hardware and cannot be reached — the killer cell blocks the ladder tail and the table publication. Scientifically they are not needed: M2/M3 quote authorized cells only; the one_step control is cheap at mb=8/16 (3.1 s steps, 10.75 GB), and the memory-critical arm (rollout) measured completely.
+
+**F6 `cell-exclusion` round dispatched (build now; relaunch needs Yixun):** a config-declared cell exclusion list — excluded cells recorded in the authorization table as EXCLUDED with the declared reason (never silently absent, never authorized); fail-loud if any downstream consumer quotes an excluded cell. With exclusions set to the 4 unreachable cells, M1-5 adopts the 12 banked cells and publishes the table in ~30 min.
+
+**Process note (honest):** Planner monitoring lapsed 05:45Z→13:47Z (a turn ended without re-arming the wakeup); the failure sat unread for ~5 h. The banked cells made the lapse cost zero, but the rule stands: no turn ends without an armed wakeup while a job runs.
