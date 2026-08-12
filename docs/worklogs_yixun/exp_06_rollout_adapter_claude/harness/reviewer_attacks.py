@@ -2339,6 +2339,46 @@ def attack_f5_forge_with_the_CURRENT_manifest(tmp):
     )
 
 
+def attack_f6_quote_an_excluded_cell(tmp):
+    """Can a training run reach a cell M1 DECLARED unreachable and never built?
+
+    F6 exists because `one_step microbatch=32 k=2` faults the chip deterministically (2/2 on the same
+    cell, two VMs, two days), so the ladder publishes without it. An excluded cell has no measurement
+    at all -- weaker evidence than a refused one, which at least missed a rule -- so quoting it must be
+    as unconstructible as quoting a refused cell, and the refusal must say it was left out ON PURPOSE
+    rather than merely never seen.
+    """
+    fp = _probe_env()
+    config = _f5_config(fp, tmp, "excluded", "att-1")
+    for key, value in (
+        ("pos_fit_excluded_cells", "one_step:32:2"),
+        ("pos_fit_exclusion_reason", "bad_smem_address: deterministic XLA codegen fault (issue #18)"),
+    ):
+        setattr(config, key, value)
+    excluded = fp.FitCell("one_step", 32, 2)
+    path = str(getattr(config, "pos_fit_authorization"))
+    fp.run_fit_probe(
+        config,
+        measurer=_f5_measurer(fp),
+        cells=[fp.FitCell("rollout", 8, 2), excluded],
+        trials=2,
+        devices=[_Dev() for _ in range(8)],
+    )
+    published = fp.load_authorization(path)
+    if any(dict(e) == excluded.as_payload() for e in published["authorized_cells"]):
+        return "SUCCEEDED: an excluded cell was AUTHORIZED"
+    if not published["excluded_cells"]:
+        return "SUCCEEDED: the excluded cell vanished from the table instead of being recorded"
+    try:
+        fp.assert_cell_authorized(published, excluded, context=fp.derive_probe_context(config, devices=[_Dev()] * 8))
+    except ValueError as error:
+        text = str(error)
+        if "EXCLUDED" not in text:
+            return f"SUCCEEDED: refused, but not AS an exclusion: {text.splitlines()[0][:110]}"
+        return f"REFUSED: {text.splitlines()[0][:120]}"
+    return "SUCCEEDED: a declared-unreachable cell was accepted by the gate"
+
+
 def attack_f5_tear_the_pair_with_two_publishers(tmp):
     """Can two concurrent publishers leave a cell permanently unadoptable?
 
@@ -2506,5 +2546,6 @@ if __name__ == "__main__":
         _report("F5-6   killed ladder banks 0 ", attack_f5_a_killed_ladder_banks_nothing, tmp)
         _report("F5-7   tear the pair (2 writers)", attack_f5_tear_the_pair_with_two_publishers, tmp)
         _report("F5-8   forge w/ CURRENT manifest", attack_f5_forge_with_the_CURRENT_manifest, tmp)
+        _report("F6-1   quote an excluded cell", attack_f6_quote_an_excluded_cell, tmp)
     if not _summarize():
         raise SystemExit(1)

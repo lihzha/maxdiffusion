@@ -11,10 +11,12 @@ review-package artifacts and are kept current in this folder.
 - `reviewer_attacks.py` — every probe the campaign has accumulated, each one an attack that must be
   REFUSED. Rounds are additive: a probe is never removed, and the final run of a round executes all
   of them. Run from the repository root with `PYTHONPATH=src`.
-- `attacks_f5c_20260812.log` — the final all-probes run of round F5c: **88 probes — 87 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**. F5c added the three-way accounting above, `F5-8` (the in-boundary forgery, DECLARED), and split `F5-5` to the foreign-manifest case it actually tests.
+- `attacks_f6_20260812.log` — **current**: round F6 `cell-exclusion`, **89 probes — 88 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**. Adds `F6-1 quote an excluded cell`: a cell DECLARED unreachable must be as unconstructible as a refused one, and refused AS an exclusion rather than as one merely never measured.
+- `attacks_f5d_20260812.log` — round F5d: **88 probes — 87 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**. Added the `DECLARED` allowlist, the non-zero exit, and restored `P3-5` to actually executing.
+- `attacks_f5c_20260812.log` — round F5c: **88 probes — 87/1/0/0**. Introduced the three-way accounting, `F5-8` (the in-boundary forgery, DECLARED), and split `F5-5` to the foreign-manifest case it actually tests. **Its `P3-5` line is a false refusal** — the probe could not run (see the fifth caution).
 - `attacks_f5b_20260812.log` — round F5b: **87 probes, 87 refused**. **Superseded and overstated**: its `F5-5` tested a foreign-manifest artifact while reporting as though it covered forgery generally; the in-boundary forgery it did not test is adopted. Kept as record.
-- `attacks_f5_20260812.log` — round F5's run: **86 probes, 86 refused, 0 succeeded**. **Superseded and partly WRONG**: its `F5-5` scored REFUSED on an attack that in fact succeeded. Kept because a log that overstated its coverage is part of the record.
-- `attacks_after_w5b.log` — the final all-probes run of round W5b: **80 probes, 80 refused, 0 succeeded**. `W3-1` and `W4-1` are BEHAVIOURAL: they execute the placement contract and the scope, and observe shardings and rules, rather than matching source text. `W3-1`'s "the measurement enters the scope" half is an AST `with`-item check, which survives an equivalent refactor and fails a real removal.
+- `attacks_f5_20260812.log` — round F5: **86 probes, 86 refused**. **Superseded and partly WRONG**: its `F5-5` scored REFUSED on an attack that in fact succeeded. Kept because a log that overstated its coverage is part of the record.
+- `attacks_after_w5b.log` — round W5b: **80 probes, 80 refused, 0 succeeded**. `W3-1` and `W4-1` are BEHAVIOURAL: they execute the placement contract and the scope, and observe shardings and rules, rather than matching source text. `W3-1`'s "the measurement enters the scope" half is an AST `with`-item check, which survives an equivalent refactor and fails a real removal.
 
 ## Reproducing
 

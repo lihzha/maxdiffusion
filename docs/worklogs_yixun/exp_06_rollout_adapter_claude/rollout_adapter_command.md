@@ -89,3 +89,10 @@ Zone tally for M1-3: 7 dead attempts today (health events at 30min–2h lifetime
 **F6 `cell-exclusion` round dispatched (build now; relaunch needs Yixun):** a config-declared cell exclusion list — excluded cells recorded in the authorization table as EXCLUDED with the declared reason (never silently absent, never authorized); fail-loud if any downstream consumer quotes an excluded cell. With exclusions set to the 4 unreachable cells, M1-5 adopts the 12 banked cells and publishes the table in ~30 min.
 
 **Process note (honest):** Planner monitoring lapsed 05:45Z→13:47Z (a turn ended without re-arming the wakeup); the failure sat unread for ~5 h. The banked cells made the lapse cost zero, but the rule stands: no turn ends without an armed wakeup while a job runs.
+
+
+---
+
+## 2026-08-12 ~15:45Z — F6 review: my "~30-min adoption" claim was WRONG (append-only correction)
+
+The F6 reviewer reproduced both manifests and proved the point: F6 changes manifest-covered files, so M1-5's context cannot match the F5-era banked cells — adoption will correctly REFUSE all 12. That is the manifest binding working as designed; a migration rule would reopen the different-code-adoption hole F5b/F5c closed, and is rejected. **Corrected M1-5 profile: re-measures the 12 reachable cells (~2–2.5 h per attempt), banking as it goes; attempts at the SAME new SHA adopt each other's cells, so zone churn converges instead of restarting.** The 2026-08-12 ~13:50Z entry's "adopts the 12 banked cells and publishes the table in ~30 min" is retracted.
