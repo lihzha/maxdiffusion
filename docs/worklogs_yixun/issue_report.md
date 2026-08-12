@@ -114,6 +114,12 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff)
 - **(b) Issue #11 extension:** `hasattr(config_like, x)` is as unsafe as 3-arg `getattr` on `HyperParameters` — it only swallows `AttributeError`, and the class raises `ValueError` (found when a closure-walking detector died mid-walk and under-reported everything after it). Also: **source-token tripwires prove shape, not liveness** — a `NameError`-dead loader stayed green under 21 source-checking guard tests; only an executing end-to-end test caught it.
 - **Status:** workaround standing; both hazards recorded for future rounds.
 
+### 18. Deterministic `bad_smem_address` chip fault at `one_step microbatch>=32` under the F4 scan (real bug in XLA, worked around)
+- **Symptom:** the M1 fit probe's `one_step mb=32 k=2` cell kills the TPU VM with `tc_scalar_program_errors ... bad_smem_address` during/just after compile — reproduced **2/2 on distinct VMs on distinct days** (M1-3 att-2 at 07:39Z Aug 11; M1-4 att-1 at 08:43Z Aug 12), identical cell, identical fault. The same chunk width works on the rollout arm, and the one_step loss works at widths 8/16 — an XLA codegen fault triggered by that specific program shape (one_step grad under `lax.scan`, chunk width ≥32, v6e-8).
+- **Cost:** the fault is fatal (unhandleable in-process) and sat at the ladder tail, blocking table publication; combined with #16-era zone weather it burned ~27 dead VM attempts across M1-1..M1-4 before the full causal chain (10.18 GB constants → unrolled graph → this) was separated.
+- **Workaround (exp_06 F6, reviewed):** declared cell exclusion — the 4 unreachable cells are recorded EXCLUDED-with-reason in a v4 authorization table that accounts for every ladder cell; quoting an excluded cell fails loudly. Scientifically free for M2/M3: microbatch is not a matched-control property; both arms run at mb=16 (measured + authorized).
+- **Status:** worked around; the underlying XLA bug is unreported upstream (needs a minimal repro — deferred; low priority while the exclusion stands).
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
