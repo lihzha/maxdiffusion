@@ -33,6 +33,7 @@ the answer to each:**
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -40,6 +41,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -267,6 +269,7 @@ TRAIN_INTERFACE = (
     ("WANDB_PROJECT", "wandb_project", "exp06-rollout", "yaml"),
     ("HARDWARE", "hardware", "gpu", "yaml"),
     ("POS_FIT_AUTHORIZATION", "pos_fit_authorization", "gs://bucket/m1/other.json", _PREREQUISITE),
+    ("POS_FIT_ADOPTION_ROOT", "pos_fit_adoption_root", "gs://bucket/m1-prior-attempts", "yaml"),
 )
 #: Emitted, but with no env variable at all: derived inside the launcher, which is the point.
 TRAIN_DERIVED = {
@@ -600,18 +603,29 @@ def test_only_a_complete_publication_of_this_arm_at_this_sha_is_adopted(tmp_path
     # An attempt that crashed before publishing its marker: a directory, but not COMPLETE.
     (Path(parent) / "att-5" / "checkpoints").mkdir(parents=True)
 
-    selected = trainer.select_resume_publication(parent, code_sha=mine, arm="rollout")
+    selected = trainer.select_resume_publication(parent, code_sha=mine, arm="rollout", context_digest="d" * 64)
     assert selected["attempt"] == "att-2" and selected["step"] == 3000, "the newest COMPLETE one, not att-3/4/5"
-    assert trainer.select_resume_publication(parent, code_sha=mine, arm="one_step")["attempt"] == "att-4"
-    assert trainer.select_resume_publication(parent, code_sha="c" * 40, arm="rollout") is None
-    assert trainer.select_resume_publication(str(tmp_path / "nothing-here"), code_sha=mine, arm="rollout") is None
+    assert (
+        trainer.select_resume_publication(parent, code_sha=mine, arm="one_step", context_digest="d" * 64)["attempt"]
+        == "att-4"
+    )
+    assert trainer.select_resume_publication(parent, code_sha="c" * 40, arm="rollout", context_digest="d" * 64) is None
+    assert (
+        trainer.select_resume_publication(
+            str(tmp_path / "nothing-here"), code_sha=mine, arm="rollout", context_digest="d" * 64
+        )
+        is None
+    )
 
     # ...and an edited marker is not adopted at all, rather than adopted with better numbers.
     marker = Path(parent) / "att-2" / trainer.PUBLICATION_NAME
     stored = json.loads(marker.read_text())
     stored["payload"]["step"] = 99999
     marker.write_text(json.dumps(stored))
-    assert trainer.select_resume_publication(parent, code_sha=mine, arm="rollout")["attempt"] == "att-1"
+    assert (
+        trainer.select_resume_publication(parent, code_sha=mine, arm="rollout", context_digest="d" * 64)["attempt"]
+        == "att-1"
+    )
     with pytest.raises(ValueError, match="does not describe its payload"):
         trainer.load_publication(str(marker))
 
@@ -635,7 +649,10 @@ def test_an_incomplete_publication_is_never_adopted(tmp_path):
 
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     (parent / "att-1" / trainer.PUBLICATION_NAME).write_text(json.dumps({"payload": payload, "sha256": digest}))
-    assert trainer.select_resume_publication(str(parent), code_sha="a" * 40, arm="rollout") is None
+    assert (
+        trainer.select_resume_publication(str(parent), code_sha="a" * 40, arm="rollout", context_digest="d" * 64)
+        is None
+    )
     with pytest.raises(ValueError, match="not marked complete"):
         trainer.load_publication(str(parent / "att-1" / trainer.PUBLICATION_NAME))
 
@@ -695,7 +712,7 @@ def test_the_preflight_is_present_and_checks_the_exp06_dispatch(tmp_path):
     for launcher, expected in (
         (
             TRAIN_LAUNCHER,
-            ("wan_pos_rollout_trainer", "pos_rollout_arms", "orbax.checkpoint", "select_resume_publication"),
+            ("wan_pos_rollout_trainer", "pos_rollout_arms", "orbax.checkpoint", "describe_resume_candidates"),
         ),
         (EVAL_LAUNCHER, ("eval_wan_pos_rollout", "pos_rollout_gates", "skimage")),
     ):
@@ -780,6 +797,56 @@ def test_the_launcher_has_an_m1_probe_mode_that_runs_the_probe_entrypoint(tmp_pa
         overrides["pos_fit_authorization"] == "gs://bucket/parent/m1/fit_probe/attempts/att-X/fit_authorization.json"
     )
     assert "/rollout/" not in overrides["pos_fit_authorization"], "M1 measures BOTH arms in one job"
+
+
+def test_probe_mode_derives_an_adoption_root_that_spans_this_jobs_attempts(tmp_path):
+    """F5. The ladder is ~3.5 h and the zone kills the VM inside it, so a restart must be able to
+    adopt the cells a prior attempt already published. The root it looks in is the ATTEMPTS root —
+    the same immutable resume INPUT `pos_resume_parent` names — not this attempt's own output tree,
+    which is by construction empty when the attempt starts (issue #13)."""
+    overrides = _overrides(
+        _entrypoint_argv(
+            _run(
+                tmp_path,
+                TRAIN_LAUNCHER,
+                POS_JOB_MODE="fit_probe",
+                RUN_NAME="m1",
+                ATTEMPT="att-X",
+                OUTPUT_DIR="gs://bucket/parent",
+                POS_FIT_AUTHORIZATION="",
+            )[1]
+        )
+    )
+    assert overrides["pos_fit_adoption_root"] == "gs://bucket/parent/m1/fit_probe/attempts"
+    assert "att-X" not in overrides["pos_fit_adoption_root"], "an attempt cannot adopt only from itself"
+    assert overrides["pos_fit_authorization"].startswith(overrides["pos_fit_adoption_root"] + "/att-X/")
+
+
+def test_probe_mode_lets_a_wrapper_widen_the_adoption_root(tmp_path):
+    """The submit wrapper scopes OUTPUT_DIR per attempt (`$M1ROOT/$ATT`), which makes the derived
+    attempts root a fresh empty tree on every attempt. Such a wrapper passes its M1 root explicitly,
+    and the launcher must carry that through rather than overriding it with the derived default."""
+    overrides = _overrides(
+        _entrypoint_argv(
+            _run(
+                tmp_path,
+                TRAIN_LAUNCHER,
+                POS_JOB_MODE="fit_probe",
+                RUN_NAME="m1",
+                ATTEMPT="att-X",
+                OUTPUT_DIR="gs://bucket/parent/att-OUTER",
+                POS_FIT_ADOPTION_ROOT="gs://bucket/parent",
+                POS_FIT_AUTHORIZATION="",
+            )[1]
+        )
+    )
+    assert overrides["pos_fit_adoption_root"] == "gs://bucket/parent"
+
+
+def test_train_mode_does_not_ask_a_training_job_to_adopt_cells(tmp_path):
+    """Nothing in M2/M3 publishes or adopts a fit-probe cell; the key stays at its YAML default."""
+    overrides = _overrides(_entrypoint_argv(_run(tmp_path, TRAIN_LAUNCHER)[1]))
+    assert overrides["pos_fit_adoption_root"] == ""
 
 
 def test_train_mode_without_an_m1_authorization_is_refused_before_the_prefetch(tmp_path):
@@ -1052,7 +1119,12 @@ def test_the_real_preflight_reports_the_publication_it_would_adopt(tmp_path):
         ATTEMPT="att-NEW",
     )
     assert proc.returncode == 0, proc.stdout[-4000:]
-    assert "resume: adopting att-OLD at step 4000" in proc.stdout
+    # F5c: the preflight REPORTS candidates and never decides. It cannot derive the context that
+    # decides adoption -- it runs before the HF prefetch and before the distributed system is up, so
+    # it can identify neither the model snapshot nor the real device count -- and a preflight that
+    # predicted adoption from a commit label would be the very defect the selector was just fixed for.
+    assert "att-OLD step 4000" in proc.stdout, "the candidate for this arm at this SHA is reported"
+    assert "ADOPTION IS NOT DECIDED HERE" in proc.stdout, "and it says so, rather than implying a decision"
     assert "att-OTHER" not in proc.stdout, "the other arm's publication is not this arm's to adopt"
 
 
@@ -1294,3 +1366,119 @@ def test_the_derived_value_is_echoed_with_the_topology_it_came_from(tmp_path):
     assert "POS_DEVICE_COUNT=8" in proc.stdout
     assert "PER_DEVICE_BATCH=32.0" in proc.stdout
     assert "global batch 256" in proc.stdout, "the log must say what the job actually runs"
+
+
+# =============================================================================================
+# Round F5c — the F5b re-review's BLOCKER 2: resume selection dropped the manifest-bearing
+# identity. Publications have recorded `context_digest` since T6-3, but nothing REQUIRED or
+# MATCHED it: `load_publication` did not demand the field, `select_resume_publication` filtered
+# on `(code_sha, arm)`, and `resume_source` derived the whole running context and then kept only
+# `code_sha`. The reviewer executed the consequence — two same-SHA publications with different
+# context digests, and the selector took the higher-step FOREIGN one.
+#
+# These run the REAL selector rather than reading its source (the F3c liveness lesson: a guard
+# that inspects source proves a spelling, not a behaviour).
+# =============================================================================================
+
+
+def _publish(parent, attempt, *, arm="rollout", code_sha="a" * 40, context_digest="d" * 64, step=1000):
+    from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
+
+    return trainer.publish_attempt(
+        parent,
+        attempt=attempt,
+        arm=arm,
+        code_sha=code_sha,
+        context_digest=context_digest,
+        step=step,
+        checkpoint_dir=f"{parent}/{attempt}/checkpoints",
+    )
+
+
+def test_two_same_sha_publications_with_different_contexts_do_not_resume_each_other(tmp_path):
+    """The reviewer's executed construction. Two git-less deployments can carry the same `COMMIT`
+    label and different running bytes; before F5c the higher-step foreign one won, and one arm's
+    optimizer state resumed under another program's identity."""
+    from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
+
+    parent = str(tmp_path / "attempts")
+    mine, foreign = "d" * 64, "e" * 64
+    _publish(parent, "att-1", context_digest=mine, step=1000)
+    _publish(parent, "att-2", context_digest=foreign, step=9000)
+
+    selected = trainer.select_resume_publication(parent, code_sha="a" * 40, arm="rollout", context_digest=mine)
+    assert selected is not None and selected["attempt"] == "att-1", "the FOREIGN higher-step attempt must lose"
+    assert selected["context_digest"] == mine
+    assert (
+        trainer.select_resume_publication(parent, code_sha="a" * 40, arm="rollout", context_digest="f" * 64) is None
+    ), "a context nobody published must adopt nothing at all"
+
+
+def test_the_selector_cannot_be_called_without_a_context_to_match(tmp_path):
+    """Fail-closed by signature: the identity cannot be dropped by forgetting an argument, which is
+    exactly how it came to be dropped."""
+    from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
+
+    parent = str(tmp_path / "attempts")
+    _publish(parent, "att-1")
+    with pytest.raises(TypeError):
+        trainer.select_resume_publication(parent, code_sha="a" * 40, arm="rollout")
+
+
+def test_a_publication_without_a_context_digest_is_not_adoptable(tmp_path):
+    """`load_publication` records the field but never demanded it, so a marker written by any older
+    or hand-rolled publisher read as adoptable. It fails closed now."""
+    import hashlib
+
+    from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
+
+    parent = tmp_path / "attempts"
+    (parent / "att-1").mkdir(parents=True)
+    payload = {
+        "protocol": trainer.PUBLICATION_PROTOCOL,
+        "attempt": "att-1",
+        "arm": "rollout",
+        "code_sha": "a" * 40,
+        "step": 5000,
+        "checkpoint_dir": str(parent / "att-1" / "checkpoints"),
+        "complete": True,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    (parent / "att-1" / trainer.PUBLICATION_NAME).write_text(json.dumps({"payload": payload, "sha256": digest}))
+
+    with pytest.raises(ValueError, match="context_digest"):
+        trainer.load_publication(str(parent / "att-1" / trainer.PUBLICATION_NAME))
+    assert (
+        trainer.select_resume_publication(str(parent), code_sha="a" * 40, arm="rollout", context_digest="d" * 64)
+        is None
+    ), "unreadable markers are skipped, not fatal -- one damaged attempt must not stop a good resume"
+
+
+def test_resume_source_matches_the_whole_derived_context_not_just_its_sha(tmp_path):
+    """`resume_source` derived the complete context and then threw all but `code_sha` away. It now
+    hands the selector the same digest adoption uses, and this runs the real method."""
+    from maxdiffusion import pos_rollout_fit_probe as probe
+    from maxdiffusion.trainers.wan_pos_rollout_trainer import WanPosRolloutTrainer
+
+    parent = str(tmp_path / "attempts")
+    derived = probe.ProbeContext(
+        code_sha="a" * 40,
+        manifest_digest="1" * 64,
+        model_revision="m@" + "0" * 40,
+        device_kind="v6e",
+        device_count=8,
+        geometry=(("height", 192),),
+        recipe_fingerprint="9" * 64,
+    )
+    other = dataclasses.replace(derived, manifest_digest="2" * 64)
+    _publish(parent, "att-1", context_digest=derived.digest(), step=1000)
+    _publish(parent, "att-2", context_digest=other.digest(), step=9000)
+
+    trainer = WanPosRolloutTrainer.__new__(WanPosRolloutTrainer)
+    trainer.resume_parent = parent
+    trainer.checkpoint_dir = f"{parent}/att-9/checkpoints"
+    trainer.schedule = types.SimpleNamespace(arm="rollout")
+
+    adopted = trainer.resume_source(derived)
+    assert adopted is not None and adopted["attempt"] == "att-1", "the manifest-bearing identity must decide"
+    assert trainer.resume_source(other)["attempt"] == "att-2", "and each context adopts its own"

@@ -306,6 +306,17 @@ pos_test_manifest: 'docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/
 # authorizes only the (arm, microbatch, k) cells it actually measured (plan §4-P1).
 pos_fit_authorization: ''
 
+# F5: where the fit probe LOOKS for cells a prior attempt of this same job already measured. The
+# ladder is ~3.5 h and used to publish only at the end, so a zone that killed the VM at 90 minutes
+# threw away every cell -- one attempt measured 24 of 32 and published nothing. Each cell is now
+# published as it finishes, and a restart adopts a published cell instead of re-measuring it, but
+# ONLY when the digest verifies over the content, the recorded context is byte-for-byte the one this
+# process derived (code SHA, recipe fingerprint, model revision, geometry AND device count) and the
+# run identity matches. Anything else re-measures. Empty = adopt nothing, which is the behaviour
+# before F5. The launcher derives it in fit_probe mode; pass POS_FIT_ADOPTION_ROOT to widen it to a
+# submit wrapper's M1 root when the wrapper scopes OUTPUT_DIR per attempt.
+pos_fit_adoption_root: ''
+
 # Review pass 3, T6-1/T6-2/T6-3. Every one of these is a PATH the launcher DERIVES; none is an
 # operator input, and none is a complete root a caller may override (that override is what let a
 # caller flatten the phase/attempt/arm scoping the queue's auto-retry depends on).

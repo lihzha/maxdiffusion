@@ -54,6 +54,43 @@ is exactly why **k=4 is exploratory only** and may never be the headline.
   the arm, run to a steady-state step time, read the per-device peak HBM and capacity, count the
   runtime's reservation failures — is device-specific, and it names that boundary.
 
+**THE TRUST BOUNDARY OF A BANKED CELL, stated rather than implied (review F5b, BLOCKER 1).** F5 let a
+restart adopt a cell a prior attempt published instead of re-measuring it. Codex's finding was that
+the artifact's digest proves CONSISTENCY, not LEGALITY: every hashed value -- the context, the run
+identity, the peak, the peak source -- is supplied by whoever wrote the object, so a writer who can
+reach the bucket can fabricate a cheap cell, recompute the digest, and be adopted. That was true, and
+the battery probe that claimed otherwise was wrong (it watched the run-level digest move and called
+propagation a refusal); both are corrected.
+
+What this round DOES provide, and what it does not:
+
+* **Integrity** -- a cell object is content-addressed and digest-verified end to end, so truncation,
+  a torn concurrent write, or an edit without a re-hash is refused.
+* **Program binding** -- adoption compares the artifact's recorded context byte-for-byte against the
+  context THIS process derived, and that context now carries :func:`deployed_manifest_digest`: the
+  sha256 of the running bytes, not a commit label. Cells measured by other code, on another topology,
+  against another model or under another recipe are refused, and the refusal names the field.
+* **NOT authenticated, and the bar is LOWER than it first looks (review F5c).** There is no signature
+  and no publication authority. Every field the loader checks -- the context, the manifest digest, the
+  run identity, the peaks -- is *inside the artifact*, so ANY WRITER WITH BUCKET WRITE ACCESS WHO CAN
+  READ ONE CURRENT ARTIFACT CAN FABRICATE A MEASUREMENT: copy that artifact's context verbatim
+  (the manifest digest is public in the payload), replace the trials with one-byte peaks, recompute
+  the payload digest and the marker, and adoption accepts it. **Possession of the deployed source tree
+  is NOT required** -- the F5b docstring said it was, and that was wrong: the manifest is recomputed
+  locally but only ever EQUALITY-compared against a value the forger controls. The reviewer executed
+  this end to end through the real publication, loader and adoption functions (``adopting rollout ...
+  peak 1 bytes``, measurer skipped). Probe ``F5-8`` keeps it visible, and reports it **DECLARED**
+  rather than refused, because reporting it as a refusal is what this module did for two rounds.
+
+  **The trust anchor is therefore the bucket ACL** -- lab-internal writers only -- which is the same
+  anchor the final authorization table has always rested on, and the same one every published artifact
+  in this campaign rests on. What the manifest binding *does* buy is the accident case, which is the
+  one that has actually cost this campaign time: a dirty tree, a stale tarball, a hand-edited module,
+  a cross-code adoption. It buys nothing against a deliberate writer. Real authentication (workload
+  identity / KMS signing at publication, verified at adoption) is infrastructure, not a code change,
+  and it is escalated to Yixun as a policy decision in the pre-launch package rather than skipped
+  silently or half-faked with an in-repo shared secret those same bucket writers could read.
+
 **What this module has never done, stated plainly:** it has never seen a TPU. Everything below the
 device measurer is arithmetic, a verdict rule, a provenance derivation and an artifact contract, and
 every test in this repository exercises them on the host.
@@ -72,10 +109,33 @@ import re
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
-from maxdiffusion.pos_rollout_support import storage_exists, storage_read_bytes, storage_write_bytes
+from maxdiffusion.pos_rollout_support import (
+    storage_exists,
+    storage_list_children,
+    storage_publish_bytes,
+    storage_read_bytes,
+    storage_write_bytes,
+)
 
 __all__ = [
+    "ADOPTED_PREFIX",
+    "ADOPTION_SCAN_DEPTH",
+    "ADOPTION_SCAN_LIMIT",
     "AUTHORIZATION_PROTOCOL",
+    "CELLS_DIRNAME",
+    "CELL_PROTOCOL",
+    "DIGEST_SUFFIX",
+    "PROVENANCE_MEASURED",
+    "CellArtifact",
+    "adopt_published_cell",
+    "adoption_candidates",
+    "cell_artifact_name",
+    "cell_publication_dir",
+    "cell_content_path",
+    "cell_marker_path",
+    "derive_job_identity",
+    "load_cell_artifact",
+    "publish_cell",
     "DEV_COHORT_SIZE",
     "FINGERPRINT_EXCLUSIONS",
     "FINGERPRINT_EXCLUSION_REASONS",
@@ -120,9 +180,35 @@ __all__ = [
     "run_fit_probe",
 ]
 
-AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v2"
+#: ``v3`` because F5 added ``cell_provenance`` to the payload the digest covers. A consumer holding a
+#: table with no provenance record cannot tell "nothing was adopted" from "written by code that could
+#: not adopt", and this module's whole stance is that an artifact says what it is or is refused.
+AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v3"
 #: Plan §4-P1. Steady state, not transient: a peak measured during compilation is not this number.
 HEADROOM_FRACTION = 0.90
+
+# --- F5: per-cell publication and adoption -----------------------------------------------------
+#: The per-cell artifact's own protocol, versioned separately from the run-level table.
+CELL_PROTOCOL = "exp06.fit_cell.v1"
+#: The directory of per-cell artifacts, beside the run-level authorization in the attempt root.
+CELLS_DIRNAME = "cells"
+#: The commit marker. Content is renamed into place FIRST and this sidecar written LAST, so a cell
+#: without a sidecar is a publication that did not finish and is not adoptable.
+DIGEST_SUFFIX = ".digest"
+#: How deep under an adoption root a ``cells/`` directory is looked for. Two layouts are in use and
+#: both are this job's own tree: the launcher derives ``<OUTPUT_DIR>/<RUN_NAME>/fit_probe/attempts/
+#: att-X/cells`` (depth 5 from ``OUTPUT_DIR``, depth 2 from the attempts root), and the submit wrapper
+#: puts an attempt level ABOVE ``OUTPUT_DIR`` as well, which puts ``cells`` at depth 6 from the M1
+#: root. A bound exists at all because an adoption root pointed at a bucket root must not walk the
+#: bucket.
+ADOPTION_SCAN_DEPTH = 6
+#: The second bound: directories visited before the scan gives up and says so. Adoption is an
+#: optimization in front of a 3.5-hour ladder, so it stops rather than becoming the cost.
+ADOPTION_SCAN_LIMIT = 4096
+#: What the run-level table records for a cell this attempt measured itself.
+PROVENANCE_MEASURED = "measured"
+#: ...and the prefix for one it adopted, followed by the artifact path it adopted.
+ADOPTED_PREFIX = "adopted from "
 
 #: Where a reported peak came from. The first two are attributable UPPER bounds on this cell's
 #: footprint; the third is a cell-local LOWER bound, good enough to refuse a cell and never good
@@ -172,6 +258,7 @@ FINGERPRINT_EXCLUSIONS = {
     "pos_resume_parent": _DESTINATION,
     "pos_recipe_lock": _DESTINATION,
     "pos_fit_authorization": _DESTINATION,
+    "pos_fit_adoption_root": _DESTINATION,
     "pos_run_report": _DESTINATION,
     "pos_anchor_certificate": _DESTINATION,
     "pos_benchmark_row": _DESTINATION,
@@ -266,6 +353,10 @@ class ProbeContext:
     """The running program a measurement is a measurement OF. Every field is derived, none supplied."""
 
     code_sha: str
+    #: F5b, BLOCKER 2: the RUNNING BYTES. ``code_sha`` is the commit this program says it is;
+    #: this is what is on disk. Adoption compares the whole context byte-for-byte, so binding the
+    #: manifest here is what makes "measured by other code" a refusal rather than a hope.
+    manifest_digest: str
     model_revision: str
     device_kind: str
     device_count: int
@@ -275,6 +366,7 @@ class ProbeContext:
     def as_payload(self) -> dict:
         return {
             "code_sha": str(self.code_sha),
+            "manifest_digest": str(self.manifest_digest),
             "model_revision": str(self.model_revision),
             "device_kind": str(self.device_kind),
             "device_count": int(self.device_count),
@@ -289,6 +381,7 @@ class ProbeContext:
     def from_payload(cls, payload: Mapping) -> "ProbeContext":
         return cls(
             code_sha=str(payload["code_sha"]),
+            manifest_digest=str(payload["manifest_digest"]),
             model_revision=str(payload["model_revision"]),
             device_kind=str(payload["device_kind"]),
             device_count=int(payload["device_count"]),
@@ -375,21 +468,130 @@ def _git_head(start: pathlib.Path) -> str:
     return head if completed.returncode == 0 and _SHA_RE.match(head) else ""
 
 
-def derive_code_sha(*, module_file: str | None = None, environ: Mapping | None = None) -> str:
-    """The SHA of the code that is RUNNING, from this module's own checkout.
+#: Excluded from the deployed manifest, with a reason: a test cannot change what a measurement costs,
+#: and hashing the test tree would make every red-first round invalidate every banked cell.
+MANIFEST_EXCLUDED_DIR = "tests"
+_MANIFEST_CACHE: dict = {}
 
-    On a TPU worker the code arrives as an uploaded tarball with no git objects, so the launcher's
-    validated ``COMMIT`` is the provenance there; in a checkout git is. When both exist they must
-    agree — a disagreement means the tarball and the checkout are different programs, which is
-    exactly the case a stamped SHA would have hidden.
+
+def deployed_manifest_digest(root: str | None = None) -> str:
+    """The RUNNING BYTES of the deployed package: sha256 over every ``.py`` outside ``tests/``.
+
+    Review F5b, BLOCKER 2. ``code_sha`` names a commit; this names what is actually on disk, and it is
+    what :class:`ProbeContext` binds and adoption compares. A dirty checkout, a stale tarball, a
+    hand-edited module on a worker and a caller-supplied ``COMMIT`` all move it or fail to reproduce
+    it, and none of them can be argued with.
+
+    Length-framed records in sorted path order — the serialization discipline
+    :func:`snapshot_manifest_digest` earned in review F1b/W1, so exactly one tree of files maps to any
+    given stream and a reshuffle at equal total bytes is not invisible. Cached per process for the
+    default root: the bytes cannot change under a running process, and re-hashing the package on
+    every context derivation would be a cost with no answer attached.
+    """
+    package = pathlib.Path(root) if root else pathlib.Path(__file__).resolve().parent
+    key = str(package)
+    if root is None and key in _MANIFEST_CACHE:
+        return _MANIFEST_CACHE[key]
+    files = sorted(
+        path
+        for path in package.rglob("*.py")
+        if MANIFEST_EXCLUDED_DIR not in path.relative_to(package).parts and "__pycache__" not in path.parts
+    )
+    if not files:
+        raise ValueError(
+            f"{package} holds no deployed Python: a probe that cannot identify the code it is running "
+            f"cannot publish a measurement OF that code"
+        )
+    digest = hashlib.sha256()
+    digest.update(f"exp06.deployed_manifest.v1\n{len(files)}\n".encode("utf-8"))
+    for path in files:
+        relative = str(path.relative_to(package)).encode("utf-8")
+        body = path.read_bytes()
+        digest.update(f"{len(relative)} {len(body)}\n".encode("utf-8"))
+        digest.update(relative)
+        digest.update(body)
+    computed = digest.hexdigest()
+    if root is None:
+        _MANIFEST_CACHE[key] = computed
+    return computed
+
+
+def _git_dirty_paths(start: pathlib.Path) -> tuple:
+    """The manifest-bearing files git reports as modified — empty when the deployment is clean."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(start), "status", "--porcelain", "--", "."],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if completed.returncode != 0:
+        return ()
+    dirty = []
+    for line in completed.stdout.splitlines():
+        name = line[3:].strip().strip('"')
+        # Scoped to what the manifest hashes: a dirty test file cannot change a measurement, and
+        # blocking on one would make this round's own red-first workflow unrunnable.
+        if name.endswith(".py") and f"{MANIFEST_EXCLUDED_DIR}/" not in name:
+            dirty.append(name)
+    return tuple(sorted(dirty))
+
+
+def derive_code_sha(
+    *, module_file: str | None = None, environ: Mapping | None = None, manifest: str | None = None
+) -> str:
+    """The commit this program CLAIMS to be, cross-checked — never the thing adoption trusts.
+
+    **Review F5b, BLOCKER 2: a commit is not the running bytes.** This read ``git rev-parse HEAD``
+    and, failing that, the launcher's ``COMMIT`` — and the F5 delta was its own counterexample: its
+    running bytes were uncommitted while the SHA it derived read ``a3ba5c0``. A dirty measurement-code
+    change could therefore adopt cells measured before that change. What identifies the code now is
+    :func:`deployed_manifest_digest`, bound into :class:`ProbeContext` beside this field; ``code_sha``
+    survives as the label the launcher's prerequisite check compares, and two rules keep it honest:
+
+    * **A process that DECLARES a commit must BE that commit.** ``COMMIT`` is the launcher's assertion
+      "this job runs commit X"; a process making it from a tree with uncommitted measurement code is
+      publishing provenance it cannot support, and is refused loudly rather than warned. A process
+      that declares nothing (a developer's checkout) is identified by its manifest alone — it still
+      runs, and it still cannot masquerade as a commit.
+
+      **This is NOT a whole-checkout cleanliness check, and must not be described as one** (review
+      F5c). Its scope is exactly the manifest's: ``.py`` files under ``maxdiffusion`` outside
+      ``tests/``. A dirty YAML does not refuse here — its LOADED VALUES are bound by
+      ``recipe_fingerprint`` instead, which is the binding that actually decides the footprint — and a
+      dirty test file does not refuse either, because a test cannot change what a measurement costs.
+    * **A deployment without git identifies itself by CONTENT.** On a worker the code arrives as a
+      tarball with no git objects, and ``COMMIT`` is then an environment variable anybody can set. It
+      may label the artifact; it may not be the only thing standing behind it, so the derivation
+      refuses unless a manifest is bound alongside it.
     """
     environ = os.environ if environ is None else environ
     stamped = str(environ.get("COMMIT", "")).strip()
-    head = _git_head(pathlib.Path(module_file or __file__).resolve().parent)
+    start = pathlib.Path(module_file or __file__).resolve().parent
+    head = _git_head(start)
     if head and stamped and head != stamped:
         raise ValueError(
             f"the running checkout is at {head} but COMMIT declares {stamped}: an HBM measurement is a "
             f"measurement OF A PROGRAM, and these are two of them"
+        )
+    if stamped and head:
+        dirty = _git_dirty_paths(start)
+        if dirty:
+            raise ValueError(
+                f"COMMIT declares {stamped} but this tree has uncommitted measurement code: "
+                f"{list(dirty[:5])}{' ...' if len(dirty) > 5 else ''}. A run that publishes under a commit "
+                f"must BE that commit -- otherwise the authorization names bytes nobody can retrieve, and a "
+                f"later attempt adopts cells measured by code that no longer exists. Commit the tree (or "
+                f"clear COMMIT to run identified by content alone) and re-launch."
+            )
+    if stamped and not head and not str(manifest or ""):
+        raise ValueError(
+            f"COMMIT declares {stamped} but there is no git checkout to verify it against and no content "
+            f"manifest was bound. An environment variable is a claim, not an identity: a deployment without "
+            f"git is identified by the bytes it is running, or it is not identified at all."
         )
     sha = head or stamped
     if not _SHA_RE.match(sha):
@@ -528,8 +730,10 @@ def derive_model_revision(config) -> str:
 def derive_probe_context(config, *, devices: Sequence | None = None, environ: Mapping | None = None) -> ProbeContext:
     """Everything a measurement is a measurement of, derived from the running program."""
     kind, count = derive_device_signature(devices)
+    manifest = deployed_manifest_digest()
     return ProbeContext(
-        code_sha=derive_code_sha(environ=environ),
+        code_sha=derive_code_sha(environ=environ, manifest=manifest),
+        manifest_digest=manifest,
         model_revision=derive_model_revision(config),
         device_kind=kind,
         device_count=count,
@@ -833,6 +1037,16 @@ class ProbeEvidence:
     context: ProbeContext
     measurements: tuple
     projection_inputs: tuple
+    #: F5. One ``(cell, text)`` pair per aggregated cell, in the same order: ``"measured"`` for a cell
+    #: this attempt measured, ``"adopted from <path>"`` for one it took from a prior attempt's
+    #: publication. It is a RECORD, not a derivation — the artifact a cell was adopted from is not
+    #: recomputable from the numbers — so it is digest-bound like everything else here and no more.
+    #: Left empty it fills itself in as all-measured, which is what an uninterrupted run is.
+    provenance: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.provenance:
+            object.__setattr__(self, "provenance", tuple((m.cell, PROVENANCE_MEASURED) for m in self.measurements))
 
     def projections(self) -> tuple:
         inputs = dict(self.projection_inputs)
@@ -848,6 +1062,13 @@ class ProbeEvidence:
         )
 
     def as_payload(self) -> dict:
+        recorded = [cell for cell, _ in self.provenance]
+        if recorded != [measurement.cell for measurement in self.measurements]:
+            raise ValueError(
+                f"the provenance record names {[str(cell) for cell in recorded]} but the measurements are "
+                f"{[str(m.cell) for m in self.measurements]}: a table whose account of where its numbers "
+                f"came from does not line up with its numbers settles nothing about either"
+            )
         authorized, measured, refused = [], [], []
         for measurement in self.measurements:
             verdict = cell_verdict(measurement)
@@ -859,6 +1080,7 @@ class ProbeEvidence:
                 refused.append({**payload, "reasons": list(verdict.reasons)})
         return {
             "protocol": AUTHORIZATION_PROTOCOL,
+            "cell_provenance": [{**cell.as_payload(), "provenance": str(text)} for cell, text in self.provenance],
             "context": self.context.as_payload(),
             "context_digest": self.context.digest(),
             "authorized_cells": authorized,
@@ -878,8 +1100,13 @@ def build_evidence(
     max_train_steps: int,
     eval_every: int,
     checkpoint_every: int,
+    provenance: Mapping | None = None,
 ) -> ProbeEvidence:
-    """Bind the trials to the context they were measured under, aggregate them, and project."""
+    """Bind the trials to the context they were measured under, aggregate them, and project.
+
+    ``provenance`` maps each cell to how this attempt came by it (F5). Omitted, every cell is
+    recorded as measured — which is what a run with no adoption root did and still does.
+    """
     if not isinstance(context, ProbeContext):
         raise ValueError(
             "the context must be one derive_probe_context() produced from the running program; a mapping "
@@ -894,14 +1121,23 @@ def build_evidence(
             f"these measurements were made under context digest(s) {foreign}, not under {wanted}: a number "
             f"measured on another commit, model or device cannot be published as evidence about this one"
         )
+    aggregated = aggregate_trials(measurements)
+    if provenance is None:
+        record = tuple((entry.cell, PROVENANCE_MEASURED) for entry in aggregated)
+    else:
+        missing = sorted(str(entry.cell) for entry in aggregated if entry.cell not in provenance)
+        if missing:
+            raise ValueError(f"no provenance was recorded for {missing}: every published cell says where it came from")
+        record = tuple((entry.cell, str(provenance[entry.cell])) for entry in aggregated)
     evidence = ProbeEvidence(
         context=context,
-        measurements=aggregate_trials(measurements),
+        measurements=aggregated,
         projection_inputs=(
             ("max_train_steps", _positive_int(max_train_steps, "max_train_steps")),
             ("eval_every", _positive_int(eval_every, "eval_every")),
             ("checkpoint_every", _positive_int(checkpoint_every, "checkpoint_every")),
         ),
+        provenance=record,
     )
     evidence.projections()  # project now, so a cadence production cannot honour fails HERE (LS-8)
     return evidence
@@ -1042,6 +1278,12 @@ def load_authorization(path: str) -> dict:
     inputs = payload.get("projection_inputs")
     if not isinstance(inputs, Mapping):
         raise ValueError(f"{path}: an authorization records the run it projected for; this one records none")
+    recorded_provenance = payload.get("cell_provenance")
+    if not isinstance(recorded_provenance, list):
+        raise ValueError(
+            f"{path}: a {AUTHORIZATION_PROTOCOL} table records, per cell, whether this attempt measured it or "
+            f"adopted a prior attempt's publication; this one records none"
+        )
     try:
         evidence = ProbeEvidence(
             context=rebuilt,
@@ -1049,6 +1291,7 @@ def load_authorization(path: str) -> dict:
             projection_inputs=tuple(
                 (key, int(inputs[key])) for key in ("max_train_steps", "eval_every", "checkpoint_every")
             ),
+            provenance=tuple((FitCell.from_payload(entry), str(entry["provenance"])) for entry in recorded_provenance),
         )
         recomputed = evidence.as_payload()
     except (KeyError, TypeError, ValueError) as error:
@@ -1120,6 +1363,404 @@ def assert_cell_authorized(authorization: Any, cell: FitCell, *, context: ProbeC
         f"measured. M1 authorizes only the cells it measured (plan §4-P1); authorized are "
         f"{authorization.get('authorized_cells')}."
     )
+
+
+# =================================================================================================
+# F5: a cell is published the moment it is measured, and adopted the moment it is verified.
+#
+# The ladder is ~3.5 hours and it published ONLY at the end, so a zone that kills the VM at 90
+# minutes threw away every cell. It happened repeatedly: one attempt measured 24 of 32 cells and
+# published nothing, and five attempts re-measured the same cells byte-identically. Publication
+# per cell banks the work; adoption is what makes the banked work count on the next attempt.
+#
+# ADOPTION IS BOUND TO THE CONTEXT DIGEST, and that is a deliberately coarse policy stated here so
+# nobody has to infer it: the digest carries ``code_sha``, so ANY commit — a comment, a docs-only
+# descendant, a launcher tweak — makes every published cell unadoptable and the ladder re-measures
+# from scratch. It over-refuses. The alternative is a curated list of "code that changes the
+# footprint", which is a list somebody has to remember to extend, and the cost of forgetting is an
+# HBM authorization for a program nobody measured. Over-refusing costs TPU minutes; under-refusing
+# costs a 64-chip reservation. The same trade was already made for FINGERPRINT_EXCLUSIONS.
+# =================================================================================================
+
+
+def derive_job_identity(config) -> str:
+    """WHICH RUN measured a cell — the guard against another job's cells leaking in.
+
+    The queue exposes no job id to the workload, so the run identity is ``run_name``: the launcher
+    scopes every root by it, it is fixed for the life of a submission (the submit wrapper bakes it
+    into the job's environment) and it differs between submissions. Two attempts of one job share it;
+    two different experiments do not.
+
+    What it does NOT distinguish is two submissions made under the same ``run_name`` against the same
+    root at the same commit with the same recipe on the same topology — and those are the same
+    program by every check this module has, so adopting between them is sound rather than tolerated.
+    An empty ``run_name`` is not a wildcard: :func:`adopt_published_cell` refuses on both sides.
+    """
+    return str(declared(config, "run_name") or "")
+
+
+def cell_artifact_name(cell: FitCell) -> str:
+    """``rollout_m8_k2.json`` — the same ``<arm>_m<microbatch>_k<k>`` spelling the probe checkpoint uses."""
+    return f"{cell.arm}_m{int(cell.microbatch)}_k{int(cell.k_b)}.json"
+
+
+def cell_publication_dir(authorization_path: str) -> str:
+    """``cells/`` beside the run-level table, so a cell is attempt-scoped exactly as it is (issue #13)."""
+    parent = str(authorization_path).rpartition("/")[0]
+    return f"{parent}/{CELLS_DIRNAME}" if parent else CELLS_DIRNAME
+
+
+def cell_marker_path(authorization_path: str, cell: FitCell) -> str:
+    """The cell's COMMIT MARKER -- the one stable, discoverable name, holding one content digest.
+
+    Everything else about a banked cell is content-addressed and immutable; this is the only name a
+    second publisher can take, and taking it is safe because whatever digest it holds names a whole
+    object that verifies against it (review F5b, MAJOR).
+    """
+    return f"{cell_publication_dir(authorization_path)}/{cell_artifact_name(cell)}{DIGEST_SUFFIX}"
+
+
+def _content_for_marker(marker_path: str, digest: str) -> str:
+    """``.../rollout_m8_k2.<full 64-hex digest>.json`` beside the marker that commits it.
+
+    Review F5c, MINOR: this truncated the digest to 12 hex characters, so an object was named by 48
+    bits of itself rather than by itself — and two payloads sharing that prefix would contend for one
+    name, re-expressing the very ``marker-A -> content-B`` tear content-addressing exists to remove.
+    A long filename is a small price for a name that is actually the content's identity.
+    """
+    base = str(marker_path)
+    if base.endswith(DIGEST_SUFFIX):
+        base = base[: -len(DIGEST_SUFFIX)]
+    stem = base[: -len(".json")] if base.endswith(".json") else base
+    return f"{stem}.{str(digest)}.json"
+
+
+def cell_content_path(authorization_path: str, cell: FitCell, digest: str) -> str:
+    return _content_for_marker(cell_marker_path(authorization_path, cell), digest)
+
+
+@dataclasses.dataclass(frozen=True)
+class CellArtifact:
+    """One measured cell, banked: its TRIALS, and the running program they were measured on.
+
+    The trials are stored individually rather than aggregated because aggregation is conservative and
+    order-independent (:func:`aggregate_trials` takes the worst of each field): storing the aggregate
+    would make an adopted cell's contribution to the table a different computation from a measured
+    cell's, and the whole claim of this round is that it is the same table.
+    """
+
+    cell: FitCell
+    context: ProbeContext
+    job_identity: str
+    trials: tuple
+
+    def as_payload(self) -> dict:
+        return {
+            "protocol": CELL_PROTOCOL,
+            "cell": self.cell.as_payload(),
+            "job_identity": str(self.job_identity),
+            "context": self.context.as_payload(),
+            "context_digest": self.context.digest(),
+            # Redundant with the context above, and recorded anyway: these are the three fields an
+            # operator reads in a refusal message, and a refusal that can name them without rebuilding
+            # a context object is a refusal that still works when the context payload is unparseable.
+            "code_sha": str(self.context.code_sha),
+            "device_count": int(self.context.device_count),
+            "recipe_fingerprint": str(self.context.recipe_fingerprint),
+            "trial_count": len(self.trials),
+            "trials": [trial.as_payload() for trial in self.trials],
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping) -> "CellArtifact":
+        """Rebuild a cell artifact, refusing anything internally inconsistent BEFORE it is compared.
+
+        Every check here is about the artifact agreeing with itself. Whether it agrees with THIS
+        process is :func:`adopt_published_cell`'s question, and separating the two is what lets a
+        refusal say which kind of wrong it is.
+        """
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"{payload!r} is not a cell artifact payload")
+        if payload.get("protocol") != CELL_PROTOCOL:
+            raise ValueError(f"protocol {payload.get('protocol')!r} is not {CELL_PROTOCOL}")
+        cell = FitCell.from_payload(payload["cell"])
+        context = ProbeContext.from_payload(payload["context"])
+        if context.digest() != payload.get("context_digest"):
+            raise ValueError(
+                f"the recorded context digest {payload.get('context_digest')!r} does not describe the recorded "
+                f"context: the two would bind different programs"
+            )
+        for field, value in (
+            ("code_sha", context.code_sha),
+            ("device_count", context.device_count),
+            ("recipe_fingerprint", context.recipe_fingerprint),
+        ):
+            if payload.get(field) != value:
+                raise ValueError(f"the recorded {field} {payload.get(field)!r} contradicts the recorded context")
+        trials = tuple(CellMeasurement.from_payload(entry) for entry in payload["trials"])
+        if not trials:
+            raise ValueError("a cell artifact records the trials it was measured over; this one records none")
+        if int(payload.get("trial_count", -1)) != len(trials):
+            raise ValueError(f"it claims {payload.get('trial_count')!r} trials and records {len(trials)}")
+        for trial in trials:
+            _checked(trial)
+            if trial.cell != cell:
+                raise ValueError(f"a trial describes {trial.cell} in an artifact about {cell}")
+            if str(trial.context_digest) != context.digest():
+                raise ValueError(f"a trial of {cell} is bound to a context this artifact does not record")
+        return cls(cell=cell, context=context, job_identity=str(payload.get("job_identity", "")), trials=trials)
+
+
+def publish_cell_content(marker_path: str, artifact: CellArtifact) -> str:
+    """Write the immutable CONTENT OBJECT for this artifact and return its digest.
+
+    Content-addressed: the object's name carries the digest of the payload inside it, so two writers
+    with different measurements write two different objects and neither can overwrite the other. That
+    is what removes the tear the reviewer found — there is no name for two payloads to contend for.
+    """
+    if not isinstance(artifact, CellArtifact):
+        raise ValueError(f"publish_cell_content takes a CellArtifact, not {type(artifact).__name__}")
+    payload = artifact.as_payload()
+    digest = _digest(payload)
+    body = json.dumps({"payload": payload, "sha256": digest}, sort_keys=True).encode("utf-8")
+    storage_publish_bytes(_content_for_marker(marker_path, digest), body)
+    return digest
+
+
+def commit_cell_marker(marker_path: str, artifact: CellArtifact) -> str:
+    """Point the marker at one exact content object. This is the ONLY mutable name in the scheme.
+
+    A concurrent second writer may replace it, and that is safe by construction: whatever digest the
+    marker ends up holding names a whole, self-verifying object that some publisher finished writing
+    before it committed. Last-writer-wins on the marker, never a mixed pair — which is precisely the
+    guarantee the review asked for and the previous two-object overwrite could not give.
+    """
+    digest = _digest(artifact.as_payload())
+    storage_publish_bytes(marker_path, f"{digest}\n".encode("utf-8"))
+    return digest
+
+
+def publish_cell(marker_path: str, artifact: CellArtifact) -> dict:
+    """Bank one finished cell: immutable content object first, then the single commit marker.
+
+    **Review F5b, MAJOR — two publishers could tear the pair permanently.** The previous shape wrote
+    a fixed-name content file and then a digest sidecar, so two writers could finish as
+    ``content-B + digest-A`` and the cell was unadoptable forever. Content objects are now named by
+    their own digest and the marker names one of them, so:
+
+    * no two payloads contend for a name — a torn interleaving is not expressible;
+    * whatever the marker holds is a complete object that verifies against it;
+    * a publisher that finds a BROKEN pair (marker naming an object that is missing, unreadable or
+      does not hash to it) **repairs** it instead of returning early. Returning early was how the
+      earlier version left a poisoned cache; the review found the window my first fix did not close.
+
+    A complete, verifying pair is kept rather than rewritten (issue #10), and this attempt's own
+    in-memory measurement decides this attempt's table either way. Nothing here raises for a storage
+    condition: banking is a cache in front of a 3.5-hour ladder and must never be the thing that ends
+    one.
+
+    **What publication does not do:** it does not authenticate. The object carries an integrity digest
+    and the running program's manifest; it carries no signature, so the writer set is whoever the
+    bucket ACL admits. See the module docstring for the boundary and the escalation.
+    """
+    if not isinstance(artifact, CellArtifact):
+        raise ValueError(f"publish_cell takes a CellArtifact, not {type(artifact).__name__}")
+    payload = artifact.as_payload()
+    digest = _digest(payload)
+    if storage_exists(marker_path):
+        recorded = _marker_digest(marker_path)
+        intact = bool(recorded) and _content_is_intact(marker_path, recorded)
+        if intact:
+            if recorded != digest:
+                print(
+                    f"[M1] {marker_path} already commits {recorded[:12]} and this measurement is {digest[:12]}; "
+                    f"keeping the published artifact -- a published artifact is adopted, never rewritten "
+                    f"(issue #10). This attempt's own measurement still decides its table.",
+                    flush=True,
+                )
+            return {**payload, "sha256": recorded if recorded == digest else digest}
+        print(
+            f"[M1] {marker_path} commits {recorded[:12] if recorded else '(unreadable)'} but that content object "
+            f"is missing or does not hash to it; REPAIRing the pair from this attempt's own measurement rather "
+            f"than leaving the cell unadoptable.",
+            flush=True,
+        )
+    publish_cell_content(marker_path, artifact)
+    commit_cell_marker(marker_path, artifact)
+    return {**payload, "sha256": digest}
+
+
+def _marker_digest(marker_path: str) -> str:
+    try:
+        recorded = storage_read_bytes(marker_path).decode("utf-8").strip()
+    except Exception:  # noqa: BLE001 -- an unreadable marker is a broken pair, not a crash
+        return ""
+    return recorded if _DIGEST_RE.match(recorded) else ""
+
+
+def _content_is_intact(marker_path: str, digest: str) -> bool:
+    try:
+        _read_verified_content(marker_path, digest)
+    except Exception:  # noqa: BLE001 -- any failure to reproduce the committed object is "broken"
+        return False
+    return True
+
+
+def _read_verified_content(marker_path: str, digest: str) -> Mapping:
+    """The payload the marker commits to, or a refusal naming which link of the chain broke."""
+    path = _content_for_marker(marker_path, digest)
+    if not storage_exists(path):
+        raise ValueError(
+            f"{marker_path} commits {digest[:12]} but {path} does not exist: the marker is the commit, and "
+            f"a commit that names no object is not a publication"
+        )
+    parsed = json.loads(storage_read_bytes(path).decode("utf-8"))
+    stored = dict(parsed) if isinstance(parsed, Mapping) else {}
+    payload = stored.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{path} holds no cell payload")
+    recomputed = _digest(payload)
+    if recomputed != digest or stored.get("sha256") != digest:
+        raise ValueError(
+            f"{path}: the content hashes to {recomputed[:12]} and records {str(stored.get('sha256'))[:12]}, but "
+            f"the marker commits {digest[:12]} -- the object is not the one that was committed"
+        )
+    return payload
+
+
+def load_cell_artifact(marker_path: str) -> CellArtifact:
+    """Read a banked cell through its commit marker, or refuse it by name.
+
+    The marker is the only entry point: it names the exact content object, that object is verified to
+    hash to what the marker names, and only then is the payload parsed. A publication that did not
+    reach its marker is invisible here, which is the safe way round.
+    """
+    if not storage_exists(marker_path):
+        raise ValueError(
+            f"{marker_path} does not exist. The marker is written last and is the commit, so its absence "
+            f"means the publication did not finish -- and a half-published cell is exactly the artifact an "
+            f"adopt-if-published design must not adopt"
+        )
+    digest = _marker_digest(marker_path)
+    if not digest:
+        raise ValueError(f"{marker_path} does not hold a sha256 digest; it commits nothing")
+    payload = _read_verified_content(marker_path, digest)
+    try:
+        return CellArtifact.from_payload(payload)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"{marker_path}: {error}") from error
+
+
+def _directories_under(root: str, *, depth: int, limit: int) -> tuple:
+    """Every ``cells/`` directory at or above ``depth`` under ``root``, breadth first and bounded."""
+    frontier, found, visited = [(str(root).rstrip("/"), 0)], [], 0
+    while frontier:
+        if visited >= limit:
+            print(
+                f"[M1] adoption scan stopped after {limit} directories under {root}: it is bounded on purpose, "
+                f"and a root this wide is not an attempt tree. Point pos_fit_adoption_root at this job's M1 root.",
+                flush=True,
+            )
+            break
+        current, level = frontier.pop(0)
+        visited += 1
+        try:
+            names = storage_list_children(current)
+        except Exception as error:  # noqa: BLE001 -- a listing that fails is an empty listing here
+            print(f"[M1] adoption scan: cannot list {current} ({type(error).__name__}: {error}); skipping", flush=True)
+            continue
+        for name in names:
+            child = f"{current}/{name}"
+            if name == CELLS_DIRNAME:
+                found.append(child)
+            elif level + 1 < depth:
+                frontier.append((child, level + 1))
+    return tuple(sorted(found))
+
+
+def adoption_candidates(
+    root: str, cell: FitCell, *, depth: int = ADOPTION_SCAN_DEPTH, limit: int = ADOPTION_SCAN_LIMIT
+) -> tuple:
+    """Published artifacts for this cell under an adoption root, sorted, oldest attempt first."""
+    if not str(root or ""):
+        return ()
+    name = f"{cell_artifact_name(cell)}{DIGEST_SUFFIX}"
+    return tuple(
+        path
+        for path in (f"{directory}/{name}" for directory in _directories_under(root, depth=depth, limit=limit))
+        if storage_exists(path)
+    )
+
+
+def _adoption_refusal(artifact: CellArtifact, *, cell: FitCell, context: ProbeContext, job_identity: str, trials: int):
+    """Why THIS process may not use that artifact — or ``""`` if it may. Every branch re-measures."""
+    if artifact.cell != cell:
+        return f"it records {artifact.cell} and this is {cell}"
+    if str(artifact.job_identity) != str(job_identity):
+        return (
+            f"it was published by job/run {artifact.job_identity!r} and this job is {job_identity!r}: another "
+            f"run's cells sitting under a shared root are not this run's evidence"
+        )
+    if artifact.context.digest() != context.digest():
+        return (
+            f"it was measured under a different program -- {list(artifact.context.differences(context))} differ "
+            f"(measured on {artifact.context.code_sha[:12]}/{artifact.context.device_kind}x"
+            f"{artifact.context.device_count}, running {context.code_sha[:12]}/{context.device_kind}x"
+            f"{context.device_count}). Adoption is bound to the context digest, code_sha included."
+        )
+    if len(artifact.trials) != int(trials):
+        return (
+            f"it records {len(artifact.trials)} trial(s) and this ladder runs {int(trials)}: a cell repeats "
+            f"because one trial cannot show a cell that only fits when the neighbours are idle"
+        )
+    return ""
+
+
+def adopt_published_cell(
+    cell: FitCell, *, context: ProbeContext, job_identity: str, root: str, trials: int
+) -> tuple | None:
+    """The trials of an already-published, fully verified measurement of this cell — or ``None``.
+
+    ``None`` means measure it. Nothing here can fail the run: every refusal costs the cell's own
+    measurement time, which is what the probe was going to spend anyway.
+
+    **What adoption verifies, and what it cannot.** It verifies integrity (content-addressed object,
+    digest-checked against its marker) and program identity (the artifact's recorded context, manifest
+    of the running bytes included, byte-for-byte against this process's). It does NOT verify
+    authorship: these artifacts are not authenticated, and a bucket writer holding the deployed tree
+    could fabricate one. That residual is accepted pending Yixun's decision on signing; the trust
+    anchor today is the bucket ACL.
+    """
+    if not str(root or ""):
+        return None
+    if not str(job_identity or ""):
+        print(
+            "[M1] adoption is off: this job declares no run_name, and an empty run identity would match "
+            "every other empty one rather than naming a job",
+            flush=True,
+        )
+        return None
+    for path in reversed(adoption_candidates(root, cell)):
+        try:
+            artifact = load_cell_artifact(path)
+        except Exception as error:  # noqa: BLE001 -- adoption is an optimization and may never fail a run
+            # Deliberately every exception, not a curated tuple: the storage layer's own errors
+            # (tensorflow's NotFoundError family) are not in the ValueError/OSError hierarchy, and a
+            # read race against another attempt's publication must cost this cell a re-measure rather
+            # than the 3.5-hour ladder.
+            print(f"[M1] not adopting {path}: {type(error).__name__}: {error}", flush=True)
+            continue
+        refusal = _adoption_refusal(artifact, cell=cell, context=context, job_identity=job_identity, trials=trials)
+        if refusal:
+            print(f"[M1] not adopting {path}: {refusal}", flush=True)
+            continue
+        print(
+            f"[M1] adopting {cell.arm} microbatch={cell.microbatch} k={cell.k_b} from {path} "
+            f"({len(artifact.trials)} trials, peak {max(t.peak_bytes for t in artifact.trials)} bytes)",
+            flush=True,
+        )
+        return artifact.trials, path
+    return None
 
 
 # =================================================================================================
@@ -1678,8 +2319,36 @@ def run_fit_probe(
         )
     if int(trials) < 1:
         raise ValueError(f"each cell needs at least one trial, got {trials!r}")
+    # The destination is checked BEFORE the first cell is measured (F5). It used to be read after the
+    # ladder, so a probe pointed nowhere spent the whole 3.5 hours to discover it -- and F5's per-cell
+    # publication needs the path from the first cell anyway.
+    path = str(declared(config, "pos_fit_authorization"))
+    if not path:
+        raise ValueError(
+            "pos_fit_authorization must name the path M1 publishes to; a probe that measures a ladder and "
+            "publishes nowhere leaves M2/M3 with no route to a run"
+        )
+    adoption_root = str(declared(config, "pos_fit_adoption_root") or "")
+    job_identity = derive_job_identity(config)
+    print(
+        f"[M1] banking cells in {cell_publication_dir(path)}; adoption root "
+        f"{adoption_root or '(none -- every cell will be measured)'}; run identity {job_identity!r}",
+        flush=True,
+    )
     measurements: list[CellMeasurement] = []
+    provenance: dict[FitCell, str] = {}
     for cell in requested:
+        adopted = adopt_published_cell(
+            cell, context=context, job_identity=job_identity, root=adoption_root, trials=int(trials)
+        )
+        if adopted is not None:
+            banked, source = adopted
+            measurements.extend(banked)
+            # NOT republished into this attempt's own cells/ tree: a second copy of one measurement
+            # would read like a second measurement to anything that counts artifacts.
+            provenance[cell] = f"{ADOPTED_PREFIX}{source}"
+            continue
+        taken: list[CellMeasurement] = []
         for trial in range(int(trials)):
             measurement = measurer(cell=cell, context=context, config=config)
             if not isinstance(measurement, CellMeasurement):
@@ -1696,27 +2365,35 @@ def run_fit_probe(
                     f"trial {trial} of {cell} came back bound to another context: the probe derives the "
                     f"context, the measurer does not get to choose it"
                 )
-            measurements.append(measurement)
+            taken.append(measurement)
+        # BANK IT NOW. The next line of this loop is another cell's compile, and the zone has killed
+        # this job seven times inside one; a cell that is only in memory when that happens is a cell
+        # the campaign pays for again.
+        publish_cell(
+            cell_marker_path(path, cell),
+            CellArtifact(cell=cell, context=context, job_identity=job_identity, trials=tuple(taken)),
+        )
+        measurements.extend(taken)
+        provenance[cell] = PROVENANCE_MEASURED
     evidence = build_evidence(
         context,
         measurements,
         max_train_steps=int(declared(config, "max_train_steps")),
         eval_every=int(declared(config, "eval_every")),
         checkpoint_every=int(declared(config, "checkpoint_every")),
+        provenance=provenance,
     )
-    path = str(declared(config, "pos_fit_authorization"))
-    if not path:
-        raise ValueError(
-            "pos_fit_authorization must name the path M1 publishes to; a probe that measures a ladder and "
-            "publishes nowhere leaves M2/M3 with no route to a run"
-        )
     published = publish_authorization(path, evidence)
     print(
         f"[M1] context {context.digest()[:16]} on {context.device_kind}x{context.device_count} @ {context.code_sha[:12]}"
     )
+    banked = {(row["arm"], row["microbatch"], row["k_b"]): row["provenance"] for row in published["cell_provenance"]}
     for entry in published["measured_cells"]:
         state = "AUTHORIZED" if entry in published["authorized_cells"] else "refused"
-        print(f"[M1] {entry['arm']:<9s} microbatch={entry['microbatch']:<3d} k={entry['k_b']}  {state}")
+        source = banked.get((entry["arm"], entry["microbatch"], entry["k_b"]), PROVENANCE_MEASURED)
+        print(f"[M1] {entry['arm']:<9s} microbatch={entry['microbatch']:<3d} k={entry['k_b']}  {state}  [{source}]")
+    adopted = sum(1 for text in banked.values() if text.startswith(ADOPTED_PREFIX))
+    print(f"[M1] {len(banked) - adopted} cell(s) measured this attempt, {adopted} adopted from prior attempts")
     for projection in published["projections"]:
         print(
             f"[M1] projection {projection['arm']} m={projection['microbatch']} k={projection['k_b']}: "

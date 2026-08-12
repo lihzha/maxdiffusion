@@ -33,7 +33,35 @@ class FakeGfile:
         return pos_rollout_support.is_remote(path)
 
     def exists(self, path):
-        return str(path) in self.blobs if self._remote(path) else Path(str(path)).exists()
+        if not self._remote(path):
+            return Path(str(path)).exists()
+        # A bucket has no directories: a prefix "exists" exactly when an object lives under it, and
+        # that is what tensorflow's GCS filesystem reports too. F5's adoption scan lists prefixes, so
+        # a fake that only knew about exact object names would make every scan report an empty tree.
+        key = str(path)
+        return key in self.blobs or any(blob.startswith(key.rstrip("/") + "/") for blob in self.blobs)
+
+    def listdir(self, path):
+        if not self._remote(path):
+            return sorted(child.name for child in Path(str(path)).iterdir())
+        prefix = str(path).rstrip("/") + "/"
+        names = {blob[len(prefix) :].split("/", 1)[0] for blob in self.blobs if blob.startswith(prefix)}
+        names |= {directory[len(prefix) :].split("/", 1)[0] for directory in self.dirs if directory.startswith(prefix)}
+        return sorted(name for name in names if name)
+
+    def rename(self, source, destination, overwrite=False):
+        if not self._remote(source):
+            Path(str(source)).replace(str(destination))
+            return
+        if str(destination) in self.blobs and not overwrite:
+            raise FileExistsError(str(destination))
+        self.blobs[str(destination)] = self.blobs.pop(str(source))
+
+    def remove(self, path):
+        if self._remote(path):
+            self.blobs.pop(str(path), None)
+        else:
+            Path(str(path)).unlink(missing_ok=True)
 
     def makedirs(self, path):
         if self._remote(path):

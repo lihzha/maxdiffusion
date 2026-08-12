@@ -255,7 +255,11 @@ def load_publication(path: str) -> dict:
         raise ValueError(f"{path}: the publication marker's digest does not describe its payload; it was edited")
     if payload.get("protocol") != PUBLICATION_PROTOCOL:
         raise ValueError(f"{path}: protocol {payload.get('protocol')!r} is not {PUBLICATION_PROTOCOL}")
-    for field in ("attempt", "arm", "code_sha", "checkpoint_dir"):
+    # `context_digest` is REQUIRED (review F5c, BLOCKER 2). The field has been recorded since T6-3
+    # and demanded by nothing, so a marker written by an older publisher -- or by hand -- read as
+    # adoptable while carrying no identity at all. Two git-less deployments can share a `COMMIT`
+    # label and differ in their running bytes, and this is the field that separates them.
+    for field in ("attempt", "arm", "code_sha", "context_digest", "checkpoint_dir"):
         if not str(payload.get(field, "")):
             raise ValueError(f"{path}: a publication marker without {field} cannot be adopted")
     if payload.get("complete") is not True:
@@ -263,15 +267,54 @@ def load_publication(path: str) -> dict:
     return {**dict(payload), "sha256": stored["sha256"]}
 
 
-def select_resume_publication(parent: str, *, code_sha: str, arm: str) -> dict | None:
-    """The latest COMPLETE publication for THIS arm whose recorded SHA is the code now running.
+def describe_resume_candidates(parent: str, *, code_sha: str, arm: str) -> list[dict]:
+    """Every COMPLETE publication for this arm at this SHA — a REPORT, never a decision (F5c).
 
-    Three filters, each one a way a resume silently corrupts a run: an incomplete attempt (adopting a
-    half-written tree), another arm's attempt (matched-C0 restoring R-B's parameters — the reviewer's
-    scientifically critical finding), and another commit's attempt (resuming optimizer state built by
-    a different program). Anything unreadable is skipped rather than fatal: a damaged old attempt
-    must not stop a run that has a good one.
+    The launcher's preflight runs AFTER the HF prefetch but BEFORE distributed initialization and the
+    model load, so ``jax.devices()`` would report that host's LOCAL chip count -- wrong by a factor of
+    eight on a v6e-64 job -- and the config has not been through ``pyconfig`` there, so the recipe
+    fingerprint is unavailable. It therefore cannot derive the context that decides adoption. It gets
+    this instead: the candidates, each carrying the context it was measured under, and no claim about
+    which one (if any) the running process will accept. A preflight that predicted adoption from a
+    commit label would be the very error :func:`select_resume_publication` was just fixed for.
     """
+    found = []
+    for name in _list_children(parent):
+        if not _ATTEMPT_RE.match(name):
+            continue
+        path = f"{str(parent).rstrip('/')}/{name}/{PUBLICATION_NAME}"
+        if not storage_exists(path):
+            continue
+        try:
+            publication = load_publication(path)
+        except (ValueError, json.JSONDecodeError, OSError):
+            continue
+        if str(publication["arm"]) == str(arm) and str(publication["code_sha"]) == str(code_sha):
+            found.append(publication)
+    return sorted(found, key=lambda entry: (int(entry.get("step", 0)), str(entry["attempt"])))
+
+
+def select_resume_publication(parent: str, *, code_sha: str, arm: str, context_digest: str) -> dict | None:
+    """The latest COMPLETE publication for THIS arm measured by THIS PROGRAM.
+
+    Four filters, each one a way a resume silently corrupts a run: an incomplete attempt (adopting a
+    half-written tree), another arm's attempt (matched-C0 restoring R-B's parameters — the reviewer's
+    scientifically critical finding), another commit's attempt, and — since review F5c — another
+    CONTEXT's attempt. Anything unreadable is skipped rather than fatal: a damaged old attempt must
+    not stop a run that has a good one.
+
+    **Why the fourth filter exists.** ``code_sha`` is a commit LABEL, and on a git-less worker it is
+    whatever ``COMMIT`` said; the reviewer published two same-SHA attempts whose contexts differed and
+    watched this selector take the higher-step foreign one, so one deployment could resume another's
+    optimizer state. ``context_digest`` is the same digest cell adoption compares — code manifest,
+    model revision, device topology, geometry and recipe — and it is a REQUIRED keyword precisely
+    because the identity was lost by being droppable.
+    """
+    if not str(context_digest or ""):
+        raise ValueError(
+            "select_resume_publication needs the digest of the context THIS process derived: a resume that "
+            "matches only a commit label adopts state built by a program it cannot identify (review F5c)"
+        )
     candidates = []
     for name in _list_children(parent):
         if not _ATTEMPT_RE.match(name):
@@ -284,6 +327,8 @@ def select_resume_publication(parent: str, *, code_sha: str, arm: str) -> dict |
         except (ValueError, json.JSONDecodeError, OSError):
             continue
         if str(publication["arm"]) != str(arm) or str(publication["code_sha"]) != str(code_sha):
+            continue
+        if str(publication["context_digest"]) != str(context_digest):
             continue
         candidates.append(publication)
     if not candidates:
@@ -425,7 +470,14 @@ class WanPosRolloutTrainer:
                 f"a half-written state"
             )
         derived = self.running_context() if context is None else context
-        return select_resume_publication(self.resume_parent, code_sha=derived.code_sha, arm=str(self.schedule.arm))
+        # The WHOLE derived context, not one field of it (review F5c, BLOCKER 2): this method used to
+        # derive the complete identity and then hand the selector `code_sha` alone.
+        return select_resume_publication(
+            self.resume_parent,
+            code_sha=derived.code_sha,
+            arm=str(self.schedule.arm),
+            context_digest=derived.digest(),
+        )
 
     def assert_loader_yields_the_logical_batch(self) -> int:
         """The iterator must hand the loop EXACTLY ``pos_logical_batch`` examples per step.

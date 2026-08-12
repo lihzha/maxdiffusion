@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import pathlib
 import re
+import uuid
 
 import jax
 import jax.numpy as jnp
@@ -259,3 +261,69 @@ def storage_write_bytes(path, payload: bytes) -> None:
 def storage_exists(path) -> bool:
     gfile = _gfile(path)
     return pathlib.Path(str(path)).exists() if gfile is None else bool(gfile.exists(str(path)))
+
+
+def storage_list_children(parent) -> list[str]:
+    """The child names directly under an artifact root, sorted. A missing root lists as empty.
+
+    Round F5 needs this on the storage layer rather than inside one trainer: the fit probe's
+    adopt-if-published scan walks prior attempt roots, and those roots are ``gs://`` URIs in
+    production. ``pathlib`` would silently turn ``gs://bucket/x`` into the local path ``gs:/bucket/x``
+    and report an empty listing, which for an adoption scan means "nothing to adopt" — a wrong answer
+    that looks exactly like the right one. So the remote case never falls back; it raises, the same
+    way read/write/exists do.
+    """
+    gfile = _gfile(parent)
+    if gfile is None:
+        root = pathlib.Path(str(parent))
+        return sorted(child.name for child in root.iterdir()) if root.is_dir() else []
+    if not gfile.exists(str(parent)):
+        return []
+    return sorted(name.rstrip("/") for name in gfile.listdir(str(parent)))
+
+
+def storage_remove(path) -> None:
+    """Best effort: a staging file that outlives its publication must not be left in an artifact root."""
+    gfile = _gfile(path)
+    try:
+        if gfile is None:
+            pathlib.Path(str(path)).unlink(missing_ok=True)
+        elif gfile.exists(str(path)):
+            gfile.remove(str(path))
+    except Exception:  # noqa: BLE001 -- cleanup failure must not mask the error that caused it
+        pass
+
+
+def _storage_rename(source, destination) -> None:
+    """Move staged bytes onto the destination name. Separate so a test can make the move fail."""
+    gfile = _gfile(destination)
+    if gfile is None:
+        os.replace(str(source), str(destination))
+        return
+    gfile.rename(str(source), str(destination), overwrite=True)
+
+
+def storage_publish_bytes(path, payload: bytes) -> None:
+    """Write bytes so that the destination is never observed holding a PREFIX of them.
+
+    ``storage_write_bytes`` streams into the destination name, so a process that dies mid-write
+    leaves a short file wearing the name of a finished artifact. That is survivable for an artifact
+    nobody reads back; F5 introduces one that a later attempt reads back and BUILDS ON, and a
+    truncated read that happens to parse is how an adopt-if-published design adopts a half-write.
+
+    The bytes therefore land on a staging name beside the destination and are RENAMED onto it —
+    ``os.replace`` locally (atomic), ``gfile.rename`` on ``gs://`` (a server-side copy-then-delete, so
+    the destination object appears whole or not at all). The staging name is dot-prefixed and carries
+    the pid and a uuid, so two writers cannot collide and no scan that looks for a declared filename
+    can see one. A failed publication removes its staging file and leaves no destination behind.
+    """
+    target = str(path)
+    parent, _, name = target.rpartition("/")
+    unique = f".{name}.{os.getpid()}-{uuid.uuid4().hex}.staging"
+    staged = f"{parent}/{unique}" if parent else unique
+    storage_write_bytes(staged, payload)
+    try:
+        _storage_rename(staged, target)
+    except BaseException:
+        storage_remove(staged)
+        raise

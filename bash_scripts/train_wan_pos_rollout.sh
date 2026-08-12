@@ -161,6 +161,13 @@ OUTPUT_DIR="${OUTPUT_DIR:-gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-pos-r
 # M1 is refused by name, before the prefetch, rather than five minutes into a pipeline load. In
 # `fit_probe` mode it is DERIVED, because that mode is the thing that publishes it.
 POS_FIT_AUTHORIZATION="${POS_FIT_AUTHORIZATION:-}"
+# F5: where the fit probe LOOKS for cells a prior attempt of this same job already published. Left
+# unset in `fit_probe` mode it defaults to this job's attempts root, which is correct whenever
+# OUTPUT_DIR is stable across attempts. The submit wrapper scopes OUTPUT_DIR PER ATTEMPT
+# (`$M1ROOT/$ATT`), which puts each attempt's tree in its own OUTPUT_DIR and makes the attempts root
+# empty every time -- so that wrapper must pass POS_FIT_ADOPTION_ROOT="$M1ROOT" for adoption to see
+# anything. Inert in `train` mode: nothing there adopts cells.
+POS_FIT_ADOPTION_ROOT="${POS_FIT_ADOPTION_ROOT:-}"
 
 case "${POS_JOB_MODE}" in
   train|fit_probe) ;;
@@ -258,6 +265,10 @@ if [ "${POS_JOB_MODE}" = "fit_probe" ]; then
   # M1 PUBLISHES the authorization, so its path is derived and attempt-scoped: a retried probe
   # publishes into its own root instead of dying on the storage layer's refusal to rewrite.
   POS_FIT_AUTHORIZATION="${ATTEMPT_ROOT}/fit_authorization.json"
+  # F5: the probe banks each finished cell under ${ATTEMPT_ROOT}/cells and adopts verified cells from
+  # prior attempts under this root. Defaulting to the attempts root is the issue-#13 layout's own
+  # answer; an operator whose wrapper scopes OUTPUT_DIR per attempt widens it explicitly.
+  POS_FIT_ADOPTION_ROOT="${POS_FIT_ADOPTION_ROOT:-${RESUME_PARENT}}"
   ENTRYPOINT="src/maxdiffusion/pos_rollout_fit_probe.py"
 elif [ -z "${POS_FIT_AUTHORIZATION}" ]; then
   echo "FATAL: POS_FIT_AUTHORIZATION is empty and POS_JOB_MODE=train."
@@ -342,7 +353,7 @@ for module in ("tensorflow", "jax", "numpy", "orbax.checkpoint", "huggingface_hu
 # otherwise surface only after the config, the data pipeline and the 5B model are loaded.
 try:
     from maxdiffusion.trainers.wan_pos_rollout_trainer import WanPosRolloutTrainer  # noqa: F401
-    from maxdiffusion.trainers.wan_pos_rollout_trainer import select_resume_publication
+    from maxdiffusion.trainers.wan_pos_rollout_trainer import describe_resume_candidates
     from maxdiffusion.pos_rollout_arms import ARMS
     from maxdiffusion.pos_rollout_dev_instrument import J0_DEV64_SHA256  # noqa: F401
     from maxdiffusion.pos_rollout_fit_probe import LADDER_ARMS
@@ -359,15 +370,29 @@ if missing:
         print(f"  - {line}")
     sys.exit(1)
 
-# What this attempt would ADOPT: the latest COMPLETE publication for THIS arm at THIS code_sha.
-adopted = select_resume_publication(
+# What this attempt MIGHT adopt. Review F5c, BLOCKER 2: adoption is decided by the full derived
+# context -- code manifest, model revision, device topology, geometry, recipe -- and it is not
+# derivable here. This preflight runs AFTER the HF prefetch above, but BEFORE distributed
+# initialization and the model load: so `jax.devices()` would report this host's LOCAL chip count,
+# which on a v6e-64 job is wrong by a factor of eight, and the config has not been through `pyconfig`
+# here, so the recipe fingerprint is not available either. (F5d corrects an earlier version of this
+# comment that claimed the prefetch had not run yet -- it has; the topology argument is what stands.)
+# So this lists CANDIDATES and
+# says plainly that it is not the decision; the decision is `resume_source` inside the real process,
+# with the context that process actually derived. Reporting a prediction here would be the same class
+# of error as the selector matching a commit label: a confident claim from an identity nobody checked.
+candidates = describe_resume_candidates(
     os.environ["POS_RESUME_PARENT"], code_sha=os.environ["COMMIT"], arm=os.environ["POS_ROLLOUT_ARM"]
 )
-if adopted is None:
-    print("[preflight] resume: no COMPLETE publication for this arm at this SHA -- starting from step 0")
+if not candidates:
+    print("[preflight] resume: no COMPLETE publication for this arm at this SHA -- this attempt starts at step 0")
 else:
-    print(f"[preflight] resume: adopting {adopted['attempt']} at step {adopted['step']} ({adopted['checkpoint_dir']})")
-print("[preflight] ok: imports, exp_06 dispatch, the declared arms and the resume adoption")
+    print(f"[preflight] resume: {len(candidates)} candidate publication(s) for this arm at this SHA:")
+    for entry in candidates:
+        print(f"[preflight]   {entry['attempt']} step {entry['step']} context {entry['context_digest'][:16]}")
+    print("[preflight]   ADOPTION IS NOT DECIDED HERE: the running process matches the FULL derived context")
+    print("[preflight]   (manifest, model, topology, geometry, recipe), so a candidate above may be refused.")
+print("[preflight] ok: imports, exp_06 dispatch, the declared arms and the resume candidates")
 PREFLIGHT
 
 # =================================================================================================
@@ -381,6 +406,7 @@ COMMON_RECIPE=(
   output_dir="${OUTPUT_DIR}"
   pos_recipe_lock="${RECIPE_LOCK}"
   pos_fit_authorization="${POS_FIT_AUTHORIZATION}"
+  pos_fit_adoption_root="${POS_FIT_ADOPTION_ROOT}"
   pos_dev_manifest="${POS_DEV_MANIFEST}"
   pos_dev_manifest_sha256="${POS_DEV_MANIFEST_SHA256}"
   pos_rollout_k="${POS_ROLLOUT_K}"
@@ -421,6 +447,8 @@ echo "MODEL_DIR=${MODEL_DIR}"
 echo "TRAIN_DATA_DIR=${TRAIN_DATA_DIR}"
 echo "POS_DEV_MANIFEST=${POS_DEV_MANIFEST}"
 echo "POS_FIT_AUTHORIZATION=${POS_FIT_AUTHORIZATION}"
+echo "POS_FIT_ADOPTION_ROOT=${POS_FIT_ADOPTION_ROOT}   (F5: verified cells under this root are adopted, \
+not re-measured; empty = measure everything)"
 echo "MAX_TRAIN_STEPS=${MAX_TRAIN_STEPS} EVAL_EVERY=${EVAL_EVERY} CHECKPOINT_EVERY=${CHECKPOINT_EVERY}"
 echo "POS_LOGICAL_BATCH=${POS_LOGICAL_BATCH} POS_MICROBATCH=${POS_MICROBATCH} POS_ROLLOUT_K=${POS_ROLLOUT_K}"
 echo "SAMPLING_STEPS=${SAMPLING_STEPS} GUIDE_SCALE=${GUIDE_SCALE} NOISE_MODE=${NOISE_MODE} DROPOUT=${DROPOUT}"

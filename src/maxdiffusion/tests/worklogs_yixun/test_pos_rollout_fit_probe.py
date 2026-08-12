@@ -413,18 +413,35 @@ def test_a_footprint_key_moves_the_recipe_fingerprint_and_a_cell_key_does_not():
         assert probe.recipe_fingerprint(_config(**{key: value})) == base, f"{key} is the CELL, not the recipe"
 
 
-def test_the_code_sha_is_derived_and_a_disagreement_is_fatal():
-    """A tarball worker has no git objects and the launcher's COMMIT is the provenance; a checkout
-    has git. When both exist and disagree, they are two different programs."""
-    assert probe.derive_code_sha(environ={"COMMIT": "c" * 40}, module_file="/nonexistent/x.py") == "c" * 40
+def test_the_code_sha_is_derived_and_a_disagreement_is_fatal(monkeypatch):
+    """A tarball worker has no git objects and the launcher's COMMIT is the LABEL; a checkout has git.
+    When both exist and disagree, they are two different programs.
+
+    **Updated by review F5b (BLOCKER 2), and the update is the finding.** A commit is not the running
+    bytes, so ``COMMIT`` alone no longer stands behind a measurement: a git-less deployment must bind
+    a content manifest (hence the argument here), and a process that DECLARES a commit from a tree
+    with uncommitted measurement code is refused. The dirty-tree state is pinned per branch rather
+    than read from the working tree, so this test says the same thing before and after a ceremony
+    commit."""
+    manifest = "c" * 64
+    for environ, expected in (({"COMMIT": "c" * 40}, "c" * 40),):
+        assert probe.derive_code_sha(environ=environ, module_file="/nonexistent/x.py", manifest=manifest) == expected
     with pytest.raises(ValueError, match="no 40-hex code SHA"):
-        probe.derive_code_sha(environ={}, module_file="/nonexistent/x.py")
+        probe.derive_code_sha(environ={}, module_file="/nonexistent/x.py", manifest=manifest)
     with pytest.raises(ValueError, match="no 40-hex code SHA"):
-        probe.derive_code_sha(environ={"COMMIT": "not-a-sha"}, module_file="/nonexistent/x.py")
+        probe.derive_code_sha(environ={"COMMIT": "not-a-sha"}, module_file="/nonexistent/x.py", manifest=manifest)
+    # F5b: a git-less deployment that binds no manifest is a claim with nothing behind it.
+    with pytest.raises(ValueError, match="not identified at all"):
+        probe.derive_code_sha(environ={"COMMIT": "c" * 40}, module_file="/nonexistent/x.py")
+
     head = probe.derive_code_sha(environ={})
     with pytest.raises(ValueError, match="two of them"):
         probe.derive_code_sha(environ={"COMMIT": "0" * 40})
+    monkeypatch.setattr(probe, "_git_dirty_paths", lambda start: ())
     assert probe.derive_code_sha(environ={"COMMIT": head}) == head
+    monkeypatch.setattr(probe, "_git_dirty_paths", lambda start: ("src/maxdiffusion/pos_rollout_arms.py",))
+    with pytest.raises(ValueError, match="uncommitted"):
+        probe.derive_code_sha(environ={"COMMIT": head})
 
 
 def test_an_authorization_measured_on_another_program_does_not_authorize_this_one(tmp_path):
@@ -575,7 +592,11 @@ def test_an_identical_republication_is_adopted_rather_than_refused(tmp_path):
 @pytest.mark.parametrize(
     "damage, message",
     [
-        (lambda p: p.update(protocol="exp06.fit_authorization.v1"), "is not exp06.fit_authorization.v2"),
+        # The expected text names the CURRENT protocol constant rather than a literal: F5 bumped it to
+        # v3 (the payload gained `cell_provenance`), and a test pinning the old spelling of the
+        # refusal fails for the bump rather than for the defect it exists to catch.
+        (lambda p: p.update(protocol="exp06.fit_authorization.v1"), f"is not {probe.AUTHORIZATION_PROTOCOL}"),
+        (lambda p: p.pop("cell_provenance"), "records none"),
         (lambda p: p.pop("context"), "carries none"),
         (lambda p: p.update(context_digest="0" * 64), "does not describe the recorded context"),
         (

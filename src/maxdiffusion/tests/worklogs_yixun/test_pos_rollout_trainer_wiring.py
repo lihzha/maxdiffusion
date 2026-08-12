@@ -454,10 +454,19 @@ def test_the_attempt_is_PUBLISHED_after_the_loop_and_its_id_is_derived(tmp_path,
 
     from maxdiffusion.trainers.wan_pos_rollout_trainer import select_resume_publication
 
+    # F5c: the selector matches the WHOLE derived context, not a commit label. Passing the running
+    # context's digest here is what the trainer's own `resume_source` does.
+    running = trainer.running_context()
     adopted = select_resume_publication(
-        config.pos_resume_parent, code_sha=trainer.running_context().code_sha, arm="rollout"
+        config.pos_resume_parent, code_sha=running.code_sha, arm="rollout", context_digest=running.digest()
     )
     assert adopted is not None and adopted["attempt"] == "att-ONE"
+    assert (
+        select_resume_publication(
+            config.pos_resume_parent, code_sha=running.code_sha, arm="rollout", context_digest="f" * 64
+        )
+        is None
+    ), "a foreign context adopts nothing, even at the same SHA"
 
 
 @pytest.mark.parametrize(

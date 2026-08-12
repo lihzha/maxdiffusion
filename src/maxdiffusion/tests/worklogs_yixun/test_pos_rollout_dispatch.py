@@ -50,6 +50,11 @@ _ADDED_KEYS = {
     "pos_test_manifest",
     # T7: M1's fit authorization, which start_training refuses to run without.
     "pos_fit_authorization",
+    # F5: where the fit probe LOOKS for cells a prior attempt of this same job already published, so
+    # a ladder the zone kills at 90 minutes does not re-measure what it already banked. Empty means
+    # adopt nothing, which is the pre-F5 behaviour; the launcher derives it in fit_probe mode. It is
+    # a DESTINATION for fingerprint purposes, so the recipe fingerprint is unmoved by its arrival.
+    "pos_fit_adoption_root",
     # Review pass 3 (T6-1/T6-2/T6-3): the derived paths the launchers transport. `pos_resume_parent`
     # is the immutable resume INPUT (distinct from the fresh attempt's OUTPUT tree); `pos_recipe_lock`
     # is the run-level artifact that makes a divergent second arm refuse to start; the three eval
@@ -78,7 +83,7 @@ def test_the_config_is_a_superset_of_the_side_adapter_config():
     missing = sorted(set(base) - set(pos))
     assert not missing, f"the pos_rollout config dropped {missing}"
     assert sorted(set(pos) - set(base)) == sorted(_ADDED_KEYS)
-    assert len(pos) == len(base) + len(_ADDED_KEYS) == 202
+    assert len(pos) == len(base) + len(_ADDED_KEYS) == 203
 
 
 def test_only_the_four_intended_values_differ_from_the_side_adapter_config():
