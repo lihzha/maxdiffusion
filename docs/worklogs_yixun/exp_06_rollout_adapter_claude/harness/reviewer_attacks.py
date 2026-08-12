@@ -104,8 +104,8 @@ def attack_b1(tmp):
     report = loop.run_loop(_state(), _schedule(max_train_steps=30_000, eval_every=1),
                            batches=_stream(_schedule()), update_fn=update, dev_metric_fn=lambda s, step: 0.01,
                            manager=loop.build_checkpoint_manager(directory))
-    return (f"steps_run={report.steps_run} events={events}"
-            + ("  -> SUCCEEDED (a terminal reopen trained on)" if events else "  -> REFUSED (no step, no iterator)"))
+    outcome = "SUCCEEDED: a terminal reopen trained on" if events else "REFUSED: no step, no iterator"
+    return f"{outcome} (steps_run={report.steps_run} events={events})"
 
 
 def attack_b2(tmp):
@@ -125,8 +125,8 @@ def attack_b2(tmp):
                            manager=loop.build_checkpoint_manager(directory), selection_manager=selection)
     selection.wait_until_finished()
     shipped = selection.latest_step()
-    return (f"history_best={report.retained_step} shipped_selection={shipped}"
-            + ("  -> REFUSED (reconciled)" if shipped == report.retained_step else "  -> SUCCEEDED (stale/wrong)"))
+    outcome = "REFUSED: reconciled" if shipped == report.retained_step else "SUCCEEDED: stale/wrong selection"
+    return f"{outcome} (history_best={report.retained_step} shipped_selection={shipped})"
 
 
 # =================================================================================================
@@ -571,7 +571,17 @@ def attack_p3_flatten_the_attempt_scoping(tmp):
 
 
 def attack_p3_adopt_an_incomplete_or_foreign_publication(tmp):
-    """T6-3: 'select only the latest COMPLETE checkpoint whose recorded SHA matches the running code'."""
+    """T6-3: 'select only the latest COMPLETE checkpoint whose recorded SHA matches the running code'.
+
+    **F5d: this probe silently stopped executing for a whole round.** F5c gave
+    `select_resume_publication` a required `context_digest` keyword; this call site was not updated,
+    the resulting `TypeError` was caught by `_report`, and the probe scored
+    `REFUSED (TypeError): ... missing 1 required keyword-only argument`. A standing attack had not run
+    since the signature changed, and the summary counted it as coverage.
+
+    So the call is fixed AND the failure mode is made loud locally: a `TypeError` from the selector is
+    the harness failing to execute the attack, not production refusing it, and it is reported as such.
+    """
     from maxdiffusion.trainers import wan_pos_rollout_trainer as tr
 
     parent = str(pathlib.Path(tmp) / "p3_attempts")
@@ -582,10 +592,24 @@ def attack_p3_adopt_an_incomplete_or_foreign_publication(tmp):
     tr.publish_attempt(parent, attempt="att-other-arm", arm="one_step", code_sha="a" * 40,
                        context_digest="d" * 64, step=9000, checkpoint_dir=f"{parent}/att-other-arm/checkpoints")
     (pathlib.Path(parent) / "att-crashed" / "checkpoints").mkdir(parents=True)
-    chosen = tr.select_resume_publication(parent, code_sha="a" * 40, arm="rollout")
+    try:
+        chosen = tr.select_resume_publication(parent, code_sha="a" * 40, arm="rollout", context_digest="d" * 64)
+    except TypeError as error:
+        return f"SUCCEEDED: THE PROBE DID NOT RUN -- selector signature drift ({error}); this attack is not covered"
+    if chosen is None:
+        return "SUCCEEDED: nothing was adopted at all -- the probe is no longer exercising the selector"
     if chosen["attempt"] != "att-mine":
         return f"SUCCEEDED: adopted {chosen['attempt']} at step {chosen['step']}"
-    return f"REFUSED: adopted only att-mine (step 1000); the 9000-step foreign-SHA and other-arm trees were skipped"
+    # F5c added a fourth filter; the probe now also proves a foreign CONTEXT at this SHA is skipped.
+    foreign_context = tr.select_resume_publication(
+        parent, code_sha="a" * 40, arm="rollout", context_digest="e" * 64
+    )
+    if foreign_context is not None:
+        return f"SUCCEEDED: a foreign context adopted {foreign_context['attempt']}"
+    return (
+        "REFUSED: selection logic chose only att-mine (step 1000); the 9000-step foreign-SHA and other-arm "
+        "trees and a foreign context were all skipped"
+    )
 
 
 def attack_p3_authorization_from_another_program(tmp):
@@ -703,6 +727,26 @@ def attack_p1_write_a_gs_artifact_locally():
             if guarded else f"SUCCEEDED: {dropped}")
 
 
+#: Three verdicts, counted separately (review F5c). REFUSED: production stopped the attack. DECLARED:
+#: the attack SUCCEEDS BY DESIGN, inside the trust boundary this campaign has explicitly accepted and
+#: written down -- it is not a refusal and must never be counted as one; if the boundary claim ever
+#: changes, or authentication is added, it flips to SUCCEEDED (or the probe is rewritten) and the
+#: change is forced to be deliberate. SUCCEEDED: a defect in production.
+_VERDICTS: list[str] = []
+
+#: **Which probes may say DECLARED — an allowlist, not a keyword** (review F5d, BLOCKER).
+#: `_report` used to accept any return beginning with "DECLARED" and `_summarize` labelled it an
+#: accepted residual, so a probe drifting into that word -- by accident or by edit -- could relabel a
+#: real defect as a known one. The reviewer executed exactly that. An accepted residual is a decision
+#: somebody made and wrote down, so it is enumerated here; a DECLARED from anywhere else is a harness
+#: failure and is counted UNPARSED, loudly.
+_MAY_DECLARE = frozenset({"F5-8"})
+
+
+def _probe_id(label) -> str:
+    return str(label).split()[0].rstrip(":")
+
+
 def _report(label, fn, *args):
     """An exception raised BY PRODUCTION is a refusal; the runner must survive it and say so.
 
@@ -711,9 +755,38 @@ def _report(label, fn, *args):
     every later attack. No attack's content changed.
     """
     try:
-        print(f"{label}:", fn(*args))
+        verdict = str(fn(*args))
     except Exception as error:  # noqa: BLE001
-        print(f"{label}: REFUSED ({type(error).__name__}): {str(error).splitlines()[0][:110]}")
+        verdict = f"REFUSED ({type(error).__name__}): {str(error).splitlines()[0][:110]}"
+    if verdict.startswith("DECLARED") and _probe_id(label) not in _MAY_DECLARE:
+        print(
+            f"{label}: HARNESS FAILURE: {_probe_id(label)} returned DECLARED but is not on the accepted-residual "
+            f"allowlist {sorted(_MAY_DECLARE)}. An accepted residual is a decision somebody wrote down, not a "
+            f"word a probe can reach for. Original verdict: {verdict[:140]}"
+        )
+        _VERDICTS.append("UNPARSED")
+        return
+    print(f"{label}: {verdict}")
+    for name in ("DECLARED", "SUCCEEDED", "REFUSED"):
+        if verdict.startswith(name):
+            _VERDICTS.append(name)
+            break
+    else:
+        _VERDICTS.append("UNPARSED")
+
+
+def _summarize():
+    """The honest headline. A single "N refused" number hid a false refusal for two rounds."""
+    counts = {name: _VERDICTS.count(name) for name in ("REFUSED", "DECLARED", "SUCCEEDED", "UNPARSED")}
+    print(
+        f"\nSUMMARY: {len(_VERDICTS)} probes -- {counts['REFUSED']} REFUSED, {counts['DECLARED']} DECLARED "
+        f"(accepted residual, see the harness README), {counts['SUCCEEDED']} SUCCEEDED, "
+        f"{counts['UNPARSED']} UNPARSED"
+    )
+    if counts["SUCCEEDED"] or counts["UNPARSED"]:
+        print("SUMMARY: FAILED -- a SUCCEEDED or UNPARSED line is production-guilty until you have read the probe.")
+        return False
+    return True
 
 
 
@@ -774,7 +847,38 @@ def _fake_environment():
             return pos_rollout_support.is_remote(path)
 
         def exists(self, path):
-            return str(path) in blobs if self._remote(path) else pathlib.Path(str(path)).exists()
+            if not self._remote(path):
+                return pathlib.Path(str(path)).exists()
+            # A bucket has no directories: a prefix exists when an object lives under it, which is
+            # what tensorflow's GCS filesystem reports. F5's adoption scan lists prefixes, and a fake
+            # that only knew exact object names would make every scan report an empty tree.
+            key = str(path)
+            return key in blobs or any(blob.startswith(key.rstrip("/") + "/") for blob in blobs)
+
+        def listdir(self, path):
+            if not self._remote(path):
+                return sorted(child.name for child in pathlib.Path(str(path)).iterdir())
+            prefix = str(path).rstrip("/") + "/"
+            return sorted(
+                {blob[len(prefix):].split("/", 1)[0] for blob in blobs if blob.startswith(prefix)} - {""}
+            )
+
+        def rename(self, source, destination, overwrite=False):
+            # F5 publishes by staging and renaming, so a fake without this makes every F5 probe
+            # report REFUSED for the wrong reason -- the exact staleness this harness's README warns
+            # about ("a probe that goes stale reports a defect it cannot see").
+            if not self._remote(source):
+                pathlib.Path(str(source)).replace(str(destination))
+                return
+            if str(destination) in blobs and not overwrite:
+                raise FileExistsError(str(destination))
+            blobs[str(destination)] = blobs.pop(str(source))
+
+        def remove(self, path):
+            if self._remote(path):
+                blobs.pop(str(path), None)
+            else:
+                pathlib.Path(str(path)).unlink(missing_ok=True)
 
         def makedirs(self, path):
             if not self._remote(path):
@@ -1996,6 +2100,317 @@ def attack_w4_time_a_pruned_scorer():
     return "REFUSED: M1 times the shared scorer, aux included"
 
 
+# =================================================================================================
+# F5 -- per-cell publication and adoption. A "resume from what is already published" design adds a
+# new attack surface in one move: numbers that this process did not measure now enter its artifact.
+# Every probe below is an attempt to get somebody else's numbers, half-written numbers, or numbers
+# that then escape the artifact's own digest, into an M1 authorization.
+# =================================================================================================
+
+
+def _f5_root(tmp, slot):
+    root = pathlib.Path(tmp) / "f5" / slot
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _f5_config(fp, tmp, slot, attempt, **over):
+    root = _f5_root(tmp, slot) / "m1" / "exp06-f5" / "fit_probe" / "attempts" / attempt
+    root.mkdir(parents=True, exist_ok=True)
+    values = dict(pos_fit_authorization=str(root / "fit_authorization.json"), run_name="exp06-f5")
+    values.update(over)
+    return _pos_config(**values)
+
+
+def _f5_measurer(fp, calls=None):
+    def measure(*, cell, context, config):
+        if calls is not None:
+            calls.append(cell)
+        return _fit(fp, context, arm=cell.arm, microbatch=cell.microbatch, k_b=cell.k_b)
+
+    return measure
+
+
+def _f5_cell():
+    return ("rollout", 8, 2)
+
+
+def _f5_publish(fp, tmp, slot, attempt="att-1", **over):
+    """Measure one cell into a fresh attempt root and return the path of the artifact it banked."""
+    config = _f5_config(fp, tmp, slot, attempt, **over)
+    cell = fp.FitCell(*_f5_cell())
+    fp.run_fit_probe(
+        config, measurer=_f5_measurer(fp), cells=[cell], trials=2, devices=[_Dev() for _ in range(8)]
+    )
+    return fp.cell_marker_path(str(getattr(config, "pos_fit_authorization")), cell)
+
+
+def _f5_resume(fp, tmp, slot, attempt="att-2", **over):
+    """Re-run the same cell with adoption on. Returns (calls the measurer received, published table)."""
+    calls = []
+    config = _f5_config(fp, tmp, slot, attempt, pos_fit_adoption_root=str(_f5_root(tmp, slot)), **over)
+    table = fp.run_fit_probe(
+        config,
+        measurer=_f5_measurer(fp, calls),
+        cells=[fp.FitCell(*_f5_cell())],
+        trials=2,
+        devices=[_Dev() for _ in range(8)],
+    )
+    return calls, table
+
+
+def _f5_edit(marker, mutate):
+    """Forge a banked cell the way somebody who wanted it adopted would: a COMPETENT forger.
+
+    An edit that leaves the artifact contradicting ITSELF is refused by a self-consistency check and
+    proves nothing about whether adoption compares the artifact with the running program. So every
+    derived field is recomputed, and since F5b the forger also REPUBLISHES properly: a new
+    content-addressed object at its own digest, the marker moved to commit it, the old object
+    removed. Otherwise every probe below would be refused by the content addressing rather than by
+    the binding it exists to test -- the same "refused for the wrong reason" trap that made the
+    `_Gfile` and the smuggling probe useless.
+    """
+    from maxdiffusion import pos_rollout_fit_probe as fp
+
+    digest = pathlib.Path(marker).read_text().strip()
+    content = pathlib.Path(fp._content_for_marker(marker, digest))
+    payload = json.loads(content.read_text())["payload"]
+    mutate(payload)
+    context = fp.ProbeContext.from_payload(payload["context"])
+    payload["context_digest"] = context.digest()
+    payload["code_sha"] = context.code_sha
+    payload["device_count"] = context.device_count
+    payload["recipe_fingerprint"] = context.recipe_fingerprint
+    for trial in payload["trials"]:
+        trial["context_digest"] = context.digest()
+    forged = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    pathlib.Path(fp._content_for_marker(marker, forged)).write_text(
+        json.dumps({"payload": payload, "sha256": forged}, sort_keys=True)
+    )
+    content.unlink(missing_ok=True)
+    pathlib.Path(marker).write_text(forged + "\n")
+
+
+def attack_f5_adopt_a_cell_measured_on_another_commit(tmp):
+    """Can a cell banked by a DIFFERENT program be adopted into this one's authorization?
+
+    This is the defect that makes adopt-if-published dangerous at all: an HBM peak is a measurement
+    of a program, and a published cell that outlives a code change is a number about a program that
+    no longer exists.
+    """
+    fp = _probe_env()
+    published = _f5_publish(fp, tmp, "commit")
+    _f5_edit(published, lambda payload: payload["context"].update(code_sha="0" * 40))
+    calls, _ = _f5_resume(fp, tmp, "commit")
+    if not calls:
+        return "SUCCEEDED: a cell measured on another commit was adopted"
+    return f"REFUSED: re-measured ({len(calls)} trials) -- adoption is bound to the context digest, code_sha included"
+
+
+def attack_f5_adopt_a_cell_measured_on_another_topology(tmp):
+    """A v6e-8 peak is not a v6e-64 peak. Can a cell cross topologies by being published?"""
+    fp = _probe_env()
+    published = _f5_publish(fp, tmp, "topology")
+    _f5_edit(published, lambda payload: payload["context"].update(device_count=64))
+    calls, _ = _f5_resume(fp, tmp, "topology")
+    if not calls:
+        return "SUCCEEDED: a cell measured on 64 chips was adopted by an 8-chip probe"
+    return f"REFUSED: re-measured ({len(calls)} trials) -- device_count is inside the context digest"
+
+
+def attack_f5_adopt_another_jobs_cell(tmp):
+    """Two jobs sharing an artifact root: can one job's cells become the other's evidence?"""
+    fp = _probe_env()
+    published = _f5_publish(fp, tmp, "foreign")
+    _f5_edit(published, lambda payload: payload.update(job_identity="somebody-elses-run"))
+    calls, _ = _f5_resume(fp, tmp, "foreign")
+    if not calls:
+        return "SUCCEEDED: another job's cell was adopted"
+    return f"REFUSED: re-measured ({len(calls)} trials) -- every banked cell names the run that measured it"
+
+
+def attack_f5_adopt_a_half_published_cell(tmp):
+    """The classic: a writer died mid-publication. Is the wreckage adoptable?
+
+    Two shapes are tried -- content whose digest sidecar never landed (the crash between the two
+    writes) and content truncated in place (the crash during one).
+    """
+    fp = _probe_env()
+    notes = []
+
+    published = _f5_publish(fp, tmp, "sidecar")
+    pathlib.Path(published).unlink()  # the marker never committed
+    calls, _ = _f5_resume(fp, tmp, "sidecar")
+    notes.append("no-sidecar ADOPTED" if not calls else "no-sidecar re-measured")
+
+    published = _f5_publish(fp, tmp, "truncated")
+    content = pathlib.Path(fp._content_for_marker(published, pathlib.Path(published).read_text().strip()))
+    body = content.read_text()
+    content.write_text(body[: len(body) // 2])
+    calls, _ = _f5_resume(fp, tmp, "truncated")
+    notes.append("truncated ADOPTED" if not calls else "truncated re-measured")
+
+    if any("ADOPTED" in note for note in notes):
+        return f"SUCCEEDED: {notes}"
+    return f"REFUSED: {notes} -- the sidecar is the commit marker and the digest covers the content"
+
+
+def attack_f5_adopt_a_fabricated_favourable_cell(tmp):
+    """Can a writer FABRICATE a cheap cell, rehash it, and have M1 authorize it without measuring?
+
+    **This probe previously lied, and the correction is the point.** Its earlier form rewrote a trial,
+    watched the run-level digest move, and reported REFUSED -- but the forged artifact WAS ADOPTED.
+    It verified propagation (adopted content lands inside the digest) and labelled that legality
+    (adopted content is legitimate). Codex found it: "the committed attack nearly demonstrates this
+    itself". The `86/0` it contributed to did not cover this hunt.
+
+    What it asserts is that a FOREIGN-manifest artifact carrying favourable peaks and a correctly
+    recomputed digest causes **REMEASUREMENT**: the forger sets both trials to a peak that trivially
+    fits and carries a manifest that is not this program's, so the binding refuses it.
+
+    **This is only half the attack, and F5-8 is the other half** (review F5c). A forger who copies the
+    CURRENT manifest -- which is public in the payload -- is adopted, and `F5-8` reports that as
+    DECLARED. Both cases are kept because they are different classes: one is genuinely refused, the
+    other succeeds inside the declared boundary.
+
+    **What this does NOT prove, stated because the harness is the wrong place to imply otherwise:**
+    a writer who holds the deployed source tree AND write access to the bucket can reproduce the
+    manifest and fabricate peaks. These artifacts are integrity-checked and content-bound, not
+    authenticated; the trust anchor is the bucket ACL, exactly as it is for the final authorization
+    table. See the F5b worklog entry and the module docstring for the accepted residual.
+    """
+    fp = _probe_env()
+    published = _f5_publish(fp, tmp, "fabricate")
+
+    def fabricate(payload):
+        for trial in payload["trials"]:
+            trial["peak_bytes"] = 1
+            trial["peak_source"] = fp.PEAK_SOURCE_RUNTIME_RESET
+        payload["context"]["manifest_digest"] = "0" * 64
+
+    _f5_edit(published, fabricate)
+    calls, table = _f5_resume(fp, tmp, "fabricate")
+    if not calls:
+        return "SUCCEEDED: a fabricated cheap cell was adopted without being measured"
+    if any(entry["peak_bytes"] == 1 for entry in table["measurements"]):
+        return "SUCCEEDED: the fabricated peak reached the authorization table"
+    return f"REFUSED: re-measured ({len(calls)} trials) -- the artifact's bytes are not the running bytes"
+
+
+def attack_f5_forge_with_the_CURRENT_manifest(tmp):
+    """The in-boundary forgery: copy the published context EXACTLY, fabricate the peaks, be adopted.
+
+    **This probe reports DECLARED, not REFUSED, and that is the point.** `F5-5` forges with a FOREIGN
+    manifest and is genuinely refused. This one does what an actual attacker would: it copies the
+    current artifact's context verbatim -- the manifest digest is PUBLIC in the payload -- swaps both
+    trials for one-byte peaks, recomputes the payload digest and the marker, and adoption accepts it.
+    No deployed source tree is required. The reviewer executed exactly this and found the previous
+    probe scoring it REFUSED.
+
+    It succeeds BY DESIGN within the declared trust boundary: these artifacts are integrity-checked
+    and program-bound but NOT authenticated, and the anchor is the bucket ACL. If a publication
+    authority is ever added, this probe must flip to REFUSED and the docstring, the worklog and the
+    module's residual statement must move with it -- which is what the DECLARED class is for.
+    """
+    fp = _probe_env()
+    published = _f5_publish(fp, tmp, "inboundary")
+
+    def forge(payload):
+        for trial in payload["trials"]:
+            trial["peak_bytes"] = 1
+            trial["peak_source"] = fp.PEAK_SOURCE_RUNTIME_RESET
+        # The context, manifest digest included, is left EXACTLY as published.
+
+    _f5_edit(published, forge)
+    artifact = fp.load_cell_artifact(published)
+    if artifact.context.manifest_digest != fp.deployed_manifest_digest():
+        return "SUCCEEDED: the probe failed to stay in-boundary -- it is testing the foreign-manifest case again"
+    calls, table = _f5_resume(fp, tmp, "inboundary")
+    if calls:
+        return (
+            f"REFUSED: the in-boundary forgery was re-measured ({len(calls)} trials) -- a publication authority "
+            f"now exists, so the declared residual is STALE: update the module docstring, the worklog and this probe"
+        )
+    peaks = [entry["peak_bytes"] for entry in table["measurements"]]
+    return (
+        f"DECLARED: an authorized bucket writer who can READ one artifact fabricated a cell (peaks {peaks}) and it "
+        f"was adopted without measurement. Accepted residual: integrity- and program-bound, NOT authenticated; "
+        f"the anchor is the bucket ACL. Escalated to Yixun (KMS/workload-identity signing)."
+    )
+
+
+def attack_f5_tear_the_pair_with_two_publishers(tmp):
+    """Can two concurrent publishers leave a cell permanently unadoptable?
+
+    Review F5b, MAJOR. The previous shape wrote a fixed-name content file and then a digest sidecar,
+    so an interleaving could finish as `content-B + digest-A` and no reader could ever accept that
+    cell again. Production payloads are NOT byte-identical between attempts -- measured step times
+    differ in the third decimal -- so this drives two distinct payloads through the worst ordering:
+    both contents, then the markers committed in the opposite order.
+    """
+    fp = _probe_env()
+    config = _f5_config(fp, tmp, "tear", "att-1")
+    cell = fp.FitCell(*_f5_cell())
+    context = fp.derive_probe_context(config, devices=[_Dev() for _ in range(8)])
+    marker = fp.cell_marker_path(str(getattr(config, "pos_fit_authorization")), cell)
+    a, b = (
+        fp.CellArtifact(
+            cell=cell,
+            context=context,
+            job_identity="exp06-f5",
+            trials=(_fit(fp, context, arm=cell.arm, microbatch=cell.microbatch, k_b=cell.k_b, step_seconds=t),),
+        )
+        for t in (25.347, 25.356)
+    )
+    fp.publish_cell_content(marker, a)
+    fp.publish_cell_content(marker, b)
+    fp.commit_cell_marker(marker, b)
+    fp.commit_cell_marker(marker, a)
+    try:
+        loaded = fp.load_cell_artifact(marker)
+    except Exception as error:  # noqa: BLE001
+        return f"SUCCEEDED: the interleaving tore the pair -- {type(error).__name__}: {error}"
+    steps = {25.347, 25.356}
+    if loaded.trials[0].step_seconds not in steps:
+        return f"SUCCEEDED: the marker resolved to a payload neither publisher wrote ({loaded.trials[0].step_seconds})"
+    if loaded.trials[0].step_seconds != 25.347:
+        return "SUCCEEDED: the marker does not name the last publisher's object"
+    return "REFUSED: content objects are immutable and the marker commits one whole object -- no torn pair exists"
+
+
+def attack_f5_a_killed_ladder_banks_nothing(tmp):
+    """The production failure itself, as an attack: does a ladder killed mid-way still lose its work?
+
+    Attempt 2 of M1-3 measured 24 of 32 cells and published NOTHING, because the table published only
+    at completion. The probe must bank each finished cell before it starts the next compile.
+    """
+    fp = _probe_env()
+    config = _f5_config(fp, tmp, "killed", "att-1")
+    cells = [fp.FitCell("rollout", 8, 2), fp.FitCell("rollout", 16, 2), fp.FitCell("one_step", 8, 2)]
+    calls = []
+
+    def dies_after_two_cells(*, cell, context, config):
+        if len(calls) >= 4:
+            raise RuntimeError("TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE")
+        calls.append(cell)
+        return _fit(fp, context, arm=cell.arm, microbatch=cell.microbatch, k_b=cell.k_b)
+
+    try:
+        fp.run_fit_probe(
+            config, measurer=dies_after_two_cells, cells=cells, trials=2, devices=[_Dev() for _ in range(8)]
+        )
+    except RuntimeError:
+        pass
+    authorization = str(getattr(config, "pos_fit_authorization"))
+    banked = [cell for cell in cells if pathlib.Path(fp.cell_marker_path(authorization, cell)).exists()]
+    if len(banked) != 2:
+        return f"SUCCEEDED: a ladder killed after 2 of 3 cells banked {len(banked)}"
+    readable = all(fp.load_cell_artifact(fp.cell_marker_path(authorization, cell)) for cell in banked)
+    if not readable:
+        return "SUCCEEDED: the banked cells do not load"
+    return "REFUSED: both finished cells were banked, digest-verified, before the cell that died"
+
+
 if __name__ == "__main__":
     _report("A-B1(a) module issue token   :", attack_a_b1a)
     _report("A-B1(b) public digest override:", attack_a_b1b)
@@ -2081,3 +2496,15 @@ if __name__ == "__main__":
         _report("W3-3   two loaders, two progs", attack_w3_the_seams_diverge)
         _report("W4-1   foreign batch contract ", attack_w4_compile_against_a_batch_production_never_hands_it)
         _report("W4-2   time a pruned scorer   ", attack_w4_time_a_pruned_scorer)
+        # F5: per-cell publication and adoption -- the attack surface "resume from what is
+        # published" adds, one probe per known defect of the pattern.
+        _report("F5-1   adopt another commit  ", attack_f5_adopt_a_cell_measured_on_another_commit, tmp)
+        _report("F5-2   adopt another topology", attack_f5_adopt_a_cell_measured_on_another_topology, tmp)
+        _report("F5-3   adopt another job     ", attack_f5_adopt_another_jobs_cell, tmp)
+        _report("F5-4   adopt a half-write    ", attack_f5_adopt_a_half_published_cell, tmp)
+        _report("F5-5   forge w/ FOREIGN manifest", attack_f5_adopt_a_fabricated_favourable_cell, tmp)
+        _report("F5-6   killed ladder banks 0 ", attack_f5_a_killed_ladder_banks_nothing, tmp)
+        _report("F5-7   tear the pair (2 writers)", attack_f5_tear_the_pair_with_two_publishers, tmp)
+        _report("F5-8   forge w/ CURRENT manifest", attack_f5_forge_with_the_CURRENT_manifest, tmp)
+    if not _summarize():
+        raise SystemExit(1)

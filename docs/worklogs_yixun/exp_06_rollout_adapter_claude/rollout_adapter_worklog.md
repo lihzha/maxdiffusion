@@ -696,3 +696,250 @@ When the harness killed the second suite attempt, I wrote `detach_suite.py`: a d
 **Suite gate:** canonical subtree `src/maxdiffusion/tests/worklogs_yixun/` = **2159 passed / 0 failed** (474 s). Mystery of the baseline resolved: the campaign's suite numbers (2113→2138→2159) are THIS subtree; the full `tests/` tree additionally contains upstream accelerator-only tests (Pallas splash-attention etc.) that can never pass on CPU — the earlier full-tree run's failure burst was those, not F4. Standing note: the canonical gate is the subtree, ~8 min.
 
 **Evidence stack at close:** parity (rollout bitwise 7/7; one_step pinned ≤2 ulp), pairing (39/39 reversal control, resume boundary), fingerprint identical (5492b402…7134), remat flat (1,100 B constants — F3 intact), graph guard 4,805/4,805/4,792 vs 4,722/15,687/30,203, battery 80/80 labels-identical, suite 2159/0. Ceremony commits follow.
+
+
+## 2026-08-12T01:20:00Z — Round F5 `cell-publication`: the ladder banks each cell as it finishes, and a restart adopts what verifies
+
+- **Goal** — stop paying for the same measurement twice. M1's ladder is 16 cells x 2 arms x 2 trials with a full backbone reload per cell (~3.5 h) and it published its authorization table ONLY at completion. us-east1-d killed seven VMs on 2026-08-11 at lifetimes of 30 min–2 h; attempt 2 measured **24 of 32 cells** and published NOTHING. Five attempts have re-measured the same cells byte-identically (rollout mb=8 k=2: 25.347 / 25.353 / 25.356 s across attempts, peaks bit-identical). Yixun approved option (c) — the hybrid — so the machinery is built while the queue keeps churning.
+
+- **Hypothesis** — the waste is structural, not stochastic: because the pipeline is deterministic, a cell measured once is evidence for every later attempt of the same program, and the only reason it is thrown away is that publication happens at the end. Publishing per cell plus adopting-if-verified therefore converts the zone's kill rate from "lose everything" into "lose the cell in flight", **without changing what is measured or what is authorized**.
+
+### Change
+
+| File | What |
+|---|---|
+| `src/maxdiffusion/pos_rollout_support.py` | `storage_list_children`, `storage_remove`, `_storage_rename`, `storage_publish_bytes` — a bounded listing and a **stage-then-rename** publication, so a destination is never observed holding a prefix of its bytes (`os.replace` locally, `gfile.rename` on `gs://`). |
+| `src/maxdiffusion/pos_rollout_fit_probe.py` | The F5 section: `CellArtifact`, `publish_cell`, `load_cell_artifact`, `adoption_candidates`, `adopt_published_cell`, `derive_job_identity`, `cell_publication_{dir,path}`; `ProbeEvidence.provenance`; `AUTHORIZATION_PROTOCOL` → **v3**; `run_fit_probe` adopts-then-measures-then-banks per cell. |
+| `src/maxdiffusion/configs/base_wan_5b_pos_rollout.yml` | `pos_fit_adoption_root: ''` (+ `FINGERPRINT_EXCLUSIONS` entry, reason `_DESTINATION`, so the recipe fingerprint is unchanged). |
+| `bash_scripts/train_wan_pos_rollout.sh` | `POS_FIT_ADOPTION_ROOT`, defaulting in `fit_probe` mode to the attempts root, overridable for the submit wrapper's per-attempt `OUTPUT_DIR` layout; emitted and echoed. |
+| tests | New `test_pos_rollout_cell_publication.py` (**35 tests**, 750 lines); `conftest.py` `FakeGfile` gains `listdir` / `rename` / `remove` and prefix-aware `exists`; `test_pos_rollout_fit_probe.py` (protocol literal → the constant, + a missing-provenance damage case); `test_pos_rollout_launcher.py` (interface row + 3 tests). |
+| harness | Six new probes `F5-1`…`F5-6`; `_Gfile` taught `rename` / `listdir` / `remove`; README caution; `attacks_f5_20260812.log`. |
+
+**Design, in one line each.** A finished cell writes `<attempt>/cells/<arm>_m<mb>_k<k>.json` holding its **trials** (not their aggregate — so an adopted cell reaches the table through the same `aggregate_trials` computation a measured one does), the full derived context, the run identity and a sha256 over the payload; the `.digest` sidecar is written **last**, so "content plus sidecar" is the commit marker. On restart the probe scans the configured adoption root for that cell and adopts only when the digest verifies over the content, the sidecar corroborates it, the artifact is internally consistent, the run identity matches, the recorded context is **byte-for-byte the context this process derived**, and the trial count is the one this ladder runs. Every other outcome logs a named reason and re-measures.
+
+**The adoption policy, stated rather than inferred (defect (a)).** Adoption is bound to the **context digest**, which carries `code_sha` — so *any* commit, including a docs-only descendant, makes every published cell unadoptable and the ladder re-measures from scratch. That over-refuses on purpose: the alternative is a curated list of "code that changes the footprint", which is a list somebody has to remember to extend, and the cost of forgetting is an HBM authorization for a program nobody measured. Over-refusing costs TPU minutes; under-refusing costs a 64-chip reservation. Same trade as `FINGERPRINT_EXCLUSIONS`. **Operational consequence for the Planner: to adopt across submissions, keep `COMMIT` *and* `RUN_NAME` identical** — `RUN_NAME` is baked per submission (`exp06-m1-$(date -u +%Y%m%d)`), so a resubmission on a later UTC day adopts nothing unless `RUN_NAME` is pinned.
+
+### The six known defects of adopt-if-published, and their dispositions
+
+| | Defect | Disposition | Test / probe |
+|---|---|---|---|
+| (a) | artifact produced by **different code** | bound by the context digest, which contains `code_sha`; policy written into the module docstring | `test_a_cell_measured_on_another_commit_is_re_measured`, `F5-1` |
+| (b) | **partial / corrupt** write adopted | digest over the whole payload; content staged-and-renamed; sidecar written last as the commit marker | `test_a_corrupt_cell_artifact_is_re_measured`, `test_a_truncated_cell_artifact_is_re_measured`, `test_a_content_file_without_its_sidecar_is_not_adoptable`, `test_a_failed_publication_leaves_no_artifact_at_the_destination`, `F5-4` |
+| (c) | **cross-JOB** adoption | every artifact embeds the run identity (`run_name`); mismatch refuses. Residual, named in the code: two submissions sharing run_name, root, SHA, recipe and topology are indistinguishable — and are the same program by every check available, so adopting between them is sound rather than tolerated | `test_a_foreign_job_identity_is_refused_and_re_measured`, `test_an_unidentified_run_can_neither_adopt_nor_be_adopted` (empty identity is not a wildcard), `F5-3` |
+| (d) | **empty-adoption** case must behave exactly like today | no root ⇒ `adopt_published_cell` returns immediately; the ladder measures every cell in the same order; the table is byte-identical to an uninterrupted run outside the provenance record | `test_with_no_adoption_root_the_probe_measures_exactly_what_it_measured_before`, `test_the_restarted_table_is_the_uninterrupted_table` |
+| (e) | different **device topology** | `device_count` (and `device_kind`) are inside the context digest; the refusal names the differing field | `test_a_cell_measured_on_a_different_topology_is_re_measured`, `F5-2` |
+| (f) | **trust-chain gap** around adopted content | an adopted trial enters the evidence as a measurement, so the run-level sha256 covers it and `load_authorization` re-decides every verdict from it | `test_the_run_level_digest_covers_adopted_content`, `F5-5` |
+
+**Two more, unasked but real.** *Scan blow-up*: the walk is bounded by `ADOPTION_SCAN_DEPTH=6` (covers both root layouts) and `ADOPTION_SCAN_LIMIT=4096` directories, and says so when it stops. *Adoption failing the run*: nothing in the adoption path can raise — every error, including the storage layer's own non-`OSError` families, costs the cell a re-measure, which is what the probe was going to spend anyway.
+
+### Red-then-green evidence
+
+- **New unit, red first.** `test_pos_rollout_cell_publication.py` was written before the implementation and run: **34 failed / 1 passed**, every failure an `AttributeError` on a name that did not exist yet. The one passer (`test_an_unidentified_run_can_neither_adopt_nor_be_adopted`) passed **vacuously** — with no adoption at all, "nothing was adopted" is trivially true — so it was rewritten with a named control in the same loop (identical setup, `run_name` set) that must adopt. Final: **35/35 green.**
+- **Launcher derivation, red demonstrated.** With `POS_FIT_ADOPTION_ROOT="${POS_FIT_ADOPTION_ROOT:-${RESUME_PARENT}}"` removed, `test_probe_mode_derives_an_adoption_root_that_spans_this_jobs_attempts` fails (`'' == 'gs://bucket/parent/m1/fit_probe/attempts'`); restored and **sha-verified identical** (`b70a7d9e84def6dd…` before mutation and after restore).
+- **The battery caught its own blind spot.** The first F5 run reported all six probes `REFUSED (AttributeError): '_Gfile' object has no attribute 'rename'` — six green-looking lines, not one of which executed an adoption. The harness's in-memory `_Gfile` predates stage-then-rename. Fixed the **fake**, not the probe (and recorded the caution in the harness README beside W2b's and W4's): `_report` converts any exception into a REFUSED line, which is what makes the runner robust and also what lets a stale fake masquerade as a refusal. **Read the reason on a REFUSED line, not the verdict.**
+
+### Verification
+
+- **Adversarial battery: 86 probes, 86 REFUSED, 0 SUCCEEDED** → `harness/attacks_f5_20260812.log` (sha256 `52456e496e611fbf…`). Set-compared against `attacks_f4_20260810.log`: **80 prior verdicts unchanged, zero regressions**, the only difference being the six new F5 lines. `F5-5`'s message confirms adoption actually occurred (it is not the vacuous branch).
+- **Targeted suites** (all green on the final delta): `test_pos_rollout_cell_publication.py` 35; `test_pos_rollout_fit_probe.py` 134 (was 133 — the added damage case); `test_pos_rollout_launcher.py` 144 (was 139); F3 captured-constants + F4 scan-accumulation + trainer wiring **67**, i.e. the graph-size and captured-constant guards still trace the real builder — F5 does not touch `build_probe_program`.
+- **Reader sweep (asked for explicitly).** Nothing in the repo reads the fit-probe output *directory* shape: every consumer takes `pos_fit_authorization` as a scalar path (the launcher PREREQ heredoc, `WanPosRolloutTrainer.start_training` via `load_authorization` / `assert_cell_authorized`). `pos_rollout_gates.py`, `eval_wan_pos_rollout.py`, `pos_rollout_loop.py` and `train_wan.py` reference it nowhere. The only directory listing in the exp_06 tree is `select_resume_publication`, which filters children by `^att-[A-Za-z0-9._-]+$` and then requires `publication.json` — a `cells/` grandchild of the attempts root is invisible to it, and it already tolerates the sibling `checkpoints/` and `artifacts/` dirs the launcher derives. **No reader needed updating**, so no red-first reader test was written; the claim is recorded here as a sweep result rather than as a test.
+- **`AUTHORIZATION_PROTOCOL` v2 → v3**, because the digest-covered payload gained `cell_provenance`. A consumer holding a table with no provenance record cannot distinguish "nothing was adopted" from "written by code that could not adopt". No published artifact exists in the wild (`fit_probe/` is empty on every attempt root), and the only two literals in the repo were test strings, one of which now names the constant instead.
+
+- **Acceptance criteria** (set before the work): per-cell artifact published immediately with a verifying digest; a restart adopts without re-measuring, proven by measurer **call count**; the final table bitwise identical to an uninterrupted run outside provenance; every one of the six defect classes refusing by test; canonical suite green; battery ≥80 refused / 0 succeeded. Met, with the suite number recorded below.
+
+- **Result** — `fix_ready`, **uncommitted** (Planner ceremony after the Codex review). Suite/battery/targeted numbers as above; +869 insertions across 9 files plus the 750-line new test file.
+
+- **Analysis** — the change is confined to orchestration and artifacts: `build_probe_program`, `measure_cell_on_device`, `_measure_under_mesh`, the verdict rule, the aggregation and the projection are untouched, which is why the F3/F4 guards and the whole authorization half of the fit-probe suite pass unmodified. The one semantic addition to the gate is that a cell may now be authorized from evidence measured in a **prior attempt** — and that is exactly where the review attention belongs. My own judgement is that the binding is sound (the context digest is the same object `assert_cell_authorized` already requires the trainer to match), and that the residual is social rather than technical: the `RUN_NAME`-per-day convention silently disables adoption across submissions, which is a launch-time footgun for the Planner rather than a defect in the code. Two things I could not test and am naming instead: real `gs://` rename semantics (exercised only against the in-memory fake, though `tf.io.gfile.rename` is the documented primitive), and the behaviour of a genuine concurrent second attempt writing the same cell path (the collision path is tested, the race is not).
+
+- **Next** — black/ruff on the delta (cosmetic line-joins only; deferred until the suite stopped reading these sources — the F4 lesson), the definitive full-suite number, then Codex review of the F5 delta with the adoption policy and the `RUN_NAME` consequence as the explicit questions. No M1 relaunch, and no commit, before both.
+
+
+## 2026-08-12T02:05:00Z — F5 verification, and the two things the verification found
+
+The first full-suite run on the F5 delta came back **2198 passed / 2 failed**, and both failures were
+worth having.
+
+**1. The exact-addition guard fired, correctly.** `test_pos_rollout_dispatch::test_the_config_is_a_superset_of_the_side_adapter_config`
+and `…_is_generated_from_the_side_adapter_config` refused `pos_fit_adoption_root` because S8's standard
+is that a new config key is *named* in `_ADDED_KEYS`, not merely added to the YAML. Resolved by
+declaring the key with its reason and moving the pinned count 202 → **203**. This is the guard doing
+exactly its job — a key that arrived unnoticed is how a launcher override becomes a silent no-op.
+
+**2. A real gap in `publish_cell`, found by self-review before the reviewer saw it.** "Already
+published" was `storage_exists(path)` — content only. A crash between the content rename and the
+sidecar write therefore produced a path that `load_cell_artifact` will never accept **and** that
+`publish_cell` treated as taken, leaving that cell unadoptable for the life of the tree: a cache
+poisoned by precisely the crash this round exists to survive. Fixed to require **content AND
+sidecar** before declining to write; issue #10's never-rewrite rule now applies to *complete*
+artifacts, which is what it was always about. Red first —
+`test_an_incomplete_publication_is_completed_rather_than_treated_as_published` failed on the missing
+sidecar, then passed. Blast radius was bounded before the fix (one extra re-measure of one cell,
+because each attempt writes its own `cells/` tree), but it is the difference between "an incomplete
+publication is a published artifact" and "it is not".
+
+Also applied in the same pass: `black` (cosmetic line-joins only — 3 files; deferred until no pytest
+process was reading these sources, per the F4 lesson), one `ruff` C416 in the new test file, and
+`flush=True` on the adoption scan's unlistable-directory line so M1 logs stay readable live.
+
+### Final numbers on the shipped delta
+
+| Gate | Result |
+|---|---|
+| Canonical suite `src/maxdiffusion/tests/worklogs_yixun/` | **2201 passed / 0 failed** (580 s) — baseline 2159 + 42: 36 in the new `test_pos_rollout_cell_publication.py`, +1 fit-probe damage case, +5 launcher |
+| Adversarial battery | **86 probes, 86 REFUSED, 0 SUCCEEDED** — `harness/attacks_f5_20260812.log`, sha256 `5bf1d6b80b4a1b36…`; set-compared against F4's log: 80 prior verdicts unchanged, zero regressions |
+| Targeted re-run after lint | `cell_publication` + `dispatch` + `fit_probe` + `launcher` = **338 passed** |
+| F3 captured-constants + F4 scan-accumulation + trainer wiring | **67 passed** (F5 does not touch `build_probe_program`) |
+| Static | `black --check` clean (7 files), `ruff` clean, `bash -n` clean, `git diff --check` clean, YAML parses at **203** keys |
+
+**Environment note for whoever reads the timings:** the machine carried a load average of ~128 from
+unrelated desktop applications while the FIRST full run was measured, so that run took 747 s against
+the 474 s the F4 close recorded; the final run, on a quieter machine, took 580 s. Same tests, same
+result — recorded so neither number is read as a regression in the suite itself.
+
+- **Result** — `fix_ready`, **uncommitted**, awaiting Codex review then Planner ceremony.
+- **Next** — Codex review of the F5 delta. The two questions I would put to it explicitly: (1) is
+  binding adoption to the whole context digest — `code_sha` included, so any commit forfeits every
+  banked cell — the right trade, or should the binding be narrower and the invalidation rule
+  explicit? (2) is `run_name` an adequate job identity given the queue exposes no job id, and is the
+  named residual (two submissions identical in run_name, root, SHA, recipe and topology adopt from
+  each other) acceptable? Beyond the review, the launch-time consequence for the Planner stands:
+  **pin `RUN_NAME` across resubmissions or adoption sees nothing**, and pass
+  `POS_FIT_ADOPTION_ROOT="$M1ROOT"` while the submit wrapper scopes `OUTPUT_DIR` per attempt.
+
+
+## 2026-08-12T03:40:00Z — Round F5b: the Codex review of F5 — 2 BLOCKERs + 1 MAJOR, all three closed
+
+- **Goal** — answer `rollout_adapter_codex_code_f5-cell-publication_review.md` (REQUEST-REVISION). Hunt items C/D/F/G passed and stand: the final table's semantics, protocol v3's refusal of genuine v2 tables, F3/F4 tracing untouched by adoption, and the ruling that `RUN_NAME` pinning is sound *once artifacts are authenticated*.
+
+- **Hypothesis** — the reviewer's B1 is the load-bearing one and my own harness half-proved it: if a cell artifact's every hashed field is writer-supplied, the digest is a tamper check and never a legality check, and no amount of comparing public claims to public values changes that. What CAN be closed without inventing infrastructure is *program identity*; what cannot is *authorship*, and the honest move is to close the first and declare the second.
+
+### The probe that lied — fixed first, and red before anything else
+
+`F5-5 smuggle past the digest` rewrote a banked trial, recomputed both digests, **watched the forged artifact be adopted**, and reported REFUSED because the run-level digest moved. It verified propagation and labelled it legality. Rewritten to assert what the review demanded — a rehashed favourable-peak artifact must cause **REMEASUREMENT** — it immediately reported:
+
+```
+F5-5 fabricate a cheap cell: SUCCEEDED: a fabricated cheap cell was adopted without being measured
+[M1] projection rollout m=8 k=2: 11.77h at 0.0% of capacity
+```
+
+A one-byte peak, adopted, projected, and on its way to authorizing a cell nobody measured. That is the blocker, live, and it is the red side of this round. **It is the second false REFUSAL the harness has produced in a week** (the first was the stale `_Gfile`), so the rule now sits in the harness README: when you add a probe, write down what its SUCCEEDED branch would have to observe, and check that it can observe it.
+
+### BLOCKER 2 — `code_sha` is a label, `deployed_manifest_digest` is the identity
+
+`derive_code_sha` read `git rev-parse HEAD` and fell back to a caller-supplied `COMMIT`. The F5 delta was its own counterexample: running bytes uncommitted, derived SHA `a3ba5c0`. Three changes:
+
+1. **`deployed_manifest_digest()`** — sha256 over every deployed `.py` under `src/maxdiffusion/`, `tests/` excluded (a test cannot change what a measurement costs, and hashing the test tree would make every red-first round invalidate every banked cell). Length-framed records in sorted path order, the serialization discipline `snapshot_manifest_digest` earned in F1b/W1. Cached per process for the default root.
+2. **Bound into `ProbeContext`** as `manifest_digest`, so it is inside the context digest — which means *every* existing binding carries it for free: adoption, `assert_cell_authorized`, and the trainer's independent derivation all compare it without a line of new comparison code.
+3. **Two honesty rules in `derive_code_sha`.** A process that DECLARES a commit (`COMMIT` set, the launcher's assertion) from a tree with uncommitted measurement code is **refused loudly** — scoped to the manifest's files, so a dirty test file does not block this round's own workflow. A deployment **without git** must bind a manifest: `COMMIT` alone is an environment variable anybody can set, and it may label an artifact but not stand behind it.
+
+`test_the_code_sha_is_derived_and_a_disagreement_is_fatal` was updated rather than deleted, and now pins the dirty-tree branch by monkeypatch so it says the same thing before and after a ceremony commit.
+
+### BLOCKER 1 — what is now refused, and what is DECLARED instead of faked
+
+With the manifest inside the context, the fabricated-cell attack is refused: the forger's artifact is not the running bytes. **That is program binding, not authentication, and the difference is written into the module docstring, `publish_cell`, `adopt_published_cell`, this entry, and the corrected probe** — because the alternative on offer was an in-repo shared secret that the same bucket writers could read, which is theatre.
+
+Stated plainly, as the ruling required:
+
+- **Provided:** integrity (content-addressed, digest-verified end to end) and program identity (context + running-bytes manifest, byte-for-byte).
+- **NOT provided:** authentication. **A writer holding both the deployed source tree and write access to `gs://v6_east1d` can reproduce the manifest and fabricate a measurement.** No check in this module detects that.
+- **The trust anchor is the bucket ACL** — lab-internal writers only — which is the same anchor the final authorization table has always rested on, and the same one every published artifact in this campaign rests on. F5b does not weaken it; it declines to pretend it is something else.
+- **Escalation:** real authentication (workload-identity / KMS signing at publication, verified at adoption) is infrastructure, not a code change. It goes to Yixun as a policy decision in the M1 pre-launch package. Until he rules, the residual above is accepted and named.
+
+`test_the_module_declares_what_adoption_does_not_prove` keeps the declaration from being quietly deleted.
+
+### MAJOR — the tear is now inexpressible
+
+Content objects are **named by their own digest** (`cells/rollout_m8_k2.<digest12>.json`) and the marker (`cells/rollout_m8_k2.json.digest`) is the single mutable name, holding one digest. Two publishers therefore write two different objects; the marker commits one of them; last-writer-wins on the marker only, never a mixed pair. `publish_cell` also **verifies and repairs**: a marker naming an object that is missing, unreadable or does not hash to it is repaired from this attempt's measurement instead of returning early — the window my earlier orphan fix did not close, which the reviewer found. Red-first with **distinct payloads** (25.347 s / 25.356 s — production timings differ), interleaved in the worst order.
+
+- **Command / Validation** — canonical suite **2213 passed / 0 failed** (580 s) on the complete F5b delta; battery **87 probes, 87 REFUSED, 0 SUCCEEDED** → `harness/attacks_f5b_20260812.log` (sha256 `ac9b419ba26e75f8…`), `F5-7` added for the tear; `black`/`ruff`/`git diff --check` clean; F5+F5b unit file **48 passed**; `test_pos_rollout_fit_probe.py` 134; `test_pos_rollout_dispatch.py` 24. The manifest costs **35 ms** over 300 files / 4.16 MB on first call and is cached thereafter — measured, not assumed, because a per-process directory hash in front of a 3.5-hour ladder deserved a number.
+
+**Red-side evidence, per finding.** B1: the rewritten `F5-5` reported `SUCCEEDED: a fabricated cheap cell was adopted without being measured` before the manifest landed (quoted above with its 11.77 h / 0.0 %-of-capacity projection). B2: the eleven new unit tests failed on missing names, and `test_a_cell_measured_by_other_running_bytes_is_re_measured` then failed on behaviour until the binding existed. MAJOR: `test_the_retired_two_object_scheme_really_did_tear` re-derives the retired fixed-name scheme in-test and drives the same interleaving through it, ending at `content-B + digest-A` — F4's technique, so the claim "content objects cannot tear" is measured against something that could, rather than argued from the diff.
+
+- **Result** — `fix_ready`, **uncommitted**. All three findings closed; one of them (B1) closed as far as code can close it and declared for the rest.
+
+- **Analysis** — the review was worth its cost twice over: B1 was a real hole and my own probe was covering it up, which is the failure mode this campaign keeps rediscovering (a guard that reports on the wrong observable is worse than no guard, because it buys confidence). The manifest is the durable win — it is strictly stronger than `code_sha` in every case that has actually bitten this campaign (dirty tree, tarball drift, hand-edit on a worker) and it costs one directory hash per process. The residual is authorship, and I have not pretended otherwise anywhere in the code.
+
+- **Next** — Codex re-review of the F5b delta; the trust-boundary escalation carried into the M1 pre-launch package as a question for Yixun (sign artifacts, or accept the bucket-ACL anchor); no commit and no M1 relaunch before both.
+
+
+## 2026-08-12T05:30:00Z — Round F5c: the F5b re-review — the forgery I "fixed" was still adopted, and resume never checked the identity at all
+
+- **Goal** — answer the F5b re-review (2 BLOCKER + 1 MINOR), both blockers executed by the reviewer. Planner ruling carried forward: bucket-ACL boundary accepted, **honesty mandatory**, no new cryptography.
+
+### BLOCKER 1 — my "fixed" probe was a false refusal one level up
+
+F5b's `F5-5` forged an artifact by setting its manifest to `0 * 64` and, seeing it refused, reported REFUSED. That tests a **foreign-manifest** artifact. The real attack is simpler and needs nothing I assumed it needed: **the manifest digest is PUBLIC in the artifact payload**, so a forger copies the current context verbatim, swaps both trials for one-byte peaks, rehashes payload and marker, and is adopted. The reviewer executed it through the real publication/loader/adoption functions — `adopting rollout ... (2 trials, peak 1 bytes)`, `local_manifest 4af0e0f2… == artifact_manifest 4af0e0f2…`, measurer skipped.
+
+The manifest is recomputed locally but only ever **equality-compared against a value the forger controls**. That is the whole shape of the error, and it is the third time this campaign has produced a guard that reports on the wrong observable.
+
+**Fixed as prescribed, without inventing cryptography:**
+
+1. **A third verdict class, `DECLARED`.** The battery now counts `REFUSED / DECLARED / SUCCEEDED / UNPARSED` separately and prints a `SUMMARY:` line. DECLARED means *the attack succeeds by design, inside a trust boundary this campaign has explicitly accepted and written down.* It is not a refusal and is never counted as one. Defined in the harness README.
+2. **`F5-8 forge w/ CURRENT manifest`** — the in-boundary forgery, reporting **DECLARED**, and it is a tripwire as well as a disclosure: if a publication authority is ever added the probe flips to REFUSED and its own return value says that the docstring, the worklog and the probe must move together.
+3. **`F5-5` keeps the foreign-manifest case** and is renamed `forge w/ FOREIGN manifest`, because that IS genuinely refused — a different class, not a weaker version of the same one.
+4. **The residual statement is corrected, not softened.** F5b said a forger needed "both the deployed source tree and write access". That was wrong and flattering. It now reads: **ANY writer with bucket write access who can READ one current artifact can fabricate a measurement; possession of the deployed tree is NOT required.** What the manifest binding actually buys is the *accident* case — dirty tree, stale tarball, hand-edited module, cross-code adoption — which is the case that has cost this campaign real time. Against a deliberate writer it buys nothing.
+5. **`test_the_accepted_residual_a_bucket_writer_can_forge_a_cell`** asserts the weakness on purpose, so the residual is measured rather than claimed in prose, and so that adding authentication *breaks a test* and forces every statement about it to be updated. Its failure would be good news.
+
+### BLOCKER 2 — resume selection never carried the identity (executed)
+
+Publications have recorded `context_digest` since T6-3 and **nothing required or matched it**: `load_publication` did not demand the field, `select_resume_publication` filtered on `(code_sha, arm)`, and `resume_source` derived the entire running context and then kept `code_sha` alone. The reviewer published two same-SHA attempts with different context digests and watched the selector take the higher-step **foreign** one — so two git-less deployments sharing a `COMMIT` label could resume each other's optimizer and parameter state.
+
+Fixed: `context_digest` is **required** by `load_publication` (fail-closed), is a **required keyword** of `select_resume_publication` (the identity cannot be lost by forgetting an argument, which is exactly how it was lost), and `resume_source` passes the whole derived digest — the same one cell adoption compares. Red-first with the reviewer's own two-publication construction, and **executed through the real selector and the real `resume_source`**, not source inspection (the F3c liveness lesson): before the fix `resume_source` returned `att-2`, the foreign context.
+
+**The launcher preflight is now honest instead of wrong.** It cannot derive the context — it runs *before* the HF prefetch (no resolved model snapshot) and *before* the distributed system is up (`jax.devices()` would report the local chip count, wrong by 8x on a v6e-64 job). So it calls a new `describe_resume_candidates`, which **reports** candidates and never decides, and prints in as many words that adoption is settled in-process against the full derived context. A preflight predicting adoption from a commit label would have been the same error as the selector matching one.
+
+### MINOR + the wording fix
+
+Content objects are named by the **whole 64-hex digest** (was `digest[:12]` — 48 bits, enough to re-express `marker-A -> content-B`, the tear content-addressing exists to remove). And the dirty-tree refusal no longer reads as whole-checkout cleanliness: its scope is stated exactly — `.py` files under `maxdiffusion` outside `tests/` — with the note that a dirty **YAML** does not refuse because its loaded values are bound by `recipe_fingerprint`, which is the binding that actually decides the footprint.
+
+- **Command / Validation** — canonical suite **2218 passed / 0 failed** (604 s); battery **88 probes — 87 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED** → `harness/attacks_f5c_20260812.log` (sha256 `2149fedeeee66c72…`). `black`/`ruff`/`bash -n`/`git diff --check` clean. F5 unit file **49 passed**.
+
+  **Five existing tests the signature change broke, and every one was a call site rather than a contract dispute** — four passing `select_resume_publication` without the now-required `context_digest` (updated to pass the running context's digest, plus a new negative assertion that a foreign context adopts nothing at the same SHA), and one asserting the launcher preflight's old "resume: adopting att-OLD" line (updated to assert the candidate report AND the explicit `ADOPTION IS NOT DECIDED HERE` disclaimer). They are exactly the call sites the required keyword was meant to surface; a default value would have left every one of them silently wrong.
+
+- **Result** — `fix_ready`, **uncommitted**.
+
+- **Analysis** — the honest summary of three rounds on this surface: F5 shipped a hole, F5b narrowed it and *overstated the narrowing*, F5c states it correctly and makes the overstatement impossible to repeat silently. The DECLARED class is the durable artefact — the campaign now has a way to record "this attack works and we accept it" that is neither a lie nor a silence, and a tripwire attached to it. **The 87/87 and 86/86 headlines of the previous two rounds were both wrong in the same direction**, and a single-number battery headline is what let them pass; that is why the summary line now breaks the count out.
+
+  Two UNPARSED verdicts surfaced when the strict classifier landed — pre-existing probes `B-1`/`B-2` returned diagnostics before their verdict word. Their verdict strings were reordered (content unchanged) rather than loosening the classifier, because a classifier that guesses is how this class of error survives.
+
+- **Next** — Codex re-review of F5c. The trust-boundary escalation now goes to Yixun with a concrete measured statement rather than a caveat: *an authorized bucket writer who can read one artifact can fabricate a fit-probe measurement; do we sign artifacts (workload identity / KMS) or accept the ACL anchor?* No commit and no M1 relaunch before both.
+
+
+## 2026-08-12T07:10:00Z — Round F5d (closer): three harness/docs findings, and the third false verdict of the week
+
+- **Goal** — close the F5c re-review. Every production disposition passed (resume binding, one-context derivation, report-only preflight, 64-hex names, the `B-1`/`B-2` reorder, log hash); all three findings are in the harness and the docs, which on this campaign is not a lesser place for them to be — the harness IS the review package's evidence.
+
+### BLOCKER — `DECLARED` was a word, not a decision
+
+`_report` accepted any return beginning with `DECLARED` and `_summarize` labelled it an accepted residual, so a probe drifting into that word — by accident or by edit — could relabel a real defect as a known one. The reviewer executed it with `DECLARED: accidental drift`.
+
+Fixed with an explicit **call-site allowlist** (`_MAY_DECLARE = {"F5-8"}`). A `DECLARED` from any other probe prints `HARNESS FAILURE`, keeps the original verdict text visible for diagnosis, and is counted **UNPARSED**. Adding an entry is now a decision that appears in the diff a reviewer reads — the same discipline `FINGERPRINT_EXCLUSIONS` uses. `_summarize` returns pass/fail and the runner **exits non-zero** on any SUCCEEDED or UNPARSED, so the battery is a gate rather than a report.
+
+Red demonstrated both directions rather than argued: with the foreign probe on the allowlist (the pre-F5d behaviour) `DECLARED: accidental drift` classified as `['DECLARED']`; with the gate, `['UNPARSED']` plus the failure line. Three tests pin it, including `_probe_id` against the awkward existing labels (`A-B1(a) module issue token   :`).
+
+### MAJOR — a probe that could not run had been scoring as a refusal
+
+F5c gave `select_resume_publication` a required `context_digest`; `P3-5`'s call site was not updated, and the `TypeError` was caught by `_report`:
+
+```
+P3-5  adopt incomplete/foreign:: REFUSED (TypeError): select_resume_publication() missing 1 required
+                                 keyword-only argument: 'context_digest'
+```
+
+**A standing attack had not executed for an entire round and the summary counted it as coverage** — and it is in the F5c log I shipped, at line 30, which makes it my regression to have introduced and missed. The call now passes the published digest, so the attack runs; its REFUSED comes from selection logic (`chose only att-mine (step 1000); the ... foreign-SHA and other-arm trees and a foreign context were all skipped`), and it now also exercises F5c's fourth filter. **It did not succeed — there is no real resume hole.** The probe additionally catches `TypeError` from the selector and reports it as `SUCCEEDED: THE PROBE DID NOT RUN`, so this specific disappearance cannot recur silently.
+
+**Sweep:** every `select_resume_publication` call site in `src/`, `bash_scripts/` and the harness was checked; line 585 was the only one omitting the keyword (the one remaining bare call is `test_the_selector_cannot_be_called_without_a_context_to_match`, which asserts the `TypeError` deliberately).
+
+**The pattern is now in the harness README**, because the exception type cannot distinguish the two cases — several genuine refusals in this battery ARE `TypeError`s, production declining a call shape it does not have. So the distinction is made *in the probe*, and the standing rule is: when a production signature changes, grep the harness for its call sites in the same commit.
+
+### MINOR — my preflight rationale had the ordering backwards
+
+The comment claimed the preflight precedes the HF prefetch. It does not: the launcher prefetches at `:337` and preflights at `:341`. Corrected in the launcher comment, in `describe_resume_candidates`' docstring and in the F5c strengthening record. **The conclusion is unchanged and the surviving reasons are stated exactly:** the preflight runs after the prefetch but before distributed initialization and the model load, so `jax.devices()` reports the host's LOCAL chip count — wrong by 8x on a v6e-64 job — and `pyconfig` has not run there, so no recipe fingerprint exists either. It therefore still cannot derive the context, and still only reports candidates.
+
+- **Command / Validation** — canonical suite **2221 passed / 0 failed** (598 s; 2218 + the three allowlist tests); battery **88 probes — 87 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**, exit 0 → `harness/attacks_f5d_20260812.log` (sha256 `5675593ce02f0e99…`). `black`/`ruff`/`bash -n`/`git diff --check` clean.
+
+- **Result** — `fix_ready`, **uncommitted**.
+
+- **Analysis** — the count for the week is **three false verdicts, all green: a stale fake (`_Gfile`), a probe watching the wrong observable (`F5-5`), and a probe that never ran (`P3-5`)**. Two of the three were mine, introduced while fixing the previous one. The through-line is that the battery's headline number is the least trustworthy artefact in the review package, and every mechanism added this round — the three-way summary, the allowlist, the non-zero exit, the per-probe execution guard — exists to make the number harder to earn rather than easier to read. That is worth stating plainly in a closing round: the harness got safer, not stronger, and the reviewer found all three.
+
+- **Next** — Planner spot-check and ceremony; no further Codex pass. The escalation for Yixun rides in the M1 pre-launch package unchanged: *an authorized bucket writer who can read one artifact can fabricate a fit-probe measurement — sign artifacts (workload identity / KMS) or accept the ACL anchor?*
