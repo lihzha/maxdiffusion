@@ -34,3 +34,53 @@ The legitimate consumer path is sound: launcher and trainer both use the sole v4
 The legitimate consumer path is sound: launcher and trainer both use the sole v4 loader, the trainer gates the exact `(arm, microbatch, k)` before expensive work, and no production v3/v4 dual acceptance remains. I also accept `skipped_cells` in principle: with GBS 256 it is inert, projections still iterate measured authorized cells, and training behavior does not change—subject to the disjointness validation above.
 
 **Planner M2 intent:** Agreed. P3’s matched properties do not name microbatch, and running both arms at microbatch 16 is stricter anyway: both use the same microbatch and preserve the matched GBS/update stream. Both v6e-8 cells were measured and authorized. M3 still requires its separate v6e-64 M1′ v4 authorization because topology is context-bound.
+
+---
+
+# Strengthening record — round F6b (Coder, 2026-08-12)
+
+All four findings resolved; none rejected. Narrative in `rollout_adapter_worklog.md` (2026-08-12T16:30Z).
+
+## BLOCKER — M1-5 cannot adopt the 12 banked cells — **RESOLVED BY POLICY (Planner ruling)**
+
+No compatibility or migration rule. Grandfathering cells measured by different code is the hole
+F5b/F5c closed; the manifest refusing them is the mechanism working. M1-5 re-measures the 12 reachable
+cells (~2–2.5 h for attempt 1, banking as it goes) and converges across attempts at the same new SHA.
+The "~30-min adoption" claim in the command ledger is withdrawn (Planner is correcting it there).
+Added `test_a_code_change_between_attempts_refuses_the_cells_banked_before_it`, which moves the
+manifest BETWEEN attempts — the transition re-measures with `manifest_digest` named, and a third
+attempt at the new manifest adopts the second's cells. The reviewer was right that the previous test
+(bank + adopt inside one unchanged process) could not model this.
+
+## MAJOR — a cell could hold two statuses — **FIXED**
+
+`ProbeEvidence._assert_one_status_per_cell`, called from `as_payload`, so neither the publishing path
+nor the loader's re-decide can produce one; plus explicit loader pre-checks for precise diagnosis.
+Refuses duplicates within any list, overlaps across every pair of (authorized, refused, excluded,
+skipped), and exclusions with an empty reason. Red-first with the reviewer's doctored-table
+construction; probe `F6-2` refuses it **at load**, distinct from `F6-1`'s gate refusal.
+
+## MAJOR — the two headline tests — **BOTH CORRECTED**
+
+(a) The digest-isolation test declared an exclusion that was filtered out, so it observed a digest
+change caused by measuring different cells. Replaced with a fixed-measured-set construction (X
+measures {A,B}; Y measures {A,B} and declares C excluded; Z varies only the reason), asserting
+identical `measured_cells`/`measurements`, an independent digest move for the declaration and for the
+reason, and unmoved per-cell fingerprints. (b) "Bit-for-bit with today" was unprovable — v3→v4 plus
+three new fields makes literal identity impossible. Renamed to
+`test_an_empty_exclusion_declaration_is_behaviourally_inert` with the comparison projection declared
+in `_UNSTABLE_FIELDS` and each stripped field justified; the claim is withdrawn from the F6 worklog.
+
+## MINOR — empty tokens — **FIXED**
+
+A blank declaration is no declaration; a declaration made of punctuation (`","`, trailing/doubled
+commas) is malformed and refused by name.
+
+## Verification
+
+Canonical suite **2248 passed / 0 failed** (560 s). Battery **90 probes — 89 REFUSED, 1 DECLARED, 0
+SUCCEEDED, 0 UNPARSED**, exit 0 (`harness/attacks_f6b_20260812.log`, sha256 `d31da372ab8344a0…`).
+`black` / `ruff` / `git diff --check` clean. Three tests passed before their fix (the behaviour was
+already right; the evidence was missing) and were mutation-checked rather than assumed — see the
+worklog's red-side note, including the sha-verified restore of `pos_rollout_fit_probe.py`. Nothing
+committed.

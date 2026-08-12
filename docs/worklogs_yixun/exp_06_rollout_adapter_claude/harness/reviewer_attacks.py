@@ -2379,6 +2379,55 @@ def attack_f6_quote_an_excluded_cell(tmp):
     return "SUCCEEDED: a declared-unreachable cell was accepted by the gate"
 
 
+def attack_f6_doctor_a_table_into_two_statuses(tmp):
+    """Can an edited-and-rehashed v4 table give one cell TWO statuses, and does the gate notice?
+
+    Review F6b, MAJOR 1. The serializer emitted `authorized_cells` / `refused_cells` /
+    `excluded_cells` / `skipped_cells` independently and the loader only type-checked them, so an
+    editor could append an AUTHORIZED cell to `excluded_cells`, re-hash, and load — and
+    `assert_cell_authorized` returns on the authorized list before it ever looks at exclusions, so the
+    contradiction resolved in the attacker's favour.
+
+    This must be refused at LOAD, which is a different and earlier refusal than `F6-1`'s (a table that
+    is internally sound, refusing a cell it legitimately excludes).
+    """
+    fp = _probe_env()
+    config = _f5_config(fp, tmp, "doctored", "att-1")
+    for key, value in (
+        ("pos_fit_excluded_cells", "one_step:32:2"),
+        ("pos_fit_exclusion_reason", "bad_smem_address: deterministic XLA codegen fault (issue #18)"),
+    ):
+        setattr(config, key, value)
+    path = str(getattr(config, "pos_fit_authorization"))
+    fp.run_fit_probe(
+        config,
+        measurer=_f5_measurer(fp),
+        cells=[fp.FitCell("rollout", 8, 2), fp.FitCell("one_step", 32, 2)],
+        trials=2,
+        devices=[_Dev() for _ in range(8)],
+    )
+    fp.load_authorization(path)  # sound before doctoring
+
+    stored = json.loads(pathlib.Path(path).read_text())
+    payload = stored["payload"]
+    smuggled = dict(payload["authorized_cells"][0])
+    payload["excluded_cells"].append({**smuggled, "reason": "smuggled"})
+    stored["sha256"] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    pathlib.Path(path).write_text(json.dumps(stored, sort_keys=True))
+
+    try:
+        published = fp.load_authorization(path)
+    except ValueError as error:
+        return f"REFUSED at load: {str(error).splitlines()[0][:120]}"
+    try:
+        fp.assert_cell_authorized(
+            published, fp.FitCell(**{k: v for k, v in smuggled.items()}), context=fp.derive_probe_context(config, devices=[_Dev()] * 8)
+        )
+    except ValueError:
+        return "SUCCEEDED (partly): the contradictory table LOADED; only the gate caught the cell"
+    return "SUCCEEDED: a cell listed as both authorized and excluded loaded and was authorized"
+
+
 def attack_f5_tear_the_pair_with_two_publishers(tmp):
     """Can two concurrent publishers leave a cell permanently unadoptable?
 
@@ -2547,5 +2596,6 @@ if __name__ == "__main__":
         _report("F5-7   tear the pair (2 writers)", attack_f5_tear_the_pair_with_two_publishers, tmp)
         _report("F5-8   forge w/ CURRENT manifest", attack_f5_forge_with_the_CURRENT_manifest, tmp)
         _report("F6-1   quote an excluded cell", attack_f6_quote_an_excluded_cell, tmp)
+        _report("F6-2   doctor two statuses", attack_f6_doctor_a_table_into_two_statuses, tmp)
     if not _summarize():
         raise SystemExit(1)

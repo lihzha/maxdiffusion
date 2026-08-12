@@ -987,3 +987,49 @@ The comment claimed the preflight precedes the HF prefetch. It does not: the lau
 - **Analysis** — the round is small because the hard part was decided for me: exclusions outside the per-cell fingerprint, inside the run digest. That single decision is what keeps F6 from undoing F5, and it is the thing I would ask a reviewer to check first. The refusal wording is the other piece worth attention — an excluded cell is *weaker* evidence than a refused one (a refused cell was measured and missed a rule; an excluded cell has no measurement at all), so the gate says "declared EXCLUDED and never built" rather than reusing the never-measured message, and the battery probe fails if that distinction is lost.
 
 - **Next** — **the relaunch with a populated exclusion list is a PLAN DEVIATION and goes to Yixun.** He is being asked to accept a table that authorizes 12 of 16 cells, with `one_step` unmeasured at microbatch 32 and 64 — which bears directly on whether matched-C0 can run at the microbatch the rollout arm wants. The launcher prints a `[note]` to that effect whenever the list is non-empty, but a printed note is not a decision. My job here was the mechanism; arming it is his.
+
+
+## 2026-08-12T16:30:00Z — Round F6b: the F6 review — no grandfathering, and two of my own tests corrected
+
+- **Goal** — answer `rollout_adapter_codex_code_f6-cell-exclusion_review.md` (1 BLOCKER + 2 MAJOR + 1 MINOR).
+
+### BLOCKER — M1-5 cannot adopt M1-4's 12 banked cells. **Resolved by POLICY: no migration rule.**
+
+The F6 delta edits `pos_rollout_fit_probe.py`, which the deployed manifest covers, so M1-5 runs under a different manifest and every F5-era banked cell is refused. The reviewer reproduced both: M1-4 at `6eda654` = `4bbdbb28…`, the F6 working tree = `64f92825…`.
+
+**The Planner's ruling, recorded here because it is the load-bearing decision of this round: there is NO compatibility or migration rule, and there will not be one.** Grandfathering cells measured by different code is exactly the hole F5b and F5c were spent closing — the manifest refusing them is the mechanism *working*, not a defect in it. The alternative (a hand-maintained "these changes don't affect measurements" allowlist) is the curated list this module has twice refused to build, and its failure mode is publishing an HBM authorization for a program nobody measured.
+
+**Corrected M1-5 profile** (supersedes the "adopts in ~30 min" reading in the command ledger, which the Planner is correcting there):
+
+| | |
+|---|---|
+| Cells to measure | **12** — the reachable ladder; the 4 `one_step` mb∈{32,64} cells are declared EXCLUDED (issue #18) |
+| Attempt 1 | full ~2–2.5 h, banking each cell as it finishes |
+| Attempt 2+ | **converges**: adopts attempt 1's cells at the SAME new SHA, so only the unmeasured tail costs time |
+| What is NOT lost | nothing that F5 was built for — banking still turns a zone kill from "lose everything" into "lose the cell in flight". It is the one-time code change that costs a re-measure, not the churn. |
+
+**My test could not have caught this** and the reviewer was right to say so: `test_declaring_an_exclusion_does_not_invalidate_cells_already_banked` banks and adopts inside a single unchanged process. Added `test_a_code_change_between_attempts_refuses_the_cells_banked_before_it`, which moves the manifest BETWEEN attempts and asserts both halves of the ruling — the transition re-measures with `manifest_digest` named in the refusal, and a third attempt at the new manifest adopts the second's work.
+
+### MAJOR 1 — one cell could hold two statuses
+
+The four cell lists were emitted independently and the loader only type-checked them, so an edited-and-rehashed table could name a cell BOTH authorized and excluded — and `assert_cell_authorized` returns on the authorized list before it ever looks at exclusions, so the contradiction resolved in the attacker's favour. Fixed at the point **both** paths pass through — `ProbeEvidence._assert_one_status_per_cell`, called from `as_payload`, so the probe cannot publish one and the loader cannot re-decide one — plus explicit loader pre-checks so the diagnosis names the contradiction instead of surfacing as "re-deciding does not reproduce the artifact". Duplicates within a list, overlaps across any pair, and exclusions with an empty reason are all refused. Red-first with the reviewer's construction; new probe `F6-2` refuses it **at load**, which is a different and earlier refusal than `F6-1`'s.
+
+### MAJOR 2 — two of my headline tests proved less than they claimed
+
+**(a) The digest-isolation test observed the right outcome for the wrong reason.** It declared an exclusion that was FILTERED OUT (the cell was not in the requested list), so the digest change it saw came from measuring a different number of cells. Replaced with a construction that holds the MEASURED set fixed — run X measures {A,B} with no declaration; run Y measures {A,B} while declaring C excluded — and then varies only the reason string. `measured_cells` and `measurements` are asserted identical across all three, the run digest must move for the declaration and again for the reason alone, and no per-cell recipe fingerprint may move at all.
+
+**(b) "Bit-for-bit with today" was not provable and I should not have written it.** F6 bumps v3→v4 and adds three fields, so literal identity with HEAD is impossible by construction; the test compared F6 to F6. Renamed to `test_an_empty_exclusion_declaration_is_behaviourally_inert`, with the projection it compares over declared as `_UNSTABLE_FIELDS` — `cell_provenance` (adoption paths are attempt-scoped and differ by design) and `sha256` (a function of the payload, so comparing it too would be comparing twice) — and every other field compared literally. **The "bit-for-bit" claim is withdrawn from the F6 entry above.**
+
+### MINOR — an empty token is a malformation
+
+`pos_fit_excluded_cells=","` parsed as no exclusions, so a declaration written to keep the probe away from the deterministic-fault cell could have walked straight into it. Now: a BLANK declaration is no declaration; a declaration made of punctuation is a malformed one and says so.
+
+- **Command / Validation** — canonical suite **2248 passed / 0 failed** (560 s; 2236 + 12 new); battery **90 probes — 89 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**, exit 0 → `harness/attacks_f6b_20260812.log` (sha256 `d31da372ab8344a0…`). F5/F6 unit file **75 passed**. `black`/`ruff`/`git diff --check` clean.
+
+- **Red-side honesty.** Genuinely red before the fix: MAJOR 1 (3 of 4 doctored-table cases) and the MINOR (5 of 5). The other three tests **passed on first run** — the behaviour was already correct and what was missing was the evidence, which is precisely what the reviewer said. Rather than assert they have teeth, I measured it: dropping `manifest_digest` from the context payload kills the transition test, and dropping `excluded_cells` from the payload kills the digest-isolation test. `pos_rollout_fit_probe.py` sha256 `5d685f13f336b1ba…` verified identical before and after both mutations. The inertness test survives both, which is correct — its claim is narrower and I have stopped claiming otherwise.
+
+- **Result** — `fix_ready`, **uncommitted**. Mechanism still ships disarmed.
+
+- **Analysis** — the BLOCKER was not a code defect and the ruling is the right one, but it changes what the campaign should expect from M1-5, and the honest framing is worth keeping: **F5's banking pays off across attempts of one build, never across builds.** Every code change resets it. That is the price of the binding, it was paid knowingly, and the two-line summary for anyone reading later is: a zone kill costs one cell; a commit costs the ladder.
+
+- **Next** — Planner spot-check; the exclusion list stays empty pending Yixun's plan-deviation decision.
