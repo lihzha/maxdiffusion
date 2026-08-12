@@ -56,3 +56,10 @@ Yixun ordered the cancel in-conversation ("cancel the old M1 job"); executed via
 **The failure:** at `one_step microbatch=32 k=2`, during the per-cell backbone reload, the TPU runtime dumped `bad_smem_address` (tc_scalar_program_errors — chip-level scalar-memory fault) and the worker exited 1 at 07:39Z. No Python traceback; the queue classified it program-failure and went terminal. **Planner ruling: infra** (hardware-fault family; the same arm's smaller cells measured clean seconds before; fatal fired in a load path exercised 11 times prior). Retried via `tpu retry` (same spec, same SHA `5ca0fe5`, zero changes) under announcement 02's auto-resubmit rule; a same-cell repeat on a fresh VM would overturn the ruling to deterministic ⇒ stop + fix round.
 
 **Formal state:** `fit_probe/` is EMPTY — the authorization table publishes at completion, so NO cells are authorized; the 24 measurements are log evidence only. (Design note for a possible F5, not this round: publish-at-end means a 3.5 h ladder that dies at cell 12/16 authorizes nothing — per-cell incremental publication with a terminal digest would fit the issue-#13 lesson.)
+
+
+---
+
+## 2026-08-12 ~00:00Z — Yixun chose (c): hybrid — F5 `cell-publication` round OPENED while the churn continues
+
+Zone tally for M1-3: 7 dead attempts today (health events at 30min–2h lifetimes vs the 3.5h ladder); every re-measured cell byte-identical across attempts — the waste is structural (publish-at-end). Yixun approved option (c). F5 Coder dispatched: per-cell incremental publication (digest-bound cell JSONs to the attempt root as each cell completes) + adopt-if-published on restart (digest + recipe-fingerprint + job-identity verified; refusal paths re-measure), final authorization table unchanged in semantics with measured/adopted provenance recorded. The queue keeps churning attempt 8+ in the background; whichever lands first wins — a lucky completed churn attempt moots F5 for M1 but the machinery stays for M1' (v6e-64) and any future ladder.
