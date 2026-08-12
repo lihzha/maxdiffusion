@@ -943,3 +943,47 @@ The comment claimed the preflight precedes the HF prefetch. It does not: the lau
 - **Analysis** — the count for the week is **three false verdicts, all green: a stale fake (`_Gfile`), a probe watching the wrong observable (`F5-5`), and a probe that never ran (`P3-5`)**. Two of the three were mine, introduced while fixing the previous one. The through-line is that the battery's headline number is the least trustworthy artefact in the review package, and every mechanism added this round — the three-way summary, the allowlist, the non-zero exit, the per-probe execution guard — exists to make the number harder to earn rather than easier to read. That is worth stating plainly in a closing round: the harness got safer, not stronger, and the reviewer found all three.
 
 - **Next** — Planner spot-check and ceremony; no further Codex pass. The escalation for Yixun rides in the M1 pre-launch package unchanged: *an authorized bucket writer who can read one artifact can fabricate a fit-probe measurement — sign artifacts (workload identity / KMS) or accept the ACL anchor?*
+
+
+## 2026-08-12T14:20:00Z — CORRECTION (append-only): the `bad_smem_address` fault is DETERMINISTIC, not infra — issue #18
+
+**This corrects a classification I recorded, and the correcting evidence is a second data point on the same cell.** The F5-era entries and the command ledger carry the M1-3 attempt-2 ruling as *infra* (hardware-fault family; "the same arm's smaller cells measured clean seconds before; fatal fired in a load path exercised 11 times prior"), which under announcement 02 licensed an unchanged auto-resubmit. That reading is now **overturned**:
+
+- **M1-3 attempt 2** died at `one_step microbatch=32 k=2` with `bad_smem_address` (tc_scalar_program_errors).
+- **M1-4 attempt 1**, a different VM on a different day, banked 12 of 16 cells and died at **the same cell** with **the same fault**.
+
+**2/2 on one cell across two VMs and two days is a workload signature, not a fleet one** — the same reasoning that convicted the unrolled graph in F4, applied to the same evidence shape. The cause is an XLA codegen fault triggered by the one_step loss under the F4 scan at chunk width >= 32 on v6e-8: width 32 is fine on the rollout arm, and one_step is fine at widths 8 and 16. Filed as **issue #18**. The practical consequence is that retrying M1 unchanged cannot succeed — attempts 3..N would each burn ~20 minutes to die in the same place — which is what round F6 answers.
+
+*Recorded here rather than by editing the earlier entries: the worklog is append-only, and a ruling that was reasonable on one data point and wrong on two is part of the record worth keeping.*
+
+
+## 2026-08-12T14:40:00Z — Round F6 `cell-exclusion`: the mechanism, built but NOT armed
+
+- **Goal** — let a run publish a table that DECLARES the unreachable cells instead of dying on them. M1-4 attempt 1 proved F5 end to end in production (12 of 16 cells banked at `att-0812-053153/.../cells/`, full-digest content objects with their markers, exactly as designed) and then hit the deterministic fault above. Four unreachable cells were holding twelve good ones hostage, because the table only publishes when the ladder finishes.
+
+- **Hypothesis** — the difference between a cell that *missed a rule* and a cell that *was never built* is a difference a training run must be able to see. Recording exclusions in the table (rather than letting the ladder shrink silently) turns an unreachable cell from a reason the campaign cannot publish into a fact the campaign has published.
+
+### Change
+
+| Piece | Behaviour |
+|---|---|
+| `pos_fit_excluded_cells` | comma-separated `arm:microbatch:k`, **empty by default**. A string, not a YAML list, because pyconfig coerces an override to the declared key's type and the launcher must carry it (the `pos_ablation_L: '1,8'` precedent). |
+| `pos_fit_exclusion_reason` | **required** whenever the list is non-empty. An undocumented exclusion is a cell that quietly stopped being measured. |
+| `parse_excluded_cells` | strict: three fields, a declared arm, a microbatch and horizon the ladder actually visits, no duplicates. Every malformed entry is a loud config error — a typo must not silently leave a cell running, or silently stop one. |
+| `run_fit_probe` | excluded cells are removed **before anything is built**: never constructed, never compiled, never measured, never adopted. Proven by measurer call count, by the absence of a banked artifact, and by the adoption path never being entered for them. |
+| the table (v3 → **v4**) | `excluded_cells` (with reason), `exclusion_reason`, and `skipped_cells` for the divisibility drop. |
+| `assert_cell_authorized` | refuses an excluded cell with a **distinct** error naming the declaration and quoting the reason, and explicitly *not* the "never measured" wording — re-running M1 unchanged will not produce that measurement, and the refusal says so. |
+
+**The `skipped_cells` field is a small scope addition I made deliberately.** The brief's requirement was that the table account for every cell — never silently absent. The divisibility drop (`microbatch does not divide pos_logical_batch`) was exactly such a silent absence: printed to the log, then gone from the table. It is inert in the deployed config (256 divides by 8/16/32/64), so this costs nothing today and makes the accounting invariant total rather than approximately true.
+
+**The fingerprint decision, asserted both ways.** The exclusion declaration is a fourth `FINGERPRINT_EXCLUSIONS` category (`_EXCLUSION`, added as a reviewed decision rather than an edit, per the rule that dict states about itself) and does **not** enter `recipe_fingerprint`: a cell is identified by its own recipe, so declaring cell X unreachable must not invalidate the banked artifacts of cells Y — which would defeat exactly what F5 exists to keep. It **does** enter the run-level table digest, so a reader of the authorization sees it. `test_declaring_an_exclusion_does_not_invalidate_cells_already_banked` runs the real thing: bank cells, then re-run with an exclusion declared, and the banked cells are still adopted (measurer call count 0).
+
+- **Command / Validation** — canonical suite **2236 passed / 0 failed** (572 s; 2221 + 15 new); battery **89 probes — 88 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**, exit 0 → `harness/attacks_f6_20260812.log` (sha256 `741f8b6db2b0d84c…`), with new probe `F6-1 quote an excluded cell`. F5/F6 unit file **63 passed** (11 new, red first). `black`/`ruff`/`bash -n`/`git diff --check` clean; YAML parses at 205 keys.
+
+  **One existing test changed contract, and it was worth checking rather than patching:** `test_a_cell_whose_microbatch_cannot_divide_the_logical_batch_is_dropped` expects the message "no declared cell has a microbatch dividing pos_logical_batch". My first version merged that refusal with the all-excluded one. Split again by cause — "nothing divides the logical batch" and "every cell was declared unreachable" are different operator mistakes with different fixes — so the original diagnostic survives verbatim. Its substantive assertion (the dropped cell stays out of `measured_cells`, i.e. unauthorized at the gate) never changed.
+
+- **Result** — `fix_ready`, **uncommitted**. **The mechanism exists and is inert.** `pos_fit_excluded_cells` is empty in the YAML, empty in the launcher default, and an empty list reproduces today's table bit-for-bit (asserted).
+
+- **Analysis** — the round is small because the hard part was decided for me: exclusions outside the per-cell fingerprint, inside the run digest. That single decision is what keeps F6 from undoing F5, and it is the thing I would ask a reviewer to check first. The refusal wording is the other piece worth attention — an excluded cell is *weaker* evidence than a refused one (a refused cell was measured and missed a rule; an excluded cell has no measurement at all), so the gate says "declared EXCLUDED and never built" rather than reusing the never-measured message, and the battery probe fails if that distinction is lost.
+
+- **Next** — **the relaunch with a populated exclusion list is a PLAN DEVIATION and goes to Yixun.** He is being asked to accept a table that authorizes 12 of 16 cells, with `one_step` unmeasured at microbatch 32 and 64 — which bears directly on whether matched-C0 can run at the microbatch the rollout arm wants. The launcher prints a `[note]` to that effect whenever the list is non-empty, but a printed note is not a decision. My job here was the mechanism; arming it is his.
