@@ -105,3 +105,12 @@ The F6 reviewer reproduced both manifests and proved the point: F6 changes manif
 **Job:** `20260812-160205-4a3dc8a8-exp06-m1e-fitprobe-yixun` (v6e-8), tip `a8a0b78` (F3+F4+F5+F6). Exclusion ARMED in the job env: `one_step:32:2, one_step:32:4, one_step:64:2, one_step:64:4`, reason bound (issue #18). RUN_NAME `exp06-m1-fitprobe`; adoption root `$M1ROOT`.
 
 **Expected:** re-measures the 12 reachable cells (~2–2.5 h/attempt; F5-era banked cells correctly refuse cross-build), banking as it goes; same-SHA attempts adopt each other; publishes the v4 table with 12 authorized/refused + 4 EXCLUDED. On success → acceptance verification (peak_source per cell) → M2 package.
+
+
+---
+
+## 2026-08-12 ~19:00Z — F5 CROSS-ATTEMPT ADOPTION CONFIRMED IN PRODUCTION; M1-5 retried after a setup network flake
+
+**The debut:** attempt 2's log: `[M1] adopting rollout microbatch=8 k=2 from .../att-20260812T161545Z/cells/... (2 trials, peak 32405364416 bytes)` — attempt 1's banked cell adopted at the same SHA, F5-era cells simultaneously REFUSED by name (different program). The mechanism works end-to-end on hardware.
+
+**The churn:** att 1 suspended (banked m8_k2), att 2 preempted (banked m8_k4 progress unknown), att 3 preempted pre-start, att 4 died in SETUP on a transient GitHub qwix-archive fetch (http2 refused stream after 4.5s of retries) — queue classified terminal. Ruled infra; `tpu retry` issued (same spec, zero changes, auto-resubmit rule).
