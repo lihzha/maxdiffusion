@@ -270,6 +270,8 @@ TRAIN_INTERFACE = (
     ("HARDWARE", "hardware", "gpu", "yaml"),
     ("POS_FIT_AUTHORIZATION", "pos_fit_authorization", "gs://bucket/m1/other.json", _PREREQUISITE),
     ("POS_FIT_ADOPTION_ROOT", "pos_fit_adoption_root", "gs://bucket/m1-prior-attempts", "yaml"),
+    ("POS_FIT_EXCLUDED_CELLS", "pos_fit_excluded_cells", "one_step:32:2", "yaml"),
+    ("POS_FIT_EXCLUSION_REASON", "pos_fit_exclusion_reason", "deterministic chip fault", "yaml"),
 )
 #: Emitted, but with no env variable at all: derived inside the launcher, which is the point.
 TRAIN_DERIVED = {

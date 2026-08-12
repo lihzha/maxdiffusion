@@ -168,6 +168,11 @@ POS_FIT_AUTHORIZATION="${POS_FIT_AUTHORIZATION:-}"
 # empty every time -- so that wrapper must pass POS_FIT_ADOPTION_ROOT="$M1ROOT" for adoption to see
 # anything. Inert in `train` mode: nothing there adopts cells.
 POS_FIT_ADOPTION_ROOT="${POS_FIT_ADOPTION_ROOT:-}"
+# F6: cells this run DECLARES unreachable ('arm:mb:k', comma separated) and the required reason.
+# EMPTY by default: populating it publishes a table authorizing less than the ladder was designed to
+# measure, which is a plan deviation and needs Yixun's decision, not an operator's.
+POS_FIT_EXCLUDED_CELLS="${POS_FIT_EXCLUDED_CELLS:-}"
+POS_FIT_EXCLUSION_REASON="${POS_FIT_EXCLUSION_REASON:-}"
 
 case "${POS_JOB_MODE}" in
   train|fit_probe) ;;
@@ -331,6 +336,8 @@ if measured_sha != os.environ.get("COMMIT", ""):
     print("       An HBM peak is a measurement OF A PROGRAM; re-run M1 at this SHA.")
     sys.exit(1)
 print(f"[prereq] M1 authorization {path}: {authorization['authorized_cells']}")
+for entry in authorization.get("excluded_cells") or []:
+    print(f"[prereq]   EXCLUDED {entry['arm']} microbatch={entry['microbatch']} k={entry['k_b']}: {entry['reason']}")
 PREREQ
 
 # --- issue #4: prefetch the HF snapshot before JAX starts, with retries ------------------
@@ -407,6 +414,8 @@ COMMON_RECIPE=(
   pos_recipe_lock="${RECIPE_LOCK}"
   pos_fit_authorization="${POS_FIT_AUTHORIZATION}"
   pos_fit_adoption_root="${POS_FIT_ADOPTION_ROOT}"
+  pos_fit_excluded_cells="${POS_FIT_EXCLUDED_CELLS}"
+  pos_fit_exclusion_reason="${POS_FIT_EXCLUSION_REASON}"
   pos_dev_manifest="${POS_DEV_MANIFEST}"
   pos_dev_manifest_sha256="${POS_DEV_MANIFEST_SHA256}"
   pos_rollout_k="${POS_ROLLOUT_K}"
@@ -449,6 +458,13 @@ echo "POS_DEV_MANIFEST=${POS_DEV_MANIFEST}"
 echo "POS_FIT_AUTHORIZATION=${POS_FIT_AUTHORIZATION}"
 echo "POS_FIT_ADOPTION_ROOT=${POS_FIT_ADOPTION_ROOT}   (F5: verified cells under this root are adopted, \
 not re-measured; empty = measure everything)"
+echo "POS_FIT_EXCLUDED_CELLS=${POS_FIT_EXCLUDED_CELLS}   (F6: DECLARED unreachable -- never built, never \
+measured, recorded EXCLUDED in the table; empty = the full ladder runs)"
+if [ -n "${POS_FIT_EXCLUDED_CELLS}" ]; then
+  echo "[note] This run publishes a table that authorizes LESS than the full ladder, by declaration:"
+  echo "[note]   ${POS_FIT_EXCLUSION_REASON}"
+  echo "[note] That is a plan deviation. It must carry Yixun's recorded decision, not just this flag."
+fi
 echo "MAX_TRAIN_STEPS=${MAX_TRAIN_STEPS} EVAL_EVERY=${EVAL_EVERY} CHECKPOINT_EVERY=${CHECKPOINT_EVERY}"
 echo "POS_LOGICAL_BATCH=${POS_LOGICAL_BATCH} POS_MICROBATCH=${POS_MICROBATCH} POS_ROLLOUT_K=${POS_ROLLOUT_K}"
 echo "SAMPLING_STEPS=${SAMPLING_STEPS} GUIDE_SCALE=${GUIDE_SCALE} NOISE_MODE=${NOISE_MODE} DROPOUT=${DROPOUT}"

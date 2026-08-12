@@ -55,6 +55,13 @@ _ADDED_KEYS = {
     # adopt nothing, which is the pre-F5 behaviour; the launcher derives it in fit_probe mode. It is
     # a DESTINATION for fingerprint purposes, so the recipe fingerprint is unmoved by its arrival.
     "pos_fit_adoption_root",
+    # F6: the cell-exclusion declaration. A cell that faults the chip deterministically (one_step at
+    # scan chunk width >= 32 on v6e-8, 2/2 across two VMs) can be DECLARED unreachable so the table
+    # publishes and still accounts for it; the reason is required and lands in the table. Both keys are
+    # DESTINATION-class for the fingerprint -- they decide which cells the ladder visits, never what a
+    # cell compiles to -- so declaring one does not invalidate another cell's banked artifact.
+    "pos_fit_excluded_cells",
+    "pos_fit_exclusion_reason",
     # Review pass 3 (T6-1/T6-2/T6-3): the derived paths the launchers transport. `pos_resume_parent`
     # is the immutable resume INPUT (distinct from the fresh attempt's OUTPUT tree); `pos_recipe_lock`
     # is the run-level artifact that makes a divergent second arm refuse to start; the three eval
@@ -83,7 +90,7 @@ def test_the_config_is_a_superset_of_the_side_adapter_config():
     missing = sorted(set(base) - set(pos))
     assert not missing, f"the pos_rollout config dropped {missing}"
     assert sorted(set(pos) - set(base)) == sorted(_ADDED_KEYS)
-    assert len(pos) == len(base) + len(_ADDED_KEYS) == 203
+    assert len(pos) == len(base) + len(_ADDED_KEYS) == 205
 
 
 def test_only_the_four_intended_values_differ_from_the_side_adapter_config():

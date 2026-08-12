@@ -180,10 +180,11 @@ __all__ = [
     "run_fit_probe",
 ]
 
-#: ``v3`` because F5 added ``cell_provenance`` to the payload the digest covers. A consumer holding a
-#: table with no provenance record cannot tell "nothing was adopted" from "written by code that could
-#: not adopt", and this module's whole stance is that an artifact says what it is or is refused.
-AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v3"
+#: ``v4`` because F6 added ``excluded_cells`` / ``exclusion_reason`` / ``skipped_cells`` (v3 added
+#: ``cell_provenance``). A v3 loader reading a v4 table would treat a DECLARED-unreachable cell as one
+#: that was simply never measured -- the same class of confusion v3 was cut for -- so the version is
+#: the fail-closed signal, exactly as before.
+AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v4"
 #: Plan §4-P1. Steady state, not transient: a peak measured during compilation is not this number.
 HEADROOM_FRACTION = 0.90
 
@@ -243,6 +244,15 @@ TRIALS_PER_CELL = 2
 _CELL = "the cell: the ladder varies it and M1 authorizes it per cell rather than globally"
 _DESTINATION = "a destination or run identity: it names where output goes, never what is computed"
 _SCHEDULE = "schedule length or cadence: it decides how MANY steps run, never what one step compiles to"
+#: F6. A fourth category, added as a reviewed decision rather than an edit (the rule this dict states
+#: about itself). The exclusion declaration decides WHICH cells the ladder visits and why; it does not
+#: change what any one cell compiles to. Keeping it OUT of the fingerprint is load-bearing: a cell is
+#: identified by its own recipe, so declaring cell X unreachable must not invalidate the banked
+#: artifacts of cells Y -- which is precisely what F5 exists to keep. The run-level table digest covers
+#: the declaration instead, so a reader of the authorization still sees it.
+_EXCLUSION = (
+    "the cell-exclusion declaration: it decides WHICH cells the ladder visits, never what one cell compiles to"
+)
 
 FINGERPRINT_EXCLUSIONS = {
     "pos_rollout_arm": _CELL,
@@ -259,6 +269,8 @@ FINGERPRINT_EXCLUSIONS = {
     "pos_recipe_lock": _DESTINATION,
     "pos_fit_authorization": _DESTINATION,
     "pos_fit_adoption_root": _DESTINATION,
+    "pos_fit_excluded_cells": _EXCLUSION,
+    "pos_fit_exclusion_reason": _EXCLUSION,
     "pos_run_report": _DESTINATION,
     "pos_anchor_certificate": _DESTINATION,
     "pos_benchmark_row": _DESTINATION,
@@ -276,7 +288,7 @@ FINGERPRINT_EXCLUSIONS = {
 }
 #: The categories a key may be excluded under. A new reason string is a reviewed decision, not an
 #: edit: the test refuses any exclusion whose reason is not one of these three.
-FINGERPRINT_EXCLUSION_REASONS = (_CELL, _DESTINATION, _SCHEDULE)
+FINGERPRINT_EXCLUSION_REASONS = (_CELL, _DESTINATION, _SCHEDULE, _EXCLUSION)
 
 #: The tensor geometry every activation is sized by. Recorded SEPARATELY in the context (and human
 #: readable there) as well as being inside the fingerprint, so a refusal can name the shapes.
@@ -447,6 +459,82 @@ def recipe_fingerprint(config) -> str:
     over-bound", which costs a re-measure rather than a wrong authorization.
     """
     return _digest(config_recipe(config))
+
+
+#: Why a cell was left out of the measured set, when it was not DECLARED unreachable.
+SKIPPED_NON_DIVIDING = "microbatch does not divide the logical batch, so this cell is not a runnable program"
+
+
+def declared_exclusion_reason(config) -> str:
+    """The one reason string covering this run's declared exclusions. Empty when there are none."""
+    return str(declared(config, "pos_fit_exclusion_reason") or "").strip()
+
+
+def parse_excluded_cells(config) -> tuple:
+    """Cells this run DECLARES unreachable — parsed strictly, or refused loudly (F6).
+
+    M1-4 attempt 1 banked 12 of 16 cells and then died at ``one_step microbatch=32 k=2`` with
+    ``bad_smem_address`` — the same cell and the same chip fault as M1-3 attempt 2, on a different VM
+    on a different day. **2/2 on one cell is deterministic**, not a zone event: an XLA codegen fault
+    under the F4 scan at chunk width >= 32 for the one_step loss on v6e-8. Four unreachable cells were
+    holding twelve good ones hostage, because the table only publishes when the ladder finishes.
+
+    A declared exclusion lets the table publish and still account for every cell. It is deliberately
+    unpleasant to declare: every entry must name an arm the experiment runs and a microbatch and
+    horizon the ladder actually visits, duplicates are refused, and a non-empty list without
+    ``pos_fit_exclusion_reason`` is refused — an undocumented exclusion is a cell that quietly stopped
+    being measured, which is the failure this mechanism exists to make impossible rather than easy.
+    """
+    raw = declared(config, "pos_fit_excluded_cells")
+    if isinstance(raw, (list, tuple)):
+        entries = [str(item).strip() for item in raw]
+        blank = not entries
+    else:
+        text = str(raw or "").strip()
+        # A BLANK declaration is no declaration. A declaration made of punctuation is a malformed one:
+        # `pos_fit_excluded_cells=","` used to parse as "no exclusions", so a list written to keep the
+        # probe away from the deterministic-fault cell would have walked straight into it (F6b MINOR).
+        blank = not text
+        entries = [chunk.strip() for chunk in text.replace("\n", ",").split(",")] if text else []
+    if blank:
+        return ()
+    # Review F6b, MINOR: empty chunks used to be discarded before validation, so
+    # `pos_fit_excluded_cells=","` parsed as NO exclusions -- a declaration written to keep the probe
+    # away from the deterministic-fault cell would have walked straight into it. "Malformed = loud"
+    # has to include the malformation that looks like nothing.
+    if any(not entry for entry in entries):
+        raise ValueError(
+            f"pos_fit_excluded_cells={raw!r} contains an empty token (a leading, trailing or doubled "
+            f"comma). An exclusion list is read by a machine that will otherwise silently measure a cell "
+            f"you meant to declare unreachable; write the entries with single commas and no trailing one."
+        )
+    if not declared_exclusion_reason(config):
+        raise ValueError(
+            f"pos_fit_excluded_cells declares {entries} but pos_fit_exclusion_reason is empty. An exclusion "
+            f"removes a cell from the measured ladder, and the table records WHY; an undocumented one is a "
+            f"cell that quietly stopped being measured."
+        )
+    cells: list[FitCell] = []
+    for entry in entries:
+        fields = entry.split(":")
+        if len(fields) != 3:
+            raise ValueError(f"{entry!r} is not an exclusion: it needs three fields, 'arm:microbatch:k'")
+        arm, microbatch, horizon = (field.strip() for field in fields)
+        if arm not in LADDER_ARMS:
+            raise ValueError(f"{entry!r} names arm {arm!r}; exp_06 declares {list(LADDER_ARMS)}")
+        for label, value in (("microbatch", microbatch), ("k", horizon)):
+            if not value.isdigit() or int(value) <= 0:
+                raise ValueError(f"{entry!r}: {label} must be a positive whole number, got {value!r}")
+        cell = FitCell(arm=arm, microbatch=int(microbatch), k_b=int(horizon))
+        if cell.microbatch not in LADDER_MICROBATCH or cell.k_b not in LADDER_K:
+            raise ValueError(
+                f"{entry!r} is not a cell this ladder visits (microbatches {list(LADDER_MICROBATCH)}, "
+                f"horizons {list(LADDER_K)}): excluding a cell that never runs hides a typo rather than a fault"
+            )
+        if cell in cells:
+            raise ValueError(f"{entry!r} is declared twice; one cell has one exclusion")
+        cells.append(cell)
+    return tuple(cells)
 
 
 def latent_geometry(config) -> tuple:
@@ -1043,6 +1131,47 @@ class ProbeEvidence:
     #: recomputable from the numbers — so it is digest-bound like everything else here and no more.
     #: Left empty it fills itself in as all-measured, which is what an uninterrupted run is.
     provenance: tuple = ()
+    #: F6. ``((cell, reason), ...)`` for cells DECLARED unreachable, and for cells the divisibility
+    #: rule dropped. Neither was measured; both are recorded, because a table that is silent about a
+    #: cell is a table a reader cannot distinguish from one that forgot it.
+    exclusions: tuple = ()
+    skipped: tuple = ()
+
+    def _assert_one_status_per_cell(self) -> None:
+        """A cell has ONE status. Review F6b, MAJOR 1.
+
+        The serializer emitted the four lists independently, so an edited-and-rehashed table could
+        name a cell BOTH authorized and excluded — and :func:`assert_cell_authorized` returns on the
+        authorized list before it ever looks at exclusions, so the smuggled cell would have run. This
+        lives on the evidence rather than in the loader because BOTH paths build one of these: the
+        probe when it publishes, the loader when it re-decides.
+        """
+        buckets = (
+            ("measured", [entry.cell for entry in self.measurements]),
+            ("excluded", [cell for cell, _ in self.exclusions]),
+            ("skipped", [cell for cell, _ in self.skipped]),
+        )
+        for name, cells in buckets:
+            duplicates = sorted({str(cell) for cell in cells if cells.count(cell) > 1})
+            if duplicates:
+                raise ValueError(f"{name} names {duplicates} twice; a cell has one status, not several")
+        for (left, first), (right, second) in (
+            (buckets[0], buckets[1]),
+            (buckets[0], buckets[2]),
+            (buckets[1], buckets[2]),
+        ):
+            both = sorted({str(cell) for cell in set(first) & set(second)})
+            if both:
+                raise ValueError(
+                    f"{both} are recorded as both {left} and {right}: a cell has ONE status, and a table "
+                    f"that gives it two settles nothing about which one a training run may quote"
+                )
+        for cell, why in self.exclusions:
+            if not str(why).strip():
+                raise ValueError(
+                    f"{cell} is recorded as excluded with no reason. An exclusion removes a cell from the "
+                    f"measured ladder; an undocumented one is a cell that quietly stopped being measured"
+                )
 
     def __post_init__(self) -> None:
         if not self.provenance:
@@ -1062,6 +1191,7 @@ class ProbeEvidence:
         )
 
     def as_payload(self) -> dict:
+        self._assert_one_status_per_cell()
         recorded = [cell for cell, _ in self.provenance]
         if recorded != [measurement.cell for measurement in self.measurements]:
             raise ValueError(
@@ -1081,6 +1211,9 @@ class ProbeEvidence:
         return {
             "protocol": AUTHORIZATION_PROTOCOL,
             "cell_provenance": [{**cell.as_payload(), "provenance": str(text)} for cell, text in self.provenance],
+            "excluded_cells": [{**cell.as_payload(), "reason": str(why)} for cell, why in self.exclusions],
+            "skipped_cells": [{**cell.as_payload(), "reason": str(why)} for cell, why in self.skipped],
+            "exclusion_reason": str(self.exclusions[0][1]) if self.exclusions else "",
             "context": self.context.as_payload(),
             "context_digest": self.context.digest(),
             "authorized_cells": authorized,
@@ -1101,11 +1234,18 @@ def build_evidence(
     eval_every: int,
     checkpoint_every: int,
     provenance: Mapping | None = None,
+    exclusions: Sequence | None = None,
+    skipped: Sequence | None = None,
 ) -> ProbeEvidence:
     """Bind the trials to the context they were measured under, aggregate them, and project.
 
     ``provenance`` maps each cell to how this attempt came by it (F5). Omitted, every cell is
     recorded as measured — which is what a run with no adoption root did and still does.
+
+    ``exclusions`` and ``skipped`` are the cells that were NOT measured and why (F6): declared
+    unreachable, or dropped because their microbatch does not divide the logical batch. They are
+    carried so the published table accounts for every cell of the ladder it ran rather than being
+    silent about the ones that are missing.
     """
     if not isinstance(context, ProbeContext):
         raise ValueError(
@@ -1129,6 +1269,14 @@ def build_evidence(
         if missing:
             raise ValueError(f"no provenance was recorded for {missing}: every published cell says where it came from")
         record = tuple((entry.cell, str(provenance[entry.cell])) for entry in aggregated)
+    declared_out = tuple((cell, str(why)) for cell, why in (exclusions or ()))
+    dropped = tuple((cell, str(why)) for cell, why in (skipped or ()))
+    overlap = {cell for cell, _ in declared_out} & {entry.cell for entry in aggregated}
+    if overlap:
+        raise ValueError(
+            f"{sorted(str(cell) for cell in overlap)} are recorded as BOTH measured and excluded; an excluded "
+            f"cell is one this run never built, so a measurement of it is a contradiction"
+        )
     evidence = ProbeEvidence(
         context=context,
         measurements=aggregated,
@@ -1138,6 +1286,8 @@ def build_evidence(
             ("checkpoint_every", _positive_int(checkpoint_every, "checkpoint_every")),
         ),
         provenance=record,
+        exclusions=declared_out,
+        skipped=dropped,
     )
     evidence.projections()  # project now, so a cadence production cannot honour fails HERE (LS-8)
     return evidence
@@ -1278,6 +1428,44 @@ def load_authorization(path: str) -> dict:
     inputs = payload.get("projection_inputs")
     if not isinstance(inputs, Mapping):
         raise ValueError(f"{path}: an authorization records the run it projected for; this one records none")
+    for field in ("excluded_cells", "skipped_cells"):
+        if not isinstance(payload.get(field), list):
+            raise ValueError(
+                f"{path}: a {AUTHORIZATION_PROTOCOL} table accounts for every cell of the ladder it ran -- "
+                f"authorized, refused, DECLARED-excluded or skipped -- and this one records no {field}"
+            )
+    statuses: dict = {}
+    for field in ("authorized_cells", "refused_cells", "excluded_cells", "skipped_cells"):
+        for entry in payload.get(field) or []:
+            try:
+                cell = FitCell.from_payload(entry)
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(f"{path}: {field} contains {entry!r}, which is not a cell: {error}") from error
+            if field != "refused_cells" or cell not in statuses.get("authorized_cells", ()):
+                statuses.setdefault(field, []).append(cell)
+    for field, cells in statuses.items():
+        duplicates = sorted({str(cell) for cell in cells if cells.count(cell) > 1})
+        if duplicates:
+            raise ValueError(f"{path}: {field} names {duplicates} twice; a cell has one status, not several")
+    for left, right in (
+        ("authorized_cells", "excluded_cells"),
+        ("authorized_cells", "skipped_cells"),
+        ("refused_cells", "excluded_cells"),
+        ("refused_cells", "skipped_cells"),
+        ("excluded_cells", "skipped_cells"),
+    ):
+        both = sorted({str(cell) for cell in set(statuses.get(left, ())) & set(statuses.get(right, ()))})
+        if both:
+            raise ValueError(
+                f"{path}: {both} are listed as both {left} and {right}. A cell has ONE status; this table "
+                f"gives it two, and the gate answers from whichever list it reads first."
+            )
+    for entry in payload.get("excluded_cells") or []:
+        if not str(entry.get("reason", "")).strip():
+            raise ValueError(
+                f"{path}: {entry!r} is excluded with no reason recorded. An exclusion removes a cell from "
+                f"the measured ladder, and a table that cannot say why is not evidence about the run."
+            )
     recorded_provenance = payload.get("cell_provenance")
     if not isinstance(recorded_provenance, list):
         raise ValueError(
@@ -1292,6 +1480,12 @@ def load_authorization(path: str) -> dict:
                 (key, int(inputs[key])) for key in ("max_train_steps", "eval_every", "checkpoint_every")
             ),
             provenance=tuple((FitCell.from_payload(entry), str(entry["provenance"])) for entry in recorded_provenance),
+            exclusions=tuple(
+                (FitCell.from_payload(entry), str(entry["reason"])) for entry in payload.get("excluded_cells") or []
+            ),
+            skipped=tuple(
+                (FitCell.from_payload(entry), str(entry["reason"])) for entry in payload.get("skipped_cells") or []
+            ),
         )
         recomputed = evidence.as_payload()
     except (KeyError, TypeError, ValueError) as error:
@@ -1347,6 +1541,18 @@ def assert_cell_authorized(authorization: Any, cell: FitCell, *, context: ProbeC
     wanted = cell.as_payload()
     if wanted in [dict(entry) for entry in authorization.get("authorized_cells", [])]:
         return
+    excluded = [
+        entry
+        for entry in authorization.get("excluded_cells", [])
+        if {key: value for key, value in entry.items() if key != "reason"} == wanted
+    ]
+    if excluded:
+        raise ValueError(
+            f"M1 did not measure {cell.arm} at microbatch={cell.microbatch} k={cell.k_b}: this run DECLARED "
+            f"that cell EXCLUDED and never built it -- {excluded[0].get('reason')!r}. It was left out on "
+            f"purpose, so there is no measurement to appeal to and re-running M1 unchanged will not produce "
+            f"one. Choose an authorized cell, or change the declaration and re-measure."
+        )
     refused = [
         entry
         for entry in authorization.get("refused_cells", [])
@@ -2304,18 +2510,43 @@ def run_fit_probe(
     context = derive_probe_context(config, devices=devices)
     requested = tuple(cells) if cells is not None else ladder()
     logical_batch = int(declared(config, "pos_logical_batch"))
-    runnable = tuple(cell for cell in requested if logical_batch % int(cell.microbatch) == 0)
-    for cell in requested:
-        if cell not in runnable:
-            print(
-                f"[M1] skipping {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: "
-                f"{cell.microbatch} does not divide the logical batch {logical_batch}"
-            )
+
+    # F6: DECLARED-unreachable cells are removed BEFORE anything is built. Not measured, not compiled,
+    # not adopted -- the whole point is that compiling one of them killed the VM twice on the same
+    # cell. They are recorded in the table instead, with the declared reason.
+    declared_out = parse_excluded_cells(config)
+    why_excluded = declared_exclusion_reason(config)
+    exclusions = tuple((cell, why_excluded) for cell in declared_out if cell in requested)
+    for cell, _ in exclusions:
+        print(f"[M1] EXCLUDED {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: {why_excluded}", flush=True)
+    survivors = tuple(cell for cell in requested if cell not in declared_out)
+
+    runnable = tuple(cell for cell in survivors if logical_batch % int(cell.microbatch) == 0)
+    skipped = tuple((cell, SKIPPED_NON_DIVIDING) for cell in survivors if cell not in runnable)
+    for cell, _ in skipped:
+        print(
+            f"[M1] skipping {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: "
+            f"{cell.microbatch} does not divide the logical batch {logical_batch}"
+        )
     requested = runnable
     if not requested:
+        # Name the actual cause rather than a merged one: "nothing divides the logical batch" and
+        # "every cell was declared unreachable" are different operator mistakes with different fixes.
+        if exclusions and not skipped:
+            raise ValueError(
+                "every cell of this ladder is declared in pos_fit_excluded_cells, so this probe would "
+                "publish a table that authorizes nothing. The exclusion list removes cells from a ladder; "
+                "it cannot be the whole ladder."
+            )
+        if skipped and not exclusions:
+            raise ValueError(
+                f"no declared cell has a microbatch dividing pos_logical_batch={logical_batch}, so this probe "
+                f"would authorize nothing; the ladder is {LADDER_MICROBATCH}"
+            )
         raise ValueError(
-            f"no declared cell has a microbatch dividing pos_logical_batch={logical_batch}, so this probe "
-            f"would authorize nothing; the ladder is {LADDER_MICROBATCH}"
+            f"every cell of this ladder was excluded or skipped ({len(exclusions)} declared unreachable, "
+            f"{len(skipped)} with a microbatch not dividing pos_logical_batch={logical_batch}), so this probe "
+            f"would publish a table that authorizes nothing; the ladder is {LADDER_MICROBATCH}"
         )
     if int(trials) < 1:
         raise ValueError(f"each cell needs at least one trial, got {trials!r}")
@@ -2382,6 +2613,8 @@ def run_fit_probe(
         eval_every=int(declared(config, "eval_every")),
         checkpoint_every=int(declared(config, "checkpoint_every")),
         provenance=provenance,
+        exclusions=exclusions,
+        skipped=skipped,
     )
     published = publish_authorization(path, evidence)
     print(
@@ -2392,8 +2625,13 @@ def run_fit_probe(
         state = "AUTHORIZED" if entry in published["authorized_cells"] else "refused"
         source = banked.get((entry["arm"], entry["microbatch"], entry["k_b"]), PROVENANCE_MEASURED)
         print(f"[M1] {entry['arm']:<9s} microbatch={entry['microbatch']:<3d} k={entry['k_b']}  {state}  [{source}]")
+    for entry in published["excluded_cells"]:
+        print(f"[M1] {entry['arm']:<9s} microbatch={entry['microbatch']:<3d} k={entry['k_b']}  EXCLUDED  [declared]")
     adopted = sum(1 for text in banked.values() if text.startswith(ADOPTED_PREFIX))
-    print(f"[M1] {len(banked) - adopted} cell(s) measured this attempt, {adopted} adopted from prior attempts")
+    print(
+        f"[M1] {len(banked) - adopted} cell(s) measured this attempt, {adopted} adopted from prior attempts, "
+        f"{len(published['excluded_cells'])} declared EXCLUDED, {len(published['skipped_cells'])} skipped"
+    )
     for projection in published["projections"]:
         print(
             f"[M1] projection {projection['arm']} m={projection['microbatch']} k={projection['k_b']}: "

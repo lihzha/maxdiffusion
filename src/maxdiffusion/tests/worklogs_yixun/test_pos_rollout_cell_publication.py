@@ -784,10 +784,15 @@ def test_the_provenance_record_must_describe_exactly_the_measured_cells(tmp_path
         ).as_payload()
 
 
-def test_the_authorization_protocol_names_the_shape_that_carries_provenance():
+def test_the_authorization_protocol_names_the_shape_that_carries_provenance(tmp_path):
     """A consumer reading a table with no provenance record cannot tell "nothing was adopted" from
-    "written by code that could not adopt". The version is what tells it."""
-    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v3"
+    "written by code that could not adopt". The version is what tells it — and the version is pinned
+    once, by :func:`test_the_protocol_names_the_shape_that_carries_exclusions`; what this asserts is
+    that the SHAPE the version promises is actually there, which is the part a bump could break."""
+    table = _run(_config(pos_fit_authorization=_attempt(tmp_path, "att-1")), _CountingMeasurer())
+    assert table["protocol"] == probe.AUTHORIZATION_PROTOCOL
+    for field in ("cell_provenance", "excluded_cells", "skipped_cells", "exclusion_reason"):
+        assert field in table, f"the declared protocol must carry {field}"
 
 
 def test_adoption_cannot_reach_a_cell_the_ladder_did_not_ask_for(tmp_path):
@@ -1154,3 +1159,330 @@ def test_the_declared_allowlist_names_exactly_the_probes_that_earned_it():
     assert harness._MAY_DECLARE == frozenset({"F5-8"})
     assert harness._probe_id("F5-8   forge w/ CURRENT manifest") == "F5-8"
     assert harness._probe_id("A-B1(a) module issue token   :") == "A-B1(a)"
+
+
+# =============================================================================================
+# Round F6 `cell-exclusion` — a cell the hardware cannot compile must be DECLARED, not discovered.
+#
+# M1-4 attempt 1 banked 12 of 16 cells (F5 working end to end in production) and then died at
+# `one_step microbatch=32 k=2` with `bad_smem_address` — the identical cell and chip fault as M1-3
+# attempt 2, on a different VM on a different day. **2/2 on the same cell is deterministic**: an XLA
+# codegen fault under the F4 scan at chunk width 32 for the one_step loss on v6e-8 (width 32 is fine
+# on the rollout arm; one_step is fine at widths 8 and 16). The four tail cells are unreachable, and
+# because the ladder cannot finish, the table cannot publish — 12 good cells held hostage by 4.
+#
+# The mechanism below lets a run DECLARE those cells excluded, with a reason, so the table publishes
+# and accounts for every cell. Populating the list is a plan deviation for Yixun; the YAML default is
+# empty and stays empty here.
+# =============================================================================================
+
+
+_TAIL = ("one_step:32:2", "one_step:32:4", "one_step:64:2", "one_step:64:4")
+_WHY = "bad_smem_address: deterministic XLA codegen fault, one_step scan chunk width>=32 on v6e-8 (issue #18)"
+
+
+def _excluding(*cells, reason=_WHY, **overrides):
+    return _config(
+        pos_fit_excluded_cells=",".join(cells),
+        pos_fit_exclusion_reason=reason if cells else "",
+        **overrides,
+    )
+
+
+def test_the_exclusion_list_parses_strictly_or_says_why(tmp_path):
+    """A typo in an exclusion is a cell that silently still runs — or worse, one that silently does
+    not. Every malformed entry is a loud config error, and an empty list parses to nothing."""
+    assert probe.parse_excluded_cells(_config()) == ()
+    assert probe.parse_excluded_cells(_excluding(*_TAIL)) == tuple(
+        probe.FitCell("one_step", mb, k) for mb in (32, 64) for k in (2, 4)
+    )
+    for bad, why in (
+        ("one_step:32", "three fields"),
+        ("one_step:32:2:9", "three fields"),
+        ("sideways:32:2", "arm"),
+        ("one_step:33:2", "ladder"),
+        ("one_step:32:3", "ladder"),
+        ("one_step:x:2", "whole number"),
+        ("one_step:32:2,one_step:32:2", "twice"),
+    ):
+        with pytest.raises(ValueError, match=why):
+            probe.parse_excluded_cells(_excluding(bad))
+
+
+def test_an_exclusion_without_a_declared_reason_is_refused(tmp_path):
+    """An undocumented exclusion is a cell that quietly stopped being measured. The reason is
+    required, and it lands in the table where a reader of the authorization will see it."""
+    with pytest.raises(ValueError, match="pos_fit_exclusion_reason"):
+        probe.parse_excluded_cells(_excluding(*_TAIL, reason=""))
+    assert probe.declared_exclusion_reason(_excluding(*_TAIL)) == _WHY
+    assert probe.declared_exclusion_reason(_config()) == ""
+
+
+def test_an_excluded_cell_is_never_built_never_measured_and_never_banked(tmp_path):
+    """The call-count proof. An excluded cell must not reach the measurer at all — not compiled, not
+    timed, not published — because the whole point is that compiling it kills the VM."""
+    path = _attempt(tmp_path, "att-1")
+    excluded = probe.FitCell("one_step", 32, 2)
+    measurer = _CountingMeasurer()
+    table = _run(
+        _excluding("one_step:32:2", pos_fit_authorization=path),
+        measurer,
+        cells=[probe.FitCell("rollout", 8, 2), excluded],
+    )
+    assert excluded not in measurer.calls, "the excluded cell reached the measurer"
+    assert len(measurer.calls) == 2, "only the surviving cell was measured, twice"
+    assert not Path(probe.cell_marker_path(path, excluded)).exists(), "an excluded cell banks nothing"
+    assert table["excluded_cells"] == [{"arm": "one_step", "microbatch": 32, "k_b": 2, "reason": _WHY}]
+
+
+def test_the_table_accounts_for_every_cell_of_the_ladder_it_was_asked_to_run(tmp_path):
+    """Never silently absent. Authorized + refused + excluded (+ skipped) must cover the request."""
+    path = _attempt(tmp_path, "att-1")
+    cells = [probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2), probe.FitCell("one_step", 32, 2)]
+    table = _run(
+        _excluding("one_step:32:2", pos_fit_authorization=path),
+        _CountingMeasurer(peaks={("rollout", 16, 2): 31 * 1024**3}),
+        cells=cells,
+    )
+    accounted = (
+        [tuple(c.values()) for c in table["authorized_cells"]]
+        + [(c["arm"], c["microbatch"], c["k_b"]) for c in table["refused_cells"]]
+        + [(c["arm"], c["microbatch"], c["k_b"]) for c in table["excluded_cells"]]
+        + [(c["arm"], c["microbatch"], c["k_b"]) for c in table["skipped_cells"]]
+    )
+    assert sorted(accounted) == sorted((c.arm, c.microbatch, c.k_b) for c in cells)
+    assert len(table["authorized_cells"]) == 1 and len(table["refused_cells"]) == 1
+
+
+def test_a_cell_the_microbatch_cannot_divide_is_recorded_rather_than_dropped(tmp_path):
+    """The other silent absence, closed by the same invariant: a cell whose microbatch does not
+    divide the logical batch was printed to the log and then vanished from the table."""
+    path = _attempt(tmp_path, "att-1")
+    table = _run(
+        _config(pos_fit_authorization=path, pos_logical_batch=24),
+        _CountingMeasurer(),
+        cells=[probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2)],
+    )
+    assert [(c["arm"], c["microbatch"], c["k_b"]) for c in table["skipped_cells"]] == [("rollout", 16, 2)]
+    assert "divide" in table["skipped_cells"][0]["reason"]
+
+
+def test_quoting_an_excluded_cell_is_refused_with_its_declared_reason(tmp_path):
+    """Fail-loud consumption: an excluded cell must be as unconstructible as a refused one, and the
+    refusal must say it was excluded ON PURPOSE rather than never measured by accident."""
+    path = _attempt(tmp_path, "att-1")
+    excluded = probe.FitCell("one_step", 32, 2)
+    config = _excluding("one_step:32:2", pos_fit_authorization=path)
+    _run(config, _CountingMeasurer(), cells=[probe.FitCell("rollout", 8, 2), excluded])
+    authorization = probe.load_authorization(path)
+
+    with pytest.raises(ValueError, match="EXCLUDED"):
+        probe.assert_cell_authorized(authorization, excluded, context=_context(config))
+    try:
+        probe.assert_cell_authorized(authorization, excluded, context=_context(config))
+    except ValueError as error:
+        assert _WHY in str(error), "the refusal quotes the declared reason"
+        assert "never measured" not in str(error), "an excluded cell is not an unmeasured one"
+
+
+def test_an_empty_exclusion_list_is_todays_behaviour_bit_for_bit(tmp_path):
+    """Defect (d) of F5, restated for F6: the mechanism must be inert until it is declared."""
+    plain = _run(_config(pos_fit_authorization=_attempt(tmp_path, "a")), _CountingMeasurer())
+    declared_empty = _run(_excluding(pos_fit_authorization=_attempt(tmp_path, "b")), _CountingMeasurer())
+    assert json.dumps(_without_provenance(plain), sort_keys=True) == json.dumps(
+        _without_provenance(declared_empty), sort_keys=True
+    )
+    assert plain["excluded_cells"] == [] and plain["exclusion_reason"] == ""
+
+
+def test_the_exclusion_declaration_is_outside_the_per_cell_recipe_and_inside_the_run_digest(tmp_path):
+    """The decision recorded in the F6 brief, asserted in both directions.
+
+    Excluding cell X must not invalidate the banked artifacts of cells Y — otherwise declaring an
+    exclusion would throw away every cell F5 exists to keep. So the exclusion declaration is NOT in
+    the per-cell recipe fingerprint. It IS inside the run-level table digest, because a reader of the
+    authorization must be able to tell that the table was decided under a declared exclusion."""
+    assert probe.recipe_fingerprint(_excluding(*_TAIL)) == probe.recipe_fingerprint(_config())
+    assert probe.recipe_fingerprint(_excluding("one_step:32:2")) == probe.recipe_fingerprint(_config())
+
+    plain = _run(_config(pos_fit_authorization=_attempt(tmp_path, "a")), _CountingMeasurer())
+    excluded = _run(
+        _excluding("one_step:8:2", pos_fit_authorization=_attempt(tmp_path, "b")),
+        _CountingMeasurer(),
+        cells=[probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2)],
+    )
+    assert excluded["sha256"] != plain["sha256"], "the run-level digest covers the exclusion"
+    assert excluded["context"]["recipe_fingerprint"] == plain["context"]["recipe_fingerprint"]
+
+
+def test_declaring_an_exclusion_does_not_invalidate_cells_already_banked(tmp_path):
+    """The reason the fingerprint decision matters, executed: M1-4 banked 12 cells before the fault.
+    Declaring the 4 unreachable ones must let those 12 be ADOPTED, not re-measured — otherwise the
+    exclusion costs exactly what it was introduced to save."""
+    _first_attempt(tmp_path, die_after=4)
+    measurer = _CountingMeasurer()
+    table = _run(
+        _excluding(
+            "one_step:8:2",
+            pos_fit_authorization=_attempt(tmp_path, "att-2"),
+            pos_fit_adoption_root=_adoption_root(tmp_path),
+        ),
+        measurer,
+    )
+    assert len(measurer.calls) == 0, "the banked cells were adopted although an exclusion was declared"
+    assert len(table["authorized_cells"]) == 2 and len(table["excluded_cells"]) == 1
+
+
+def test_the_protocol_names_the_shape_that_carries_exclusions():
+    """v3 tables cannot express an excluded cell, so a v3 loader reading a v4 table would silently
+    treat an excluded cell as never-measured. Fail closed on the version, as for v3."""
+    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v4"
+
+
+def test_excluding_the_whole_ladder_is_refused_rather_than_publishing_nothing(tmp_path):
+    with pytest.raises(ValueError, match="every cell"):
+        _run(
+            _excluding("rollout:8:2", pos_fit_authorization=_attempt(tmp_path, "att-1")),
+            _CountingMeasurer(),
+            cells=[probe.FitCell("rollout", 8, 2)],
+        )
+
+
+# =============================================================================================
+# Round F6b — the F6 review. Two of these correct tests of mine that proved less than they said.
+# =============================================================================================
+
+
+def _doctor(path, mutate):
+    """Edit a published table and re-hash it, the way a competent editor would."""
+    stored = json.loads(Path(path).read_text())
+    mutate(stored["payload"])
+    stored["sha256"] = hashlib.sha256(json.dumps(stored["payload"], sort_keys=True).encode()).hexdigest()
+    Path(path).write_text(json.dumps(stored, sort_keys=True))
+
+
+def test_a_code_change_between_attempts_refuses_the_cells_banked_before_it(tmp_path, monkeypatch, capsys):
+    """The F5 -> F6 production transition, modelled across TWO manifests rather than inside one.
+
+    Review F6b, BLOCKER. M1-4 banked 12 cells at `6eda654` (manifest `4bbdbb28…`); the F6 delta edits
+    `pos_rollout_fit_probe.py`, which the manifest covers, so M1-5 runs at a different manifest
+    (`64f92825…`) and **cannot adopt them**. The Planner's ruling is that this is correct and there
+    will be NO migration rule: grandfathering cells measured by different code is exactly the hole
+    F5b/F5c closed. The existing adoption tests bank and adopt inside one unchanged process and cannot
+    see this at all, which is why the reviewer could not take them as evidence.
+
+    So the manifest is moved between attempts here, and both halves of the ruling are asserted: the
+    transition re-measures, and attempts at the SAME new manifest converge on each other's work."""
+    cells = [probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2)]
+    root = _adoption_root(tmp_path)
+
+    monkeypatch.setattr(probe, "deployed_manifest_digest", lambda root=None: "a" * 64)
+    first = _CountingMeasurer()
+    _run(_config(pos_fit_authorization=_attempt(tmp_path, "att-1"), pos_fit_adoption_root=root), first, cells=cells)
+    assert len(first.calls) == 4, "attempt 1 measured and banked both cells"
+
+    # The deployed code changes — a new commit, a new manifest. This is F5 -> F6.
+    monkeypatch.setattr(probe, "deployed_manifest_digest", lambda root=None: "b" * 64)
+    after = _CountingMeasurer()
+    _run(_config(pos_fit_authorization=_attempt(tmp_path, "att-2"), pos_fit_adoption_root=root), after, cells=cells)
+    assert len(after.calls) == 4, "cells measured by the OLD code must be re-measured, not grandfathered"
+    assert "manifest_digest" in capsys.readouterr().out, "and the refusal must name the field that moved"
+
+    # ...and the work is not lost twice: a later attempt at the SAME new manifest adopts.
+    converged = _CountingMeasurer()
+    _run(
+        _config(pos_fit_authorization=_attempt(tmp_path, "att-3"), pos_fit_adoption_root=root), converged, cells=cells
+    )
+    assert len(converged.calls) == 0, "attempt 3 adopts attempt 2's cells: convergence at the new SHA"
+
+
+@pytest.mark.parametrize(
+    "doctor, message",
+    [
+        (lambda p: p["excluded_cells"].append({**p["authorized_cells"][0], "reason": "smuggled"}), "both"),
+        (lambda p: p["skipped_cells"].append({**p["authorized_cells"][0], "reason": "smuggled"}), "both"),
+        (lambda p: p["excluded_cells"].append(dict(p["excluded_cells"][0])), "twice"),
+        (lambda p: p["excluded_cells"][0].update(reason=""), "reason"),
+    ],
+    ids=["authorized-and-excluded", "authorized-and-skipped", "duplicate-exclusion", "exclusion-without-reason"],
+)
+def test_a_doctored_table_whose_lists_overlap_does_not_load(tmp_path, doctor, message):
+    """Review F6b, MAJOR 1. The loader type-checked the new lists and nothing else, so an
+    edited-and-rehashed table could list one cell as BOTH authorized and excluded — and
+    `assert_cell_authorized` returns on the authorized list before it ever looks at exclusions, so
+    the smuggled cell would run. A cell has ONE status; a table that gives it two settles nothing."""
+    path = _attempt(tmp_path, "att-1")
+    _run(
+        _excluding("one_step:32:2", pos_fit_authorization=path),
+        _CountingMeasurer(),
+        cells=[probe.FitCell("rollout", 8, 2), probe.FitCell("one_step", 32, 2)],
+    )
+    probe.load_authorization(path)  # sound before doctoring
+    _doctor(path, doctor)
+    with pytest.raises(ValueError, match=message):
+        probe.load_authorization(path)
+
+
+def test_the_exclusion_declaration_moves_the_run_digest_with_the_measured_set_held_fixed(tmp_path):
+    """Review F6b, MAJOR 2(a) — my earlier test observed the right outcome for the wrong reason.
+
+    It declared an exclusion that was FILTERED OUT (the cell was not in the requested list), so the
+    digest change it saw came from measuring a different number of cells, not from the declaration.
+    Here the MEASURED set is identical in every run — the same two cells, the same trials — and only
+    the declaration varies: present vs absent, and then reason vs reason. The run digest must move for
+    each independently, and no per-cell recipe fingerprint may move at all."""
+    measured = [probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2)]
+    third = probe.FitCell("one_step", 8, 2)
+
+    plain = _run(_config(pos_fit_authorization=_attempt(tmp_path, "a")), _CountingMeasurer(), cells=measured)
+    declared = _run(
+        _excluding("one_step:8:2", pos_fit_authorization=_attempt(tmp_path, "b")),
+        _CountingMeasurer(),
+        cells=measured + [third],
+    )
+    other_reason = _run(
+        _excluding(
+            "one_step:8:2", reason="a different declared reason", pos_fit_authorization=_attempt(tmp_path, "c")
+        ),
+        _CountingMeasurer(),
+        cells=measured + [third],
+    )
+
+    assert plain["measured_cells"] == declared["measured_cells"] == other_reason["measured_cells"]
+    assert plain["measurements"] == declared["measurements"] == other_reason["measurements"]
+    assert declared["sha256"] != plain["sha256"], "declaring an exclusion must move the run digest"
+    assert other_reason["sha256"] != declared["sha256"], "so must changing only the declared REASON"
+    fingerprints = {t["context"]["recipe_fingerprint"] for t in (plain, declared, other_reason)}
+    assert len(fingerprints) == 1, "and no per-cell recipe fingerprint may move with the declaration"
+
+
+#: The fields a table may legitimately differ in without the RUN being different, and why each is
+#: allowed to vary. Everything outside this projection is compared literally (review F6b, MAJOR 2b).
+_UNSTABLE_FIELDS = {
+    "cell_provenance": "records WHERE each cell came from; adoption paths are attempt-scoped and differ by design",
+    "sha256": "a function of the payload, so comparing it as well as the payload would be comparing twice",
+}
+
+
+def test_an_empty_exclusion_declaration_is_behaviourally_inert(tmp_path):
+    """Review F6b, MAJOR 2(b): the claim is narrowed to what is actually provable here.
+
+    This does NOT prove byte-identity with the pre-F6 table, and the earlier "bit-for-bit with today"
+    wording was wrong: F6 bumped the protocol v3 -> v4 and added `excluded_cells`, `skipped_cells` and
+    `exclusion_reason`, so literal identity with HEAD is impossible by construction. What IS provable,
+    and what matters, is that DECLARING the keys empty changes nothing about the run: same cells
+    measured, same numbers, same verdicts, and the new fields present and empty."""
+    plain = _run(_config(pos_fit_authorization=_attempt(tmp_path, "a")), _CountingMeasurer())
+    declared_empty = _run(_excluding(pos_fit_authorization=_attempt(tmp_path, "b")), _CountingMeasurer())
+    stable = lambda table: {k: v for k, v in table.items() if k not in _UNSTABLE_FIELDS}  # noqa: E731
+    assert json.dumps(stable(plain), sort_keys=True) == json.dumps(stable(declared_empty), sort_keys=True)
+    assert plain["excluded_cells"] == [] and plain["exclusion_reason"] == "" and plain["skipped_cells"] == []
+    assert set(_UNSTABLE_FIELDS) < set(plain), "the projection must name fields the table actually has"
+
+
+@pytest.mark.parametrize("raw", [",", "one_step:32:2,", ",one_step:32:2", "one_step:32:2,,one_step:32:4", " , "])
+def test_an_empty_token_in_the_declaration_is_a_loud_error(raw):
+    """Review F6b, MINOR. `pos_fit_excluded_cells=","` parsed as NO exclusions, so a declaration meant
+    to keep the probe away from the deterministic-fault cell could silently walk straight into it."""
+    with pytest.raises(ValueError, match="empty"):
+        probe.parse_excluded_cells(_config(pos_fit_excluded_cells=raw, pos_fit_exclusion_reason=_WHY))

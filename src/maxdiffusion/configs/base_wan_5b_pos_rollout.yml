@@ -306,6 +306,21 @@ pos_test_manifest: 'docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests/
 # authorizes only the (arm, microbatch, k) cells it actually measured (plan §4-P1).
 pos_fit_authorization: ''
 
+# F6: cells this run DECLARES unreachable, and why. Comma-separated 'arm:microbatch:k' entries -- a
+# string rather than a YAML list because pyconfig coerces an override to the declared key's type, and
+# the launcher must be able to pass this through (the `pos_ablation_L: '1,8'` precedent).
+#
+# An excluded cell is never built, never compiled, never measured, never adopted -- and is RECORDED in
+# the authorization table as EXCLUDED with the reason below, so the table still accounts for every cell
+# of the ladder and a training run that quotes one is refused by name.
+#
+# EMPTY BY DEFAULT, AND IT STAYS THAT WAY HERE: populating it is a plan deviation needing Yixun's
+# decision, because it publishes a table authorizing less than the ladder was designed to measure.
+# `pos_fit_exclusion_reason` is REQUIRED whenever the list is non-empty -- an undocumented exclusion is
+# a cell that quietly stopped being measured.
+pos_fit_excluded_cells: ''
+pos_fit_exclusion_reason: ''
+
 # F5: where the fit probe LOOKS for cells a prior attempt of this same job already measured. The
 # ladder is ~3.5 h and used to publish only at the end, so a zone that killed the VM at 90 minutes
 # threw away every cell -- one attempt measured 24 of 32 and published nothing. Each cell is now
