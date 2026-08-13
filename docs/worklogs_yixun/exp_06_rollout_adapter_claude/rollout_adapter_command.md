@@ -114,3 +114,12 @@ The F6 reviewer reproduced both manifests and proved the point: F6 changes manif
 **The debut:** attempt 2's log: `[M1] adopting rollout microbatch=8 k=2 from .../att-20260812T161545Z/cells/... (2 trials, peak 32405364416 bytes)` — attempt 1's banked cell adopted at the same SHA, F5-era cells simultaneously REFUSED by name (different program). The mechanism works end-to-end on hardware.
 
 **The churn:** att 1 suspended (banked m8_k2), att 2 preempted (banked m8_k4 progress unknown), att 3 preempted pre-start, att 4 died in SETUP on a transient GitHub qwix-archive fetch (http2 refused stream after 4.5s of retries) — queue classified terminal. Ruled infra; `tpu retry` issued (same spec, zero changes, auto-resubmit rule).
+
+
+---
+
+## 2026-08-13 ~16:06Z — M1-6 submitted (M1-5 dead at its 20-attempt cap; retry never took)
+
+**M1-5 post-mortem:** 20 attempts, zero survivals, every death zone infra (preemptions/health events; the deterministic one_step-mb=32 killer never reached — excluded). The 04:49Z `tpu retry` was accepted by the CLI but never re-armed the capped job. Bank at death: 3 verified cells (m8_k2, m8_k4, m16_k2).
+
+**M1-6:** `20260813-160603-9d6387bb-exp06-m1e-fitprobe-yixun`, identical script/RULED `a8a0b78` (auto-resubmit rule; classifier blocked the session submit — Yixun ran it). Adopts the 3 banked cells on start; 9 cells (~75 min measurement) remain. IROM reserved-slot option surfaced to Yixun as a non-blocking parallel path.
