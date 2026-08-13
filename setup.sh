@@ -119,6 +119,10 @@ uv pip install -U --resolution=lowest-direct \
 
 # Install GitHub-hosted extras (torch CPU, qwix). Best-effort: qwix requires a
 # live GitHub connection and is only needed when use_qwix_quantization=True.
+# This is the ONLY place qwix may be installed from — it must never go into the
+# core requirements above, which run without failure tolerance under `set -e`.
+# On a 32-host TPU slice all workers fetch concurrently and GitHub refuses some
+# HTTP/2 streams, so a hard dependency on it aborts training at random.
 uv pip install -U --resolution=lowest-direct \
         -r src/install_maxdiffusion_extra_deps/extra_deps_from_github.txt || \
     echo "Warning: some GitHub-hosted extras failed to install (e.g. qwix). Safe to ignore if use_qwix_quantization=False."

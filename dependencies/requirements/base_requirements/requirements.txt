@@ -41,5 +41,14 @@ transformers<5.0.0
 # installing GPU versions from PyPI when running seed-env
 torch @ https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
 torchvision @ https://download.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
-qwix @ https://github.com/google/qwix/archive/408a0f48f988b6c5b180e07f0cb1d05997bf0dcc.zip
+# qwix is deliberately NOT listed here. setup.sh installs this file as the CORE
+# dependency set with no failure tolerance, and the scripts run under `set -e`,
+# so a GitHub fetch failure aborts training before it starts. On a multi-host
+# TPU slice every worker hits github.com at once and GitHub answers some of them
+# with an HTTP/2 REFUSED_STREAM, which is why it failed intermittently.
+#
+# qwix is only needed when use_qwix_quantization=True (False in every config
+# here) and is imported nowhere outside two WAN transformer tests. It stays in
+# src/install_maxdiffusion_extra_deps/extra_deps_from_github.txt, which setup.sh
+# installs best-effort and lets fail with a warning. Re-add it there, not here.
 
