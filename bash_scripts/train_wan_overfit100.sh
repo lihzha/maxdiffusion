@@ -10,7 +10,16 @@ ulimit -n 1048576 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
 
 if [ -f "$HOME/.config/irom-tpu/secrets.env" ]; then
   set +x
+  # A WANDB_API_KEY forwarded from the submitting shell (job --env; launch_wan_train.sh's
+  # W&B block) must survive the worker image's provisioned secrets: capture before sourcing,
+  # restore after. Otherwise the provisioned key silently decides which W&B entity the run
+  # lands in (2026-08-13; see CLAUDE.md "W&B entity facts"). No forwarded key => unchanged.
+  __job_wandb_api_key="${WANDB_API_KEY:-}"
   source "$HOME/.config/irom-tpu/secrets.env"
+  if [ -n "${__job_wandb_api_key}" ]; then
+    export WANDB_API_KEY="${__job_wandb_api_key}"
+  fi
+  unset __job_wandb_api_key
   set -x
 fi
 

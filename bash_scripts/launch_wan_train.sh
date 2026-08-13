@@ -7,29 +7,41 @@
 #     v6e TPU, runs --setup-cmd on every worker, and runs the training command.
 #   - Code comes from --code-dir (this repo's tracked + untracked, non-ignored
 #     files), NOT a git branch. Commit/save what you want included.
-#   - W&B key is read on the worker from Secret Manager secret `wandb-api-key`
-#     (key is in ~/.zshrc)
+#   - W&B: the key is forwarded from the submitting shell (see the W&B block
+#     below); export WANDB_API_KEY (and optionally WANDB_ENTITY) before running.
 #
 # Usage:
 #   SMOKE=1 bash bash_scripts/launch_wan_train.sh     # 1-step smoke test
 #   bash bash_scripts/launch_wan_train.sh             # full run
+#   DRY_RUN=1 bash bash_scripts/launch_wan_train.sh   # print the submit command, submit nothing
 #
 # Optional overrides (env vars):
-#   WAN_EXPERIMENT=pre_context|side_adapter|full_ft   (default pre_context)
+#   WAN_EXPERIMENT=pre_context|side_adapter|full_ft|overfit100   (default pre_context)
 #   TPU_CHIPS=64                              (v6e chip count)
 #   NAME=<job name>                           (default wan-<type>-yixun)
+#   RUN_NAME=<run name>                       (default: the fresh-run template below; export it
+#                                              explicitly to RESUME an existing run dir — Orbax
+#                                              restores the latest checkpoint under the same name)
 #   PER_DEVICE_BATCH_SIZE=<n>                 (AUTHORITATIVE batch knob: pyconfig derives
 #                                              GBS = num_devices x this on the worker.
 #                                              Arm-dependent defaults: adapters 8;
 #                                              full_ft 4 -- per-device 8 OOMs v6e-64 for
-#                                              full-FT, fit probe #4 / Query 7. Small
+#                                              full-FT, fit probe #4 / Query 7; overfit100 4.0
+#                                              (the exp_02 campaign recipe). Small
 #                                              topologies must lower it further, e.g. 1)
 #   GLOBAL_BATCH_SIZE_TO_TRAIN_ON=<n>         (inert to training — pyconfig recomputes
 #   GLOBAL_BATCH_SIZE_TO_LOAD=<n>              both from per-device; defaults follow the
-#                                              arm: adapters 512, full_ft 256. Override
-#                                              alongside PER_DEVICE_BATCH_SIZE so the
+#                                              arm: adapters 512, full_ft/overfit100 256.
+#                                              Override alongside PER_DEVICE_BATCH_SIZE so the
 #                                              worker-log echoes stay honest, 1/8/8 on
 #                                              a v6e-8 smoke)
+#   overfit100-only knobs (exp_02; forwarded only for that arm, all env-overridable):
+#     MAX_TRAIN_STEPS (2500)                  DATA_DIR (gs://.../exp02_overfit100/train100)
+#     EXPECTED_WINDOWS (1629)                 NUM_TEXT_SLOTS (100)
+#     CHECKPOINT_STEPS ([250,500,1000,1750,2500])   LEARNING_RATE (1e-5)
+#     WARMUP_STEPS (250)                      TEXT_ENCODE_BATCH (8)
+#     MANIFEST_PATH (docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json)
+#     (train10 smoke ladder: DATA_DIR=.../train10 EXPECTED_WINDOWS=167 NUM_TEXT_SLOTS=10)
 
 set -euo pipefail
 
@@ -44,8 +56,8 @@ MODEL_DIR="Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 TRAIN_DATA_DIR="gs://v6_east1d/datasets/droid_wan_side_adapter/train"
 EVAL_DATA_DIR="gs://v6_east1d/datasets/droid_wan_side_adapter/val"
 
-# The queue runs this training wrapper on each worker. The full_ft arm overrides it to the
-# full-finetune wrapper; pre_context / side_adapter keep the side-adapter wrapper.
+# The queue runs this training wrapper on each worker. The full_ft / overfit100 arms override
+# it to their own wrappers; pre_context / side_adapter keep the side-adapter wrapper.
 TRAIN_SCRIPT="bash_scripts/train_wan_side_adapter.sh"
 
 # ---- Choose exactly one experiment ----
@@ -74,8 +86,21 @@ case "$WAN_EXPERIMENT" in
     MAX_TRAIN_STEPS="20000"
     TRAIN_SCRIPT="bash_scripts/train_wan_full_ft.sh"
     ;;
+  overfit100)
+    # exp_02 memorization probe (docs/worklogs_yixun/exp_02_overfit100_claude/
+    # plan_overfit100.md). As with full_ft, ACTION_ADAPTER_TYPE is a run-name / provenance
+    # tag ONLY -- train_wan_overfit100.sh never reads it (model_type: OVERFIT100_TI2V comes
+    # from base_wan_5b_overfit100.yml). The campaign's dataset/cadence/LR knobs are applied
+    # AFTER the common defaults below so they win; MAX_TRAIN_STEPS is env-respecting because
+    # the exp_02 ladder drives it per segment (2,500-step segments, resumed extensions).
+    ACTION_ADAPTER_TYPE="overfit100"
+    OUTPUT_DIR="gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100"
+    WANDB_PROJECT="maxdiffusion-wan-overfit100"
+    MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2500}"
+    TRAIN_SCRIPT="bash_scripts/train_wan_overfit100.sh"
+    ;;
   *)
-    echo "WAN_EXPERIMENT must be pre_context, side_adapter, or full_ft" >&2
+    echo "WAN_EXPERIMENT must be pre_context, side_adapter, full_ft, or overfit100" >&2
     exit 1
     ;;
 esac
@@ -119,6 +144,33 @@ if [ "$WAN_EXPERIMENT" = "full_ft" ]; then
   GLOBAL_BATCH_SIZE_TO_LOAD_DEFAULT="256"
 fi
 
+# ---- overfit100 overrides (exp_02) ----
+# Same placement rationale as the full_ft block. train_wan_overfit100.sh drives checkpoint
+# cadence with an EXPLICIT step list (CHECKPOINT_STEPS) + CHECKPOINT_EVERY=0 and runs no
+# in-loop eval, so the common every-100/every-1000 cadence is zeroed here rather than
+# forwarded (the campaign's Jobs 9-51 all ran this shape). SAVE_FINAL_CHECKPOINT=False
+# matches the wrapper's own default: the segment end is always IN the step list.
+if [ "$WAN_EXPERIMENT" = "overfit100" ]; then
+  DATA_DIR="${DATA_DIR:-gs://v6_east1d/datasets/exp02_overfit100/train100}"
+  EVAL_DATA_DIR="$DATA_DIR"
+  EXPECTED_WINDOWS="${EXPECTED_WINDOWS:-1629}"
+  NUM_TEXT_SLOTS="${NUM_TEXT_SLOTS:-100}"
+  TEXT_ENCODE_BATCH="${TEXT_ENCODE_BATCH:-8}"
+  MANIFEST_PATH="${MANIFEST_PATH:-docs/worklogs_yixun/exp_02_overfit100_claude/overfit100_manifest.json}"
+  LEARNING_RATE="${LEARNING_RATE:-1e-5}"
+  WARMUP_STEPS="${WARMUP_STEPS:-250}"
+  CHECKPOINT_STEPS="${CHECKPOINT_STEPS:-[250,500,1000,1750,2500]}"
+  CHECKPOINT_EVERY="0"
+  CHECKPOINT_KEEP_PERIOD=""
+  EVAL_EVERY="0"
+  EVAL_MAX_BATCHES=""
+  SAVE_FINAL_CHECKPOINT="False"
+  # Campaign recipe (S3 on v6e-64 and the v6e-8 smokes both ran the wrapper default 4.0).
+  PER_DEVICE_BATCH_SIZE_DEFAULT="4.0"
+  GLOBAL_BATCH_SIZE_TO_TRAIN_ON_DEFAULT="256"
+  GLOBAL_BATCH_SIZE_TO_LOAD_DEFAULT="256"
+fi
+
 # Env-respecting collapse: an explicitly exported batch value beats the arm default
 # (small-topology smokes pass e.g. PER_DEVICE_BATCH_SIZE=1 GLOBAL_*=8).
 PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-$PER_DEVICE_BATCH_SIZE_DEFAULT}"
@@ -128,8 +180,10 @@ GLOBAL_BATCH_SIZE_TO_LOAD="${GLOBAL_BATCH_SIZE_TO_LOAD:-$GLOBAL_BATCH_SIZE_TO_LO
 # Non-smoke run name, built AFTER the batch collapse so it interpolates the RESOLVED
 # global batch (cycle-8 change order: the old hard-coded `gbs512` lied for full_ft's
 # gbs256 recipe; adapter arms still resolve 512, keeping their names byte-identical).
-# The SMOKE block below overwrites the whole name with its own template, as before.
-RUN_NAME="wan-${ACTION_ADAPTER_TYPE}-v6e${TPU_CHIPS}-full-gbs${GLOBAL_BATCH_SIZE_TO_TRAIN_ON}-fresh-$(date -u +%Y%m%d-%H%M%S)"
+# Env-respecting (2026-08-13, overfit100 arm): an exported RUN_NAME wins, which is how
+# the exp_02 resume/extension flow re-enters an existing run dir. The SMOKE block below
+# overwrites the whole name with its own template, as before.
+RUN_NAME="${RUN_NAME:-wan-${ACTION_ADAPTER_TYPE}-v6e${TPU_CHIPS}-full-gbs${GLOBAL_BATCH_SIZE_TO_TRAIN_ON}-fresh-$(date -u +%Y%m%d-%H%M%S)}"
 
 # ---- Optional one-step smoke (SMOKE=1) ----
 if [ "${SMOKE:-0}" = "1" ]; then
@@ -161,42 +215,74 @@ SETUP_CMD="EPHEMERAL_WORKER=1 bash bash_scripts/setup.sh MODE=stable DEVICE=tpu 
 # W&B key is forwarded from your shell env (export WANDB_API_KEY in ~/.zshrc).
 # NOTE: this writes the key into the job spec on GCS, readable by anyone with
 # bucket access. If the key is absent, disable W&B so the run doesn't crash.
+# WANDB_ENTITY (optional): forwarded only when exported, so the run lands in a named
+# entity instead of the authenticated key's default one (see CLAUDE.md "W&B entity
+# facts", 2026-08-13: with entity unset, runs go wherever the worker's key points).
 if [ -z "${WANDB_API_KEY:-}" ]; then
   echo "[submit] WARNING: WANDB_API_KEY not set in your shell; disabling W&B for this run." >&2
   WANDB_PROJECT=""
 fi
 
+# Arm-specific extra env, appended to the submit command. Expanded with the
+# bash-3.2-safe idiom (macOS /bin/bash chokes on empty arrays under set -u).
+EXTRA_ENV=()
+if [ -n "${WANDB_ENTITY:-}" ]; then
+  EXTRA_ENV+=( --env WANDB_ENTITY="$WANDB_ENTITY" )
+fi
+if [ "$WAN_EXPERIMENT" = "overfit100" ]; then
+  EXTRA_ENV+=(
+    --env DATA_DIR="$DATA_DIR"
+    --env EXPECTED_WINDOWS="$EXPECTED_WINDOWS"
+    --env NUM_TEXT_SLOTS="$NUM_TEXT_SLOTS"
+    --env TEXT_ENCODE_BATCH="$TEXT_ENCODE_BATCH"
+    --env MANIFEST_PATH="$MANIFEST_PATH"
+    --env LEARNING_RATE="$LEARNING_RATE"
+    --env WARMUP_STEPS="$WARMUP_STEPS"
+    --env CHECKPOINT_STEPS="$CHECKPOINT_STEPS"
+  )
+fi
+
 # ---- Submit the job to the queue ----
-tpu create v6 -n "$TPU_CHIPS" \
-  --name "$NAME" \
-  --code-dir "$REPO_ROOT" \
-  --setup-cmd "$SETUP_CMD" \
-  --env WANDB_API_KEY="${WANDB_API_KEY:-}" \
-  --env RUN_NAME="$RUN_NAME" \
-  --env COMMIT="$COMMIT" \
-  --env ACTION_ADAPTER_TYPE="$ACTION_ADAPTER_TYPE" \
-  --env TRAIN_DATA_DIR="$TRAIN_DATA_DIR" \
-  --env EVAL_DATA_DIR="$EVAL_DATA_DIR" \
-  --env OUTPUT_DIR="$OUTPUT_DIR" \
-  --env MODEL_DIR="$MODEL_DIR" \
-  --env PRE_CONTEXT_TOKENS="8" \
-  --env PRE_CONTEXT_HEADS="8" \
-  --env SIDE_ADAPTER_NOISE_MODE="fresh" \
-  --env MAX_TRAIN_STEPS="$MAX_TRAIN_STEPS" \
-  --env CHECKPOINT_EVERY="$CHECKPOINT_EVERY" \
-  --env CHECKPOINT_KEEP_PERIOD="$CHECKPOINT_KEEP_PERIOD" \
-  --env EVAL_EVERY="$EVAL_EVERY" \
-  --env EVAL_MAX_BATCHES="$EVAL_MAX_BATCHES" \
-  --env LOG_PERIOD="$LOG_PERIOD" \
-  --env SAVE_FINAL_CHECKPOINT="$SAVE_FINAL_CHECKPOINT" \
-  --env PER_DEVICE_BATCH_SIZE="$PER_DEVICE_BATCH_SIZE" \
-  --env GLOBAL_BATCH_SIZE_TO_TRAIN_ON="$GLOBAL_BATCH_SIZE_TO_TRAIN_ON" \
-  --env GLOBAL_BATCH_SIZE_TO_LOAD="$GLOBAL_BATCH_SIZE_TO_LOAD" \
-  --env TFRECORD_SHUFFLE_BUFFER_SIZE="$TFRECORD_SHUFFLE_BUFFER_SIZE" \
-  --env WANDB_PROJECT="$WANDB_PROJECT" \
-  --env HF_HUB_DISABLE_XET="1" \
-  --env HF_HUB_ENABLE_HF_TRANSFER="0" \
-  -- bash "$TRAIN_SCRIPT"
+SUBMIT=( tpu create v6 -n "$TPU_CHIPS"
+  --name "$NAME"
+  --code-dir "$REPO_ROOT"
+  --setup-cmd "$SETUP_CMD"
+  --env WANDB_API_KEY="${WANDB_API_KEY:-}"
+  --env RUN_NAME="$RUN_NAME"
+  --env COMMIT="$COMMIT"
+  --env ACTION_ADAPTER_TYPE="$ACTION_ADAPTER_TYPE"
+  --env TRAIN_DATA_DIR="$TRAIN_DATA_DIR"
+  --env EVAL_DATA_DIR="$EVAL_DATA_DIR"
+  --env OUTPUT_DIR="$OUTPUT_DIR"
+  --env MODEL_DIR="$MODEL_DIR"
+  --env PRE_CONTEXT_TOKENS="8"
+  --env PRE_CONTEXT_HEADS="8"
+  --env SIDE_ADAPTER_NOISE_MODE="fresh"
+  --env MAX_TRAIN_STEPS="$MAX_TRAIN_STEPS"
+  --env CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
+  --env CHECKPOINT_KEEP_PERIOD="$CHECKPOINT_KEEP_PERIOD"
+  --env EVAL_EVERY="$EVAL_EVERY"
+  --env EVAL_MAX_BATCHES="$EVAL_MAX_BATCHES"
+  --env LOG_PERIOD="$LOG_PERIOD"
+  --env SAVE_FINAL_CHECKPOINT="$SAVE_FINAL_CHECKPOINT"
+  --env PER_DEVICE_BATCH_SIZE="$PER_DEVICE_BATCH_SIZE"
+  --env GLOBAL_BATCH_SIZE_TO_TRAIN_ON="$GLOBAL_BATCH_SIZE_TO_TRAIN_ON"
+  --env GLOBAL_BATCH_SIZE_TO_LOAD="$GLOBAL_BATCH_SIZE_TO_LOAD"
+  --env TFRECORD_SHUFFLE_BUFFER_SIZE="$TFRECORD_SHUFFLE_BUFFER_SIZE"
+  --env WANDB_PROJECT="$WANDB_PROJECT"
+  --env HF_HUB_DISABLE_XET="1"
+  --env HF_HUB_ENABLE_HF_TRANSFER="0"
+  ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}
+  -- bash "$TRAIN_SCRIPT" )
+
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  echo "[submit] DRY_RUN=1 — the command below was NOT submitted:"
+  printf '%q ' "${SUBMIT[@]}"
+  printf '\n'
+  exit 0
+fi
+
+"${SUBMIT[@]}"
 
 # Note: visual validation (the old v6e-8 watcher) is a separate concern in the
 # queue model. Submit it as its own `tpu create v6 -n 8 ... -- <validation cmd>`
