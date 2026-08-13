@@ -4,7 +4,7 @@ A-B1(a) module issue token · A-B1(b) public digest override · A-B2 unrestricte
 B-1 terminal-verdict resume · B-2 selection artifact after a crash in the write window.
 """
 
-import dataclasses, functools, hashlib, json, pathlib, tempfile
+import contextlib, dataclasses, functools, hashlib, json, pathlib, tempfile
 
 import jax.numpy as jnp
 
@@ -235,30 +235,67 @@ def attack_t5a_widen_the_anchor():
 
 
 def attack_t5a_test_into_the_anchor():
-    """Can a TEST-64 example be scored into the anchor summary?"""
+    """Can a TEST-64 example be scored into the anchor summary?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** ``summarize_samples`` stopped taking
+    ``checkpoint_step=``: a measurement is bound to the :class:`CheckpointIdentity` a restore
+    produced, and the code SHA and model revision are part of the same binding. The old call died on
+    the signature, and until F7d's universal guard `_report` scored that crash as a REFUSAL.
+
+    Re-expressed against the real call and deliberately legal in every OTHER respect: each row
+    carries the deployed grid digest and the deployed horizon, so the only thing wrong with this
+    summary is the held-out name inside it. A row that also failed the grid or horizon check would
+    produce a refusal that says nothing about the TEST screen — which is the F5b caution (watch the
+    thing the probe is named for).
+    """
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
     anchor, test_manifest, _ = _anchor_env()
     intruder = json.loads(pathlib.Path(test_manifest).read_text())["rows"][0]["name"]
-    rows = [{"name": n, "latent_mse": 1.0, "pixel_mse": 0.1, "ssim_avg": 0.3} for n in ("a", intruder)]
+    legal = {
+        "latent_mse": ev.HISTORICAL_ANCHOR.mean_latent_mse,
+        "pixel_mse": ev.HISTORICAL_ANCHOR.mean_pixel_mse,
+        "ssim_avg": ev.HISTORICAL_ANCHOR.mean_ssim,
+        "num_steps": ev.DEPLOYED_SAMPLING_STEPS,
+        "grid_sha256": ev.DEPLOYED_GRID_SHA256,
+    }
+    rows = [{"name": name, **legal} for name in ("a", intruder)]
     try:
-        anchor.summarize_samples(rows, checkpoint_step=30000, test_manifest_path=test_manifest)
+        anchor.summarize_samples(
+            rows,
+            checkpoint=_identity(),
+            code_sha="a" * 40,
+            model_revision="rev@" + "b" * 40,
+            test_manifest_path=test_manifest,
+        )
     except ValueError as error:
         return f"REFUSED: {str(error).splitlines()[0][:110]}"
     return f"SUCCEEDED: {intruder} scored into the anchor summary"
 
 
 def attack_t5a_rederive_the_benchmark(tmp):
-    """Can the frozen benchmark row be silently re-derived with different numbers?"""
+    """Can the frozen benchmark row be silently re-derived with different numbers?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** ``freeze_benchmark_row`` stopped taking the cohort,
+    the per-example values, the checkpoint, the code SHA and the model revision as five independent
+    caller assertions; it derives every one of them from ONE bound ``ScoreTable``. The old
+    five-argument call died on ``cohort=`` and the crash was filed as a refusal.
+
+    The attack itself is unchanged and is issue #10 in the small: freeze the baseline, then freeze a
+    BETTER one at the same path. Both tables are legitimately built and differ only in their numbers,
+    so a refusal here is about republication and not about the artifact being malformed.
+    """
     from maxdiffusion import pos_rollout_dev_instrument as instrument
 
     anchor, _, dev = _anchor_env()
     cohort = instrument.load_dev_cohort(dev)
+    names = list(cohort.names)
     path = str(pathlib.Path(tmp) / "bench.json")
-    common = dict(checkpoint={"step": 30000}, code_sha="a" * 40, model_revision="rev@" + "b" * 40)
-    anchor.freeze_benchmark_row(path, cohort=cohort, per_example={n: 0.25 for n in cohort.names}, **common)
+    frozen = anchor.freeze_benchmark_row(path, table=_gate_table(names, 0.25, cohort=cohort))
     try:
-        anchor.freeze_benchmark_row(path, cohort=cohort, per_example={n: 0.95 for n in cohort.names}, **common)
+        anchor.freeze_benchmark_row(path, table=_gate_table(names, 0.95, cohort=cohort))
     except ValueError as error:
-        return f"REFUSED: {str(error).splitlines()[0][:110]}"
+        return f"REFUSED (mean stayed {frozen['mean_ssim']:.2f}): {str(error).splitlines()[0][:90]}"
     return "SUCCEEDED: the frozen baseline was rewritten with better numbers"
 
 
@@ -302,53 +339,251 @@ def _gate_env():
     return g, cohort, names
 
 
+@contextlib.contextmanager
+def _cohort_records(cohort):
+    """In-memory records for THIS cohort's rows, installed for the block and then REMOVED.
+
+    ``cohort_derangement`` reads every example's real action bytes through ``CohortBatchReader`` —
+    that is what makes "no example received byte-identical actions" a measurement rather than a
+    promise about a name list — so a derangement cannot be built on a laptop without records.
+
+    ``_fake_environment`` supplies records, but it also installs an in-memory ``gs://`` filesystem
+    and a shard binder **process-wide and permanently**, and the T5b probes run BEFORE the T7/P1/P3
+    probes, which have never been measured under those fakes. Installing it here would change what
+    twenty later probes are standing on. This patches the two seams a derangement actually needs and
+    restores both, so the blast radius is the ``with`` block.
+    """
+    import numpy as np
+
+    from maxdiffusion import null_adapter_manifest_io, run_wan_null_inversion
+
+    geometry = {"z_i0": (48, 1, 12, 20), "z_video": (48, 9, 12, 20), "actions": (32, 7)}
+    by_shard = {}
+    for row in cohort.rows:
+        by_shard.setdefault(str(row["shard_path"]), []).append(dict(row))
+
+    def fill(name):
+        """Distinct per example, so the cohort legitimately SUPPORTS a derangement. (The
+        byte-identical case is `G3-8`'s attack, and it uses `_fake_environment(identical=True)`.)"""
+        return float(int(hashlib.sha256(str(name).encode()).hexdigest()[:6], 16) % 9973) / 10.0 + 1.0
+
+    def reader(shard_path, wanted):
+        for row in by_shard[str(shard_path)]:
+            if str(row["name"]) not in set(wanted):
+                continue
+            value = fill(row["name"])
+            yield (
+                str(row["name"]),
+                int(row["ordinal"]),
+                np.full(geometry["z_i0"], value, np.float32),
+                np.full(geometry["z_video"], value, np.float32),
+                np.full(geometry["actions"], value, np.float32),
+            )
+
+    def binder(shard_path):
+        row = by_shard[str(shard_path)][0]
+        return {"generation": str(row["shard_generation"]), "size": int(row["shard_size"])}
+
+    saved = (run_wan_null_inversion._tfrecord_reader, null_adapter_manifest_io.shard_binding)
+    run_wan_null_inversion._tfrecord_reader = reader
+    null_adapter_manifest_io.shard_binding = binder
+    try:
+        yield
+    finally:
+        run_wan_null_inversion._tfrecord_reader, null_adapter_manifest_io.shard_binding = saved
+
+
 def _tbl(names, ssim):
+    """A naked mapping. Kept for `T5b-4`, whose attack is the POSITIONAL call itself — those
+    arguments never reach the gate's body, so what they are is irrelevant to what it tests."""
     return {n: {"ssim": float(ssim), "mse": 1.0} for n in names}
 
 
+def _gate_table(
+    names,
+    ssim,
+    *,
+    cohort=None,
+    condition="true",
+    arm="rollout",
+    run="rb",
+    mse=1.0,
+    derangement=None,
+    draw_key_for=None,
+    checkpoint=None,
+    incomplete=False,
+):
+    """A LEGITIMATE built :class:`ScoreTable` — the artifact every gate has required since F8's drift.
+
+    **Why this exists (F8).** The 2026-08-09 rework stopped letting a gate read
+    ``{name: {"ssim": …}}``: a mapping cannot say which checkpoint, whose actions or which noise
+    produced it, and those identities are precisely what a gate cross-checks. Five probes below were
+    still handing over mappings, so every one of them died inside ``as_gate_table``'s type refusal
+    **before its own attack ran**, and scored as a refusal for four days.
+
+    So the probes need a real artifact to attack. This builds one through the real constructor, with
+    per-row action digests and pinned per-example noise keys, which lets each probe apply its ONE
+    mutation to an otherwise-legal table and learn what production does about *that* — rather than
+    collecting a refusal that was really about the argument type.
+    """
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
+    cohort = _gate_env()[1] if cohort is None else cohort
+    rows = {}
+    for index, name in enumerate(names):
+        if condition == "zero":
+            donor = None
+        elif condition == "wrong" and derangement is not None:
+            donor = derangement.donor(name)
+        else:
+            donor = name
+        # The digests come from the DERANGEMENT artifact whenever there is one: that is what the gate
+        # cross-checks, and a hand-written digest would not be what the cohort's records hold.
+        if derangement is not None and donor is not None:
+            digest = derangement.action_sha256[donor]
+        else:
+            digest = hashlib.sha256(str(donor).encode()).hexdigest()
+        drawn = name if draw_key_for is None else draw_key_for(name)
+        rows[str(name)] = {
+            "ssim": float(ssim(index)) if callable(ssim) else float(ssim),
+            "mse": float(mse),
+            "actions_from": donor,
+            "actions_sha256": digest,
+            "draw_key_sha256": ev.draw_key_digest(ev.evaluation_draw_key(drawn)),
+            "num_steps": ev.DEPLOYED_SAMPLING_STEPS,
+        }
+    return ev.build_score_table(
+        rows=rows,
+        cohort=cohort,
+        condition=condition,
+        arm=arm,
+        checkpoint=_identity(run=run, step=10000, source="selection") if checkpoint is None else checkpoint,
+        num_steps=ev.DEPLOYED_SAMPLING_STEPS,
+        derangement_sha256=derangement.fingerprint if (condition == "wrong" and derangement is not None) else None,
+        allow_incomplete=incomplete,
+    )
+
+
 def attack_t5b_lower_the_bar():
-    """Can the +0.05 margin or the CI condition be relaxed from the outside?"""
+    """Can the +0.05 margin or the CI condition be relaxed from the outside?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** Both calls handed the gate naked mappings and died
+    inside ``as_gate_table``'s type refusal *before either half of the attack ran*; the ``TypeError``
+    was filed as "no margin argument exists", a claim about production the probe had not tested.
+    With real artifacts the two halves finally measure the MARGIN rather than the argument type.
+
+    The second half is the one that matters: +0.04 with a spotless CI is exactly the run that would
+    want a caller-supplied margin to exist. **The old body also mis-scored its own first half** — an
+    ACCEPTED override was appended to the notes and the verdict was still taken from the second call,
+    so the attack could have succeeded and reported REFUSED. It now returns on that branch.
+    """
     g, cohort, names = _gate_env()
+
+    def arms():
+        return dict(
+            rollout=_gate_table(names, 0.34, cohort=cohort),
+            control=_gate_table(names, 0.30, cohort=cohort, arm="control", run="c0"),
+            cohort=cohort,
+        )
+
     notes = []
     try:
-        g.primary_gate(rollout=_tbl(names, 0.34), control=_tbl(names, 0.30), cohort=cohort, margin=0.01)
-        notes.append("margin override ACCEPTED")
-    except TypeError:
-        notes.append("no margin argument exists")
-    verdict = g.primary_gate(rollout=_tbl(names, 0.34), control=_tbl(names, 0.30), cohort=cohort)
-    notes.append(f"+0.04 with a clean CI passed={verdict.passed}")
-    return ("SUCCEEDED: " if verdict.passed else "REFUSED: ") + "; ".join(notes)
+        g.primary_gate(**arms(), margin=0.01)
+    except TypeError as error:
+        notes.append(f"no margin argument exists ({str(error).splitlines()[0][:52]})")
+    else:
+        return "SUCCEEDED: the primary margin was overridden by a caller"
+    verdict = g.primary_gate(**arms())
+    if verdict.passed:
+        return f"SUCCEEDED: a +0.04 delta passed the +{g.PRIMARY_MARGIN} gate; " + "; ".join(notes)
+    ci = [round(float(value), 4) for value in verdict.numbers["ci"]]
+    notes.append(f"+0.04 at CI {ci} (CI-low clean) still failed on {list(verdict.reasons)}")
+    return "REFUSED: " + "; ".join(notes)
 
 
-def attack_t5b_score_test_first():
-    """Can TEST be scored without a passing DEV gate?"""
+def attack_t5b_score_test_first(tmp):
+    """Can TEST be scored without a passing DEV gate?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** Two signatures moved at once: ``dev_certificate``
+    stopped accepting a caller's ``GateVerdict`` (it COMPUTES the gate and publishes to a path), and
+    ``confirm_on_test`` takes a certificate **path** plus a ``TestCohort``. The probe died on the
+    mapping tables before it ever reached the TEST door.
+
+    Re-expressed with both attempts made real, and the second one sharpened. The old "hand-written
+    pass" was ``{"passed": True}``, which `G3-5` already covers as a bare marker. The interesting
+    forgery now is a certificate that is **complete, correctly digested and internally
+    well-formed** — production's own failing certificate with ``passed`` flipped to True and its
+    ``reasons`` erased, republished so the file's digest describes its own payload. Nothing about it
+    is detectable by integrity checking; only re-deciding the verdict from its own numbers catches it.
+    """
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
     g, cohort, names = _gate_env()
-    failing = g.dev_certificate(
-        g.primary_gate(rollout=_tbl(names, 0.30), control=_tbl(names, 0.30), cohort=cohort), cohort, num_steps=25
+    test_cohort = g.load_test_cohort(TEST)
+    honest = str(pathlib.Path(tmp) / "dev_cert_failing.json")
+    # A genuinely failing DEV gate, computed by production from real tables: R-B does not beat C0.
+    published = g.dev_certificate(
+        honest,
+        rollout=_gate_table(names, 0.30, cohort=cohort),
+        control=_gate_table(names, 0.30, cohort=cohort, arm="control", run="c0"),
+        cohort=cohort,
     )
-    for label, cert in (("failing certificate", failing), ("hand-written pass", {"passed": True})):
+    forged_payload = {
+        **{key: value for key, value in published.items() if key != "sha256"},
+        "passed": True,
+        "reasons": [],
+    }
+    forged = str(pathlib.Path(tmp) / "dev_cert_forged.json")
+    ev.publish_certificate(forged, forged_payload)  # recomputes the digest: the file is self-consistent
+    # BOTH refusals are recorded, not just the last one: each is a different production rule, and a
+    # probe that prints only its final attempt hides which door actually held (the T5a-2 repair).
+    refusals = []
+    for label, path in (("the gate's own failing certificate", honest), ("a digest-consistent forged pass", forged)):
         try:
-            g.confirm_on_test(cert, test_manifest_path=str(MD / "test64.json"), rollout={}, control={})
-        except ValueError as error:
-            last = f"REFUSED ({label}): {str(error).splitlines()[0][:80]}"
+            g.confirm_on_test(path, test_cohort=test_cohort, derangement=None, tables={}, control_tables={})
+        except (TypeError, ValueError) as error:
+            reason = str(error).splitlines()[0]
+            refusals.append(f"{label} -> {reason.split(': ', 1)[-1][:78]}")
         else:
-            return f"SUCCEEDED: TEST scored with a {label}"
-    return last
+            return f"SUCCEEDED: TEST was scored behind {label}"
+    return "REFUSED: " + "; ".join(refusals)
 
 
 def attack_t5b_forge_the_derangement():
-    """Can a wrong-action assignment secretly hand examples their own actions back?"""
+    """Can a wrong-action assignment secretly hand examples their own actions back?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** ``cohort_derangement`` became ``cohort_derangement(cohort)``
+    returning a :class:`DerangementArtifact`: it reads the cohort's own action bytes, so the legality
+    of the shuffle is measured. The old call passed ``names`` positionally **and** ``cohort=`` and
+    died on the argument binding before any forgery was attempted.
+
+    Re-expressed at full strength rather than as its dead letter. A naive rewrite of the permutation
+    is caught by the fingerprint, which would make this a test of tamper detection instead of the
+    fixed-point rule — so the forgery **recomputes the fingerprint after the edit**. The artifact that
+    reaches production is internally consistent: its hash correctly describes its own permutation and
+    digests, and the only thing wrong with it is that one example is its own donor. The score tables
+    are built under the forged mapping as well, so a relaxation of the artifact check would still
+    have to get past the row-level identity checks inside the gate.
+    """
+    import dataclasses as dc
+
     g, cohort, names = _gate_env()
-    blobs = {n: f"a{i}".encode() for i, n in enumerate(names)}
-    good = g.cohort_derangement(names, cohort="dev64", action_bytes=blobs)
-    sneaky = {**good, names[0]: names[0]}
-    try:
-        g.action_use_gate(
-            true_table=_tbl(names, 0.36), wrong_table=_tbl(names, 0.30), cohort=cohort, derangement=sneaky
-        )
-    except ValueError as error:
-        return f"REFUSED: {str(error).splitlines()[0][:110]}"
-    return "SUCCEEDED: an example was scored against its own actions as the wrong-action row"
+    with _cohort_records(cohort):
+        honest = g.cohort_derangement(cohort)
+        sneaky = dc.replace(honest, permutation={**honest.permutation, names[0]: names[0]})
+        sneaky = dc.replace(sneaky, fingerprint=g.derangement_fingerprint(sneaky))
+        if g.derangement_fingerprint(sneaky) != sneaky.fingerprint:
+            return "SUCCEEDED: the harness failed to build the self-consistent forgery it means to test"
+        try:
+            g.action_use_gate(
+                true_table=_gate_table(names, 0.36, cohort=cohort),
+                wrong_table=_gate_table(names, 0.30, cohort=cohort, condition="wrong", derangement=sneaky),
+                cohort=cohort,
+                derangement=sneaky,
+            )
+        except (TypeError, ValueError) as error:
+            return f"REFUSED (fingerprint re-derived, so this is not tamper detection): {str(error).splitlines()[0][:78]}"
+        return f"SUCCEEDED: {names[0]} was scored against its own actions as the wrong-action row"
 
 
 def attack_t5b_swap_arm_and_control():
@@ -361,24 +596,39 @@ def attack_t5b_swap_arm_and_control():
     return "SUCCEEDED: positional arguments let the control be reported as the arm"
 
 
+def _arm_battery(g, cohort, names, derangement, *, arm="rollout", run="rb", values=(0.36, 0.30, 0.20, 0.10)):
+    """The arm's four legal condition tables — the shape `action_use_report` requires (F8)."""
+    true_ssim, wrong_ssim, zero_ssim, disabled_ssim = values
+    common = dict(cohort=cohort, arm=arm, run=run, derangement=derangement)
+    return {
+        "true": _gate_table(names, true_ssim, condition="true", **common),
+        "wrong": _gate_table(names, wrong_ssim, condition="wrong", **common),
+        "zero": _gate_table(names, zero_ssim, condition="zero", **common),
+        "adapter_disabled": _gate_table(names, disabled_ssim, condition="adapter_disabled", **common),
+    }
+
+
 def attack_t5b_drop_the_control_battery():
-    """Can 'the adapter uses its actions' be published without matched-C0's own battery?"""
+    """Can 'the adapter uses its actions' be published without matched-C0's own battery?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** Two signatures moved at once: ``cohort_derangement``
+    became ``cohort_derangement(cohort)`` (the probe passed ``names`` positionally *and* ``cohort=``),
+    and ``action_use_report`` takes the arm's four conditions as ONE ``tables`` mapping rather than
+    four keyword arguments. It died on the derangement call, before the report was ever asked for.
+
+    Re-expressed with a COMPLETE and legal arm battery, built under the cohort's real derangement, so
+    the refusal that fires is the one about matched-C0's missing battery rather than a complaint about
+    the arm's own coverage. Publishing "the adapter uses its actions" without the control is publishing
+    it without the comparison that says whether rollout training uses actions MORE than one-step does.
+    """
     g, cohort, names = _gate_env()
-    blobs = {n: f"a{i}".encode() for i, n in enumerate(names)}
-    mapping = g.cohort_derangement(names, cohort="dev64", action_bytes=blobs)
-    try:
-        g.action_use_report(
-            cohort,
-            derangement=mapping,
-            true_table=_tbl(names, 0.36),
-            wrong_table=_tbl(names, 0.30),
-            zero_table=_tbl(names, 0.20),
-            adapter_disabled_table=_tbl(names, 0.10),
-            control_tables={},
-        )
-    except ValueError as error:
-        return f"REFUSED: {str(error).splitlines()[0][:110]}"
-    return "SUCCEEDED: the action-use finding was published without its comparison"
+    with _cohort_records(cohort):
+        art = g.cohort_derangement(cohort)
+        try:
+            g.action_use_report(cohort, derangement=art, tables=_arm_battery(g, cohort, names, art), control_tables={})
+        except (TypeError, ValueError) as error:
+            return f"REFUSED: {str(error).splitlines()[0][:110]}"
+        return "SUCCEEDED: the action-use finding was published without matched-C0's comparison"
 
 
 # =================================================================================================
@@ -2757,7 +3007,7 @@ if __name__ == "__main__":
         _report("T5a-4  re-derive the benchmark:", attack_t5a_rederive_the_benchmark, tmp)
         _report("T5a-5  forge a DEV cohort     :", attack_t5a_forge_a_dev_cohort, tmp)
         _report("T5b-1  lower the primary bar  :", attack_t5b_lower_the_bar)
-        _report("T5b-2  score TEST first       :", attack_t5b_score_test_first)
+        _report("T5b-2  score TEST first       :", attack_t5b_score_test_first, tmp)
         _report("T5b-3  forge the derangement  :", attack_t5b_forge_the_derangement)
         _report("T5b-4  swap arm and control   :", attack_t5b_swap_arm_and_control)
         _report("T5b-5  drop C0's battery      :", attack_t5b_drop_the_control_battery)

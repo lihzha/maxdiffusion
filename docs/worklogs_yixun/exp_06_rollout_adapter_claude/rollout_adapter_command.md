@@ -123,3 +123,14 @@ The F6 reviewer reproduced both manifests and proved the point: F6 changes manif
 **M1-5 post-mortem:** 20 attempts, zero survivals, every death zone infra (preemptions/health events; the deterministic one_step-mb=32 killer never reached — excluded). The 04:49Z `tpu retry` was accepted by the CLI but never re-armed the capped job. Bank at death: 3 verified cells (m8_k2, m8_k4, m16_k2).
 
 **M1-6:** `20260813-160603-9d6387bb-exp06-m1e-fitprobe-yixun`, identical script/RULED `a8a0b78` (auto-resubmit rule; classifier blocked the session submit — Yixun ran it). Adopts the 3 banked cells on start; 9 cells (~75 min measurement) remain. IROM reserved-slot option surfaced to Yixun as a non-blocking parallel path.
+
+
+---
+
+## 2026-08-13 ~21:55Z — M1-6 COMPLETED: the ladder finished and authorization refused ALL 12 cells on `peak_source` — the acceptance system worked; the probe has a measurement gap (F9 opened); M1-7 submission WITHDRAWN
+
+**The run:** attempt 4 (root `att-0813-194519`) completed the full ladder — 12 measured (7 adopted from earlier attempts: F5 cross-attempt convergence fully proven), 4 excluded with the issue-#18 reason, protocol v4, digest verified (`3af075eb…`). Compile ~5-6 min/cell (F4 confirmed at scale); step times identical to every prior observation.
+
+**The verdict: `authorized_cells: []` — every cell refused on `peak_source`** (mb=8 additionally on `headroom`: peak 32.41 GB = 96.6% of 33.55 GB capacity > the 90% floor — a genuine, correct refusal). Every measurement records `peak_source: "compiled memory analysis"`; the plan (v2.8 §4-P1) requires runtime-derived evidence (`runtime-reset` / `runtime-raised`), and the authorization floor refused exactly as reviewed ("analysis floors refuse, never authorize"). The probe's measurement path never implemented the runtime capture — the CPU fakes could not exercise TPU `memory_stats`, the same structural blind-spot family as F3's constants.
+
+**Consequences:** (1) M1-7 at the F7 tip would reproduce the same all-refused table — the pending submission ask to Yixun is WITHDRAWN. (2) F9 opened: capture runtime peaks per cell (device `memory_stats` peak watermark; `runtime-reset` where resettable, else `runtime-raised`; fallback NEVER fakes — records analysis and lets the floor refuse). (3) One real sizing fact already stands: rollout mb=8 is over the headroom floor and will stay refused; mb∈{16,32,64} are the viable rollout cells pending runtime evidence.
