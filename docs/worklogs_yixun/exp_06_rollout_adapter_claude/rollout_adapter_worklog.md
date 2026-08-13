@@ -1033,3 +1033,193 @@ The four cell lists were emitted independently and the loader only type-checked 
 - **Analysis** — the BLOCKER was not a code defect and the ruling is the right one, but it changes what the campaign should expect from M1-5, and the honest framing is worth keeping: **F5's banking pays off across attempts of one build, never across builds.** Every code change resets it. That is the price of the binding, it was paid knowingly, and the two-line summary for anyone reading later is: a zone kill costs one cell; a commit costs the ladder.
 
 - **Next** — Planner spot-check; the exclusion list stays empty pending Yixun's plan-deviation decision.
+
+
+## 2026-08-13T02:10:00Z — Round F7 `manifest-identity`: the label stopped being able to throw away the bank
+
+- **Goal** — M1-6 attempt 2 adopted **ZERO** cells. The production line:
+
+```
+[M1] not adopting .../cells/rollout_m8_k2.json.digest: it was measured under a different program --
+     ['code_sha'] differ (measured on f51a8a6.../v6e x8, running 5631a36.../v6e x8)
+```
+
+`manifest_digest` **matched**. The only difference between those two tips is the Planner's ledger commits, which are docs-only. F5b's "any commit invalidates every banked cell" meets this campaign's own discipline of recording every submission in the ledger, and the product is **guaranteed bank loss on every resubmission** — the exact failure F5 was built to prevent, reintroduced by the binding meant to protect it.
+
+- **Hypothesis** — my own F6b entry already contained the answer: *the manifest is the identity; `code_sha` is the label*. The code did not agree with the sentence. Narrowing the binding to the running bytes should cost nothing real, because every failure mode the old rule caught — dirty tree, stale tarball, hand-edited module, any genuine code change — moves the manifest too.
+
+### Change
+
+`ProbeContext.BINDING_FIELDS` is now a declared set — `manifest_digest`, `model_revision`, `device_kind`, `device_count`, `geometry`, `recipe_fingerprint` — with `binding_digest()` / `binding_differences()` beside the existing full `digest()`. **`code_sha` is deliberately not in it.**
+
+| Surface | Before | After |
+|---|---|---|
+| cell adoption | full context digest | `binding_digest`; a label mismatch over an identical manifest is **logged as label drift** and adopted |
+| `CellMeasurement.context_digest` | full context digest | the binding — a measurement is bound to the bytes that produced it, not to the label they were committed under |
+| resume selection | `(arm, code_sha, context_digest)` | `(arm, binding_digest)`, with `code_sha` optional and used only for the drift log |
+| publications | `code_sha` + `context_digest` | + `binding_digest` (required); the other two stay, for audit |
+| the artifact / the table | — | unchanged: `code_sha` is still recorded, still inside the run-level digest, still audited |
+
+**`AUTHORIZATION_PROTOCOL` v4 → v5**, because the MEANING of `measurements[].context_digest` moved. A version is exactly for a field whose shape survives while its semantics do not, and the alternative — letting an old table load under new rules — is the silent-mismatch class this module keeps refusing.
+
+### What did NOT change, deliberately
+
+- **A different build under the same label is still refused.** Two deployments can share a `COMMIT` and differ in bytes (dirty tree, stale tarball, hand-edit); that is what F5b's manifest was for and the narrowing does not touch it. Asserted in the same test as the fix, so the two directions cannot drift apart.
+- **The cross-manifest transition test from F6b passes unchanged** — the no-grandfathering policy stands on the manifest, which is where it always belonged.
+- **`derive_code_sha`'s dirty-tree refusal is untouched:** a process that DECLARES a commit must still be that commit. That is about honest provenance, not about adoption.
+
+### One consequence I am flagging rather than fixing
+
+`assert_cell_authorized` (the M2 gate) and the launcher's `measured_sha != COMMIT` prerequisite **still compare the full context and the label**. They have the same property that just cost M1-6 its bank: M2 launched after a ledger commit would be refused an authorization M1 published before it. I did not narrow them, because the brief scoped F7 to adoption and resume and because that gate is the last thing standing between a launch and an unmeasured cell — narrowing it is a decision, not a mechanical follow-through. **It needs a ruling before M2.**
+
+- **Deleted, not kept as dead weight:** `test_a_cell_measured_on_another_commit_is_re_measured` asserted the behaviour F7 removes. Probe `F5-1` was rewritten from `adopt another commit` to `lose bank to docs commit` — same construction, opposite expectation, and it now reproduces the production failure as a standing guard. `F5-5` (foreign MANIFEST) is untouched and still refuses.
+
+- **Command / Validation** — canonical suite **2251 passed / 0 failed** (492 s; 2248 + 4 new − 1 deleted); battery **90 probes — 89 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**, exit 0 → `harness/attacks_f7_20260813.log` (sha256 `bd273b67ad6dbcb5…`). `black`/`ruff`/`bash -n`/`git diff --check` clean.
+
+- **A process note worth recording.** Running `black` over the whole test directory reformatted **23 files belonging to exp_04 and exp_05** that this round never touched. Reverted; the diff is seven files. Lint the files you changed, not the tree they live in.
+
+- **Result** — `fix_ready`, **uncommitted** (branch commits frozen until M1-6 settles).
+
+- **Analysis** — the honest read is that F5b's coarse binding was defensible in isolation and wrong in context: the campaign's own ledger discipline guaranteed the label would move between every pair of attempts, and nobody costed that until production did. The narrowing is not a weakening — the set of programs that can adopt each other is unchanged in every respect that decides a measurement; what changed is that a difference which was never a difference stopped counting as one. **A zone kill costs one cell; a code change costs the ladder; a docs commit now costs nothing.**
+
+- **Next** — Planner spot-check. Two items need decisions: the M2-gate consequence above, and whether M1-6's in-flight v4 table (if it completes under the pre-F7 tip) is still wanted — under F7 it will not load, which is the version doing its job but is worth knowing before the ceremony.
+
+
+## 2026-08-13T04:05:00Z — Round F7b: the same narrowing at the M2 gate (the extension F7 flagged, ruled YES)
+
+- **Goal** — F7 fixed adoption and resume and reported that `assert_cell_authorized` still compared the full context and the label. That is the identical failure one step later and at the worst possible moment: M1 publishes an authorization at one tip, the submission is recorded in the ledger, M2 starts at the next tip running byte-identical code — and would be refused its own authorization **at startup, with a 64-chip reservation already held**. Ruled YES; closed here.
+
+### Change
+
+| Surface | Before | After |
+|---|---|---|
+| `assert_cell_authorized` | full context digest (label included) | `binding_digest`; a label drift over an identical build **logs `[M2] label drift` and proceeds** |
+| launcher prerequisite | `FATAL` when the table's `code_sha` != `COMMIT` | **report-only**: prints both labels and `AUTHORIZATION IS NOT DECIDED HERE`, exit 0 |
+| everything else | — | unchanged |
+
+**The launcher could not have made this decision correctly and should never have been asked to.** Bash cannot compute the binding: there is no manifest, and `jax.devices()` in the preflight reports the host's local chip count, wrong by 8x on a v6e-64 job. So it reports and the in-process gate decides — the same correction F6b made to the resume preflight, for the same reason. **No bash label-refusal remains that could block a legitimate launch.**
+
+**The dangerous direction is unchanged and now has two guards.** Identical `COMMIT`, different running bytes — a dirty tree, a stale tarball, a hand-edited module — still refuses at the gate, naming `manifest_digest`. `test_the_gate_still_refuses_an_authorization_from_a_different_build` and battery probe `F7-2` assert it, and `test_the_gate_refuses_every_field_that_decides_what_was_measured` walks `model_revision`, `device_count` and `recipe_fingerprint` so "narrowed to the build" cannot quietly become "narrowed to one field".
+
+**Version story, confirmed end to end (item 3).** M1 publishes v5; M2's loader accepts v5 only; a v4 table is refused by the protocol check *before* any field-level validation, with a message naming both versions — `test_a_v4_table_is_refused_by_version_and_not_by_a_cryptic_field_error` asserts the message contains both and contains no field name, because the operator needs "re-run M1", not a missing-key traceback.
+
+- **Command / Validation** — canonical suite **2257 passed / 0 failed** (490 s; 2251 + 6 new); battery **92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**, exit 0 → `harness/attacks_f7b_20260813.log` (sha256 `851c43f878f61d54…`), adding `F7-1 block launch on a label` (the mirror of `F5-1`, one step later) and `F7-2 authorize another build`. `black`/`ruff`/`bash -n`/`git diff --check` clean; lint scoped to the changed files after F7's lesson.
+
+  **One existing test changed by design and was corrected, not patched around.** T7-1's
+  `test_an_authorization_measured_on_another_program_does_not_authorize_this_one` looped `code_sha`
+  through its refusal cases. That field left the list deliberately, so `manifest_digest` takes its
+  place — the field that actually means "different bytes" — and the label case was added below as a
+  PASS with a logged drift. The test still walks five fields and still refuses all five.
+
+- **Result** — `fix_ready`, **uncommitted** (freeze holds until the ceremony decision).
+
+### The bank resets once more, and this is the LAST time
+
+F7+F7b change manifest-covered files, so M1-7 starts from an empty bank and re-measures the reachable ladder. **That is the final reset of this kind.** The reason every previous reset happened was that the binding included the commit label, and this campaign records every submission in a ledger commit — so consecutive attempts of one job never shared a label and the bank was discarded every time. From the F7 tip onward:
+
+- a **docs commit** costs nothing — the manifest is unchanged, adoption logs drift and proceeds;
+- a **zone kill** costs the cell in flight — everything banked before it is adopted by the next attempt;
+- a **code change** costs the ladder, and should, because it is a different program.
+
+- **Analysis** — F7 and F7b are one change split across two rounds by where the comparison happened to live, and the split is worth noting for the review: adoption, resume and the gate were three copies of the same decision, and only the first was in the brief. The lesson I would take is that "the identity of the running program" was never a single function — it was a phrase re-implemented in three places, and narrowing one of them left the other two able to reintroduce the failure. It is one function now (`binding_digest`), which is why F7b was small.
+
+- **Next** — one focused Codex review of the combined F7+F7b delta, then ceremony and the M1-7 relaunch package to Yixun.
+
+
+## 2026-08-13T06:40:00Z — Round F7c: the binding did not cover the compiler, and P3-5 lied again
+
+- **Goal** — close the combined F7+F7b review (2 BLOCKER + 1 MINOR). The narrowing itself was ratified; both blockers are gaps in it.
+
+### BLOCKER 1 — the compiler was outside the binding
+
+The reviewer executed it: two contexts differing in `LIBTPU_INIT_ARGS` and `XLA_PYTHON_CLIENT_MEM_FRACTION` compared **binding-equal**. The manifest hashes `src/maxdiffusion` Python and nothing else, but the launcher sets the runtime and compiler policy through the environment. A peak measured at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` is not a statement about a run at 0.5, and a step time under one set of `LIBTPU_INIT_ARGS` is not a statement about another. **Same source, different compiler, different measurement** — and adoption, resume and the gate would all have accepted it.
+
+`derive_runtime_policy()` reads the environment in-process at context-derivation time; `runtime_policy` (raw) is recorded in the artifact for audit and `runtime_policy_digest` joins `BINDING_FIELDS`.
+
+**The declared list and the inclusion rule — anything the launcher exports that reaches the compiler or the runtime**, enumerated from `bash_scripts/train_wan_pos_rollout.sh`: `JAX_PLATFORMS`, `LIBTPU_INIT_ARGS`, `XLA_FLAGS`, `XLA_PYTHON_CLIENT_MEM_FRACTION`, `XLA_PYTHON_CLIENT_PREALLOCATE`, `TPU_PREMAPPED_BUFFER_SIZE`. **Excluded with reasons:** `PYTHONUNBUFFERED` (stdout buffering), `TF_CPP_MIN_LOG_LEVEL` (log verbosity) and the four `HF_HUB_*` download knobs (they decide how the snapshot arrives; the snapshot itself is already bound by `model_revision`). None can change what is compiled or what it costs.
+
+**Canonicalisation is load-bearing and tested:** unset, empty and whitespace-only encode identically, so two identical launches cannot disagree by accident — the same false-difference class F7 removed from `code_sha`. Internal whitespace in a flag string is collapsed; flag ORDER is preserved, because for XLA flags the last occurrence wins.
+
+Dangerous direction asserted through **all three consumers** — adoption re-measures, the gate refuses, resume refuses — plus `test_a_docs_only_commit_still_costs_nothing_under_the_wider_binding`, so F7 survives F7c.
+
+### BLOCKER 2 — P3-5 lied again, and it was my rule that should have caught it
+
+```
+P3-5  adopt incomplete/foreign:: REFUSED (TypeError): publish_attempt() missing 1 required
+                                 keyword-only argument: 'binding_digest'
+```
+
+**Fourth false verdict of this campaign, second from this exact cause, and it shipped in the F7b log I handed over.** F5d repaired this probe, wrote the standing rule — *grep the harness for call sites in the same commit as any production signature change* — and guarded one call. F7 changed `publish_attempt`'s signature. I did not run the grep. The probe stopped executing and the battery counted it as coverage.
+
+Two things were wrong, and only fixing the second one is why it recurred: **the rule depended on me remembering it at exactly the moment I was busy doing something else, and the guard covered the call that had broken last time, which is never the one that breaks next.**
+
+- `_must_execute` is now a **decorator wrapping the whole probe body**; a `TypeError` from anywhere inside scores `SUCCEEDED: THE PROBE DID NOT RUN`, the runner exits non-zero, and the battery cannot be green while a probe is silently absent. Applied to P3-5 and to the eleven F5/F6/F7 probes that call production APIs whose signatures have churned.
+- P3-5's three `publish_attempt` fixtures and both selector calls repaired; its foreign-attempt fixture is now a foreign **BUILD** (the label stopped being the discriminator in F7) and its negative case names a build nobody published, since the old sentinel is now a legitimately selectable one.
+- **Full-harness sweep for callers of every changed signature** (`publish_attempt`, `select_resume_publication`, `load_publication`, `describe_resume_candidates`): P3-5 was the only one.
+- Recorded as the sixth caution in the harness README with the sharpened rule.
+
+### MINOR — the resume report claimed a filter it no longer applies
+
+`describe_resume_candidates` filters on the ARM only since F7, but the preflight still printed "for this arm at this SHA". It now prints each candidate's recorded build and label instead of claiming they match.
+
+- **Command / Validation** — canonical suite **2263 passed / 0 failed** (493 s; 2257 + 6 new); battery **92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**, exit 0 → `harness/attacks_f7c_20260813.log` (sha256 `2ee4e0c42de739dc…`), reproduced on the final tree. `black`/`ruff`/`bash -n`/`git diff --check` clean.
+
+- **Result** — `fix_ready`, **uncommitted** (freeze holds).
+
+- **Analysis** — BLOCKER 1 is the same lesson as F5b/F7 arriving a third time: "the identity of the running program" kept turning out to be wider than the last definition of it. Source bytes were not enough because the compiler is configured outside them. I would now state the invariant as *everything that can change what is compiled or what it costs*, and the honest caveat is that this list is still enumerated by hand from one shell script — if a future launcher exports a new XLA knob and nobody adds it here, the binding goes quietly blind again. That is the residual, and it is the same shape as the `FINGERPRINT_EXCLUSIONS` denylist problem, minus the denylist's protection.
+
+  BLOCKER 2 is worse because it was not a gap in knowledge. I wrote the rule, then broke it four rounds later, and shipped a log whose headline number I had told the Planner to trust. The mechanical guard is the fix that does not depend on me.
+
+- **Next** — short verification pass on the F7c delta, then ceremony and the M1-7 package.
+
+
+## 2026-08-13T09:30:00Z — Round F7d: the battery has been counting dead probes since 2026-08-09
+
+- **Goal** — close the F7c verification (both blockers partially closed). B2's widened lens is the finding of the campaign so far, and it is not a near miss: **probes have been silently not executing inside every green battery since the W-round evaluator rework.**
+
+### B2 — the universal guard, and what it exposed
+
+`_must_execute` caught only `TypeError`, and only on a hand-picked subset. `AttributeError`, `KeyError`, `ModuleNotFoundError` all still scored REFUSED, and probes I had not decorated were unguarded beside ones I had (`F5-5` next to `F5-8`).
+
+**The fix is structural, one mechanism, universal by construction:** the guard moved into `_report`, which every probe is invoked through, so there is no list to keep in step. The discriminator is no longer a guess about exception classes — **a verdict is a RETURNED string; anything that escapes the probe body is the probe's own failure** and scores `SUCCEEDED: THE PROBE DID NOT RUN`. A probe that means "production refused" must catch the production error itself, which also forces it to name the error it expected. The per-probe decorators are gone; there is exactly one mechanism now.
+
+**Turning it on took the battery from 92/0/0 to 82 REFUSED / 1 DECLARED / 9 SUCCEEDED, exit 1.** That is the honest number and it is what the previous headline was hiding.
+
+### The inventory: which probes were dead, and since when
+
+`git log -L` puts all three evaluator/gates signature moves in **`76117df` (2026-08-09, "evaluator, gates, instrument, loop, stream, arms")**; the `DeviceBackend` / `ProductionModelSource.build` changes are the same era (`d289063` / `76117df`).
+
+| Probe | Cause | Dead since |
+|---|---|---|
+| `T5a-2` widen/miss the anchor | `reproduce_anchor` takes a `Measurement`, not a mapping | 2026-08-09 — **REPAIRED this round** |
+| `T5a-3` TEST into the anchor | `summarize_samples(checkpoint_step=…)` → `checkpoint=`, `code_sha=`, `model_revision=` | 2026-08-09 |
+| `T5a-4` re-derive the benchmark | `freeze_benchmark_row(cohort=…, per_example=…)` → `table: ScoreTable` | 2026-08-09 |
+| `T5b-1` lower the primary bar | gates take built `ScoreTable`s; `_tbl` returns a mapping | 2026-08-09 |
+| `T5b-2` score TEST first | same | 2026-08-09 |
+| `T5b-3` forge the derangement | `cohort_derangement(cohort)` — probe passes names positionally **and** `cohort=` | 2026-08-09 |
+| `T5b-5` drop C0's battery | same | 2026-08-09 |
+| `F3a-5` float32 under bf16 | `DeviceBackend.__init__` no longer takes `velocity_for` | ~2026-08-09 |
+| `F1b-2` microbatch as update | imports `f1_shims`, a module that does not exist in the tree | ~2026-08-09 |
+| `W1-3` hand-rebuild adapter | `ProductionModelSource.build` was removed (W3) | ~2026-08-09 |
+
+**`T5a-2` was worse than dead — it was lying twice.** It caught the mapping-refusal `TypeError` and recorded it as "no tolerance argument exists", a claim about production that was simply false, then made a second unguarded call whose `TypeError` escaped and printed as a refusal. Rewritten to execute both attempts, observe each refusal and return it; it now refuses from two real production rules.
+
+**Therefore: every battery headline from `attacks_after_w5b.log` (80/80) through `attacks_f7c` (92) counted dead probes.** Those logs are not withdrawn — they are the record — but their numbers overstate coverage by up to ten probes, and this entry is the correction. The three-way summary, the universal guard and the non-zero exit are what make future numbers mean something; **the battery is red until the remaining nine are repaired, and that is correct.**
+
+### What I did NOT do, and why
+
+**Nine probes remain unrepaired and I stopped rather than rushing them.** Each needs its attack re-expressed faithfully against APIs I have not read — `build_score_table` alone requires per-row action digests and pinned noise keys, and `cohort_derangement`/`action_use_gate` now exchange a `DerangementArtifact`. A probe that executes but asserts nothing is precisely the defect this round exists to remove, and manufacturing six of those at the end of a long session to turn the summary green would be the worst possible response to this finding. The per-probe repair notes are in the report; the guard means every one of them is now loud.
+
+### B1 remainder
+
+- **Quoted values no longer collide.** Canonicalisation tokenizes with `shlex` and keeps tokens verbatim, so `--xla_dump_hlo_module_re='foo  bar'` and `'foo bar'` — two valid, materially different filters the reviewer collided — now hash differently. Normalization is BETWEEN flags only; order is preserved (last XLA flag wins); an unparseable value is recorded as one opaque token rather than simplified.
+- **The raw value is recorded.** `derive_runtime_policy` returns what the environment said; `canonical_runtime_policy` is applied only inside the digest. The first version stored the normalized form and called it the audit value.
+- **The resume test now runs the deployed selector** (publish an attempt under policy A, select under policy B → `None`) instead of comparing two digests, which was a restatement of the test above it. The F3c liveness lesson, applied to my own test.
+
+- **Command / Validation** — canonical suite **2263 passed / 0 failed** (499 s); battery **92 probes — 82 REFUSED, 1 DECLARED, 9 SUCCEEDED, 0 UNPARSED, exit 1** → `harness/attacks_f7d_20260813.log` (sha256 `a53d9ba09e12568e…`), run twice with identical verdict sequences. `black`/`ruff`/`git diff --check` clean.
+
+- **Result** — `partial`, **uncommitted**. B1 closed; B2's mechanism closed and its inventory published; nine probe repairs outstanding.
+
+- **Analysis** — the mechanism failures in this harness have all had one shape: a guard whose scope was set by what broke last time. F5d guarded one call, F7c guarded a subset, and each was overtaken by the next thing to move. The structural discriminator — returned string versus escaping exception — is the first version of this that does not depend on anticipating the failure. What it cost to find is the uncomfortable part: nine probes had been dead for four days across five rounds, and I reported those batteries as evidence.
+
+- **Next** — repair the nine, one at a time, each verified to refuse from real production behaviour; **if any of them SUCCEEDS against current production, that is a real hole that was masked and it stops the round.** Then ceremony and the M1-7 package.
