@@ -3,14 +3,18 @@
 A-B1(a) module issue token · A-B1(b) public digest override · A-B2 unrestricted batch callback ·
 B-1 terminal-verdict resume · B-2 selection artifact after a crash in the write window.
 """
-import dataclasses, hashlib, json, pathlib, tempfile
+
+import dataclasses, functools, hashlib, json, pathlib, tempfile
 
 import jax.numpy as jnp
 
 from maxdiffusion import pos_rollout_dev_instrument as instrument
 from maxdiffusion import pos_rollout_loop as loop
 
-MD = pathlib.Path(instrument.__file__).resolve().parents[2] / "docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests"
+MD = (
+    pathlib.Path(instrument.__file__).resolve().parents[2]
+    / "docs/worklogs_yixun/exp_04_null_adapter_claude/j0_manifests"
+)
 DEV, TEST = str(MD / "dev64.json"), str(MD / "test64.json")
 TEST_ROW = json.loads(pathlib.Path(TEST).read_text())["rows"][0]
 SHAPE = (4, 3, 4, 6)
@@ -20,8 +24,9 @@ def attack_a_b1a():
     token = getattr(instrument, "_ISSUE_TOKEN", None)
     if token is None:
         return "REFUSED: there is no _ISSUE_TOKEN module attribute to hand back"
-    cohort = instrument.DevCohort(token, cohort="dev64", rows=[{**TEST_ROW, "split": "dev64"}],
-                                 manifest_sha256="0" * 64, manifest_path=DEV)
+    cohort = instrument.DevCohort(
+        token, cohort="dev64", rows=[{**TEST_ROW, "split": "dev64"}], manifest_sha256="0" * 64, manifest_path=DEV
+    )
     drawn = cohort.draw(TEST_ROW["name"], num_steps=25, k_b=2, example_shape=SHAPE)
     return f"SUCCEEDED: drew for {TEST_ROW['name']} (support {int(drawn.support_start)})"
 
@@ -49,22 +54,29 @@ def attack_a_b2():
     test_batch = {"z_video": jnp.ones((1, *SHAPE), jnp.float32) * 999.0}
     cohort = instrument.load_dev_cohort(DEV)
     try:
-        out = instrument.score_dev_cohort(cohort, lambda p, b, c, *, draws: (jnp.asarray(1.0), {}),
-                                          lambda row: test_batch, params=jnp.asarray(1.0), context=Ctx(),
-                                          example_shape=SHAPE)
+        out = instrument.score_dev_cohort(
+            cohort,
+            lambda p, b, c, *, draws: (jnp.asarray(1.0), {}),
+            lambda row: test_batch,
+            params=jnp.asarray(1.0),
+            context=Ctx(),
+            example_shape=SHAPE,
+        )
     except (TypeError, ValueError) as error:
         return f"REFUSED: {error}"
     return f"SUCCEEDED: metric {out['metric']} stamped cohort={out['cohort']} sha={out['manifest_sha256'][:12]}"
 
 
 def _state():
-    return loop.RolloutTrainState(params={"w": jnp.zeros((2,), jnp.float32)},
-                                  opt_state={"mu": jnp.zeros((2,), jnp.float32)}, step=0)
+    return loop.RolloutTrainState(
+        params={"w": jnp.zeros((2,), jnp.float32)}, opt_state={"mu": jnp.zeros((2,), jnp.float32)}, step=0
+    )
 
 
 def _schedule(**over):
-    base = dict(max_train_steps=6, eval_every=2, logical_batch=4, microbatch=2, seed=0, arm="rollout", k_b=2,
-                num_steps=25)
+    base = dict(
+        max_train_steps=6, eval_every=2, logical_batch=4, microbatch=2, seed=0, arm="rollout", k_b=2, num_steps=25
+    )
     base.update(over)
     return loop.LoopSchedule(**base)
 
@@ -74,8 +86,12 @@ def _stream(schedule):
 
     def factory(seed):
         events.append(("iterator", int(seed)))
-        return itertools.repeat({"z_video": jnp.zeros((schedule.logical_batch, *SHAPE), jnp.float32),
-                                 "actions": jnp.zeros((schedule.logical_batch, 4, 7), jnp.float32)})
+        return itertools.repeat(
+            {
+                "z_video": jnp.zeros((schedule.logical_batch, *SHAPE), jnp.float32),
+                "actions": jnp.zeros((schedule.logical_batch, 4, 7), jnp.float32),
+            }
+        )
 
     return factory
 
@@ -91,9 +107,14 @@ def attack_b1(tmp):
     values = iter([0.1, 1.0, 1.0, 1.0])
     manager = loop.build_checkpoint_manager(directory)
     events = []
-    loop.run_loop(_state(), schedule, batches=_stream(schedule),
-                  update_fn=lambda s, b, d, sc, gs: (dataclasses.replace(s, params=s.params), 1.0 / gs),
-                  dev_metric_fn=lambda s, step: next(values), manager=manager)
+    loop.run_loop(
+        _state(),
+        schedule,
+        batches=_stream(schedule),
+        update_fn=lambda s, b, d, sc, gs: (dataclasses.replace(s, params=s.params), 1.0 / gs),
+        dev_metric_fn=lambda s, step: next(values),
+        manager=manager,
+    )
     assert loop.stop_verdict(loop.restore_eval_history(loop.build_checkpoint_manager(directory))).stop
     events = []
 
@@ -101,9 +122,14 @@ def attack_b1(tmp):
         events.append(("update", global_step))
         return dataclasses.replace(state, params=state.params), 1.0
 
-    report = loop.run_loop(_state(), _schedule(max_train_steps=30_000, eval_every=1),
-                           batches=_stream(_schedule()), update_fn=update, dev_metric_fn=lambda s, step: 0.01,
-                           manager=loop.build_checkpoint_manager(directory))
+    report = loop.run_loop(
+        _state(),
+        _schedule(max_train_steps=30_000, eval_every=1),
+        batches=_stream(_schedule()),
+        update_fn=update,
+        dev_metric_fn=lambda s, step: 0.01,
+        manager=loop.build_checkpoint_manager(directory),
+    )
     outcome = "SUCCEEDED: a terminal reopen trained on" if events else "REFUSED: no step, no iterator"
     return f"{outcome} (steps_run={report.steps_run} events={events})"
 
@@ -113,16 +139,26 @@ def attack_b2(tmp):
     directory = str(pathlib.Path(tmp) / "b2")
     schedule = _schedule(max_train_steps=2, eval_every=2)
     values = iter([0.5])
-    loop.run_loop(_state(), schedule, batches=_stream(schedule),
-                  update_fn=lambda s, b, d, sc, gs: (dataclasses.replace(s, params=s.params), 1.0),
-                  dev_metric_fn=lambda s, step: next(values), manager=loop.build_checkpoint_manager(directory))
+    loop.run_loop(
+        _state(),
+        schedule,
+        batches=_stream(schedule),
+        update_fn=lambda s, b, d, sc, gs: (dataclasses.replace(s, params=s.params), 1.0),
+        dev_metric_fn=lambda s, step: next(values),
+        manager=loop.build_checkpoint_manager(directory),
+    )
     selection = loop.build_selection_manager(directory)
     values = iter([0.9])
     schedule = _schedule(max_train_steps=4, eval_every=2)
-    report = loop.run_loop(_state(), schedule, batches=_stream(schedule),
-                           update_fn=lambda s, b, d, sc, gs: (dataclasses.replace(s, params=s.params), 1.0),
-                           dev_metric_fn=lambda s, step: next(values),
-                           manager=loop.build_checkpoint_manager(directory), selection_manager=selection)
+    report = loop.run_loop(
+        _state(),
+        schedule,
+        batches=_stream(schedule),
+        update_fn=lambda s, b, d, sc, gs: (dataclasses.replace(s, params=s.params), 1.0),
+        dev_metric_fn=lambda s, step: next(values),
+        manager=loop.build_checkpoint_manager(directory),
+        selection_manager=selection,
+    )
     selection.wait_until_finished()
     shipped = selection.latest_step()
     outcome = "REFUSED: reconciled" if shipped == report.retained_step else "SUCCEEDED: stale/wrong selection"
@@ -163,20 +199,39 @@ def attack_t5a_restore_falls_back():
 
 
 def attack_t5a_widen_the_anchor():
-    """Can a caller widen the band, swap the record, or pass a measurement that misses it?"""
+    """Can a caller widen the band, swap the record, or pass a measurement that misses it?
+
+    **F7d: this probe had been dead since the 2026-08-09/10 evaluator rework and was mislabelling its
+    own failure.** `reproduce_anchor` stopped accepting a mapping — it takes a `Measurement`, so the
+    hand-written record below is refused by type. The old body caught that `TypeError` and recorded it
+    as "no tolerance argument exists", which was simply false, then made a second unguarded call whose
+    `TypeError` escaped into `_report` and was printed as a REFUSAL.
+
+    Rewritten so the refusal is OBSERVED and RETURNED: each attempt is executed, a production refusal
+    is recorded as one, and only a verdict that actually reproduces the anchor counts as success.
+    """
     anchor, _, _ = _anchor_env()
+    forged = {
+        "mean_ssim": 0.20,
+        "mean_latent_mse": 1.496,
+        "mean_pixel_mse": 0.0983,
+        "num_samples": 4,
+        "checkpoint_step": 30000,
+        "sample_names": list("abcd"),
+    }
     attempts = []
-    try:
-        anchor.reproduce_anchor({"mean_ssim": 0.20, "mean_latent_mse": 1.496, "mean_pixel_mse": 0.0983,
-                                 "num_samples": 4, "checkpoint_step": 30000, "sample_names": list("abcd")},
-                                tolerance=0.5)
-        attempts.append("tolerance override ACCEPTED")
-    except TypeError:
-        attempts.append("no tolerance argument exists")
-    verdict = anchor.reproduce_anchor({"mean_ssim": 0.20, "mean_latent_mse": 1.496, "mean_pixel_mse": 0.0983,
-                                       "num_samples": 4, "checkpoint_step": 30000, "sample_names": list("abcd")})
-    attempts.append(f"ssim 0.20 reproduced={verdict.reproduced}")
-    return "REFUSED: " + "; ".join(attempts) if not verdict.reproduced else "SUCCEEDED: " + "; ".join(attempts)
+    for label, extra in (("tolerance override", {"tolerance": 0.5}), ("hand-written record", {})):
+        try:
+            verdict = anchor.reproduce_anchor(dict(forged), **extra)
+        except TypeError as error:
+            attempts.append(f"{label} refused ({str(error).splitlines()[0][:56]})")
+        except ValueError as error:
+            attempts.append(f"{label} refused ({str(error).splitlines()[0][:56]})")
+        else:
+            if getattr(verdict, "reproduced", False):
+                return f"SUCCEEDED: {label} reproduced the anchor from a record nobody measured"
+            attempts.append(f"{label} did not reproduce (reproduced={verdict.reproduced})")
+    return "REFUSED: " + "; ".join(attempts)
 
 
 def attack_t5a_test_into_the_anchor():
@@ -220,9 +275,14 @@ def attack_t5a_forge_a_dev_cohort(tmp):
             return 1
 
     try:
-        anchor.freeze_benchmark_row(str(pathlib.Path(tmp) / "forged.json"), cohort=_LookAlike(),
-                                    per_example={row["name"]: 0.9}, checkpoint={"step": 30000},
-                                    code_sha="a" * 40, model_revision="rev")
+        anchor.freeze_benchmark_row(
+            str(pathlib.Path(tmp) / "forged.json"),
+            cohort=_LookAlike(),
+            per_example={row["name"]: 0.9},
+            checkpoint={"step": 30000},
+            code_sha="a" * 40,
+            model_revision="rev",
+        )
     except (TypeError, ValueError) as error:
         return f"REFUSED: {str(error).splitlines()[0][:110]}"
     return "SUCCEEDED: a TEST row was frozen as the DEV-64 benchmark"
@@ -283,8 +343,9 @@ def attack_t5b_forge_the_derangement():
     good = g.cohort_derangement(names, cohort="dev64", action_bytes=blobs)
     sneaky = {**good, names[0]: names[0]}
     try:
-        g.action_use_gate(true_table=_tbl(names, 0.36), wrong_table=_tbl(names, 0.30), cohort=cohort,
-                          derangement=sneaky)
+        g.action_use_gate(
+            true_table=_tbl(names, 0.36), wrong_table=_tbl(names, 0.30), cohort=cohort, derangement=sneaky
+        )
     except ValueError as error:
         return f"REFUSED: {str(error).splitlines()[0][:110]}"
     return "SUCCEEDED: an example was scored against its own actions as the wrong-action row"
@@ -306,9 +367,15 @@ def attack_t5b_drop_the_control_battery():
     blobs = {n: f"a{i}".encode() for i, n in enumerate(names)}
     mapping = g.cohort_derangement(names, cohort="dev64", action_bytes=blobs)
     try:
-        g.action_use_report(cohort, derangement=mapping, true_table=_tbl(names, 0.36),
-                            wrong_table=_tbl(names, 0.30), zero_table=_tbl(names, 0.20),
-                            adapter_disabled_table=_tbl(names, 0.10), control_tables={})
+        g.action_use_report(
+            cohort,
+            derangement=mapping,
+            true_table=_tbl(names, 0.36),
+            wrong_table=_tbl(names, 0.30),
+            zero_table=_tbl(names, 0.20),
+            adapter_disabled_table=_tbl(names, 0.10),
+            control_tables={},
+        )
     except ValueError as error:
         return f"REFUSED: {str(error).splitlines()[0][:110]}"
     return "SUCCEEDED: the action-use finding was published without its comparison"
@@ -362,18 +429,27 @@ def _ctx(fp, config=None, **over):
 
 
 def _fit(fp, context=None, *, arm="rollout", microbatch=32, k_b=2, **over):
-    values = dict(cell=fp.FitCell(arm, microbatch, k_b), context_digest=(context or _ctx(fp)).digest(),
-                  compile_seconds=480.0, step_seconds=3.5, eval_seconds=600.0, checkpoint_seconds=90.0,
-                  peak_bytes=20 * 1024**3, capacity_bytes=32 * 1024**3, reservation_failures=0,
-                  peak_source=fp.PEAK_SOURCE_RUNTIME_RESET)
+    values = dict(
+        cell=fp.FitCell(arm, microbatch, k_b),
+        context_digest=(context or _ctx(fp)).binding_digest(),
+        compile_seconds=480.0,
+        step_seconds=3.5,
+        eval_seconds=600.0,
+        checkpoint_seconds=90.0,
+        peak_bytes=20 * 1024**3,
+        capacity_bytes=32 * 1024**3,
+        reservation_failures=0,
+        peak_source=fp.PEAK_SOURCE_RUNTIME_RESET,
+    )
     values.update(over)
     return fp.CellMeasurement(**values)
 
 
 def _auth(fp, tmp, measurements, name="auth.json", context=None):
     context = context or _ctx(fp)
-    evidence = fp.build_evidence(context, measurements, max_train_steps=10_000, eval_every=1_000,
-                                 checkpoint_every=1_000)
+    evidence = fp.build_evidence(
+        context, measurements, max_train_steps=10_000, eval_every=1_000, checkpoint_every=1_000
+    )
     return fp.publish_authorization(str(pathlib.Path(tmp) / name), evidence)
 
 
@@ -383,10 +459,13 @@ def attack_t7_run_an_unmeasured_cell(tmp):
 
     fp = _probe_env()
     path = str(pathlib.Path(tmp) / "t7a.json")
-    config = _pos_config(pos_fit_authorization=path, pos_rollout_k=4,
-                         pos_recipe_lock=str(pathlib.Path(tmp) / "t7a_lock.json"),
-                         pos_resume_parent=str(pathlib.Path(tmp) / "t7a_attempts"),
-                         checkpoint_dir=str(pathlib.Path(tmp) / "t7a_attempts/att-X/checkpoints"))
+    config = _pos_config(
+        pos_fit_authorization=path,
+        pos_rollout_k=4,
+        pos_recipe_lock=str(pathlib.Path(tmp) / "t7a_lock.json"),
+        pos_resume_parent=str(pathlib.Path(tmp) / "t7a_attempts"),
+        checkpoint_dir=str(pathlib.Path(tmp) / "t7a_attempts/att-X/checkpoints"),
+    )
     running = fp.derive_probe_context(config)
     _auth(fp, tmp, [_fit(fp, running)], name="t7a.json", context=running)
     try:
@@ -402,8 +481,11 @@ def attack_t7_forge_an_authorization(tmp):
     """Can a hand-written mapping authorize a cell?"""
     fp = _probe_env()
     try:
-        fp.assert_cell_authorized({"authorized_cells": [{"arm": "rollout", "microbatch": 64, "k_b": 4}]},
-                                  fp.FitCell("rollout", 64, 4), context=_ctx(fp))
+        fp.assert_cell_authorized(
+            {"authorized_cells": [{"arm": "rollout", "microbatch": 64, "k_b": 4}]},
+            fp.FitCell("rollout", 64, 4),
+            context=_ctx(fp),
+        )
     except ValueError as error:
         return f"REFUSED: {str(error).splitlines()[0][:110]}"
     return "SUCCEEDED: a hand-written mapping authorized an unmeasured cell"
@@ -428,8 +510,9 @@ def attack_t7_authorize_a_cell_that_missed(tmp):
     """Can a cell that was measured and MISSED the headroom rule be run anyway?"""
     fp = _probe_env()
     context = _ctx(fp)
-    published = _auth(fp, tmp, [_fit(fp, context, microbatch=64, peak_bytes=31 * 1024**3)], name="t7d.json",
-                      context=context)
+    published = _auth(
+        fp, tmp, [_fit(fp, context, microbatch=64, peak_bytes=31 * 1024**3)], name="t7d.json", context=context
+    )
     try:
         fp.assert_cell_authorized(published, fp.FitCell("rollout", 64, 2), context=context)
     except ValueError as error:
@@ -447,14 +530,21 @@ def attack_t7_project_what_was_not_measured(tmp):
     except TypeError:
         notes.append("every cadence is a required argument")
     try:
-        fp.project_wall_clock(_fit(fp), max_train_steps=10_000, eval_every=1_000, checkpoint_every=1_000,
-                              eval_seconds=1.0, checkpoint_seconds=1.0)
+        fp.project_wall_clock(
+            _fit(fp),
+            max_train_steps=10_000,
+            eval_every=1_000,
+            checkpoint_every=1_000,
+            eval_seconds=1.0,
+            checkpoint_seconds=1.0,
+        )
         notes.append("caller-supplied overheads ACCEPTED")
     except TypeError:
         notes.append("there is no overhead argument to supply")
     try:
-        fp.project_wall_clock(_fit(fp, peak_bytes=31 * 1024**3), max_train_steps=10_000, eval_every=1_000,
-                              checkpoint_every=1_000)
+        fp.project_wall_clock(
+            _fit(fp, peak_bytes=31 * 1024**3), max_train_steps=10_000, eval_every=1_000, checkpoint_every=1_000
+        )
         return "SUCCEEDED: " + "; ".join(notes) + "; a misfit cell was projected"
     except ValueError:
         notes.append("a misfit cell cannot be projected")
@@ -499,11 +589,17 @@ def _launch(tmp, script, **env_over):
             os.symlink(found, root / "bin" / tool)
     # W2b made the topology a REQUIRED declaration of the training launcher, so every sandbox
     # declares one. A caller that wants the missing-declaration case overrides it explicitly.
-    env = {"PATH": str(root / "bin"), "HOME": str(root / "home"), "POS_DEVICE_COUNT": "8",
-           "SHIM_RECORD": str(root / "record.txt"), "COMMIT": _COMMIT}
+    env = {
+        "PATH": str(root / "bin"),
+        "HOME": str(root / "home"),
+        "POS_DEVICE_COUNT": "8",
+        "SHIM_RECORD": str(root / "record.txt"),
+        "COMMIT": _COMMIT,
+    }
     env.update({k: str(v) for k, v in env_over.items() if not k.startswith("_")})
-    proc = subprocess.run(["/bin/bash", f"bash_scripts/{script}"], cwd=root, env=env,
-                          capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(
+        ["/bin/bash", f"bash_scripts/{script}"], cwd=root, env=env, capture_output=True, text=True, timeout=300
+    )
     argv = []
     if (root / "record.txt").exists():
         for line in (root / "record.txt").read_text().splitlines():
@@ -524,14 +620,15 @@ def _launch(tmp, script, **env_over):
 
 def attack_p3_arms_share_checkpoint_state(tmp):
     """T6-1: running R-B then matched-C0 made C0 restore R-B's parameters, optimizer, step, history."""
-    common = dict(RUN_NAME="m3", ATTEMPT="att-X", OUTPUT_DIR="gs://b/p",
-                  POS_FIT_AUTHORIZATION="gs://b/m1.json")
+    common = dict(RUN_NAME="m3", ATTEMPT="att-X", OUTPUT_DIR="gs://b/p", POS_FIT_AUTHORIZATION="gs://b/m1.json")
     _, left = _launch(tmp, "train_wan_pos_rollout.sh", POS_ROLLOUT_ARM="rollout", **common)
     _, right = _launch(tmp, "train_wan_pos_rollout.sh", POS_ROLLOUT_ARM="one_step", **common)
     if left.get("checkpoint_dir") == right.get("checkpoint_dir"):
         return f"SUCCEEDED: both arms write and restore {left.get('checkpoint_dir')}"
-    return (f"REFUSED: rollout -> {left['checkpoint_dir'].split('/p/')[-1]} vs "
-            f"one_step -> {right['checkpoint_dir'].split('/p/')[-1]}")
+    return (
+        f"REFUSED: rollout -> {left['checkpoint_dir'].split('/p/')[-1]} vs "
+        f"one_step -> {right['checkpoint_dir'].split('/p/')[-1]}"
+    )
 
 
 def attack_p3_divergent_second_arm(tmp):
@@ -541,8 +638,7 @@ def attack_p3_divergent_second_arm(tmp):
     path = str(pathlib.Path(tmp) / "p3_lock.json")
     publish_recipe_lock(path, _pos_config(pos_rollout_arm="rollout"), arm="rollout")
     try:
-        publish_recipe_lock(path, _pos_config(pos_rollout_arm="one_step", seed=7, learning_rate=1e-3),
-                            arm="one_step")
+        publish_recipe_lock(path, _pos_config(pos_rollout_arm="one_step", seed=7, learning_rate=1e-3), arm="one_step")
     except ValueError as error:
         return f"REFUSED: {str(error).splitlines()[0][:130]}"
     return "SUCCEEDED: matched-C0 ran at another seed and learning rate and nothing noticed"
@@ -561,10 +657,20 @@ def attack_p3_confirm_without_a_certificate(tmp):
 def attack_p3_flatten_the_attempt_scoping(tmp):
     """T6-3: a caller-supplied ARTIFACT_ROOT removed phase/attempt scoping entirely, in BOTH launchers."""
     notes = []
-    for script, extra in (("train_wan_pos_rollout.sh", {"POS_FIT_AUTHORIZATION": "gs://b/m1.json"}),
-                          ("eval_wan_pos_rollout.sh", {})):
-        _, overrides = _launch(tmp, script, ARTIFACT_ROOT="gs://bucket/flat", CHECKPOINT_DIR="gs://bucket/flat",
-                               OUTPUT_DIR="gs://b/p", RUN_NAME="m3", ATTEMPT="att-X", **extra)
+    for script, extra in (
+        ("train_wan_pos_rollout.sh", {"POS_FIT_AUTHORIZATION": "gs://b/m1.json"}),
+        ("eval_wan_pos_rollout.sh", {}),
+    ):
+        _, overrides = _launch(
+            tmp,
+            script,
+            ARTIFACT_ROOT="gs://bucket/flat",
+            CHECKPOINT_DIR="gs://bucket/flat",
+            OUTPUT_DIR="gs://b/p",
+            RUN_NAME="m3",
+            ATTEMPT="att-X",
+            **extra,
+        )
         flattened = overrides.get("base_output_directory") == "gs://bucket/flat"
         notes.append(f"{script.split('_')[0]}={'FLAT' if flattened else 'derived'}")
     return ("SUCCEEDED: " if "FLAT" in " ".join(notes) else "REFUSED: ") + ", ".join(notes)
@@ -585,29 +691,48 @@ def attack_p3_adopt_an_incomplete_or_foreign_publication(tmp):
     from maxdiffusion.trainers import wan_pos_rollout_trainer as tr
 
     parent = str(pathlib.Path(tmp) / "p3_attempts")
-    tr.publish_attempt(parent, attempt="att-mine", arm="rollout", code_sha="a" * 40,
-                       context_digest="d" * 64, step=1000, checkpoint_dir=f"{parent}/att-mine/checkpoints")
-    tr.publish_attempt(parent, attempt="att-foreign-sha", arm="rollout", code_sha="b" * 40,
-                       context_digest="d" * 64, step=9000, checkpoint_dir=f"{parent}/att-foreign-sha/checkpoints")
-    tr.publish_attempt(parent, attempt="att-other-arm", arm="one_step", code_sha="a" * 40,
-                       context_digest="d" * 64, step=9000, checkpoint_dir=f"{parent}/att-other-arm/checkpoints")
+    tr.publish_attempt(
+        parent,
+        attempt="att-mine",
+        arm="rollout",
+        code_sha="a" * 40,
+        context_digest="d" * 64,
+        binding_digest="d" * 64,
+        step=1000,
+        checkpoint_dir=f"{parent}/att-mine/checkpoints",
+    )
+    tr.publish_attempt(
+        parent,
+        attempt="att-foreign-build",
+        arm="rollout",
+        code_sha="b" * 40,
+        context_digest="e" * 64,
+        binding_digest="e" * 64,
+        step=9000,
+        checkpoint_dir=f"{parent}/att-foreign-build/checkpoints",
+    )
+    tr.publish_attempt(
+        parent,
+        attempt="att-other-arm",
+        arm="one_step",
+        code_sha="a" * 40,
+        context_digest="d" * 64,
+        binding_digest="d" * 64,
+        step=9000,
+        checkpoint_dir=f"{parent}/att-other-arm/checkpoints",
+    )
     (pathlib.Path(parent) / "att-crashed" / "checkpoints").mkdir(parents=True)
-    try:
-        chosen = tr.select_resume_publication(parent, code_sha="a" * 40, arm="rollout", context_digest="d" * 64)
-    except TypeError as error:
-        return f"SUCCEEDED: THE PROBE DID NOT RUN -- selector signature drift ({error}); this attack is not covered"
+    chosen = tr.select_resume_publication(parent, arm="rollout", binding_digest="d" * 64, code_sha="a" * 40)
     if chosen is None:
         return "SUCCEEDED: nothing was adopted at all -- the probe is no longer exercising the selector"
     if chosen["attempt"] != "att-mine":
         return f"SUCCEEDED: adopted {chosen['attempt']} at step {chosen['step']}"
     # F5c added a fourth filter; the probe now also proves a foreign CONTEXT at this SHA is skipped.
-    foreign_context = tr.select_resume_publication(
-        parent, code_sha="a" * 40, arm="rollout", context_digest="e" * 64
-    )
-    if foreign_context is not None:
-        return f"SUCCEEDED: a foreign context adopted {foreign_context['attempt']}"
+    unpublished_build = tr.select_resume_publication(parent, arm="rollout", binding_digest="f" * 64, code_sha="a" * 40)
+    if unpublished_build is not None:
+        return f"SUCCEEDED: a build nobody published adopted {unpublished_build['attempt']}"
     return (
-        "REFUSED: selection logic chose only att-mine (step 1000); the 9000-step foreign-SHA and other-arm "
+        "REFUSED: selection logic chose only att-mine (step 1000); the 9000-step foreign-BUILD and other-arm "
         "trees and a foreign context were all skipped"
     )
 
@@ -641,9 +766,13 @@ def attack_p3_contradictory_duplicate_trials(tmp):
     """T7-3: the same cell published once fitting and once at 96.9% with a reservation failure."""
     fp = _probe_env()
     context = _ctx(fp)
-    published = _auth(fp, tmp, [_fit(fp, context),
-                                _fit(fp, context, peak_bytes=int(32 * 1024**3 * 0.969), reservation_failures=1)],
-                      name="p3_dup.json", context=context)
+    published = _auth(
+        fp,
+        tmp,
+        [_fit(fp, context), _fit(fp, context, peak_bytes=int(32 * 1024**3 * 0.969), reservation_failures=1)],
+        name="p3_dup.json",
+        context=context,
+    )
     try:
         fp.assert_cell_authorized(published, fp.FitCell("rollout", 32, 2), context=context)
     except ValueError as error:
@@ -654,8 +783,14 @@ def attack_p3_contradictory_duplicate_trials(tmp):
 def attack_p3_m1_cannot_be_run(tmp):
     """T7-4: `run_fit_probe` walked no ladder and the launcher had no probe mode -- M1 was unrunnable."""
     fp = _probe_env()
-    proc, overrides = _launch(tmp, "train_wan_pos_rollout.sh", POS_JOB_MODE="fit_probe", RUN_NAME="m1",
-                              ATTEMPT="att-X", OUTPUT_DIR="gs://b/p")
+    proc, overrides = _launch(
+        tmp,
+        "train_wan_pos_rollout.sh",
+        POS_JOB_MODE="fit_probe",
+        RUN_NAME="m1",
+        ATTEMPT="att-X",
+        OUTPUT_DIR="gs://b/p",
+    )
     path = str(pathlib.Path(tmp) / "p3_m1.json")
     config = _pos_config(pos_fit_authorization=path)
     seen = []
@@ -669,8 +804,10 @@ def attack_p3_m1_cannot_be_run(tmp):
     except NotImplementedError as error:
         return f"SUCCEEDED (still unrunnable): {str(error)[:100]}"
     ran = proc.returncode == 0 and overrides.get("pos_fit_authorization", "").endswith("fit_authorization.json")
-    return (f"REFUSED (M1 runs): launcher probe mode={'yes' if ran else 'no'}, ladder walked {len(seen)} cells, "
-            f"published {len(published['authorized_cells'])} authorized cells")
+    return (
+        f"REFUSED (M1 runs): launcher probe mode={'yes' if ran else 'no'}, ladder walked {len(seen)} cells, "
+        f"published {len(published['authorized_cells'])} authorized cells"
+    )
 
 
 # =================================================================================================
@@ -693,8 +830,14 @@ def attack_p1_echoed_identity_decoder():
     except TypeError:
         notes.append("DevBatchReader takes a cohort and nothing else")
     try:
-        instrument.score_dev_cohort(cohort, lambda *a, **k: (1.0, {}), forged, params=1.0,
-                                    context=type("C", (), {"num_steps": 25, "k_b": 2})(), example_shape=(4, 3, 4, 6))
+        instrument.score_dev_cohort(
+            cohort,
+            lambda *a, **k: (1.0, {}),
+            forged,
+            params=1.0,
+            context=type("C", (), {"num_steps": 25, "k_b": 2})(),
+            example_shape=(4, 3, 4, 6),
+        )
         return "SUCCEEDED: " + "; ".join(notes) + "; scoring accepted a decoder"
     except TypeError:
         notes.append("score_dev_cohort has no batch source parameter")
@@ -706,8 +849,10 @@ def attack_p1_poison_selection_with_nan():
     could displace, while preserve_selection still replaced the sibling."""
     from maxdiffusion import pos_rollout_loop as pl
 
-    history = [pl.EvalRecord(step=1000, dev_metric=float("nan"), train_metric=1.0),
-               pl.EvalRecord(step=2000, dev_metric=0.1, train_metric=0.9)]
+    history = [
+        pl.EvalRecord(step=1000, dev_metric=float("nan"), train_metric=1.0),
+        pl.EvalRecord(step=2000, dev_metric=0.1, train_metric=0.9),
+    ]
     try:
         verdict = pl.stop_verdict(history)
     except ValueError as error:
@@ -723,8 +868,11 @@ def attack_p1_write_a_gs_artifact_locally():
 
     dropped = str(_p.Path("gs://bucket/run/report.json"))
     guarded = pos_rollout_support.is_remote("gs://bucket/run/report.json")
-    return (f"REFUSED: pathlib would give {dropped!r}; storage layer treats it as remote={guarded}"
-            if guarded else f"SUCCEEDED: {dropped}")
+    return (
+        f"REFUSED: pathlib would give {dropped!r}; storage layer treats it as remote={guarded}"
+        if guarded
+        else f"SUCCEEDED: {dropped}"
+    )
 
 
 #: Three verdicts, counted separately (review F5c). REFUSED: production stopped the attack. DECLARED:
@@ -748,16 +896,31 @@ def _probe_id(label) -> str:
 
 
 def _report(label, fn, *args):
-    """An exception raised BY PRODUCTION is a refusal; the runner must survive it and say so.
+    """**A verdict is a RETURNED string. An escaping exception means the probe did not run.**
 
-    Added when a sibling round hardened `reproduce_anchor` into a TypeError: the attack was refused
-    in the strongest possible way (no such call shape exists) and the runner still crashed, hiding
-    every later attack. No attack's content changed.
+    Review F7d, and this is the harness's most expensive lesson. `_report` used to convert any
+    exception into `REFUSED (...)`, on the reasoning that production raising is production refusing.
+    That reasoning is wrong in the case that matters: when a probe calls an API whose signature or
+    name has moved, the exception comes from the PROBE failing to execute, not from production
+    refusing anything — and it landed in the pass column. The reviewer found concrete probes that had
+    been dead since the F3c-era API changes, counted as coverage in every green battery since.
+
+    So the discriminator is now structural rather than a guess about exception types: **a probe that
+    means "production refused" RETURNS a verdict string saying so** — catching the production error
+    itself, which also forces it to say which error it expected — **and anything that escapes the body
+    is the probe's own failure.** The runner exits non-zero on it.
+
+    This is universal by construction: every probe is invoked through here, so there is no list of
+    guarded probes to keep in step (F5d guarded one call, F7c guarded a subset, and both were
+    overtaken by the next signature to move).
     """
     try:
         verdict = str(fn(*args))
-    except Exception as error:  # noqa: BLE001
-        verdict = f"REFUSED ({type(error).__name__}): {str(error).splitlines()[0][:110]}"
+    except Exception as error:  # noqa: BLE001 -- an escape is a non-run, whatever its class
+        verdict = (
+            f"SUCCEEDED: THE PROBE DID NOT RUN -- {type(error).__name__}: "
+            f"{str(error).splitlines()[0][:110]}; this attack is not covered"
+        )
     if verdict.startswith("DECLARED") and _probe_id(label) not in _MAY_DECLARE:
         print(
             f"{label}: HARNESS FAILURE: {_probe_id(label)} returned DECLARED but is not on the accepted-residual "
@@ -787,7 +950,6 @@ def _summarize():
         print("SUMMARY: FAILED -- a SUCCEEDED or UNPARSED line is production-guilty until you have read the probe.")
         return False
     return True
-
 
 
 # =================================================================================================
@@ -859,9 +1021,7 @@ def _fake_environment():
             if not self._remote(path):
                 return sorted(child.name for child in pathlib.Path(str(path)).iterdir())
             prefix = str(path).rstrip("/") + "/"
-            return sorted(
-                {blob[len(prefix):].split("/", 1)[0] for blob in blobs if blob.startswith(prefix)} - {""}
-            )
+            return sorted({blob[len(prefix) :].split("/", 1)[0] for blob in blobs if blob.startswith(prefix)} - {""})
 
         def rename(self, source, destination, overwrite=False):
             # F5 publishes by staging and renaming, so a fake without this makes every F5 probe
@@ -1003,9 +1163,7 @@ def attack_g_forge_the_certificate_marker():
     ev.publish_certificate(path, {"certificate": g.GATE_CERTIFICATE, "passed": True})
     install(inst.load_dev_cohort(DEV))
     try:
-        g.confirm_on_test(
-            path, test_cohort=g.load_test_cohort(TEST), derangement=None, tables={}, control_tables={}
-        )
+        g.confirm_on_test(path, test_cohort=g.load_test_cohort(TEST), derangement=None, tables={}, control_tables={})
     except (TypeError, ValueError) as error:
         return f"REFUSED: {str(error).splitlines()[0][:110]}"
     return "SUCCEEDED: the marker alone unlocked TEST"
@@ -1223,8 +1381,11 @@ def attack_g_the_evaluator_cannot_run():
     source = _p.Path(ev.__file__).read_text()
     if "NotImplementedError" in source:
         return "SUCCEEDED: the evaluator still contains a raising orchestration seam"
-    missing = [n for n in ("run_evaluation", "run_anchor_phase", "run_benchmark_phase", "run_gates_phase",
-                           "run_confirm_phase") if not callable(getattr(ev, n, None))]
+    missing = [
+        n
+        for n in ("run_evaluation", "run_anchor_phase", "run_benchmark_phase", "run_gates_phase", "run_confirm_phase")
+        if not callable(getattr(ev, n, None))
+    ]
     if missing:
         return f"SUCCEEDED: the protocol is missing {missing}"
     return "REFUSED: all four phases are implemented and dispatched"
@@ -1246,9 +1407,7 @@ def attack_g_skip_the_anchor():
             return dict(self)
 
     for phase in ("benchmark", "gates", "confirm"):
-        config = Config(
-            {"pos_eval_phase": phase, "base_output_directory": f"gs://attack/run/eval_{phase}_att-1"}
-        )
+        config = Config({"pos_eval_phase": phase, "base_output_directory": f"gs://attack/run/eval_{phase}_att-1"})
         try:
             ev.run_evaluation(config, backend=object())
         except (TypeError, ValueError) as error:
@@ -1270,7 +1429,6 @@ def attack_g_plan_with_no_consumer():
     if consumes and checks_draw:
         return "REFUSED: score_condition_table consumes the plan and enforces the receiver-keyed draw"
     return f"SUCCEEDED: consumes={consumes} checks_draw={checks_draw}"
-
 
 
 # =================================================================================================
@@ -1307,13 +1465,21 @@ def attack_f1_fingerprint_blindness(tmp):
     base = fp.recipe_fingerprint(_pos_config())
     blind = [
         key
-        for key, value in (("action_tokens", 64), ("pre_context_tokens", 64),
-                           ("flash_block_sizes", {"block_q": 1024}), ("latent_frames", 99),
-                           ("action_dim", 14), ("logical_axis_rules", [["a", "b"]]))
+        for key, value in (
+            ("action_tokens", 64),
+            ("pre_context_tokens", 64),
+            ("flash_block_sizes", {"block_q": 1024}),
+            ("latent_frames", 99),
+            ("action_dim", 14),
+            ("logical_axis_rules", [["a", "b"]]),
+        )
         if fp.recipe_fingerprint(_pos_config(**{key: value})) == base
     ]
-    return (f"SUCCEEDED: {blind} leave the fingerprint unchanged" if blind
-            else "REFUSED: every graph/HBM-bearing key moves the fingerprint")
+    return (
+        f"SUCCEEDED: {blind} leave the fingerprint unchanged"
+        if blind
+        else "REFUSED: every graph/HBM-bearing key moves the fingerprint"
+    )
 
 
 def attack_f1_projection_miscounts(tmp):
@@ -1322,11 +1488,20 @@ def attack_f1_projection_miscounts(tmp):
     fp = _probe_env()
     from maxdiffusion.pos_rollout_loop import LoopSchedule, should_evaluate
 
-    schedule = LoopSchedule(max_train_steps=1_001, eval_every=1_000, logical_batch=256, microbatch=32,
-                            seed=0, arm="rollout", k_b=2, num_steps=25)
+    schedule = LoopSchedule(
+        max_train_steps=1_001,
+        eval_every=1_000,
+        logical_batch=256,
+        microbatch=32,
+        seed=0,
+        arm="rollout",
+        k_b=2,
+        num_steps=25,
+    )
     production = sum(1 for step in range(1, 1_002) if should_evaluate(step, schedule))
-    projected = fp.project_wall_clock(_fit(fp), max_train_steps=1_001, eval_every=1_000,
-                                      checkpoint_every=1_000)["evaluations"]
+    projected = fp.project_wall_clock(_fit(fp), max_train_steps=1_001, eval_every=1_000, checkpoint_every=1_000)[
+        "evaluations"
+    ]
     notes = [f"projected={projected} production={production}"]
     try:
         fp.project_wall_clock(_fit(fp), max_train_steps=10_000, eval_every=1_000, checkpoint_every=250)
@@ -1350,8 +1525,7 @@ def attack_f1_two_models_compare_equal(tmp):
     for directory, payload in ((left, b"A"), (right, b"B-and-longer")):
         directory.mkdir(exist_ok=True)
         (directory / "model.safetensors").write_bytes(payload)
-    revisions = [fp.derive_model_revision(_pos_config(pretrained_model_name_or_path=str(d)))
-                 for d in (left, right)]
+    revisions = [fp.derive_model_revision(_pos_config(pretrained_model_name_or_path=str(d))) for d in (left, right)]
     if revisions[0] == revisions[1] or "an unresolvable model produced a revision" in notes:
         return "SUCCEEDED: " + "; ".join(notes + [f"two local models share {revisions[0].split('@')[-1]}"])
     return "REFUSED: " + "; ".join(notes + ["two local models get different content manifests"])
@@ -1365,15 +1539,18 @@ def attack_f1_entrypoint_cannot_measure(tmp):
     raises = "NotImplementedError" in inspect.getsource(fp.measure_cell_on_device)
     reaches = []
     try:
-        fp.run_fit_probe(_pos_config(pos_fit_authorization=str(pathlib.Path(tmp) / "f1_m1.json")),
-                         devices=[_Dev()], cells=[fp.FitCell("rollout", 8, 2)], trials=1)
+        fp.run_fit_probe(
+            _pos_config(pos_fit_authorization=str(pathlib.Path(tmp) / "f1_m1.json")),
+            devices=[_Dev()],
+            cells=[fp.FitCell("rollout", 8, 2)],
+            trials=1,
+        )
         reaches.append("it measured")
     except NotImplementedError as error:
         return f"SUCCEEDED (M1 still dies): {str(error)[:90]}"
     except Exception as error:  # noqa: BLE001 -- reaching the real weights load is the point
         reaches.append(f"reached the real model load ({type(error).__name__})")
-    return (f"SUCCEEDED: measurer still raises" if raises
-            else f"REFUSED: the measurement path is real -- {reaches[0]}")
+    return f"SUCCEEDED: measurer still raises" if raises else f"REFUSED: the measurement path is real -- {reaches[0]}"
 
 
 def attack_f1_real_entrypoint_never_runs(tmp):
@@ -1388,15 +1565,31 @@ def attack_f1_real_entrypoint_never_runs(tmp):
     if "pyconfig.initialize" not in source or "_run_real_entrypoint" not in source:
         return "SUCCEEDED: no test executes the real entrypoint through the real parser"
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", str(test), "-q", "-p", "no:cacheprovider", "--no-header",
-         "-k", "real_m1_entrypoint_measures", "--tb=line"],
-        cwd=repo, capture_output=True, text=True, timeout=1800,
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(test),
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--no-header",
+            "-k",
+            "real_m1_entrypoint_measures",
+            "--tb=line",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=1800,
         env={**os.environ, "PYTHONPATH": "src", "JAX_PLATFORMS": "cpu"},
     )
     tail = [line for line in proc.stdout.splitlines() if line.strip()][-1:] or ["<no output>"]
-    return (f"REFUSED (it runs): {tail[0][:110]}" if proc.returncode == 0
-            else f"SUCCEEDED: the real entrypoint test did not pass -- {tail[0][:110]}")
-
+    return (
+        f"REFUSED (it runs): {tail[0][:110]}"
+        if proc.returncode == 0
+        else f"SUCCEEDED: the real entrypoint test did not pass -- {tail[0][:110]}"
+    )
 
 
 # =================================================================================================
@@ -1423,9 +1616,7 @@ def _f3a_measure(rows):
     from maxdiffusion import eval_wan_pos_rollout as ev
 
     run = ev.HISTORICAL_ANCHOR.run_name
-    identity = ev.CheckpointIdentity(
-        run_name=run, step=30000, root=f"gs://b/{run}/checkpoints", source="historical"
-    )
+    identity = ev.CheckpointIdentity(run_name=run, step=30000, root=f"gs://b/{run}/checkpoints", source="historical")
     return ev.summarize_samples(
         rows, checkpoint=identity, code_sha="a" * 40, model_revision="rev", test_manifest_path=TEST
     )
@@ -1522,9 +1713,7 @@ def attack_f3a_score_in_float32_under_a_bf16_config():
     sigmas, timesteps = ev.deployed_grid()
     backend = ev.DeviceBackend(
         velocity_for=velocity_for,
-        decode_fn=lambda x: jnp.asarray(
-            np.repeat(np.asarray(x, np.float32).mean(axis=1)[..., None], 3, axis=-1)
-        ),
+        decode_fn=lambda x: jnp.asarray(np.repeat(np.asarray(x, np.float32).mean(axis=1)[..., None], 3, axis=-1)),
         sigmas=sigmas,
         timesteps=timesteps,
         context=jnp.zeros((1, 7, 8), jnp.float32),
@@ -1552,7 +1741,6 @@ def attack_f3a_score_in_float32_under_a_bf16_config():
     return "REFUSED: the restored backend casts latents, actions and context before drawing"
 
 
-
 # =================================================================================================
 # Round F1b — the M1-readiness review's six findings, re-run against the fixes. The reviewer's own
 # probes: "boom in program build", "No room left on device", the same-size in-place byte change, and
@@ -1564,13 +1752,15 @@ def attack_f1b_wrong_adapter(tmp):
     """The pilot trains the UNCHANGED pre_context adapter; the config inherited `side_adapter`."""
     import yaml
 
-    declared = yaml.safe_load(
-        pathlib.Path("src/maxdiffusion/configs/base_wan_5b_pos_rollout.yml").read_text()
-    )["action_adapter_type"]
+    declared = yaml.safe_load(pathlib.Path("src/maxdiffusion/configs/base_wan_5b_pos_rollout.yml").read_text())[
+        "action_adapter_type"
+    ]
     if declared != "pre_context":
         return f"SUCCEEDED: M1 would build action_adapter_type={declared!r}, not the approved pre_context"
     fp = _probe_env()
-    moved = fp.recipe_fingerprint(_pos_config(action_adapter_type="side_adapter")) != fp.recipe_fingerprint(_pos_config())
+    moved = fp.recipe_fingerprint(_pos_config(action_adapter_type="side_adapter")) != fp.recipe_fingerprint(
+        _pos_config()
+    )
     return f"REFUSED: the config declares pre_context and the fingerprint separates the two ({moved})"
 
 
@@ -1582,8 +1772,12 @@ def attack_f1b_microbatch_timed_as_update(tmp):
     from probe_f1_smoke import TinyModelSource, _config as _tiny
 
     fp = _probe_env()
-    config = _tiny(pretrained_model_name_or_path=str(_HARNESS_MODEL), pos_logical_batch=8, pos_microbatch=2,
-                   checkpoint_dir=tempfile.mkdtemp())
+    config = _tiny(
+        pretrained_model_name_or_path=str(_HARNESS_MODEL),
+        pos_logical_batch=8,
+        pos_microbatch=2,
+        checkpoint_dir=tempfile.mkdtemp(),
+    )
     program = fp.build_probe_program(config, fp.FitCell("rollout", 2, 2), model_source=TinyModelSource())
     parts = len(program.batch) if isinstance(program.batch, tuple) else 1
     width = program.eval_batch["z_video"].shape[0] if program.eval_batch is not None else None
@@ -1659,7 +1853,6 @@ def attack_f1b_retype_a_duration(tmp):
     return "SUCCEEDED: a retyped duration survived the reconstruction check"
 
 
-
 def attack_f3afix_loader_reads_an_undeclared_key():
     """C3, executed: `load_device_backend` read `config.num_train_timesteps`; on the real
     HyperParameters an undeclared key RAISES, so the production loader died before anything ran."""
@@ -1687,7 +1880,9 @@ def attack_f3afix_loader_reads_an_undeclared_key():
     # ...and the real class is what makes an undeclared read fatal rather than merely untidy.
     pyconfig = root / "pyconfig.py"
     cls = next(
-        n for n in _ast.parse(pyconfig.read_text()).body if isinstance(n, _ast.ClassDef) and n.name == "HyperParameters"
+        n
+        for n in _ast.parse(pyconfig.read_text()).body
+        if isinstance(n, _ast.ClassDef) and n.name == "HyperParameters"
     )
     namespace = {"_config": _types.SimpleNamespace(keys=_yaml.safe_load(yaml_text))}
     exec(compile(_ast.Module(body=[cls], type_ignores=[]), str(pyconfig), "exec"), namespace)  # noqa: S102
@@ -1714,7 +1909,6 @@ def attack_f3afix_loader_skips_the_grid_check():
     if checks and from_scheduler:
         return "REFUSED: the loader builds from the scheduler and binds the result to the deployed grid"
     return f"SUCCEEDED: grid_check={checks} scheduler_sourced={from_scheduler}"
-
 
 
 # =================================================================================================
@@ -1780,7 +1974,6 @@ def attack_w1_hand_rebuild_the_adapter(tmp):
     if "build_adapter_stack" not in called or missing:
         return f"SUCCEEDED: M1 calls {sorted(called)}; factory missing {missing}"
     return "REFUSED: M1 calls the shared factory, which passes the production dtypes and precision"
-
 
 
 # =================================================================================================
@@ -1899,7 +2092,6 @@ def attack_w2_gate_after_the_load(tmp):
     return "REFUSED: every configuration gate precedes the pipeline load"
 
 
-
 def attack_w2b_launch_m2_with_the_yaml_per_device_batch(tmp):
     """The launch blocker W2 found: a submission whose per-device batch leaves the loader loading
     fewer examples than the run declares. The launcher must not be able to emit one."""
@@ -1911,9 +2103,7 @@ def attack_w2b_launch_m2_with_the_yaml_per_device_batch(tmp):
     emitted = 'per_device_batch_size="${DERIVED_PER_DEVICE_BATCH}"' in launcher
     guarded = "POS_LOGICAL_BATCH % POS_DEVICE_COUNT" in launcher
     if reads_env or not derived or not emitted or not guarded:
-        return (
-            f"SUCCEEDED: env-read={reads_env} derived={bool(derived)} emitted={emitted} guarded={guarded}"
-        )
+        return f"SUCCEEDED: env-read={reads_env} derived={bool(derived)} emitted={emitted} guarded={guarded}"
 
     # ...and the trainer still refuses the value the launcher used to emit, which is what makes the
     # derivation load-bearing rather than cosmetic.
@@ -1925,7 +2115,6 @@ def attack_w2b_launch_m2_with_the_yaml_per_device_batch(tmp):
     except ValueError as error:
         return f"REFUSED: derived in the launcher, and re-checked on the worker -- {str(error).splitlines()[0][:70]}"
     return "SUCCEEDED: a loader width that cannot feed the logical batch was accepted"
-
 
 
 def attack_w3_measure_an_unsharded_program():
@@ -1954,7 +2143,10 @@ def attack_w3_measure_an_unsharded_program():
     batch = ({"z_video": jnp.zeros((1, 2, 2)), "z_i0": jnp.zeros((1, 2, 2))},)
     draws = ((jnp.asarray(0), jnp.asarray(2), jnp.zeros((1, 2, 2)), jnp.zeros((1,), jnp.int32)),)
     params, opt_state, placed_batch, placed_draws = shared.place_step_inputs(
-        mesh, params={"w": jnp.zeros((2,))}, opt_state={"mu": jnp.zeros((2,))}, micro_batches=batch,
+        mesh,
+        params={"w": jnp.zeros((2,))},
+        opt_state={"mu": jnp.zeros((2,))},
+        micro_batches=batch,
         micro_draws=draws,
     )
     observed = {
@@ -2044,7 +2236,8 @@ def attack_w3_the_seams_diverge():
     for owner in (tm.WanPosRolloutTrainer.load_backbone, fp.ProductionModelSource.load):
         source = _textwrap.dedent(_inspect.getsource(owner))
         callers.append(
-            "load_backbone" in {
+            "load_backbone"
+            in {
                 node.func.id
                 for node in _ast.walk(_ast.parse(source))
                 if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name)
@@ -2053,7 +2246,6 @@ def attack_w3_the_seams_diverge():
     if not seams or not all(callers):
         return f"SUCCEEDED: seams_present={seams} callers_delegating={callers}"
     return "REFUSED: one loader reaches the settled seams and both callers enter it"
-
 
 
 def attack_w4_compile_against_a_batch_production_never_hands_it():
@@ -2139,9 +2331,7 @@ def _f5_publish(fp, tmp, slot, attempt="att-1", **over):
     """Measure one cell into a fresh attempt root and return the path of the artifact it banked."""
     config = _f5_config(fp, tmp, slot, attempt, **over)
     cell = fp.FitCell(*_f5_cell())
-    fp.run_fit_probe(
-        config, measurer=_f5_measurer(fp), cells=[cell], trials=2, devices=[_Dev() for _ in range(8)]
-    )
+    fp.run_fit_probe(config, measurer=_f5_measurer(fp), cells=[cell], trials=2, devices=[_Dev() for _ in range(8)])
     return fp.cell_marker_path(str(getattr(config, "pos_fit_authorization")), cell)
 
 
@@ -2182,7 +2372,7 @@ def _f5_edit(marker, mutate):
     payload["device_count"] = context.device_count
     payload["recipe_fingerprint"] = context.recipe_fingerprint
     for trial in payload["trials"]:
-        trial["context_digest"] = context.digest()
+        trial["context_digest"] = context.binding_digest()
     forged = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     pathlib.Path(fp._content_for_marker(marker, forged)).write_text(
         json.dumps({"payload": payload, "sha256": forged}, sort_keys=True)
@@ -2191,20 +2381,28 @@ def _f5_edit(marker, mutate):
     pathlib.Path(marker).write_text(forged + "\n")
 
 
-def attack_f5_adopt_a_cell_measured_on_another_commit(tmp):
-    """Can a cell banked by a DIFFERENT program be adopted into this one's authorization?
+def attack_f5_lose_the_bank_to_a_docs_commit(tmp):
+    """Can a COSMETIC commit destroy a measured ladder?
 
-    This is the defect that makes adopt-if-published dangerous at all: an HBM peak is a measurement
-    of a program, and a published cell that outlives a code change is a number about a program that
-    no longer exists.
+    **Rewritten in F7, and the old probe was deleted rather than kept.** It used to mutate `code_sha`
+    and call the resulting refusal a success — which was the behaviour, and the behaviour was wrong:
+    this campaign records every submission in a ledger commit, so consecutive attempts of one job
+    never share a commit, and M1-6 refused the whole M1-5 bank with `['code_sha'] differ` while the
+    manifest MATCHED. Guaranteed bank loss on every resubmission is the failure F5 exists to prevent.
+
+    The attack is now the production one: change the label, leave the bytes alone, and see whether the
+    ladder is thrown away. REFUSED means it was not. The foreign-MANIFEST refusal is a different probe
+    (`F5-5`) and is untouched.
     """
     fp = _probe_env()
     published = _f5_publish(fp, tmp, "commit")
     _f5_edit(published, lambda payload: payload["context"].update(code_sha="0" * 40))
-    calls, _ = _f5_resume(fp, tmp, "commit")
-    if not calls:
-        return "SUCCEEDED: a cell measured on another commit was adopted"
-    return f"REFUSED: re-measured ({len(calls)} trials) -- adoption is bound to the context digest, code_sha included"
+    calls, table = _f5_resume(fp, tmp, "commit")
+    if calls:
+        return f"SUCCEEDED: a docs-only label change re-measured {len(calls)} trials and discarded the bank"
+    if not any(row["provenance"].startswith(fp.ADOPTED_PREFIX) for row in table["cell_provenance"]):
+        return "SUCCEEDED: nothing was adopted, so the bank was lost by another route"
+    return "REFUSED: identical bytes under a different commit label were adopted, with the drift logged"
 
 
 def attack_f5_adopt_a_cell_measured_on_another_topology(tmp):
@@ -2339,6 +2537,50 @@ def attack_f5_forge_with_the_CURRENT_manifest(tmp):
     )
 
 
+def attack_f7_refuse_a_launch_over_a_docs_commit(tmp):
+    """Can a COSMETIC commit block a legitimate M2 launch at the gate?
+
+    The mirror of `F5-1`, one step later and far more expensive. M1 publishes an authorization at one
+    tip; the Planner records the submission in the ledger; M2 starts at the next tip running identical
+    bytes. Until F7b `assert_cell_authorized` compared the full context and refused — at startup, with
+    the reservation already held. REFUSED here means the launch was NOT blocked.
+
+    The dangerous direction is a separate probe (`F7-2`): identical label, different bytes.
+    """
+    fp = _probe_env()
+    measured_at = _ctx(fp)
+    running_now = dataclasses.replace(measured_at, code_sha="5631a36" + "0" * 33)
+    if measured_at.binding_digest() != running_now.binding_digest():
+        return "SUCCEEDED: the probe changed the BUILD, not just the label -- it is testing the wrong thing"
+    published = _auth(fp, tmp, [_fit(fp, measured_at)], name="f7_label.json", context=measured_at)
+    try:
+        fp.assert_cell_authorized(published, fp.FitCell("rollout", 32, 2), context=running_now)
+    except ValueError as error:
+        return f"SUCCEEDED: a docs-only commit blocked the launch -- {str(error).splitlines()[0][:110]}"
+    return "REFUSED: identical bytes under a different commit label were authorized, with the drift logged"
+
+
+def attack_f7_authorize_a_different_build_under_the_same_label(tmp):
+    """The direction that must NOT be narrowed: same `COMMIT`, different running bytes.
+
+    A dirty tree, a stale tarball or a hand-edited module on a worker all produce exactly this, and it
+    is what the manifest was introduced for in F5b. F7/F7b removed the LABEL from the binding and must
+    not have removed anything else.
+    """
+    fp = _probe_env()
+    measured_at = _ctx(fp)
+    running_now = dataclasses.replace(measured_at, manifest_digest="9" * 64)
+    published = _auth(fp, tmp, [_fit(fp, measured_at)], name="f7_build.json", context=measured_at)
+    try:
+        fp.assert_cell_authorized(published, fp.FitCell("rollout", 32, 2), context=running_now)
+    except ValueError as error:
+        text = str(error).splitlines()[0]
+        if "manifest_digest" not in text:
+            return f"SUCCEEDED (refused for the wrong reason): {text[:110]}"
+        return f"REFUSED: {text[:120]}"
+    return "SUCCEEDED: an authorization measured by other bytes was accepted under a matching label"
+
+
 def attack_f6_quote_an_excluded_cell(tmp):
     """Can a training run reach a cell M1 DECLARED unreachable and never built?
 
@@ -2421,7 +2663,9 @@ def attack_f6_doctor_a_table_into_two_statuses(tmp):
         return f"REFUSED at load: {str(error).splitlines()[0][:120]}"
     try:
         fp.assert_cell_authorized(
-            published, fp.FitCell(**{k: v for k, v in smuggled.items()}), context=fp.derive_probe_context(config, devices=[_Dev()] * 8)
+            published,
+            fp.FitCell(**{k: v for k, v in smuggled.items()}),
+            context=fp.derive_probe_context(config, devices=[_Dev()] * 8),
         )
     except ValueError:
         return "SUCCEEDED (partly): the contradictory table LOADED; only the gate caught the cell"
@@ -2587,7 +2831,7 @@ if __name__ == "__main__":
         _report("W4-2   time a pruned scorer   ", attack_w4_time_a_pruned_scorer)
         # F5: per-cell publication and adoption -- the attack surface "resume from what is
         # published" adds, one probe per known defect of the pattern.
-        _report("F5-1   adopt another commit  ", attack_f5_adopt_a_cell_measured_on_another_commit, tmp)
+        _report("F5-1   lose bank to docs commit", attack_f5_lose_the_bank_to_a_docs_commit, tmp)
         _report("F5-2   adopt another topology", attack_f5_adopt_a_cell_measured_on_another_topology, tmp)
         _report("F5-3   adopt another job     ", attack_f5_adopt_another_jobs_cell, tmp)
         _report("F5-4   adopt a half-write    ", attack_f5_adopt_a_half_published_cell, tmp)
@@ -2597,5 +2841,7 @@ if __name__ == "__main__":
         _report("F5-8   forge w/ CURRENT manifest", attack_f5_forge_with_the_CURRENT_manifest, tmp)
         _report("F6-1   quote an excluded cell", attack_f6_quote_an_excluded_cell, tmp)
         _report("F6-2   doctor two statuses", attack_f6_doctor_a_table_into_two_statuses, tmp)
+        _report("F7-1   block launch on a label", attack_f7_refuse_a_launch_over_a_docs_commit, tmp)
+        _report("F7-2   authorize another build", attack_f7_authorize_a_different_build_under_the_same_label, tmp)
     if not _summarize():
         raise SystemExit(1)

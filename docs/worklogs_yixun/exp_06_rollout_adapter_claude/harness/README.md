@@ -55,6 +55,29 @@ lying about production. It now REFUSES to return when a launch produced nothing,
 deliberately expects a non-launch opts out with `_expect_failure`. When adding a probe that inspects
 launcher argv, make sure it fails loudly if the launcher did not run.
 
+## The sixth caution, earned in F7c — the fifth caution was not enough, and the rule had a hole
+
+`P3-5` did it again. F5d repaired it, wrote the standing rule below (*grep the harness for call sites
+in the same commit as any production signature change*), and guarded **one call**. F7 then changed
+`publish_attempt`'s signature, the rule was not followed, and the F7b log shipped with:
+
+```
+P3-5  adopt incomplete/foreign:: REFUSED (TypeError): publish_attempt() missing 1 required
+                                 keyword-only argument: 'binding_digest'
+```
+
+**Fourth false verdict of the campaign, second from this exact cause.** Two things were wrong. The
+rule depended on a human remembering it at exactly the moment they were busy doing something else;
+and the guard covered the one call that had broken last time, which is never the one that breaks
+next.
+
+**The sharpened rule: the did-not-run guard wraps the WHOLE probe body, not one call.**
+`_must_execute` is a decorator, it is applied to every probe that calls a production API whose
+signature has churned, and a `TypeError` from anywhere inside scores `SUCCEEDED: THE PROBE DID NOT
+RUN`. The runner exits non-zero on it, so the battery cannot be green while a probe is silently
+absent. The grep rule stands as well — a guard that turns a silent hole into a loud one is a safety
+net, not a substitute for updating the call.
+
 ## A fifth caution, earned in F5d — a probe that CANNOT RUN scores as a refusal
 
 `_report` turns any exception into a `REFUSED (...)` line. That is what makes the runner survive a
