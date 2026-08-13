@@ -149,7 +149,7 @@ def _context(config=None, devices=None, **overrides):
 def _measurement(context, cell, *, peak=20 * 1024**3, step=3.5):
     return probe.CellMeasurement(
         cell=cell,
-        context_digest=context.digest(),
+        context_digest=context.binding_digest(),
         compile_seconds=480.0,
         step_seconds=step,
         eval_seconds=600.0,
@@ -553,7 +553,7 @@ def _damage(marker: str, mutate, *, resync=True):
         payload["device_count"] = context.device_count
         payload["recipe_fingerprint"] = context.recipe_fingerprint
         for trial in payload["trials"]:
-            trial["context_digest"] = context.digest()
+            trial["context_digest"] = context.binding_digest()
     # The forger REPUBLISHES properly -- new content object at its own digest, marker moved to it,
     # old object removed. Anything less would be refused by the content-addressing rather than by the
     # binding under test, and the test would then be measuring the wrong refusal.
@@ -611,17 +611,6 @@ def test_a_recipe_knob_that_moves_the_fingerprint_forces_a_re_measure(tmp_path, 
         cells=[probe.FitCell("rollout", 8, 2)],
     )
     assert len(measurer.calls) == 2, f"{knob} moved the recipe fingerprint and the cell must be re-measured"
-
-
-def test_a_cell_measured_on_another_commit_is_re_measured(tmp_path, capsys):
-    """Defect (a). The policy is coarse and stated: the context digest carries ``code_sha``, so ANY
-    commit invalidates every published cell. That over-refuses on purpose."""
-    published = _publish_one(tmp_path)
-    _damage(published, lambda payload: payload["context"].update(code_sha="0" * 40))
-
-    measurer, _ = _resume(tmp_path)
-    assert len(measurer.calls) == 2
-    assert "code_sha" in capsys.readouterr().out, "the refusal names the field that differs"
 
 
 def test_a_cell_measured_on_a_different_topology_is_re_measured(tmp_path, capsys):
@@ -1336,7 +1325,7 @@ def test_declaring_an_exclusion_does_not_invalidate_cells_already_banked(tmp_pat
 def test_the_protocol_names_the_shape_that_carries_exclusions():
     """v3 tables cannot express an excluded cell, so a v3 loader reading a v4 table would silently
     treat an excluded cell as never-measured. Fail closed on the version, as for v3."""
-    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v4"
+    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v5"
 
 
 def test_excluding_the_whole_ladder_is_refused_rather_than_publishing_nothing(tmp_path):
@@ -1486,3 +1475,384 @@ def test_an_empty_token_in_the_declaration_is_a_loud_error(raw):
     to keep the probe away from the deterministic-fault cell could silently walk straight into it."""
     with pytest.raises(ValueError, match="empty"):
         probe.parse_excluded_cells(_config(pos_fit_excluded_cells=raw, pos_fit_exclusion_reason=_WHY))
+
+
+# =============================================================================================
+# Round F7 `manifest-identity` — measured in production, not argued.
+#
+# M1-6 attempt 2 adopted ZERO cells. The M1-5 bank was refused with
+#
+#     not adopting .../cells/rollout_m8_k2.json.digest: it was measured under a different program --
+#     ['code_sha'] differ (measured on f51a8a6.../v6e x8, running 5631a36.../v6e x8)
+#
+# while `manifest_digest` MATCHED: the only difference between those two tips is the Planner's
+# ledger commits, which are docs-only. F5b's "any commit invalidates every banked cell" meets the
+# campaign's own discipline of recording every submission in the ledger, and the product of the two
+# is guaranteed bank loss on every resubmission — the failure F5 exists to prevent, reintroduced by
+# the binding that was supposed to protect it.
+#
+# F6b already wrote down the right principle: **the manifest is the identity; code_sha is the
+# label.** F7 makes the code agree. The label stays in the artifact, the table and the run digest,
+# where it has audit value; it stops being able to throw away a measurement it does not disagree with.
+# =============================================================================================
+
+
+def _at(monkeypatch, *, code_sha, manifest):
+    monkeypatch.setattr(probe, "derive_code_sha", lambda **kwargs: code_sha)
+    monkeypatch.setattr(probe, "deployed_manifest_digest", lambda root=None: manifest)
+
+
+def test_a_docs_only_commit_does_not_throw_away_the_bank(tmp_path, monkeypatch, capsys):
+    """(a) The exact production construction: bank at tip A, adopt at tip B, bytes identical.
+
+    Two tips that differ only in committed documentation are the same program. Refusing the bank
+    across them cost M1-6 its entire inherited ladder for no measurable reason at all."""
+    cells = [probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2)]
+    root = _adoption_root(tmp_path)
+    manifest = "m" * 64
+
+    _at(monkeypatch, code_sha="f51a8a6" + "0" * 33, manifest=manifest)
+    first = _CountingMeasurer()
+    _run(_config(pos_fit_authorization=_attempt(tmp_path, "att-1"), pos_fit_adoption_root=root), first, cells=cells)
+    assert len(first.calls) == 4
+
+    _at(monkeypatch, code_sha="5631a36" + "0" * 33, manifest=manifest)  # a docs-only descendant
+    second = _CountingMeasurer()
+    table = _run(
+        _config(pos_fit_authorization=_attempt(tmp_path, "att-2"), pos_fit_adoption_root=root), second, cells=cells
+    )
+    assert len(second.calls) == 0, "identical bytes under a different label must still be adopted"
+    assert all(row["provenance"].startswith(probe.ADOPTED_PREFIX) for row in table["cell_provenance"])
+
+    out = capsys.readouterr().out
+    assert "label" in out.lower() and "f51a8a6" in out, "the drift is reported, not silently swallowed"
+    assert table["context"]["code_sha"].startswith("5631a36"), "the running label is still what the table records"
+
+
+def test_a_different_build_under_the_same_label_is_still_refused(tmp_path, monkeypatch, capsys):
+    """(b) The direction that must survive: the label is not evidence, so it cannot be a free pass.
+
+    Two deployments can carry the same `COMMIT` and different bytes — a dirty tree, a stale tarball,
+    a hand-edited module on a worker. That is exactly what F5b's manifest was introduced for, and
+    narrowing the binding must not weaken it by one field."""
+    cells = [probe.FitCell("rollout", 8, 2)]
+    root = _adoption_root(tmp_path)
+    label = "a" * 40
+
+    _at(monkeypatch, code_sha=label, manifest="1" * 64)
+    _run(
+        _config(pos_fit_authorization=_attempt(tmp_path, "att-1"), pos_fit_adoption_root=root),
+        _CountingMeasurer(),
+        cells=cells,
+    )
+
+    _at(monkeypatch, code_sha=label, manifest="2" * 64)  # same label, different running bytes
+    after = _CountingMeasurer()
+    _run(_config(pos_fit_authorization=_attempt(tmp_path, "att-2"), pos_fit_adoption_root=root), after, cells=cells)
+    assert len(after.calls) == 2, "a different build must be re-measured however it is labelled"
+    assert "manifest_digest" in capsys.readouterr().out
+
+
+def test_the_binding_names_exactly_what_adoption_compares(tmp_path):
+    """The binding is a declared set, so narrowing it is a diff a reviewer reads rather than a
+    behaviour they have to infer. `code_sha` is deliberately absent; everything that decides what a
+    measurement measured is present."""
+    assert "code_sha" not in probe.ProbeContext.BINDING_FIELDS
+    for field in (
+        "manifest_digest",
+        "model_revision",
+        "device_kind",
+        "device_count",
+        "geometry",
+        "recipe_fingerprint",
+    ):
+        assert field in probe.ProbeContext.BINDING_FIELDS, field
+
+    context = _context()
+    assert probe.ProbeContext.BINDING_FIELDS < tuple(context.as_payload()) or set(
+        probe.ProbeContext.BINDING_FIELDS
+    ) < set(context.as_payload())
+    label_only = dataclasses.replace(context, code_sha="9" * 40)
+    assert label_only.binding_digest() == context.binding_digest(), "the label is outside the binding"
+    assert label_only.digest() != context.digest(), "...and inside the full context digest, for audit"
+    moved = dataclasses.replace(context, manifest_digest="9" * 64)
+    assert moved.binding_digest() != context.binding_digest()
+    assert "manifest_digest" in moved.binding_differences(context)
+    assert "code_sha" not in label_only.binding_differences(context)
+
+
+def test_resume_binds_to_the_build_and_not_to_the_label(tmp_path):
+    """The same narrowing where the same breakage would happen next: a training run resumed after a
+    ledger commit would otherwise refuse its own predecessor's checkpoint.
+
+    The F5c/F6b direction is asserted in the same test so it cannot be lost: two publications sharing
+    a LABEL but built from different bytes must still refuse each other."""
+    from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
+
+    parent = str(tmp_path / "attempts")
+    build_a, build_b = "1" * 64, "2" * 64
+    trainer.publish_attempt(
+        parent,
+        attempt="att-1",
+        arm="rollout",
+        code_sha="f51a8a6" + "0" * 33,
+        context_digest="c" * 64,
+        binding_digest=build_a,
+        step=1000,
+        checkpoint_dir=f"{parent}/att-1/checkpoints",
+    )
+    trainer.publish_attempt(
+        parent,
+        attempt="att-2",
+        arm="rollout",
+        code_sha="f51a8a6" + "0" * 33,
+        context_digest="d" * 64,
+        binding_digest=build_b,
+        step=9000,
+        checkpoint_dir=f"{parent}/att-2/checkpoints",
+    )
+
+    # A later attempt at a NEW label but the SAME build adopts att-1 -- and not the higher-step att-2,
+    # which shares the label and was built from different bytes.
+    chosen = trainer.select_resume_publication(
+        parent, code_sha="5631a36" + "0" * 33, arm="rollout", binding_digest=build_a
+    )
+    assert chosen is not None and chosen["attempt"] == "att-1"
+    assert (
+        trainer.select_resume_publication(parent, code_sha="anything", arm="rollout", binding_digest="9" * 64) is None
+    )
+
+
+# =============================================================================================
+# Round F7b — the same narrowing at the M2 GATE, which F7 flagged and left alone.
+#
+# F7 fixed adoption and resume and reported that `assert_cell_authorized` still compared the full
+# context: an M2 launched after a ledger commit would be refused an authorization M1 published
+# before it — the identical failure one step later, and the one that would have bitten at the most
+# expensive moment (a 64-chip reservation, refused at startup). Ruled YES; done here.
+# =============================================================================================
+
+
+def _authorization(tmp_path, name, context, cells=(("rollout", 32, 2),)):
+    """A real published table, measured under `context`."""
+    measurements = [_measurement(context, probe.FitCell(*cell)) for cell in cells]
+    evidence = probe.build_evidence(
+        context, measurements, max_train_steps=10_000, eval_every=1_000, checkpoint_every=1_000
+    )
+    return probe.publish_authorization(str(tmp_path / name), evidence)
+
+
+def test_the_gate_accepts_an_authorization_across_a_docs_only_commit(tmp_path, capsys):
+    """M1 publishes at tip A; the Planner records the launch in the ledger; M2 starts at tip B.
+
+    Same bytes, same model, same topology, same recipe — and until F7b the gate refused, which would
+    have killed an M2 launch at startup with a 64-chip reservation held. The label drifts; the
+    program does not."""
+    measured_at = _context()
+    running_now = dataclasses.replace(measured_at, code_sha="5631a36" + "0" * 33)
+    assert measured_at.code_sha != running_now.code_sha
+
+    published = _authorization(tmp_path, "m1.json", measured_at)
+    probe.assert_cell_authorized(published, probe.FitCell("rollout", 32, 2), context=running_now)
+
+    out = capsys.readouterr().out
+    assert "label" in out.lower(), "the drift is reported at the gate, not silently swallowed"
+    assert measured_at.code_sha[:12] in out and running_now.code_sha[:12] in out
+
+
+def test_the_gate_still_refuses_an_authorization_from_a_different_build(tmp_path):
+    """The dangerous direction, unchanged: identical LABEL, different bytes. A dirty tree or a stale
+    tarball can produce exactly this, and it is what the manifest was introduced for."""
+    measured_at = _context()
+    running_now = dataclasses.replace(measured_at, manifest_digest="9" * 64)
+    published = _authorization(tmp_path, "m1.json", measured_at)
+
+    with pytest.raises(ValueError, match="manifest_digest"):
+        probe.assert_cell_authorized(published, probe.FitCell("rollout", 32, 2), context=running_now)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("model_revision", "Some-Other/Model@" + "0" * 40), ("device_count", 64), ("recipe_fingerprint", "7" * 64)],
+)
+def test_the_gate_refuses_every_field_that_decides_what_was_measured(tmp_path, field, value):
+    """The binding is not just the manifest: a foreign model, another topology or another recipe all
+    still refuse, so narrowing the gate to the build did not narrow it to one field."""
+    measured_at = _context()
+    published = _authorization(tmp_path, "m1.json", measured_at)
+    running_now = dataclasses.replace(measured_at, **{field: value})
+    with pytest.raises(ValueError, match=field):
+        probe.assert_cell_authorized(published, probe.FitCell("rollout", 32, 2), context=running_now)
+
+
+def test_a_v4_table_is_refused_by_version_and_not_by_a_cryptic_field_error(tmp_path):
+    """End-to-end version story for M2: M1 publishes v5, M2's loader takes v5, and a table from the
+    protocol before it says SO — the operator needs "re-run M1", not a missing-key traceback."""
+    context = _context()
+    published = _authorization(tmp_path, "m1.json", context)
+    path = str(tmp_path / "v4.json")
+    payload = {**{k: v for k, v in published.items() if k != "sha256"}, "protocol": "exp06.fit_authorization.v4"}
+    Path(path).write_text(
+        json.dumps(
+            {"payload": payload, "sha256": hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()},
+            sort_keys=True,
+        )
+    )
+    with pytest.raises(ValueError) as raised:
+        probe.load_authorization(path)
+    message = str(raised.value)
+    assert "exp06.fit_authorization.v4" in message and probe.AUTHORIZATION_PROTOCOL in message
+    assert "measurements" not in message and "excluded_cells" not in message, "not a field-level error"
+
+
+# =============================================================================================
+# Round F7c — the binding did not cover the compiler.
+#
+# The reviewer executed it: two contexts differing in `LIBTPU_INIT_ARGS` and
+# `XLA_PYTHON_CLIENT_MEM_FRACTION` compared binding-EQUAL. The manifest hashes `src/maxdiffusion`
+# Python and nothing else, but the launcher sets the runtime and compiler policy through the
+# environment — and a peak measured at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` is not a statement
+# about a run at 0.5, nor is a step time measured under different `LIBTPU_INIT_ARGS` a statement
+# about one measured without them. Same source, different compiler, different measurement.
+# =============================================================================================
+
+
+_POLICY_A = {
+    "LIBTPU_INIT_ARGS": "--xla_tpu_enable_async_collective_fusion=true",
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.95",
+}
+_POLICY_B = {
+    "LIBTPU_INIT_ARGS": "--xla_tpu_enable_async_collective_fusion=false",
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.5",
+}
+
+
+#: Captured before any patching: `_under_policy` replaces the module attribute, so calling it through
+#: the module inside the replacement would recurse forever.
+_REAL_RUNTIME_POLICY = probe.derive_runtime_policy
+
+
+def _under_policy(monkeypatch, policy):
+    """Point the real derivation at a chosen environment, the way a launcher would."""
+    monkeypatch.setattr(probe, "derive_runtime_policy", lambda environ=None: _REAL_RUNTIME_POLICY(policy))
+
+
+def _canonical(mapping):
+    return probe.canonical_runtime_policy(probe.derive_runtime_policy(mapping))
+
+
+def test_the_runtime_policy_is_derived_raw_and_canonicalised_only_for_the_digest():
+    """Two claims, and F7d corrected both.
+
+    The RAW value is what lands in the artifact — the first version stored the normalized form and
+    called it raw, so the audit value was the transformed one. And normalization happens BETWEEN
+    flags, never INSIDE one: the reviewer collided two valid, materially different settings
+    (`--xla_dump_hlo_module_re='foo  bar'` against `'foo bar'`) because whitespace was collapsed
+    across the whole string."""
+    declared = probe.RUNTIME_POLICY_KEYS
+    for key in ("LIBTPU_INIT_ARGS", "XLA_PYTHON_CLIENT_MEM_FRACTION", "JAX_PLATFORMS", "XLA_FLAGS"):
+        assert key in declared, f"{key} reaches the compiler or the runtime and must be bound"
+
+    raw = probe.derive_runtime_policy({"XLA_FLAGS": "  --a   --b  "})
+    assert dict(raw)["XLA_FLAGS"] == "  --a   --b  ", "the artifact records what the environment said"
+
+    assert _canonical({}) == _canonical(dict.fromkeys(declared, "")) == _canonical(dict.fromkeys(declared, "   "))
+    assert _canonical({"XLA_FLAGS": "--a   --b"}) == _canonical({"XLA_FLAGS": "--a --b"}), "between flags"
+    assert _canonical({"XLA_FLAGS": "--b --a"}) != _canonical({"XLA_FLAGS": "--a --b"}), "ORDER is policy"
+
+    # The reviewer's executed collision: two valid, DISTINCT dump filters.
+    wide = _canonical({"XLA_FLAGS": "--xla_dump_hlo_module_re='foo  bar'"})
+    narrow = _canonical({"XLA_FLAGS": "--xla_dump_hlo_module_re='foo bar'"})
+    assert wide != narrow, "whitespace INSIDE a quoted flag value is part of the value, not formatting"
+
+    unbalanced = _canonical({"XLA_FLAGS": "--re='unterminated"})
+    assert unbalanced["XLA_FLAGS"] == ["--re='unterminated"], "an unparseable policy is not simplified"
+
+
+def test_two_launches_differing_only_in_compiler_policy_are_not_the_same_program(monkeypatch):
+    """The reviewer's executed construction, as a binding assertion."""
+    _under_policy(monkeypatch, _POLICY_A)
+    here = _context()
+    _under_policy(monkeypatch, _POLICY_B)
+    there = _context()
+
+    assert here.manifest_digest == there.manifest_digest, "same source -- this is the point"
+    assert here.binding_digest() != there.binding_digest(), "different compiler policy is a different program"
+    assert "runtime_policy_digest" in here.binding_differences(there)
+    assert here.as_payload()["runtime_policy"] != there.as_payload()["runtime_policy"], "raw values are audited"
+
+
+def test_a_cell_measured_under_other_compiler_policy_is_re_measured(tmp_path, monkeypatch, capsys):
+    """Through ADOPTION, which is where a stale peak would be inherited."""
+    cells = [probe.FitCell("rollout", 8, 2)]
+    root = _adoption_root(tmp_path)
+
+    _under_policy(monkeypatch, _POLICY_A)
+    _run(
+        _config(pos_fit_authorization=_attempt(tmp_path, "att-1"), pos_fit_adoption_root=root),
+        _CountingMeasurer(),
+        cells=cells,
+    )
+    _under_policy(monkeypatch, _POLICY_B)
+    after = _CountingMeasurer()
+    _run(_config(pos_fit_authorization=_attempt(tmp_path, "att-2"), pos_fit_adoption_root=root), after, cells=cells)
+    assert len(after.calls) == 2, "a peak measured under other compiler flags is not evidence about this run"
+    assert "runtime_policy_digest" in capsys.readouterr().out
+
+
+def test_the_gate_refuses_an_authorization_measured_under_other_compiler_policy(tmp_path, monkeypatch):
+    """...and through the M2 GATE, which is where it would cost a reservation."""
+    _under_policy(monkeypatch, _POLICY_A)
+    measured_at = _context()
+    published = _authorization(tmp_path, "m1.json", measured_at)
+    _under_policy(monkeypatch, _POLICY_B)
+    running_now = _context()
+    with pytest.raises(ValueError, match="runtime_policy_digest"):
+        probe.assert_cell_authorized(published, probe.FitCell("rollout", 32, 2), context=running_now)
+
+
+def test_resume_refuses_state_built_under_other_compiler_policy(tmp_path, monkeypatch):
+    """...and through RESUME — calling the real selector, not comparing two digests.
+
+    F7d: the first version of this asserted `binding_digest() != binding_digest()`, which is a
+    restatement of the previous test rather than evidence about resume. The F3c liveness lesson says
+    a guard that inspects a value proves a value; this one publishes an attempt and runs the deployed
+    selector against it."""
+    from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
+
+    parent = str(tmp_path / "attempts")
+    _under_policy(monkeypatch, _POLICY_A)
+    built_under_a = _context()
+    trainer.publish_attempt(
+        parent,
+        attempt="att-1",
+        arm="rollout",
+        code_sha=built_under_a.code_sha,
+        context_digest=built_under_a.digest(),
+        binding_digest=built_under_a.binding_digest(),
+        step=1000,
+        checkpoint_dir=f"{parent}/att-1/checkpoints",
+    )
+    assert (
+        trainer.select_resume_publication(
+            parent, arm="rollout", binding_digest=built_under_a.binding_digest(), code_sha=built_under_a.code_sha
+        )["attempt"]
+        == "att-1"
+    ), "its own policy adopts it"
+
+    _under_policy(monkeypatch, _POLICY_B)
+    built_under_b = _context()
+    assert (
+        trainer.select_resume_publication(
+            parent, arm="rollout", binding_digest=built_under_b.binding_digest(), code_sha=built_under_b.code_sha
+        )
+        is None
+    ), "state built under other compiler flags is not this run's to resume"
+
+
+def test_a_docs_only_commit_still_costs_nothing_under_the_wider_binding(monkeypatch):
+    """F7 must survive F7c: the LABEL is still outside the binding, policy or no policy."""
+    _under_policy(monkeypatch, _POLICY_A)
+    here = _context()
+    relabelled = dataclasses.replace(here, code_sha="5631a36" + "0" * 33)
+    assert relabelled.binding_digest() == here.binding_digest()

@@ -212,6 +212,7 @@ def publish_attempt(
     arm: str,
     code_sha: str,
     context_digest: str,
+    binding_digest: str,
     step: int,
     checkpoint_dir: str,
 ) -> dict:
@@ -228,6 +229,10 @@ def publish_attempt(
         "arm": str(arm),
         "code_sha": str(code_sha),
         "context_digest": str(context_digest),
+        # F7: what resume MATCHES on -- the running bytes, the model, the topology, the geometry and
+        # the recipe. `code_sha` and `context_digest` stay for audit; neither decides adoption, because
+        # two attempts of one job never share a commit once the ledger records the submission.
+        "binding_digest": str(binding_digest),
         "step": int(step),
         "checkpoint_dir": str(checkpoint_dir),
         "complete": True,
@@ -259,7 +264,7 @@ def load_publication(path: str) -> dict:
     # and demanded by nothing, so a marker written by an older publisher -- or by hand -- read as
     # adoptable while carrying no identity at all. Two git-less deployments can share a `COMMIT`
     # label and differ in their running bytes, and this is the field that separates them.
-    for field in ("attempt", "arm", "code_sha", "context_digest", "checkpoint_dir"):
+    for field in ("attempt", "arm", "code_sha", "context_digest", "binding_digest", "checkpoint_dir"):
         if not str(payload.get(field, "")):
             raise ValueError(f"{path}: a publication marker without {field} cannot be adopted")
     if payload.get("complete") is not True:
@@ -289,12 +294,12 @@ def describe_resume_candidates(parent: str, *, code_sha: str, arm: str) -> list[
             publication = load_publication(path)
         except (ValueError, json.JSONDecodeError, OSError):
             continue
-        if str(publication["arm"]) == str(arm) and str(publication["code_sha"]) == str(code_sha):
+        if str(publication["arm"]) == str(arm):
             found.append(publication)
     return sorted(found, key=lambda entry: (int(entry.get("step", 0)), str(entry["attempt"])))
 
 
-def select_resume_publication(parent: str, *, code_sha: str, arm: str, context_digest: str) -> dict | None:
+def select_resume_publication(parent: str, *, arm: str, binding_digest: str, code_sha: str = "") -> dict | None:
     """The latest COMPLETE publication for THIS arm measured by THIS PROGRAM.
 
     Four filters, each one a way a resume silently corrupts a run: an incomplete attempt (adopting a
@@ -310,10 +315,11 @@ def select_resume_publication(parent: str, *, code_sha: str, arm: str, context_d
     model revision, device topology, geometry and recipe — and it is a REQUIRED keyword precisely
     because the identity was lost by being droppable.
     """
-    if not str(context_digest or ""):
+    if not str(binding_digest or ""):
         raise ValueError(
-            "select_resume_publication needs the digest of the context THIS process derived: a resume that "
-            "matches only a commit label adopts state built by a program it cannot identify (review F5c)"
+            "select_resume_publication needs the BINDING digest of the context THIS process derived: a resume "
+            "that matches only a commit label adopts state built by a program it cannot identify (F5c), and a "
+            "resume that matches the label as well adopts nothing at all once the ledger moves (F7)"
         )
     candidates = []
     for name in _list_children(parent):
@@ -326,10 +332,20 @@ def select_resume_publication(parent: str, *, code_sha: str, arm: str, context_d
             publication = load_publication(path)
         except (ValueError, json.JSONDecodeError, OSError):
             continue
-        if str(publication["arm"]) != str(arm) or str(publication["code_sha"]) != str(code_sha):
+        if str(publication["arm"]) != str(arm):
             continue
-        if str(publication["context_digest"]) != str(context_digest):
+        # F7: the BUILD decides, not the label. A docs-only ledger commit between two attempts of one
+        # job changes `code_sha` and nothing else, and refusing on it cost M1-6 its entire inherited
+        # ladder. A genuinely different build moves `binding_digest` and is still refused here.
+        if str(publication["binding_digest"]) != str(binding_digest):
             continue
+        if str(code_sha) and str(publication["code_sha"]) != str(code_sha):
+            print(
+                f"[resume] label drift: {publication['attempt']} was published under code_sha "
+                f"{str(publication['code_sha'])[:12]}, this process runs {str(code_sha)[:12]}, and the build "
+                f"binding {str(binding_digest)[:12]} is identical -- same bytes, different commit label.",
+                flush=True,
+            )
         candidates.append(publication)
     if not candidates:
         return None
@@ -474,9 +490,9 @@ class WanPosRolloutTrainer:
         # derive the complete identity and then hand the selector `code_sha` alone.
         return select_resume_publication(
             self.resume_parent,
-            code_sha=derived.code_sha,
             arm=str(self.schedule.arm),
-            context_digest=derived.digest(),
+            binding_digest=derived.binding_digest(),
+            code_sha=derived.code_sha,
         )
 
     def assert_loader_yields_the_logical_batch(self) -> int:
@@ -607,6 +623,7 @@ class WanPosRolloutTrainer:
             arm=str(self.schedule.arm),
             code_sha=str(context.code_sha),
             context_digest=context.digest(),
+            binding_digest=context.binding_digest(),
             step=int(step),
             checkpoint_dir=self.checkpoint_dir,
         )

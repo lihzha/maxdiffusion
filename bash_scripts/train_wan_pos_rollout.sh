@@ -330,11 +330,21 @@ try:
 except Exception as error:  # noqa: BLE001 -- an unreadable authorization authorizes nothing
     print(f"FATAL: {path} is not a usable fit authorization: {type(error).__name__}: {error}")
     sys.exit(1)
+# F7b: REPORT-ONLY. This used to FATAL when the authorization's `code_sha` differed from `COMMIT`,
+# which refuses a legitimate launch for a cosmetic reason: M1 publishes at one tip, the submission is
+# recorded in the ledger, and M2 starts at the next tip with byte-identical code. The binding that
+# actually decides -- the deployed manifest, the model snapshot, the device topology, the geometry and
+# the recipe -- cannot be computed in bash at all (no manifest, and `jax.devices()` here would report
+# this host's local chip count), so the decision belongs to `assert_cell_authorized` inside the real
+# process, which makes it before anything expensive is loaded. Reporting a refusal from a label here
+# would be a confident answer from an identity nobody checked -- the same error the resume preflight
+# was corrected for in F6b.
 measured_sha = str((authorization.get("context") or {}).get("code_sha", ""))
-if measured_sha != os.environ.get("COMMIT", ""):
-    print(f"FATAL: {path} was measured on {measured_sha}, this job runs {os.environ.get('COMMIT')}.")
-    print("       An HBM peak is a measurement OF A PROGRAM; re-run M1 at this SHA.")
-    sys.exit(1)
+running_sha = os.environ.get("COMMIT", "")
+if measured_sha != running_sha:
+    print(f"[prereq] label drift: measured under code_sha {measured_sha[:12]}, this job runs {running_sha[:12]}.")
+    print("[prereq]   AUTHORIZATION IS NOT DECIDED HERE: the running process compares the BUILD (manifest,")
+    print("[prereq]   model, topology, geometry, recipe) and refuses before the pipeline load if it differs.")
 print(f"[prereq] M1 authorization {path}: {authorization['authorized_cells']}")
 for entry in authorization.get("excluded_cells") or []:
     print(f"[prereq]   EXCLUDED {entry['arm']} microbatch={entry['microbatch']} k={entry['k_b']}: {entry['reason']}")
@@ -392,11 +402,16 @@ candidates = describe_resume_candidates(
     os.environ["POS_RESUME_PARENT"], code_sha=os.environ["COMMIT"], arm=os.environ["POS_ROLLOUT_ARM"]
 )
 if not candidates:
-    print("[preflight] resume: no COMPLETE publication for this arm at this SHA -- this attempt starts at step 0")
+    print("[preflight] resume: no COMPLETE publication for this arm -- this attempt starts at step 0")
 else:
-    print(f"[preflight] resume: {len(candidates)} candidate publication(s) for this arm at this SHA:")
+    # F7c MINOR: `describe_resume_candidates` filters on the ARM only -- the label stopped being a
+    # filter in F7 -- so each candidate's recorded label is printed rather than claimed to match.
+    print(f"[preflight] resume: {len(candidates)} COMPLETE publication(s) for this arm:")
     for entry in candidates:
-        print(f"[preflight]   {entry['attempt']} step {entry['step']} context {entry['context_digest'][:16]}")
+        print(
+            f"[preflight]   {entry['attempt']} step {entry['step']} build {entry['binding_digest'][:16]} "
+            f"label {entry['code_sha'][:12]}"
+        )
     print("[preflight]   ADOPTION IS NOT DECIDED HERE: the running process matches the FULL derived context")
     print("[preflight]   (manifest, model, topology, geometry, recipe), so a candidate above may be refused.")
 print("[preflight] ok: imports, exp_06 dispatch, the declared arms and the resume candidates")

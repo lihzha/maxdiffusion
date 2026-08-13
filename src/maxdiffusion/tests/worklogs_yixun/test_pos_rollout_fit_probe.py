@@ -194,7 +194,7 @@ def _measurement(context=None, *, arm="rollout", microbatch=32, k_b=2, **overrid
     context = context or _context()
     values = {
         "cell": probe.FitCell(arm=arm, microbatch=microbatch, k_b=k_b),
-        "context_digest": context.digest(),
+        "context_digest": context.binding_digest(),
         "compile_seconds": 480.0,
         "step_seconds": 3.5,
         "eval_seconds": 600.0,
@@ -326,7 +326,8 @@ def test_repeated_trials_aggregate_to_the_worst_of_each():
 
 
 def test_trials_measured_under_two_contexts_cannot_be_averaged():
-    here, elsewhere = _context(), _context(code_sha="0" * 40)
+    # F7: a different LABEL is the same program; a different MANIFEST is the different one.
+    here, elsewhere = _context(), _context(manifest_digest="0" * 64)
     with pytest.raises(ValueError, match="different contexts"):
         probe.aggregate_trials([_measurement(here), _measurement(elsewhere)])
 
@@ -445,11 +446,17 @@ def test_the_code_sha_is_derived_and_a_disagreement_is_fatal(monkeypatch):
 
 
 def test_an_authorization_measured_on_another_program_does_not_authorize_this_one(tmp_path):
-    """T7-1 as the reviewer executed it: an authorization carrying a wrong SHA, a foreign model and
-    the wrong device kind used to be accepted, because production passed no context to compare."""
+    """T7-1 as the reviewer executed it: an authorization carrying a foreign model, foreign bytes and
+    the wrong device kind used to be accepted, because production passed no context to compare.
+
+    **`code_sha` left this list in F7b, deliberately.** A commit is a LABEL, and refusing on it alone
+    blocked a legitimate M2 launch after a docs-only ledger commit — the M1-6 failure, one step later
+    and with a reservation held. `manifest_digest` takes its place here, because that is the field
+    that actually says "different bytes"; the label case is asserted below as a PASS with a logged
+    drift, so the change is recorded rather than merely absent."""
     here = _context()
     for field, value in (
-        ("code_sha", "0" * 40),
+        ("manifest_digest", "0" * 64),
         ("model_revision", "Some-Other/Model@" + "9" * 40),
         ("device_kind", "v5p"),
         ("device_count", 256),
@@ -462,6 +469,12 @@ def test_an_authorization_measured_on_another_program_does_not_authorize_this_on
         assert field in str(excinfo.value), "the refusal names what differs, so it says what to re-measure"
     matching = _publish(tmp_path, [_measurement(here)], context=here, name="ok.json")
     probe.assert_cell_authorized(matching, probe.FitCell("rollout", 32, 2), context=here)
+
+    # F7b: the LABEL alone is not a different program, and the gate says so out loud rather than
+    # refusing a launch whose bytes it has just verified are identical.
+    relabelled = _context(code_sha="5631a36" + "0" * 33)
+    published = _publish(tmp_path, [_measurement(relabelled)], context=relabelled, name="label.json")
+    probe.assert_cell_authorized(published, probe.FitCell("rollout", 32, 2), context=here)
 
 
 def test_the_current_context_is_required_and_cannot_be_a_hand_written_mapping(tmp_path):
@@ -645,7 +658,7 @@ def _stub_measurer(peaks=None, *, calls=None):
         peak = (peaks or {}).get((cell.arm, cell.microbatch, cell.k_b), 20 * 1024**3)
         return probe.CellMeasurement(
             cell=cell,
-            context_digest=context.digest(),
+            context_digest=context.binding_digest(),
             compile_seconds=480.0,
             step_seconds=3.5 * cell.k_b,
             eval_seconds=600.0,
@@ -685,7 +698,7 @@ def test_the_probe_derives_the_context_and_the_measurer_does_not_get_to_choose_i
     """``measurer`` is a host stand-in, not a provenance channel: the context is derived here, and a
     measurement that comes back describing another cell or another context is refused."""
     config = _config(pos_fit_authorization=str(tmp_path / "x.json"))
-    elsewhere = _context(code_sha="0" * 40)
+    elsewhere = _context(manifest_digest="0" * 64)
 
     def forging(*, cell, context, config):
         return _measurement(elsewhere, arm=cell.arm, microbatch=cell.microbatch, k_b=cell.k_b)
@@ -784,7 +797,7 @@ def test_the_trainer_derives_its_own_context_and_requires_exact_binding(tmp_path
     _publish(tmp_path, [_measurement(running)], context=running, name="auth.json")
     assert trainer.authorized_cell() == probe.FitCell("rollout", 32, 2)
 
-    foreign = dataclasses.replace(running, code_sha="0" * 40)
+    foreign = dataclasses.replace(running, manifest_digest="0" * 64)
     _publish(tmp_path, [_measurement(foreign)], context=foreign, name="foreign.json")
     other = WanPosRolloutTrainer(_trainer_config(tmp_path, pos_fit_authorization=str(tmp_path / "foreign.json")))
     with pytest.raises(ValueError, match="measured a different program"):

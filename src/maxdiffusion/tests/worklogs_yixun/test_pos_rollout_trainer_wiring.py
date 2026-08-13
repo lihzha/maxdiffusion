@@ -323,7 +323,7 @@ def _authorize(config, *, microbatch=_MICRO, k_b=_K, arm="rollout"):
     context = probe.derive_probe_context(config)
     measurement = probe.CellMeasurement(
         cell=probe.FitCell(arm=arm, microbatch=microbatch, k_b=k_b),
-        context_digest=context.digest(),
+        context_digest=context.binding_digest(),
         compile_seconds=1.0,
         step_seconds=1.0,
         eval_seconds=1.0,
@@ -458,12 +458,12 @@ def test_the_attempt_is_PUBLISHED_after_the_loop_and_its_id_is_derived(tmp_path,
     # context's digest here is what the trainer's own `resume_source` does.
     running = trainer.running_context()
     adopted = select_resume_publication(
-        config.pos_resume_parent, code_sha=running.code_sha, arm="rollout", context_digest=running.digest()
+        config.pos_resume_parent, arm="rollout", binding_digest=running.binding_digest(), code_sha=running.code_sha
     )
     assert adopted is not None and adopted["attempt"] == "att-ONE"
     assert (
         select_resume_publication(
-            config.pos_resume_parent, code_sha=running.code_sha, arm="rollout", context_digest="f" * 64
+            config.pos_resume_parent, arm="rollout", binding_digest="f" * 64, code_sha=running.code_sha
         )
         is None
     ), "a foreign context adopts nothing, even at the same SHA"

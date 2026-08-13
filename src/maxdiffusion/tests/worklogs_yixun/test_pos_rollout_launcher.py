@@ -559,9 +559,14 @@ def test_the_resume_input_is_distinct_from_the_fresh_attempt_output(tmp_path):
     assert first["checkpoint_dir"].startswith(first["pos_resume_parent"])
 
 
-def test_only_a_complete_publication_of_this_arm_at_this_sha_is_adopted(tmp_path):
+def test_only_a_complete_publication_of_this_arm_and_this_build_is_adopted(tmp_path):
     """The other half of T6-3, where it can actually be executed: "select only the latest COMPLETE
-    checkpoint whose recorded SHA matches the derived running code"."""
+    checkpoint" of this arm, built from the bytes this process is running.
+
+    F7 moved the discriminator from the commit LABEL to the build: a docs-only ledger commit between
+    two attempts of one job changes the label and nothing else, and refusing on it cost M1-6 its whole
+    inherited ladder. The foreign attempt below is therefore a foreign BUILD, which is the property
+    this test was always about."""
     from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
 
     parent = str(tmp_path / "attempts")
@@ -572,6 +577,7 @@ def test_only_a_complete_publication_of_this_arm_at_this_sha_is_adopted(tmp_path
         arm="rollout",
         code_sha=mine,
         context_digest="d" * 64,
+        binding_digest="d" * 64,
         step=1000,
         checkpoint_dir=f"{parent}/att-1/checkpoints",
     )
@@ -581,6 +587,7 @@ def test_only_a_complete_publication_of_this_arm_at_this_sha_is_adopted(tmp_path
         arm="rollout",
         code_sha=mine,
         context_digest="d" * 64,
+        binding_digest="d" * 64,
         step=3000,
         checkpoint_dir=f"{parent}/att-2/checkpoints",
     )
@@ -589,7 +596,8 @@ def test_only_a_complete_publication_of_this_arm_at_this_sha_is_adopted(tmp_path
         attempt="att-3",
         arm="rollout",
         code_sha=theirs,
-        context_digest="d" * 64,
+        context_digest="e" * 64,
+        binding_digest="e" * 64,
         step=9000,
         checkpoint_dir=f"{parent}/att-3/checkpoints",
     )
@@ -599,22 +607,27 @@ def test_only_a_complete_publication_of_this_arm_at_this_sha_is_adopted(tmp_path
         arm="one_step",
         code_sha=mine,
         context_digest="d" * 64,
+        binding_digest="d" * 64,
         step=9000,
         checkpoint_dir=f"{parent}/att-4/checkpoints",
     )
     # An attempt that crashed before publishing its marker: a directory, but not COMPLETE.
     (Path(parent) / "att-5" / "checkpoints").mkdir(parents=True)
 
-    selected = trainer.select_resume_publication(parent, code_sha=mine, arm="rollout", context_digest="d" * 64)
+    selected = trainer.select_resume_publication(parent, arm="rollout", binding_digest="d" * 64, code_sha=mine)
     assert selected["attempt"] == "att-2" and selected["step"] == 3000, "the newest COMPLETE one, not att-3/4/5"
     assert (
-        trainer.select_resume_publication(parent, code_sha=mine, arm="one_step", context_digest="d" * 64)["attempt"]
+        trainer.select_resume_publication(parent, arm="rollout", binding_digest="e" * 64, code_sha=mine)["attempt"]
+        == "att-3"
+    ), "...and the foreign BUILD is adoptable only by a process running that build"
+    assert (
+        trainer.select_resume_publication(parent, arm="one_step", binding_digest="d" * 64, code_sha=mine)["attempt"]
         == "att-4"
     )
-    assert trainer.select_resume_publication(parent, code_sha="c" * 40, arm="rollout", context_digest="d" * 64) is None
+    assert trainer.select_resume_publication(parent, arm="rollout", binding_digest="beef" * 16, code_sha=mine) is None
     assert (
         trainer.select_resume_publication(
-            str(tmp_path / "nothing-here"), code_sha=mine, arm="rollout", context_digest="d" * 64
+            str(tmp_path / "nothing-here"), arm="rollout", binding_digest="d" * 64, code_sha=mine
         )
         is None
     )
@@ -625,7 +638,7 @@ def test_only_a_complete_publication_of_this_arm_at_this_sha_is_adopted(tmp_path
     stored["payload"]["step"] = 99999
     marker.write_text(json.dumps(stored))
     assert (
-        trainer.select_resume_publication(parent, code_sha=mine, arm="rollout", context_digest="d" * 64)["attempt"]
+        trainer.select_resume_publication(parent, arm="rollout", binding_digest="d" * 64, code_sha=mine)["attempt"]
         == "att-1"
     )
     with pytest.raises(ValueError, match="does not describe its payload"):
@@ -643,6 +656,7 @@ def test_an_incomplete_publication_is_never_adopted(tmp_path):
         "arm": "rollout",
         "code_sha": "a" * 40,
         "context_digest": "d" * 64,
+        "binding_digest": "d" * 64,
         "step": 5000,
         "checkpoint_dir": str(parent / "att-1" / "checkpoints"),
         "complete": False,
@@ -652,7 +666,7 @@ def test_an_incomplete_publication_is_never_adopted(tmp_path):
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     (parent / "att-1" / trainer.PUBLICATION_NAME).write_text(json.dumps({"payload": payload, "sha256": digest}))
     assert (
-        trainer.select_resume_publication(str(parent), code_sha="a" * 40, arm="rollout", context_digest="d" * 64)
+        trainer.select_resume_publication(str(parent), arm="rollout", binding_digest="d" * 64, code_sha="a" * 40)
         is None
     )
     with pytest.raises(ValueError, match="not marked complete"):
@@ -1014,7 +1028,7 @@ def _write_authorization(path: Path, *, code_sha: str, cells=((("rollout", 32, 2
     measurements = [
         probe.CellMeasurement(
             cell=probe.FitCell(arm, microbatch, k_b),
-            context_digest=context.digest(),
+            context_digest=context.binding_digest(),
             compile_seconds=480.0,
             step_seconds=3.5,
             eval_seconds=600.0,
@@ -1055,16 +1069,24 @@ def test_the_real_preflight_executes_and_the_launcher_reaches_the_entrypoint(tmp
     assert Path(REPO_ROOT / argv[1]).exists(), "argv[1] must be a config that is really there"
 
 
-def test_the_real_preflight_refuses_an_authorization_measured_on_another_commit(tmp_path):
-    """The prerequisite gate is not decoration: it loads the artifact through the real module."""
+def test_the_real_preflight_reports_label_drift_instead_of_refusing_the_launch(tmp_path):
+    """The prerequisite gate is not decoration: it loads the artifact through the real module.
+
+    **F7b narrowed what it may decide.** It used to FATAL when the authorization's `code_sha` differed
+    from `COMMIT`, which refuses a legitimate launch for a cosmetic reason — M1 publishes at one tip,
+    the submission is recorded in the ledger, and M2 starts at the next tip running identical bytes.
+    Bash cannot compute the binding that actually decides (no manifest, and `jax.devices()` here would
+    report this host's local chip count), so it reports the drift and says plainly that the decision
+    is made in-process, where `assert_cell_authorized` compares the BUILD before anything is loaded."""
     authorization = tmp_path / "m1.json"
     _write_authorization(authorization, code_sha="0" * 40)
     proc, calls = _run_real(
         tmp_path, TRAIN_LAUNCHER, limit=1, POS_FIT_AUTHORIZATION=str(authorization), OUTPUT_DIR=str(tmp_path / "store")
     )
-    assert proc.returncode != 0
-    assert "was measured on 0000" in proc.stdout and "re-run M1 at this SHA" in proc.stdout
-    assert not [call for call in calls if call[0] == "PREFETCH"], "refused before the prefetch"
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    assert "label drift" in proc.stdout and "0000" in proc.stdout
+    assert "AUTHORIZATION IS NOT DECIDED HERE" in proc.stdout
+    assert "re-run M1 at this SHA" not in proc.stdout, "the bash label-refusal is gone"
 
 
 def test_the_real_preflight_refuses_an_absent_or_unreadable_authorization(tmp_path):
@@ -1098,6 +1120,7 @@ def test_the_real_preflight_reports_the_publication_it_would_adopt(tmp_path):
         arm="rollout",
         code_sha=COMMIT,
         context_digest="d" * 64,
+        binding_digest="d" * 64,
         step=4000,
         checkpoint_dir=str(parent / "att-OLD" / "checkpoints"),
     )
@@ -1107,6 +1130,7 @@ def test_the_real_preflight_reports_the_publication_it_would_adopt(tmp_path):
         arm="one_step",
         code_sha=COMMIT,
         context_digest="d" * 64,
+        binding_digest="d" * 64,
         step=9000,
         checkpoint_dir=str(parent / "att-OTHER" / "checkpoints"),
     )
@@ -1383,7 +1407,9 @@ def test_the_derived_value_is_echoed_with_the_topology_it_came_from(tmp_path):
 # =============================================================================================
 
 
-def _publish(parent, attempt, *, arm="rollout", code_sha="a" * 40, context_digest="d" * 64, step=1000):
+def _publish(
+    parent, attempt, *, arm="rollout", code_sha="a" * 40, context_digest="d" * 64, binding_digest=None, step=1000
+):
     from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
 
     return trainer.publish_attempt(
@@ -1392,12 +1418,13 @@ def _publish(parent, attempt, *, arm="rollout", code_sha="a" * 40, context_diges
         arm=arm,
         code_sha=code_sha,
         context_digest=context_digest,
+        binding_digest=binding_digest if binding_digest is not None else context_digest,
         step=step,
         checkpoint_dir=f"{parent}/{attempt}/checkpoints",
     )
 
 
-def test_two_same_sha_publications_with_different_contexts_do_not_resume_each_other(tmp_path):
+def test_two_same_sha_publications_with_different_builds_do_not_resume_each_other(tmp_path):
     """The reviewer's executed construction. Two git-less deployments can carry the same `COMMIT`
     label and different running bytes; before F5c the higher-step foreign one won, and one arm's
     optimizer state resumed under another program's identity."""
@@ -1408,15 +1435,15 @@ def test_two_same_sha_publications_with_different_contexts_do_not_resume_each_ot
     _publish(parent, "att-1", context_digest=mine, step=1000)
     _publish(parent, "att-2", context_digest=foreign, step=9000)
 
-    selected = trainer.select_resume_publication(parent, code_sha="a" * 40, arm="rollout", context_digest=mine)
+    selected = trainer.select_resume_publication(parent, arm="rollout", binding_digest=mine, code_sha="a" * 40)
     assert selected is not None and selected["attempt"] == "att-1", "the FOREIGN higher-step attempt must lose"
-    assert selected["context_digest"] == mine
+    assert selected["binding_digest"] == mine
     assert (
-        trainer.select_resume_publication(parent, code_sha="a" * 40, arm="rollout", context_digest="f" * 64) is None
-    ), "a context nobody published must adopt nothing at all"
+        trainer.select_resume_publication(parent, arm="rollout", binding_digest="f" * 64, code_sha="a" * 40) is None
+    ), "a build nobody published must adopt nothing at all"
 
 
-def test_the_selector_cannot_be_called_without_a_context_to_match(tmp_path):
+def test_the_selector_cannot_be_called_without_a_build_to_match(tmp_path):
     """Fail-closed by signature: the identity cannot be dropped by forgetting an argument, which is
     exactly how it came to be dropped."""
     from maxdiffusion.trainers import wan_pos_rollout_trainer as trainer
@@ -1425,9 +1452,11 @@ def test_the_selector_cannot_be_called_without_a_context_to_match(tmp_path):
     _publish(parent, "att-1")
     with pytest.raises(TypeError):
         trainer.select_resume_publication(parent, code_sha="a" * 40, arm="rollout")
+    with pytest.raises(ValueError, match="BINDING digest"):
+        trainer.select_resume_publication(parent, arm="rollout", binding_digest="")
 
 
-def test_a_publication_without_a_context_digest_is_not_adoptable(tmp_path):
+def test_a_publication_without_its_identity_fields_is_not_adoptable(tmp_path):
     """`load_publication` records the field but never demanded it, so a marker written by any older
     or hand-rolled publisher read as adoptable. It fails closed now."""
     import hashlib
@@ -1451,12 +1480,12 @@ def test_a_publication_without_a_context_digest_is_not_adoptable(tmp_path):
     with pytest.raises(ValueError, match="context_digest"):
         trainer.load_publication(str(parent / "att-1" / trainer.PUBLICATION_NAME))
     assert (
-        trainer.select_resume_publication(str(parent), code_sha="a" * 40, arm="rollout", context_digest="d" * 64)
+        trainer.select_resume_publication(str(parent), arm="rollout", binding_digest="d" * 64, code_sha="a" * 40)
         is None
     ), "unreadable markers are skipped, not fatal -- one damaged attempt must not stop a good resume"
 
 
-def test_resume_source_matches_the_whole_derived_context_not_just_its_sha(tmp_path):
+def test_resume_source_matches_the_derived_BUILD_not_a_commit_label(tmp_path):
     """`resume_source` derived the complete context and then threw all but `code_sha` away. It now
     hands the selector the same digest adoption uses, and this runs the real method."""
     from maxdiffusion import pos_rollout_fit_probe as probe
@@ -1465,6 +1494,7 @@ def test_resume_source_matches_the_whole_derived_context_not_just_its_sha(tmp_pa
     parent = str(tmp_path / "attempts")
     derived = probe.ProbeContext(
         code_sha="a" * 40,
+        runtime_policy=probe.derive_runtime_policy({}),
         manifest_digest="1" * 64,
         model_revision="m@" + "0" * 40,
         device_kind="v6e",
@@ -1473,8 +1503,8 @@ def test_resume_source_matches_the_whole_derived_context_not_just_its_sha(tmp_pa
         recipe_fingerprint="9" * 64,
     )
     other = dataclasses.replace(derived, manifest_digest="2" * 64)
-    _publish(parent, "att-1", context_digest=derived.digest(), step=1000)
-    _publish(parent, "att-2", context_digest=other.digest(), step=9000)
+    _publish(parent, "att-1", binding_digest=derived.binding_digest(), step=1000)
+    _publish(parent, "att-2", binding_digest=other.binding_digest(), step=9000)
 
     trainer = WanPosRolloutTrainer.__new__(WanPosRolloutTrainer)
     trainer.resume_parent = parent

@@ -106,6 +106,7 @@ import math
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
@@ -184,7 +185,7 @@ __all__ = [
 #: ``cell_provenance``). A v3 loader reading a v4 table would treat a DECLARED-unreachable cell as one
 #: that was simply never measured -- the same class of confusion v3 was cut for -- so the version is
 #: the fail-closed signal, exactly as before.
-AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v4"
+AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v5"
 #: Plan §4-P1. Steady state, not transient: a peak measured during compilation is not this number.
 HEADROOM_FRACTION = 0.90
 
@@ -365,6 +366,9 @@ class ProbeContext:
     """The running program a measurement is a measurement OF. Every field is derived, none supplied."""
 
     code_sha: str
+    #: F7c: the compiler/runtime policy this process runs under, raw for audit. Its DIGEST is what the
+    #: binding compares -- see :data:`RUNTIME_POLICY_KEYS` for the list and the inclusion rule.
+    runtime_policy: tuple
     #: F5b, BLOCKER 2: the RUNNING BYTES. ``code_sha`` is the commit this program says it is;
     #: this is what is on disk. Adoption compares the whole context byte-for-byte, so binding the
     #: manifest here is what makes "measured by other code" a refusal rather than a hope.
@@ -378,6 +382,9 @@ class ProbeContext:
     def as_payload(self) -> dict:
         return {
             "code_sha": str(self.code_sha),
+            # RAW for audit; the DIGEST is taken over the canonical token form (F7d).
+            "runtime_policy": [[str(key), _plain(value)] for key, value in self.runtime_policy],
+            "runtime_policy_digest": _digest(canonical_runtime_policy(self.runtime_policy)),
             "manifest_digest": str(self.manifest_digest),
             "model_revision": str(self.model_revision),
             "device_kind": str(self.device_kind),
@@ -386,13 +393,41 @@ class ProbeContext:
             "recipe_fingerprint": str(self.recipe_fingerprint),
         }
 
+    #: **What a measurement is a measurement OF — and ``code_sha`` is not in it (review F7).**
+    #: A commit is a LABEL; the manifest is the running bytes. Binding adoption to the label threw a
+    #: whole measured ladder away in production: M1-6 refused the M1-5 bank with ``['code_sha'] differ
+    #: (measured on f51a8a6..., running 5631a36...)`` while ``manifest_digest`` MATCHED, the two tips
+    #: differing only by the Planner's docs-only ledger commits. F6b had already written the principle
+    #: down — the manifest is the identity, ``code_sha`` is the label — and this is the code agreeing.
+    BINDING_FIELDS = (
+        "runtime_policy_digest",
+        "manifest_digest",
+        "model_revision",
+        "device_kind",
+        "device_count",
+        "geometry",
+        "recipe_fingerprint",
+    )
+
     def digest(self) -> str:
         return _digest(self.as_payload())
+
+    def binding_payload(self) -> dict:
+        return {key: value for key, value in self.as_payload().items() if key in self.BINDING_FIELDS}
+
+    def binding_digest(self) -> str:
+        """The digest adoption and resume compare: everything that decides what was measured."""
+        return _digest(self.binding_payload())
+
+    def binding_differences(self, other: "ProbeContext") -> tuple:
+        mine, theirs = self.binding_payload(), other.binding_payload()
+        return tuple(sorted(field for field in mine if mine[field] != theirs[field]))
 
     @classmethod
     def from_payload(cls, payload: Mapping) -> "ProbeContext":
         return cls(
             code_sha=str(payload["code_sha"]),
+            runtime_policy=tuple((str(key), value) for key, value in payload["runtime_policy"]),
             manifest_digest=str(payload["manifest_digest"]),
             model_revision=str(payload["model_revision"]),
             device_kind=str(payload["device_kind"]),
@@ -602,6 +637,71 @@ def deployed_manifest_digest(root: str | None = None) -> str:
     if root is None:
         _MANIFEST_CACHE[key] = computed
     return computed
+
+
+#: **The runtime and compiler policy the launcher sets, and the rule for what belongs here (F7c).**
+#:
+#: The manifest hashes ``src/maxdiffusion`` Python and nothing else, so two launches of identical
+#: source under different XLA flags compared EQUAL — and the reviewer executed exactly that. A peak
+#: measured at ``XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`` is not a statement about a run at 0.5, and a
+#: step time measured under one set of ``LIBTPU_INIT_ARGS`` is not a statement about another. Same
+#: source, different compiler, different measurement.
+#:
+#: **The inclusion rule: anything the launcher exports that reaches the compiler or the runtime.**
+#: Enumerated from ``bash_scripts/train_wan_pos_rollout.sh``. Deliberately EXCLUDED, with reasons:
+#: ``PYTHONUNBUFFERED`` (stdout buffering), ``TF_CPP_MIN_LOG_LEVEL`` (log verbosity) and the four
+#: ``HF_HUB_*`` download knobs (they decide how the snapshot arrives, and the snapshot itself is
+#: already bound by ``model_revision``). None of those can change what is compiled or what it costs.
+RUNTIME_POLICY_KEYS = (
+    "JAX_PLATFORMS",
+    "LIBTPU_INIT_ARGS",
+    "XLA_FLAGS",
+    "XLA_PYTHON_CLIENT_MEM_FRACTION",
+    "XLA_PYTHON_CLIENT_PREALLOCATE",
+    "TPU_PREMAPPED_BUFFER_SIZE",
+)
+
+
+def derive_runtime_policy(environ: Mapping | None = None) -> tuple:
+    """The RAW policy values this process runs under — recorded verbatim, for audit.
+
+    Review F7d: the first version stored the *normalized* form and called it the raw audit value, so
+    the thing an operator would want to read back was the thing that had already been transformed.
+    Canonicalisation now happens only where it belongs — inside the digest, via
+    :func:`canonical_runtime_policy` — and what lands in the artifact is what the environment said.
+    """
+    environ = os.environ if environ is None else environ
+    return tuple((key, environ.get(key) if environ.get(key) is not None else None) for key in RUNTIME_POLICY_KEYS)
+
+
+def canonical_runtime_policy(policy) -> dict:
+    """The form the BINDING digest is taken over: a flag LIST, not a line of text.
+
+    Two rules, and review F7d corrected the second one after the reviewer executed a collision:
+
+    * unset, empty and whitespace-only are ONE policy, so two identical launches cannot disagree by
+      accident — the false-difference class F7 removed from ``code_sha``;
+    * whitespace is normalized BETWEEN flags and never INSIDE one. The first version collapsed runs of
+      whitespace across the whole string, which merged two valid and materially different settings —
+      ``--xla_dump_hlo_module_re='foo  bar'`` and ``--xla_dump_hlo_module_re='foo bar'`` are different
+      filters and hashed the same. Tokenizing with :mod:`shlex` keeps a quoted value verbatim, and
+      keeping the TOKENS (rather than rejoining them) means the distinction survives into the digest.
+
+    Flag ORDER is preserved: for XLA flags the last occurrence wins, so reordering can change the
+    program. A value that will not tokenize (unbalanced quotes) is recorded as one opaque token rather
+    than normalized — an unparseable policy is not a policy this function may quietly simplify.
+    """
+    canonical = {}
+    for key, raw in policy:
+        text = str(raw or "").strip()
+        if not text:
+            canonical[str(key)] = None
+            continue
+        try:
+            canonical[str(key)] = list(shlex.split(text))
+        except ValueError:
+            canonical[str(key)] = [text]
+    return canonical
 
 
 def _git_dirty_paths(start: pathlib.Path) -> tuple:
@@ -821,6 +921,7 @@ def derive_probe_context(config, *, devices: Sequence | None = None, environ: Ma
     manifest = deployed_manifest_digest()
     return ProbeContext(
         code_sha=derive_code_sha(environ=environ, manifest=manifest),
+        runtime_policy=derive_runtime_policy(),
         manifest_digest=manifest,
         model_revision=derive_model_revision(config),
         device_kind=kind,
@@ -839,9 +940,12 @@ def derive_probe_context(config, *, devices: Sequence | None = None, environ: Ma
 class CellMeasurement:
     """What a probe run reports for one cell, BOUND to the context it was measured under.
 
-    ``context_digest`` is the binding: :func:`build_evidence` refuses a measurement whose digest is
-    not the context being published, so a number measured on another machine, another commit or
-    another model cannot be carried into this artifact alongside a nicer-looking claim.
+    ``context_digest`` is the binding, and since review F7 it is the **binding digest** — the running
+    bytes, the model, the topology, the geometry and the recipe — rather than the full context digest,
+    which also carried the commit LABEL. :func:`build_evidence` refuses a measurement whose binding is
+    not the one being published, so a number measured on another machine, another build or another
+    model still cannot be carried into this artifact alongside a nicer-looking claim; a number
+    measured by identical bytes under a different commit label now can, which is the point.
     """
 
     cell: FitCell
@@ -1254,7 +1358,7 @@ def build_evidence(
         )
     if not measurements:
         raise ValueError("an authorization over no measurements authorizes nothing; run the ladder first")
-    wanted = context.digest()
+    wanted = context.binding_digest()
     foreign = sorted({str(m.context_digest) for m in measurements if str(m.context_digest) != wanted})
     if foreign:
         raise ValueError(
@@ -1413,11 +1517,11 @@ def load_authorization(path: str) -> dict:
             f"{path}: an authorization records the measurements it was decided from; this one records none"
         )
     measurements = [CellMeasurement.from_payload(entry) for entry in recorded]
-    foreign = sorted({m.context_digest for m in measurements if m.context_digest != rebuilt.digest()})
+    foreign = sorted({m.context_digest for m in measurements if m.context_digest != rebuilt.binding_digest()})
     if foreign:
         raise ValueError(
             f"{path}: measurements bound to context digest(s) {foreign} were published under "
-            f"{rebuilt.digest()} — they measure a different program from the one this artifact claims"
+            f"{rebuilt.binding_digest()} — they measure a different program from the one this artifact claims"
         )
     cells = [measurement.cell for measurement in measurements]
     if len(set(cells)) != len(cells):
@@ -1530,13 +1634,28 @@ def assert_cell_authorized(authorization: Any, cell: FitCell, *, context: ProbeC
     if not isinstance(recorded, Mapping):
         raise ValueError("this authorization records no context, so it cannot be bound to any program")
     measured_under = ProbeContext.from_payload(recorded)
-    if measured_under.digest() != context.digest():
+    # F7b: the gate binds to the BUILD, not to the commit label -- the same narrowing F7 made for
+    # adoption and resume, extended here because it is the same failure one step later and at the
+    # worst moment. M1 publishes at one tip; the launch is recorded in the ledger; M2 starts at the
+    # next tip and used to be refused its own authorization with a 64-chip reservation already held.
+    if measured_under.binding_digest() != context.binding_digest():
         raise ValueError(
-            f"this authorization measured a different program: {list(measured_under.differences(context))} "
-            f"differ (measured on {measured_under.code_sha[:12]}/{measured_under.model_revision}/"
+            f"this authorization measured a different program: "
+            f"{list(measured_under.binding_differences(context))} differ (measured on manifest "
+            f"{measured_under.manifest_digest[:12]}/{measured_under.model_revision}/"
             f"{measured_under.device_kind}x{measured_under.device_count}, running "
-            f"{context.code_sha[:12]}/{context.model_revision}/{context.device_kind}x{context.device_count}). "
-            f"An HBM peak is a measurement OF A PROGRAM, and that is not this one."
+            f"{context.manifest_digest[:12]}/{context.model_revision}/{context.device_kind}x"
+            f"{context.device_count}). An HBM peak is a measurement OF A PROGRAM, and that is not this one."
+        )
+    if measured_under.code_sha != context.code_sha:
+        # Reported, not refused: the bytes are identical and the labels differ, which on this campaign
+        # means a launch was recorded in the ledger between M1 and M2.
+        print(
+            f"[M2] label drift: this authorization was measured under code_sha "
+            f"{measured_under.code_sha[:12]} and this job runs {context.code_sha[:12]}, but the deployed "
+            f"manifest {context.manifest_digest[:12]}, the model, the topology, the geometry and the recipe "
+            f"are identical -- same program, different commit label. Proceeding.",
+            flush=True,
         )
     wanted = cell.as_payload()
     if wanted in [dict(entry) for entry in authorization.get("authorized_cells", [])]:
@@ -1579,13 +1698,23 @@ def assert_cell_authorized(authorization: Any, cell: FitCell, *, context: ProbeC
 # published nothing, and five attempts re-measured the same cells byte-identically. Publication
 # per cell banks the work; adoption is what makes the banked work count on the next attempt.
 #
-# ADOPTION IS BOUND TO THE CONTEXT DIGEST, and that is a deliberately coarse policy stated here so
-# nobody has to infer it: the digest carries ``code_sha``, so ANY commit — a comment, a docs-only
-# descendant, a launcher tweak — makes every published cell unadoptable and the ladder re-measures
-# from scratch. It over-refuses. The alternative is a curated list of "code that changes the
-# footprint", which is a list somebody has to remember to extend, and the cost of forgetting is an
-# HBM authorization for a program nobody measured. Over-refusing costs TPU minutes; under-refusing
-# costs a 64-chip reservation. The same trade was already made for FINGERPRINT_EXCLUSIONS.
+# ADOPTION IS BOUND TO THE RUNNING BYTES, not to the commit label (review F7). The comparison is
+# `ProbeContext.binding_digest()`: the deployed manifest, the model snapshot, the device topology, the
+# tensor geometry and the recipe fingerprint. `code_sha` is deliberately NOT in it.
+#
+# It was, until production measured what that cost. F5b bound adoption to the whole context digest on
+# the reasoning that over-refusing costs TPU minutes while under-refusing costs a reservation. The
+# missing term was that this campaign records every submission in a ledger commit, so consecutive
+# attempts of one job NEVER share a commit -- and M1-6 duly refused the entire M1-5 bank with
+# `['code_sha'] differ (measured on f51a8a6..., running 5631a36...)` while `manifest_digest` MATCHED.
+# Guaranteed bank loss on every resubmission is not a conservative failure mode; it is the failure F5
+# was built to prevent, reintroduced by the binding meant to protect it.
+#
+# The narrowing gives up nothing the old rule caught: a dirty tree, a stale tarball, a hand-edited
+# module and any real code change all move the manifest, and all still refuse. What it stops catching
+# is a difference that was never a difference. A label mismatch over an identical manifest is LOGGED
+# as label drift and adopted; the label stays in the artifact, the table and the run digest, where it
+# has audit value it cannot abuse.
 # =================================================================================================
 
 
@@ -1712,7 +1841,7 @@ class CellArtifact:
             _checked(trial)
             if trial.cell != cell:
                 raise ValueError(f"a trial describes {trial.cell} in an artifact about {cell}")
-            if str(trial.context_digest) != context.digest():
+            if str(trial.context_digest) != context.binding_digest():
                 raise ValueError(f"a trial of {cell} is bound to a context this artifact does not record")
         return cls(cell=cell, context=context, job_identity=str(payload.get("job_identity", "")), trials=trials)
 
@@ -1907,12 +2036,13 @@ def _adoption_refusal(artifact: CellArtifact, *, cell: FitCell, context: ProbeCo
             f"it was published by job/run {artifact.job_identity!r} and this job is {job_identity!r}: another "
             f"run's cells sitting under a shared root are not this run's evidence"
         )
-    if artifact.context.digest() != context.digest():
+    if artifact.context.binding_digest() != context.binding_digest():
         return (
-            f"it was measured under a different program -- {list(artifact.context.differences(context))} differ "
-            f"(measured on {artifact.context.code_sha[:12]}/{artifact.context.device_kind}x"
-            f"{artifact.context.device_count}, running {context.code_sha[:12]}/{context.device_kind}x"
-            f"{context.device_count}). Adoption is bound to the context digest, code_sha included."
+            f"it was measured under a different program -- {list(artifact.context.binding_differences(context))} "
+            f"differ (measured on manifest {artifact.context.manifest_digest[:12]}/"
+            f"{artifact.context.device_kind}x{artifact.context.device_count}, running "
+            f"{context.manifest_digest[:12]}/{context.device_kind}x{context.device_count}). Adoption is bound "
+            f"to the RUNNING BYTES: the manifest, the model, the topology, the geometry and the recipe."
         )
     if len(artifact.trials) != int(trials):
         return (
@@ -1960,6 +2090,17 @@ def adopt_published_cell(
         if refusal:
             print(f"[M1] not adopting {path}: {refusal}", flush=True)
             continue
+        if artifact.context.code_sha != context.code_sha:
+            # LABEL DRIFT: reported, not refused (F7). The manifest says the bytes are identical and the
+            # commits differ, which on this campaign usually means a launch was recorded in the ledger
+            # between two attempts. Worth a line in the log; not worth a ladder.
+            print(
+                f"[M1] label drift on {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: measured under "
+                f"code_sha {artifact.context.code_sha[:12]}, running {context.code_sha[:12]}, but the deployed "
+                f"manifest {context.manifest_digest[:12]} is identical -- same bytes, different commit label. "
+                f"Adopting.",
+                flush=True,
+            )
         print(
             f"[M1] adopting {cell.arm} microbatch={cell.microbatch} k={cell.k_b} from {path} "
             f"({len(artifact.trials)} trials, peak {max(t.peak_bytes for t in artifact.trials)} bytes)",
@@ -2303,7 +2444,7 @@ def measure_cell_on_device(
         elapsed = max(time.perf_counter() - started, 1e-9)
         return CellMeasurement(
             cell=cell,
-            context_digest=context.digest(),
+            context_digest=context.binding_digest(),
             compile_seconds=elapsed,
             step_seconds=elapsed,
             eval_seconds=0.0,
@@ -2379,7 +2520,7 @@ def _measure_under_mesh(*, cell, context, config, telemetry, source, started) ->
         )
         return CellMeasurement(
             cell=cell,
-            context_digest=context.digest(),
+            context_digest=context.binding_digest(),
             compile_seconds=compile_seconds,
             step_seconds=step_seconds,
             eval_seconds=eval_seconds,
@@ -2591,7 +2732,7 @@ def run_fit_probe(
                     f"trial {trial} of {cell} came back describing {measurement.cell}: a measurement is "
                     f"evidence about the cell it was taken on"
                 )
-            if str(measurement.context_digest) != context.digest():
+            if str(measurement.context_digest) != context.binding_digest():
                 raise ValueError(
                     f"trial {trial} of {cell} came back bound to another context: the probe derives the "
                     f"context, the measurer does not get to choose it"
