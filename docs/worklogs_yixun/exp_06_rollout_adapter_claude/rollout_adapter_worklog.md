@@ -1223,3 +1223,565 @@ Two things were wrong, and only fixing the second one is why it recurred: **the 
 - **Analysis** — the mechanism failures in this harness have all had one shape: a guard whose scope was set by what broke last time. F5d guarded one call, F7c guarded a subset, and each was overtaken by the next thing to move. The structural discriminator — returned string versus escaping exception — is the first version of this that does not depend on anticipating the failure. What it cost to find is the uncomfortable part: nine probes had been dead for four days across five rounds, and I reported those batteries as evidence.
 
 - **Next** — repair the nine, one at a time, each verified to refuse from real production behaviour; **if any of them SUCCEEDS against current production, that is a real hole that was masked and it stops the round.** Then ceremony and the M1-7 package.
+
+## 2026-08-13T22:05:00Z — Round F8 `probe-revival`: the nine dead probes, revived one at a time
+
+- **Goal** — execute F7d's outstanding work: revive the nine probes that had been silently not
+  running since `76117df` (2026-08-09), each re-expressed against the REAL current API, one at a
+  time. **The standing stop-condition: if any revived probe's attack actually SUCCEEDED against
+  production, that is a real hole masked for four days and it stops the round.**
+
+- **Hypothesis** — the nine were dead from API drift alone, not from production having lost a rule.
+  If that is right, every one of them refuses once it is pointed at the real seam; if it is wrong,
+  at least one comes back green-for-the-attacker and the round converts into a fix round.
+
+### Result: nine revived, nine REFUSED, no stop-event
+
+**No revived probe's attack succeeded.** Every one of them was dead from drift, and production's
+rules were intact underneath the whole time. The battery is honestly green for the first time since
+the guard was installed.
+
+| Probe | Intent | What drifted (all `76117df`/W3/F3c, 2026-08-09) | How it was re-expressed | Verdict |
+|---|---|---|---|---|
+| `T5a-3` TEST into the anchor | can a TEST-64 example be scored into the anchor summary? | `summarize_samples(checkpoint_step=…)` → `checkpoint=CheckpointIdentity`, `code_sha=`, `model_revision=` | real signature, rows legal in every OTHER respect (deployed grid digest + horizon) so only the held-out name is wrong | **REFUSED** — "these anchor samples are TEST-64 examples: `['ep61399_v0_s00000']`" |
+| `T5a-4` re-derive the benchmark | can the frozen baseline be silently re-derived with better numbers? | `freeze_benchmark_row(cohort=, per_example=, checkpoint=, code_sha=, model_revision=)` → one bound `table: ScoreTable` | freeze a legitimately built table at 0.25, then a "better" one at 0.95 on the same path | **REFUSED** — "already published with digest …; a frozen artifact is adopted, never rewritten" |
+| `T5b-1` lower the primary bar | can the +0.05 margin or the CI rule be relaxed from outside? | gates take built `ScoreTable`s; `_tbl` returned a mapping, so BOTH calls died in `as_gate_table`'s TypeError | real tables at 0.34 vs 0.30; **also fixed a mis-scoring bug** — an ACCEPTED margin override would have been appended to the notes and still reported REFUSED | **REFUSED** — no `margin` argument exists; +0.04 at CI `[0.04, 0.04]` still fails on `mean_delta` |
+| `T5b-2` score TEST first | can TEST be scored without a passing DEV gate? | `dev_certificate` computes its own gate and publishes to a path; `confirm_on_test` takes a certificate PATH + `TestCohort` | two real attempts: production's own failing certificate, and a **digest-consistent forgery** (`passed`→True, `reasons` erased, republished so the hash correctly describes its payload) | **REFUSED** ×2 — "the DEV primary gate did not pass"; "it records passed=True but its own numbers decide False" |
+| `T5b-3` forge the derangement | can a wrong-action assignment hand an example its own actions back? | `cohort_derangement(cohort)` returns a `DerangementArtifact` and READS the cohort's action bytes; probe passed names positionally **and** `cohort=` | build the real artifact, insert a fixed point, then **re-derive the fingerprint** so tamper detection cannot be what catches it; tables built under the forgery too | **REFUSED** — "the derangement has a fixed point at […]: those examples get their TRUE actions" |
+| `T5b-5` drop C0's battery | can the action-use finding be published without matched-C0's battery? | same derangement drift, plus `action_use_report` taking ONE `tables` mapping instead of four kwargs | a COMPLETE, legal arm battery under the real derangement, with `control_tables={}` | **REFUSED** — "control_tables must carry matched-C0 under `['true','wrong','zero']`" |
+| `F3a-5` float32 under bf16 | EV-1: can a bf16-configured run draw its noise in float32? | `DeviceBackend.__init__` lost `velocity_for` — **F3c removed the bound-velocity seam deliberately** | **not unconstructible.** The modern equivalent of "bind a foreign velocity" is `build_rollout_kernel(velocity_builder)`: injection moved INSIDE the one jit boundary, weights cross as arguments. Probe now (a) interrogates both constructors so a re-added seam re-arms it, (b) executes EV-1 at the kernel seam | **REFUSED** — latents/actions/context/`z_pred` all bf16 before the draw |
+| `F1b-2` microbatch as update | the timed unit must be one LOGICAL optimizer update | imported `f1_shims` / `probe_f1_smoke` — scratchpad modules **never committed to the tree** | intent is live, so re-expressed, not deleted: the maintained successors in the canonical suite (`_install_import_shims`, `_TinySource`, `_tiny_probe_config`) are **imported, not copied** — a hand-rolled tiny backbone here is the "copy that agrees by coincidence" W1 already punished | **REFUSED** — accumulates all 4 microbatches; eval unit is batch-1 |
+| `W1-3` hand-rebuild adapter | M1 must build the adapter through the SHARED factory, dtypes included | `ProductionModelSource.build` removed in W3; the source is the WEIGHTS seam only, the adapter is finalized in `build_training_program` | upgraded from an AST read of a dead method to **BEHAVIOURAL**: instrument `build_adapter_stack`, and build M1's program at TWO dtypes so the adapter it measures must actually change (battery G07's lesson: a source string is not the property) | **REFUSED** — enters the factory 1×, adapter dtypes follow the config (`['float32']` vs `['bfloat16','float32']`) |
+
+### Every probe got a reachability check, because a green probe that cannot fail is the defect
+
+The F5b caution says to write down what the SUCCEEDED branch would have to observe and confirm the
+probe can observe it. **All nine** revivals were therefore paired with a negative control, run separately:
+
+- `T5a-3` — the identical call **without** the TEST name summarizes fine (2 samples), so the refusal is the screen.
+- `T5a-4` — an **identical** re-freeze is ADOPTED (same digest), so the refusal is about the changed numbers, not about republication being impossible.
+- `T5b-1` — the same gate at **+0.06 passes** (`mean_delta=0.06`, CI `[0.06, 0.06]`), so +0.04's failure is the margin working.
+- `T5b-2` — a genuinely **passing** DEV certificate OPENS the TEST door (`confirmed=True`, both gates true, over a real TEST derangement and battery), so the two refusals are about the failing and the forged certificate rather than a door that is simply always shut.
+- `T5b-3` — the **honest** derangement is accepted and gates at +0.06, so only the fixed point was refused.
+- `T5b-5` — **with** the control battery the report publishes (`rollout_uses_actions_more_than_control=True`).
+- `F3a-5` — at the fp32 default **all four observables come back float32** and the probe returns SUCCEEDED; it genuinely sees the cast boundary.
+- `F1b-2` — the accumulation count tracks the config (8/2→4, 16/2→8, 8/8→1), so it is a measurement and not a constant.
+- `W1-3` — the two dtypes produce different adapter parameter trees; identical trees return SUCCEEDED.
+
+### Two harness helpers added, and one deliberately NOT used
+
+- `_gate_table(...)` — builds a **legitimate** `ScoreTable` through the real constructor (per-row action digests, pinned per-example noise keys), so five probes can apply their ONE mutation to an otherwise-legal artifact instead of collecting a refusal that was really about the argument type.
+- `_cohort_records(cohort)` — a **scoped, restoring** context manager patching only the two seams a derangement needs (`_tfrecord_reader`, `shard_binding`). `_fake_environment` was NOT used here: it installs an in-memory `gs://` filesystem process-wide and permanently, and the T5b probes run BEFORE the twenty T7/P1/P3 probes that have never been measured under those fakes. Verified the reader is restored to production's object after the block.
+- `_tbl` (the naked mapping) is kept for `T5b-4` alone, whose attack IS the positional call — those arguments never reach the gate body.
+
+### Command / Validation
+
+- Battery **three times**, every run `92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED`, **exit 0**; verdict-word sequences identical (only ephemeral tmp paths differ). Published: `harness/attacks_f8_20260813.log` (the third run), sha256 `6a9788647fb9a4726b20c356e00d46386ffe7ca6ed10df6765320ffefce3bb98`. **Caveat on reproducing it:** this worktree carried F9's uncommitted production edits throughout, so no battery log taken here is byte-reproducible from a clean checkout. That is why the nine were ALSO run against a HEAD-only tree (below) — that run, not this log, is the attributable evidence.
+- `black --line-length 119 --target-version py311` clean; `ruff` 14 findings, a **subset** of the pre-F8 15 (`C420` ×2 dropped, one `C408` added, no new rule class) — this docs-tree file has always carried them; `git diff --check` clean.
+- Canonical suite **2263 passed / 0 failed** (746 s, exit 0), run in a detached `git worktree` at HEAD (`8ac7baa`) — see fact 2 below for why it could not be run in this worktree. F8's own diff touches only `docs/…/harness/` (`reviewer_attacks.py`, `README.md`, the new log) plus the worklog, none of which the suite imports, so HEAD's number IS F8's number.
+- **The nine were also verified against committed HEAD alone** (a `git archive HEAD` tree, `pos_rollout_fit_probe.py` sha-verified `bb60746b…` = `HEAD:`), where all nine still REFUSE. That matters this round — see the collision below.
+
+### Two process facts that belong in the record
+
+1. **My six in-progress probe repairs were swept into someone else's commit.** `8ac7baa`
+   (`docs(exp_06): M1-6 complete…`, author Yixun-Hu) committed
+   `harness/reviewer_attacks.py` while F8 was mid-round, so six revived probes are already in
+   history under an M1-6 message. I committed nothing myself and nothing was lost, but the round's
+   diff is no longer contiguous and `commits_*.md` will need to say so.
+2. **F9 is editing production in the same worktree, concurrently.** `src/maxdiffusion/pos_rollout_fit_probe.py`
+   is modified (+385/−40) and `src/maxdiffusion/tests/worklogs_yixun/test_pos_rollout_runtime_peak.py`
+   is untracked and **does not import**, which makes the canonical suite fail COLLECTION in this
+   worktree. Neither is mine and I touched neither. The canonical-suite number for F8 was therefore
+   taken in a detached `git worktree` at HEAD, and the battery was additionally re-run against a
+   HEAD-only tree to prove the nine verdicts do not depend on F9's uncommitted edits.
+3. **F8 introduced ONE new coupling the Planner should know about.** `F1b-2` and `W1-3` import
+   `_install_import_shims` / `_TinySource` / `_tiny_probe_config` from
+   `src/maxdiffusion/tests/worklogs_yixun/test_pos_rollout_fit_probe.py` — the maintained successors
+   of the two scratchpad modules that never existed. That is the right call (copying a tiny backbone
+   into the harness is the "agrees by coincidence" defect W1 already paid for), but it means the
+   harness now depends on three private helpers in a suite file **F9 is actively editing**. The
+   failure mode is loud, not silent — an `ImportError` escapes the probe body and `_report` scores it
+   `SUCCEEDED: THE PROBE DID NOT RUN` — which is exactly the guard working as designed. If F9 renames
+   any of the three, that is the one place F8 will break.
+
+The battery was run a **third** time after F9's later edits landed (`pos_rollout_fit_probe.py`,
+`test_pos_rollout_fit_probe.py`, `test_pos_rollout_cell_publication.py` all modified in the tree):
+still `91 REFUSED / 1 DECLARED / 0 SUCCEEDED / 0 UNPARSED`, exit 0, all nine refusing. So the F8
+result is stable across F9's churn as well as against clean HEAD.
+
+- **Result** — `passed`, **uncommitted** (Planner ceremony). Nine probes revived, nine REFUSED, zero stop-events. Battery honestly green: 91/1/0/0, exit 0.
+
+- **Analysis** — the hypothesis held completely: the drift was in the probes, not in production, and
+  the four-day hole was a hole in COVERAGE rather than in the rules. That is the good outcome and it
+  is worth naming precisely, because F7d could not know it — a dead probe is evidence of nothing in
+  either direction, which is exactly why it had to be repaired rather than reasoned about. Two
+  revivals came back stronger than their originals: `T5b-1` had a scoring bug that would have
+  reported REFUSED on a successful attack, and `W1-3` was an AST read of a method that no longer
+  exists, now a behavioural check that would survive a rename. The one genuinely interesting
+  question — whether F3c's removal of `velocity_for` made EV-1 unconstructible — resolved to *no*:
+  the seam moved inside the jit boundary rather than disappearing, so the attack was re-expressed
+  there rather than downgraded to an assertion.
+
+- **Next** — Codex review of the F8 delta, then ceremony. F9 owns the `peak_source` capture fix and
+  the collision above should be resolved before either round commits.
+
+## 2026-08-13T23:40:00Z — F9 `runtime-peaks`: the probe takes a runtime peak reading, and the floor can now be satisfied by one
+
+- **Goal** — M1-6 completed the whole ladder and the authorization refused **all twelve cells on
+  `peak_source`**: every measurement recorded `"compiled memory analysis"`, and plan v2.8 §4-P1 plus
+  the authorization floor require runtime-derived evidence (`runtime-reset` / `runtime-raised`). The
+  floor was right; the probe had a measurement gap. This round closes it — per-cell runtime peak
+  capture, correctly classified, never faked, with the floor's consumption of the result made
+  correct.
+
+- **Hypothesis** (stated before reading the measurement path) — the probe's runtime branch existed
+  but could never fire, and the reason would be structural rather than a typo. **Confirmed, twice
+  over**, and both facts are deterministic rather than unlucky:
+
+  1. **The attribution window opened in the wrong place.** `_measure_under_mesh` called
+     `begin_steady_state()` *after* the compile step and `WARMUP_STEPS = 2` warm-up steps **of the
+     very same program**. `peak_bytes_in_use` is a monotone LIFETIME high-water mark, so this cell's
+     own warm-up had already set it to this cell's peak; the timed steps then re-ran an identical
+     program and could not raise it. `end_steady_state` saw `peak == peak_before`, the reset branch
+     was unavailable, and the analysis was the only surviving source. Twelve cells, twelve analyses,
+     no exceptions — exactly the table M1-6 published.
+  2. **There is no reset facility on this stack at all.** Verified directly:
+     `jaxlib._jax.Device` in jax 0.10.2 exposes `memory_stats` and `live_buffers`, and **no**
+     `clear_memory_stats` / `reset_memory_stats` on the device *or* the client. `reset_peak()`
+     therefore returns `False` on every backend this campaign has, so `runtime-reset` is a path kept
+     for a backend that grows one and is not what v6e does today.
+
+  Fixing (1) alone would **not** have fixed the round. `TRIALS_PER_CELL = 2`, and trial 2 of a cell
+  cannot raise the mark trial 1 has just set — so raise-only attribution would have produced a
+  `runtime-raised` trial 1 and an analysis trial 2, and `aggregate_trials` degrades a mixed cell to
+  its weakest evidence: **every cell would still have been refused on `peak_source`**. Raise-only is
+  not order-sensitive, it is structurally incapable of authorizing anything measured twice.
+
+### The design, and the raised-mode soundness argument
+
+The full argument lives on `classify_peak`'s docstring in the source; this is the record of it.
+
+**The theorem.** Let `W(t)` be the allocator's lifetime peak watermark, non-decreasing. Let this
+cell's window be `[t0, t1]`, `watermark_before = W(t0)`, `watermark = W(t1)`. Let `R` be the
+per-device bytes a dedicated training process at this cell would hold at its own peak. During
+`[t0, t1]` this process held everything the cell needs — backbone, adapter, optimizer state, the
+step's temporaries — plus any residue earlier cells had not released, so some instant `t*` in the
+window has `bytes_in_use(t*) >= R`. Monotonicity gives
+
+    R  <=  bytes_in_use(t*)  <=  W(t*)  <=  W(t1)  =  watermark
+
+**so `watermark` is an upper bound on `R` whether or not this cell raised it.** The non-raising case
+is not a case where the bound fails; it is a case where the bound is *loose*. It is also
+**self-correcting**: had `R` exceeded the standing mark, executing the cell would have raised the
+mark to at least `R` — so `standing` can only ever be observed when `R` really is under it. A
+`peak <= 90% of capacity` rule read off this number can refuse a cell that would have fit; it cannot
+authorize one that would not. Refusal is the safe direction for an acceptance floor.
+
+**Why this does not re-open F1b.** F1b's rule was "a peak this cell did not set is refused, not
+reported", and the reviewer's `attack_f1b_inherited_peak` guards it. The rule survives *in its
+operative form*: a standing mark is admitted **only** when it dominates this cell's own
+`Compiled.memory_analysis()`. That guard is what keeps it honest — the analysis is this program's own
+account of itself, and a "ceiling" below the program's own floor is not a ceiling (the two disagree:
+either the program never reached its peak inside the window, or the analysis over-counts donated and
+aliased buffers). With **no** analysis at all and **no** rise there is nothing cell-local to check
+the mark against, and the measurement **fails closed exactly as before** — which is the construction
+`attack_f1b_inherited_peak` uses (`program_bytes=None`), so the probe still REFUSES it. The Planner's
+brief offered "OR was already >= this cell's analysis peak" as the admission clause and simultaneously
+warned "the raised-mode condition must not attribute a previous cell's peak to this one"; the two
+cannot both be honoured literally, and this is the resolution: **the standing mark is not attributed
+to this cell — it BOUNDS it**, the artifact says which of the two it is (`peak_attribution`), and the
+guard makes the bound meaningful rather than inherited noise.
+
+**max(runtime, analysis), and the invariant that makes the floor correct.** The reported
+`peak_bytes` is the **larger** of the admissible runtime mark and the analysis, because the two
+bound the footprint under different accounts of what "in use" means and a ceiling rule must never
+round down. Recording the runtime alone would have let a cell whose static account exceeds its
+observed mark be authorized on the smaller number. The consequence is the invariant the floor rests
+on: **`peak_source` always names the origin of the number actually reported.** If the analysis wins
+the max, the source is `PEAK_SOURCE_ANALYSIS` and the floor refuses on provenance; if the runtime
+mark wins, the source is `runtime-*` and the cell is judged on a demonstrated ceiling. The floor can
+therefore read `peak_source in AUTHORIZING_PEAK_SOURCES` as "`peak_bytes` is a runtime-derived upper
+bound" with nothing else to check — which is precisely what it does.
+
+**Attribution is audit, not gate.** `peak_attribution ∈ {reset, raised, standing, none}` records how
+the reading related to the cell; `analysis_bytes`, `watermark_bytes`, `watermark_before_bytes` record
+the raw readings. None of them gates (the gate stays `peak_source`). They exist because M1-6
+published twelve numbers nobody could interrogate: the table could say the probe fell back, and could
+not say what the runtime had reported. **The next table answers, from its own contents, whether the
+mark moves per cell on v6e-8** — the fact that decides whether the ladder needs re-ordering.
+
+### The consequence the Planner has to rule on (NOT decided here)
+
+With a monotone mark, no reset, and `standing` admitted, the number a non-raising cell is judged on
+is **the largest peak the process has reached so far**. The ladder's visit order is
+`arms × microbatch × k`, so **`rollout mb=8 k=2` is measured first and it is the largest cell in the
+table** (M1-6 analyses: 30.18 GiB, vs 17.15 / 12.05 / 18.06 for mb=16/32/64 and 14.89 / 10.02 for
+one_step). If that cell's true *runtime* peak lands above `0.90 × 31.246 GiB = 28.12 GiB`, every
+later cell inherits it as its ceiling and is refused on **headroom** — a table that refuses
+everything again, for a different and this time *sound* reason. If it lands below, every later cell
+is soundly authorized at that number.
+
+This is a real fork and it is order-dependent, so it is a Planner decision, not a Coder one. The
+cheap structural fix, if wanted, is to **visit the ladder in ascending footprint order** (smallest
+first): every cell then raises the mark and every cell gets a *tight*, `raised`-attributed number.
+Learning the order needs the per-cell analysis, which needs a compile — affordable behind the
+persistent JAX compilation cache, but it changes what the ladder does and is out of this round's
+scope. Recorded, not actioned. Note also that `rollout mb=8` is already refused on headroom on its
+own analysis (96.6%) and stays refused whatever this decision is.
+
+- **Change** — `src/maxdiffusion/pos_rollout_fit_probe.py` only (no other production file, and the
+  F8-owned `harness/reviewer_attacks.py` deliberately untouched):
+  - `PEAK_ATTRIBUTION_{RESET,RAISED,STANDING,NONE}` + `PEAK_ATTRIBUTIONS` + `_ATTRIBUTION_STRENGTH`.
+  - `PeakEvidence` (frozen record) and **`classify_peak(...)`** — a module-level *pure* function
+    carrying the rule and its proof, so the whole decision is testable on a laptop with no device.
+  - `DeviceTelemetry`: `begin_cell()` (opens the cell window), `watermark_and_capacity()`,
+    `close_steady_state()`, `steady_state_evidence()`; `begin_steady_state(*, cell_watermark=None)`;
+    `_MissingPeak` so statistics **without** `peak_bytes_in_use` still yield a capacity (the headroom
+    rule is a fraction — losing the numerator must not lose the denominator).
+    `end_steady_state(before, *, program_bytes=None) -> (peak, capacity, source)` **kept at its exact
+    signature and return shape**, because it is the seam the reviewer battery drives directly.
+  - `_measure_under_mesh`: `begin_cell()` **before** `build_probe_program` (the fix); the watermark
+    read **before** `_program_bytes` (which lowers and compiles, and a compile allocates); the four
+    audit fields recorded; the `[M1]` line now prints source, attribution, both watermarks and the
+    analysis, flushed.
+  - `CellMeasurement` +4 optional fields, payload + `from_payload` (required keys, nullable values);
+    `_checked_peak_evidence` (vocabulary; a runtime source may not claim `none`; **a runtime peak
+    below the same cell's analysis is refused on load**); `cell_verdict` numbers carry attribution
+    and analysis; `aggregate_trials` takes the **weakest** attribution and worst-cases the readings.
+  - Protocols bumped fail-closed: `AUTHORIZATION_PROTOCOL` v5 → **v6**, `CELL_PROTOCOL` v1 → **v2**.
+  - Refusal path records `peak_attribution=PEAK_ATTRIBUTION_NONE` — nothing to invent.
+
+- **BINDING** — `recipe_fingerprint` is **unchanged**: pinned at
+  `42c5c870ba6eca7e0792c83909e378d9ae500e3e9f5d9743c91d0762a947fc55` over 177 recipe keys, asserted
+  in `test_the_recipe_fingerprint_is_untouched_by_this_round`, and no peak/watermark key entered
+  `FINGERPRINT_EXCLUSIONS`. Peak capture is measurement mechanics, not recipe. The **manifest** digest
+  does change (the file changed) — expected, and the cell bank resets; F7 had already reset it, so
+  nothing bankable is lost.
+
+- **Version Control** — branch `claude-exp_06_rollout_adapter-20260807`, base `8ac7baa`,
+  **implementation uncommitted** (Planner ceremony + Codex review follow). SHA-verified file states:
+  `pos_rollout_fit_probe.py` `bb60746b…` (= `HEAD:`, pre-round) → **`15a9702b…`** (final);
+  new `tests/worklogs_yixun/test_pos_rollout_runtime_peak.py` **`166a1cbf…`** (30 tests);
+  `test_pos_rollout_fit_probe.py` → **`72144d44…`**; `test_pos_rollout_cell_publication.py` →
+  **`029f7208…`**. `harness/reviewer_attacks.py`, `harness/README.md` and
+  `harness/attacks_f8_20260813.log` are **F8's**, concurrently edited and **not touched by this
+  round** — they show as modified/untracked in `git status` at close for that reason, not this one.
+
+- **Command / Validation**
+  - TDD **red first**: the new file failed 25/29 against pre-round production with
+    `AttributeError: module … has no attribute 'PeakEvidence'` / behavioural mismatches — never an
+    import typo. Red log kept in the round's scratch.
+  - `PYTHONPATH=src .venv/bin/python -m pytest src/maxdiffusion/tests/worklogs_yixun/ -q`.
+  - `black --line-length 119` + `ruff check` clean on every changed file; `py_compile` clean.
+  - Reviewer battery re-run to a distinctly named log (F8 is editing the harness concurrently).
+
+- **Acceptance criteria** (written before the edit) — (1) the four fake-device shapes classify
+  correctly; (2) no path mints a runtime source without a watermark; (3) the floor **passes** a
+  runtime-sourced cell and still refuses an analysis-only one; (4) `recipe_fingerprint` unchanged;
+  (5) canonical suite green at baseline + the new file; (6) `end_steady_state`'s signature and the
+  two harness attacks that drive it still REFUSE.
+
+- **Result** — `passed`, **uncommitted** (Planner ceremony + Codex review follow).
+  - **Canonical suite `2293 passed, 0 failed`** (597.96s) — baseline 2263 + the 30 new tests. Log
+    `scratchpad/f9_suite_final3.log`.
+  - **Reviewer battery `92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED`, exit 0** —
+    identical to F8's published count. Log sha256 `efd0a910ff6995c4066fe09a351b83ae85e503c9470eb091efed31745b973834`.
+    Two verdict MESSAGES moved (the verdict words did not), and both moves are the round working:
+    * `W1-1 authorize on a floor` now refuses on `('headroom',)` instead of `peak_source` — a 30-GiB
+      standing mark over a 7-GiB analysis is 93.75% of a 32-GiB device, so the cell is refused **on
+      the rule** rather than on provenance. That is the stronger refusal, and it is the F9 semantics
+      visible in the battery.
+    * `F1-5 entrypoint cannot run` now reports `ValueError` where it reported `AssertionError`: a
+      blind backend is refused by `begin_cell()` **before** the model load instead of after it. The
+      probe still reaches real production code (the attack's actual claim), and M1 on a device with
+      no memory statistics now dies in seconds rather than after a six-minute XLA compile. **The
+      harness's message string "reached the real model load" is now stale** — F8 owns that file and
+      it was deliberately not edited here; flagged for its owner.
+  - **One real bug caught by the full suite that the file-scoped runs could not**: the new run-recap
+    print read `entry['peak_bytes']` off a `measured_cells` entry, and a `measured_cells` entry is
+    the cell's IDENTITY only (`arm`, `microbatch`, `k_b`) — no numbers. 47 end-to-end ladder tests
+    failed with `KeyError`. Fixed to look the numbers up in `measurements`. Same family as the
+    standing `getattr(config, key, default)` rule: **an assumed key is an unverified claim.** Worth
+    recording that the three-file run was green while the suite was not — a per-file run is not a
+    suite run, and the round's last edit was exactly where that mattered.
+
+- **Analysis** — the defect class is F3's exactly, and worth naming for the third time: **a CPU test
+  suite cannot exercise a TPU-shaped API, so the branch that only TPU reaches was never executed by
+  anything.** The fix is not "test on TPU" but *move the decision off the device*: `classify_peak` is
+  now a pure function over four integers and a bool, the device's only job is to report numbers, and
+  a laptop can drive every branch including the ones v6e takes. The second lesson is about
+  *acceptance floors that can never be satisfied*: F1b's raise-only rule was correct in isolation and
+  became an outage once `TRIALS_PER_CELL` went to 2 — a rule that no honest measurement can satisfy
+  is indistinguishable, from the outside, from a probe that is broken. The rule and the protocol that
+  feeds it have to be checked against each other, not just each against its own intent.
+
+- **Next** — Codex review of the F9 delta; then the Planner's ruling on the ladder-order fork above
+  before M1-7 is proposed.
+
+## 2026-08-14T00:35:00Z — F9b `ladder-order`: the sole above-floor cell runs LAST, so every other cell's standing bound stays under the floor
+
+- **Goal** — the Planner's ruling on the fork F9 left open. F9 made the standing watermark an
+  admissible (sound, loose) bound; the residual risk was that the ladder visits `rollout` mb=8 —
+  the one cell above the headroom floor — **first**, so every later cell would inherit a bound over
+  the floor and be refused on `headroom`. The ruling: fix it **statically**, by declaring the
+  execution order with `rollout` mb=8 (both k) last. Orchestration only.
+
+- **Hypothesis** — order matters for exactly one class of cell. A standing bound **under** the floor
+  still authorizes; a standing bound **over** it refuses cells that would have fitted. So the only
+  cell whose position changes any other cell's verdict is one whose own peak is above the floor, and
+  M1-6 says there is exactly one. Confirmed by the simulation below: the same six cells, the same
+  device, the same rule — big-cell-first authorizes **0 of 6**, declared order authorizes **5 of 6**
+  and refuses the sixth on its own footprint.
+
+- **Change** — `src/maxdiffusion/pos_rollout_fit_probe.py`, two edits, both orchestration:
+  - **`LADDER_ORDER`** — a declared list of `(arm, microbatch)` pairs, ascending expected footprint
+    with `("rollout", 8)` last: `one_step` 8/16/32/64, then `rollout` 32/16/64, then `rollout` 8. The
+    **why** is written at the constant: monotone watermark + no reset + the standing-domination rule
+    ⇒ a cell above the floor poisons every cell after it, a cell below it cannot, and M1-6 measured
+    exactly one above (30.18 GiB of 31.246 = 96.6%, refused on its own account whatever the order).
+  - **`ladder()`** now emits its cells in that order. The SET, every cell's identity, the recipes and
+    the exclusion mechanism are untouched. A pair the declaration does not name keeps the caller's
+    relative order and runs after the named ones — a case that does not arise for the real ladder
+    (a test asserts `LADDER_ORDER` covers `LADDER_ARMS × LADDER_MICROBATCH` exactly) and exists only
+    so a custom one-cell ladder is re-ordered where the declaration speaks, never silently dropped.
+  - Exported `LADDER_ORDER` in `__all__`. **No other production file touched; the harness untouched.**
+
+- **BINDING** — `recipe_fingerprint` still pinned at
+  `42c5c870ba6eca7e0792c83909e378d9ae500e3e9f5d9743c91d0762a947fc55`, asserted a second time from
+  F9b's own section. Cell identity is `(arm, microbatch, k_b)` and the ladder's SET is unchanged, so
+  no banked cell is invalidated by the re-ordering and adoption is unaffected.
+
+- **Command / Validation** — 8 new tests appended to
+  `src/maxdiffusion/tests/worklogs_yixun/test_pos_rollout_runtime_peak.py` (section 8), **38 in the
+  file**, and one pre-existing test updated:
+  - the declared order pinned (`rollout` mb=8 both k last; `one_step` leads ascending);
+  - `LADDER_ORDER` covers the ladder exactly, no duplicates;
+  - the order changes the SEQUENCE and nothing else (same 16 cells, fingerprint pin);
+  - a custom ladder keeps the declared order where the declaration speaks;
+  - **the poisoning simulation, red and green as separate tests.** `_MonotoneProcess` replays M1-6's
+    measured footprints through a monotone, never-reset watermark and PRODUCTION's `classify_peak`,
+    `aggregate_trials` and `cell_verdict` — only the device's numbers are faked. Big-cell-first:
+    all six refused on `headroom`, the five small ones on a `standing` bound that is not their own
+    ("the M1-6 outcome, for a new reason"). Declared order: five authorized under the floor,
+    `rollout` mb=8 refused on `peak_bytes == 30.180 GiB`, its own footprint;
+  - trial 2 of every cell is a `standing` bound and the cell still authorizes — the concrete reason
+    the standing case had to be admitted at all;
+  - a partially-banked restart (four adoption sets) and an exclusion set still end with `rollout`
+    mb=8 last among the cells actually executed, because adoption `continue`s past execution rather
+    than reordering it.
+  - **Updated:** `test_the_probe_walks_the_ladder_aggregates_projects_and_publishes` pinned the OLD
+    first/last cells verbatim; it now pins the new order AND asserts `calls == ladder()` doubled, so
+    the walk order is checked against the declaration rather than restated from it.
+  - One test of mine was wrong before the code was: I asserted `rollout` mb=8 aggregates to `raised`.
+    It aggregates to `standing` — its own trial 2 cannot re-raise its trial 1's mark, and the weakest
+    trial decides. The code was right; the assertion now records the real claim (it is refused on
+    `peak_bytes` equal to its own footprint) and explains the attribution.
+
+- **Result** — `passed`, **uncommitted** (Planner ceremony + the combined Codex review follow).
+  - **Canonical suite `2301 passed, 0 failed`** (557.83s) = F9's 2293 + F9b's 8. Log
+    `scratchpad/f9b_suite.log`.
+  - **Reviewer battery `92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED`, exit 0** —
+    unchanged by the re-ordering, as it must be. Published
+    `harness/attacks_f9b_20260814.log`, sha256
+    `f8b3e09437767af3e48e31f27397d61f3ffde5ba5cc0426d5e5188b2bc91afdb`.
+  - SHA-verified final states: `pos_rollout_fit_probe.py` **`b2b03e9e…`**;
+    `test_pos_rollout_runtime_peak.py` **`9af7774b…`** (38 tests);
+    `test_pos_rollout_fit_probe.py` **`5599ef79…`**;
+    `test_pos_rollout_cell_publication.py` `029f7208…` (unchanged by F9b).
+
+- **Analysis** — the ruling is right and the reason is worth stating precisely: this is **not** a
+  general "sort the ladder by size" mechanism, and it should not become one. It is a one-line
+  declaration that the single cell known to sit above the acceptance floor goes last, and its whole
+  justification is the asymmetry F9 proved — a standing bound under the floor is as good as a
+  measured one, a standing bound over it is a false refusal. If a future recipe moves a second cell
+  above the floor, `LADDER_ORDER` is where that fact gets written down, and the simulation in
+  section 8 is what will show it. The residual weakness is that the order is justified by
+  **analysis** numbers (M1-6's static accounts), not runtime ones — nobody has runtime peaks yet.
+  That is exactly what the next M1 produces, and the F9 audit fields (`watermark_bytes`,
+  `peak_attribution`) are what will let the next table confirm or refute the ordering assumption
+  from its own contents.
+
+- **Next** — combined F8 + F9 + F9b Codex review, then ceremony. Note for that review: the harness's
+  `F1-5` message string ("reached the real model load") went stale under F9 — a blind backend is now
+  refused by `begin_cell()` before the load rather than after — and was deliberately NOT edited,
+  because F8 owns that file.
+
+## 2026-08-14T02:10:00Z — F9c `review-fixes`: the attribution window spans every phase the cell reports, and the declared order governs the public seam
+
+- **Goal** — the combined F8+F9+F9b Codex review returned **REQUEST-REVISION** with two production
+  MAJORs and one MINOR (the third MAJOR is harness-side and another Coder owns it). All three are
+  addressed here, production files only; `harness/reviewer_attacks.py` untouched.
+
+### MAJOR 1 — the attribution window closed two phases too early
+
+- **The finding, and it is correct.** The closing watermark was read straight after the timed steps,
+  while `_measure_under_mesh` goes on to run a DEV scoring pass and write a real checkpoint — and
+  records the **seconds of both** in the measurement the projection is built from. A phase whose cost
+  the cell reports is a phase whose FOOTPRINT the cell must bound. With the window closed early, an
+  evaluation that touched 95% of capacity was invisible and the cell could be authorized on the
+  sub-90% mark taken before it ran. The docstring already described the correct order — the code had
+  drifted from its own documentation, which is why nothing caught it.
+- **Fix** — the window now closes **after** the evaluation and the checkpoint, still before
+  `_program_bytes` (which lowers and compiles, and a compile allocates). The docstring now says that
+  this ordering is what the code does, and names the drift. At M3 the loop evaluates and checkpoints
+  on a cadence, so those allocations are part of the steady state the 90% rule is about.
+- **RED, demonstrated rather than asserted.** `test_a_peak_reached_only_during_the_EVALUATION_is_in_the_cells_evidence`
+  drives `measure_cell_on_device` on a fake device whose steps take the mark to 28 GiB (87.5% —
+  authorizing) and whose **eval** takes it to 30.5 GiB (95.3% — refusing). Against a reverted copy of
+  production the cell came back at **`peak_bytes == 30064771072` (28 GiB) and AUTHORIZED**; with the
+  fix it is 30.5 GiB and refused on `headroom`. That is the reviewer's scenario, executed.
+  A structural companion test pins `program.score` and `_time_one_checkpoint` before
+  `close_steady_state`, and `close_steady_state` before `_program_bytes`.
+
+### MAJOR 3 — the declared order was bypassable through `cells=`
+
+- **The finding, and it is correct.** F9b declared the order and `ladder()` honoured it, but
+  `run_fit_probe` took an explicit `cells=` sequence **verbatim**, so the guarantee held for the
+  default ladder and not for the public seam. The reviewer's construction —
+  `cells=[rollout mb=8, one_step mb=8]` — is two legitimate cells in an order that pushes the
+  watermark over the floor before the small cell is measured.
+- **Fix** — new `order_cells(cells)` applies the `LADDER_ORDER` rank to **any** requested sequence,
+  and `run_fit_probe` routes both paths through it. Sorting is idempotent on `ladder()`, so the
+  default path is unchanged. Per the ruling it is **sort-and-log**: when the executed order differs
+  from the asked order the probe prints both and why, because a caller who asked for one order and
+  got another should see that in the run log. A cell whose `(arm, microbatch)` the declaration does
+  not name is **refused** — appending it would put an unknown footprint after the very cell the
+  ordering exists to run last.
+- **Tests** — the reviewer's two-cell construction re-orders; any permutation of `ladder()` lands in
+  declared order; `order_cells(ladder()) == ladder()`; an unnamed pair is refused; and the seam is
+  closed **at the seam** — `run_fit_probe` with the poisoning `cells=` list calls the measurer in
+  declared order (RED against a reverted copy, whose log shows `rollout mb=8` measured first).
+  The adoption hole the review named is proved separately: adoption SKIPS execution, so once the
+  sequence is sorted, the executed cells are the declared order restricted, and across three banked
+  sets the above-floor cell is never anywhere but last among the cells actually executed.
+
+### MINOR — the provenance claim was too absolute
+
+- `classify_peak` names the origin of the number **it** reports exactly. The invariant that survives
+  the whole pipeline is the ONE-SIDED version, and it is the one the floor needs: **the source never
+  OVERSTATES its evidence.** An authorization-eligible label implies the reported number is
+  runtime-derived; the converse is not guaranteed, because `aggregate_trials` may conservatively
+  label a mixed-provenance cell `PEAK_SOURCE_ANALYSIS` even when the numeric maximum it reports came
+  from a runtime trial. That downgrade can only refuse a cell it might have authorized — it can never
+  upgrade one. Narrowed in `classify_peak`'s docstring, in the F9 test's docstring, and in the F9
+  entry above; `test_the_source_never_OVERSTATES_though_it_may_understate` executes both directions.
+
+- **Change** — `src/maxdiffusion/pos_rollout_fit_probe.py` only: window close moved after
+  eval+checkpoint; `measure_cell_on_device` docstring corrected; `order_cells` + `_pair` added and
+  exported; `run_fit_probe` sorts and logs; `classify_peak` docstring narrowed.
+
+- **Six adoption tests relabelled, not weakened.** `test_pos_rollout_cell_publication.py`'s
+  `die_after` tests assert WHICH cells bank before the VM dies, and the sort changes which those are:
+  the first cell of the walk is now `one_step` mb=8 and the unbanked one is `rollout` mb=8. `_LADDER`
+  is now written in execution order (cosmetic — `order_cells` sorts it either way, but a reader
+  comparing it with the call order would otherwise be misled), the six expectations name the new
+  cells, and the exclusion test now excludes the cell attempt 1 did **not** reach so that "everything
+  banked was adopted" is still what it tests.
+
+- **BINDING** — `recipe_fingerprint` unchanged, still
+  `42c5c870ba6eca7e0792c83909e378d9ae500e3e9f5d9743c91d0762a947fc55`. Window placement and walk order
+  are measurement mechanics; neither is recipe.
+
+- **Version Control** — branch `claude-exp_06_rollout_adapter-20260807`, base `8ac7baa`,
+  **uncommitted**. The red demonstrations were run against a scratch-reverted copy of production and
+  the working file **restored by sha** (`shasum -c` OK) before continuing.
+
+- **Result / Command / Validation** — `passed`, **uncommitted**.
+  - **Canonical suite `2308 passed, 0 failed`** (557.75s) = F9b's 2301 + F9c's 7 new tests. Log
+    `scratchpad/f9c_suite.log`.
+  - **Reviewer battery `92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED`, exit 0**, plus
+    the F8 Coder's new control block **`11 honest controls — 11 CONTROL-PASSED, 0 CONTROL-REFUSED`**
+    — which matters this round, because a control asserts production still ACCEPTS the legitimate
+    case, and F9c both tightened a bound (the window now spans eval+checkpoint) and re-ordered a
+    public seam. Published `harness/attacks_f9c_20260814.log`, sha256
+    `b6c730a94a8869c075fe4360d9a22476857f40f7ba9f537cde0b750f2d265010`.
+  - `black --line-length 119 --target-version py311` clean, `ruff check` clean on every file this
+    round touched, `git diff --check` clean, `py_compile` clean.
+  - SHA-verified final states: `pos_rollout_fit_probe.py` **`9fadc905…`**;
+    `test_pos_rollout_runtime_peak.py` **`ce9a5801…`** (45 tests);
+    `test_pos_rollout_cell_publication.py` **`293f9cc0…`**;
+    `test_pos_rollout_fit_probe.py` `5599ef79…` (unchanged by F9c).
+
+- **Next** — the short verification pass, then ceremony. Standing note for it: the harness's `F1-5`
+  message string ("reached the real model load") is stale under F9 and is the reviewer's third MAJOR,
+  owned by the F8 Coder; not edited here.
+
+## 2026-08-14T00:20:00Z — Round F8b `controls-in-battery`: the reviewer was right, and it caught four more probes
+
+- **Goal** — close the combined review's MAJOR 2 against F8 (harness only; the production files in
+  this worktree belong to F9 and were not touched), plus its MINOR on `F1-5`'s stale verdict text.
+
+### MAJOR 2 — the reachability controls were not in the executable battery
+
+The objection, restated so it cannot be softened: F8 paired each revived probe with a reachability
+check, **ran those checks by hand**, and wrote them up here. The recurring battery invokes only the
+attacks. So **a production regression that refused everything would still have printed nine green
+`REFUSED` lines**, and this worklog's "all nine got a control" paragraph would have aged into a
+false claim about a run nobody was doing. That is the F7d lesson — *unexecuted evidence is not
+evidence* — arriving in new clothes one round later.
+
+**Shape chosen: companion entries with their own vocabulary**, not a control step hidden inside each
+probe body. The review offered both and asked for whichever keeps the summary honest. A failing
+control is **not** "the attack succeeded": nothing got through — production stopped accepting
+legitimate work, a different defect with a different fix. Reporting that as `SUCCEEDED` would repeat
+exactly the sin (`F5-5`, `T5a-2`) of a probe whose verdict word contradicts what it observed. So:
+
+- `_control` sits beside `_report` and speaks `CONTROL-PASSED` / `CONTROL-REFUSED`. `_report` itself
+  is **untouched** — still byte-identical to its F7d original.
+- `_summarize` prints a **second** SUMMARY line and counts controls separately; the runner exits
+  non-zero on `CONTROL-REFUSED` **or** an unparsed control.
+- `_control` inherits F7d's discriminator verbatim: a returned string is a verdict, anything that
+  escapes is the control's own failure. A control cannot go silent the way the nine probes did.
+- The controls' own failure modes were **mutation-tested**, because a control that cannot fail is
+  worth exactly as much as a probe that cannot: a raising control → `CONTROL-REFUSED (DID NOT RUN)`;
+  a control whose legitimate case production refuses (+0.04 instead of +0.06) → `CONTROL-REFUSED`; a
+  control answering in the attacks' vocabulary → `UNPARSED`. `_summarize()` returned `False` for all
+  three.
+
+**Eleven controls**, covering the nine revived probes plus two families where the honest case was
+already trivially in reach (the sigma grid, and anchor reproduction). Per the review's warning, none
+were manufactured: the T7/P3/F5/F6/F7 authorization and publication families stay **attack-only**,
+because their "legitimate case" is a whole multi-phase publish/adopt cycle against the in-memory
+bucket — a fixture with its own failure modes rather than a cheap witness — and several already
+assert a positive outcome internally (`F5-6` requires two cells banked and re-loadable, `F7-1`
+requires the launch authorized). The source-shape probes (`G3-13`, `W2-1`, `W2-2`) are attack-only
+because a control there would just restate the probe. This inventory is written into the section
+header above the controls, where it will be read.
+
+### What the controls found on their FIRST run — four more probes watching the wrong thing
+
+Writing the anchor family's control exposed that `_rows` never set `grid_sha256`. `summarize_samples`
+checks the grid **before** the horizon and long before `reproduce_anchor` sees a name, so every probe
+built on `_summary` was being refused with `these samples were rolled out on grids ['']`:
+
+| Probe | Was refusing on | Now refuses on |
+|---|---|---|
+| `G3-1` anchor: foreign names | the missing grid digest | "the anchor is the recorded samples […]" |
+| `G3-2` anchor: wrong order | the missing grid digest | "the anchor samples are scored in the order the val directory yielded them" |
+| `G3-3` anchor: foreign ckpt | the missing grid digest | "the anchor is the historical run 'wan-pre_context-…'" |
+| `G3-4` certify a short rollout | the missing grid digest | "these samples executed horizons [1]; the deployed grid is 25 steps" |
+
+Four probes green, none of them testing the rule in its own name — the fourth caution (`F5-5`) in
+four more places. **No amount of re-reading the attacks would have found this**; asking "does the
+honest case still pass?" found it in the first minute. That is the argument for the rule, and it is
+now the README's eighth caution.
+
+### MINOR — `F1-5`'s stale verdict text
+
+`"reached the real model load"` stopped being true when F9 moved the blind-backend refusal ahead of
+the load; the real refusal is now `this backend reports no memory statistics for ['cpu:0']`. Rather
+than hardcode a new description of where production stops — a second thing to keep in step with
+production, which is how the string went stale in the first place — the probe now **quotes
+production's own refusal**. It cannot go stale again.
+
+- **Command / Validation** — battery **twice**, both `92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED` **and** `11 honest controls — 11 CONTROL-PASSED, 0 CONTROL-REFUSED, 0 UNPARSED`, **exit 0**, identical verdict-word sequences. Published `harness/attacks_f8b_20260814.log`, sha256 `a178dfd73afe0e2ca6ae21a7952beccde2be509d94e77c08a53dc0928af0ddb7`. `black`/`py_compile`/`git diff --check` clean; `ruff` codes unchanged from F8. **Nothing mutated outside the harness**: `eval_wan_pos_rollout.py`, `pos_rollout_gates.py`, `pos_rollout_update.py`, `pos_rollout_dev_instrument.py` all sha-verified identical to HEAD, and F9's three modified files were not touched.
+- **Result** — `passed`, **uncommitted**. MAJOR 2 closed with a mechanism rather than a promise; MINOR closed; four probes recovered as a bonus finding.
+- **Analysis** — the review's objection and F7d's finding are the same defect at two levels: F7d
+  found probes that were not executing, F8b found *evidence* that was not executing. The fix has the
+  same shape both times — put the check in the mechanism that always runs, and give it a verdict word
+  that cannot be confused with its neighbour. The four recovered probes are the practical argument:
+  this harness has now produced false-reason refusals in five separate places (`_Gfile`, `F5-5`,
+  `P3-5`, and `G3-1`..`G3-4`), and every single one was green at the time.
+- **Next** — Codex re-review of the F8b delta. The canonical suite still cannot be run in this
+  worktree while F9's untracked `test_pos_rollout_runtime_peak.py` fails collection; F8b touches only
+  the harness, which the suite does not import.
