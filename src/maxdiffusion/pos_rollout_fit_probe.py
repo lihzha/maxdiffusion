@@ -144,9 +144,16 @@ __all__ = [
     "TIMED_STEPS",
     "WARMUP_STEPS",
     "DeviceTelemetry",
+    "PEAK_ATTRIBUTIONS",
+    "PEAK_ATTRIBUTION_NONE",
+    "PEAK_ATTRIBUTION_RAISED",
+    "PEAK_ATTRIBUTION_RESET",
+    "PEAK_ATTRIBUTION_STANDING",
+    "PeakEvidence",
     "ProbeProgram",
     "ProductionModelSource",
     "build_probe_program",
+    "classify_peak",
     "config_keys",
     "config_recipe",
     "evaluation_count",
@@ -155,6 +162,7 @@ __all__ = [
     "LADDER_ARMS",
     "LADDER_K",
     "LADDER_MICROBATCH",
+    "LADDER_ORDER",
     "TRIALS_PER_CELL",
     "CellMeasurement",
     "CellVerdict",
@@ -185,13 +193,19 @@ __all__ = [
 #: ``cell_provenance``). A v3 loader reading a v4 table would treat a DECLARED-unreachable cell as one
 #: that was simply never measured -- the same class of confusion v3 was cut for -- so the version is
 #: the fail-closed signal, exactly as before.
-AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v5"
+#:
+#: ``v6`` (F9) because every measurement now carries ``peak_attribution`` and the runtime/analysis
+#: audit fields. A v5 reader would take a ``peak_bytes`` whose provenance it cannot see -- and the
+#: whole point of this round is that a peak without its provenance is not evidence.
+AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v6"
 #: Plan §4-P1. Steady state, not transient: a peak measured during compilation is not this number.
 HEADROOM_FRACTION = 0.90
 
 # --- F5: per-cell publication and adoption -----------------------------------------------------
-#: The per-cell artifact's own protocol, versioned separately from the run-level table.
-CELL_PROTOCOL = "exp06.fit_cell.v1"
+#: The per-cell artifact's own protocol, versioned separately from the run-level table. ``v2`` (F9):
+#: the trials carry the runtime-peak audit fields, and a v1 reader would adopt a banked cell without
+#: being able to see whether its peak was measured or merely accounted for.
+CELL_PROTOCOL = "exp06.fit_cell.v2"
 #: The directory of per-cell artifacts, beside the run-level authorization in the attempt root.
 CELLS_DIRNAME = "cells"
 #: The commit marker. Content is renamed into place FIRST and this sidecar written LAST, so a cell
@@ -223,6 +237,37 @@ PEAK_SOURCE_REFUSED = "device capacity after a refused allocation"
 AUTHORIZING_PEAK_SOURCES = (PEAK_SOURCE_RUNTIME_RESET, PEAK_SOURCE_RUNTIME_RAISED)
 PEAK_SOURCES = AUTHORIZING_PEAK_SOURCES + (PEAK_SOURCE_ANALYSIS, PEAK_SOURCE_REFUSED)
 
+#: F9. HOW the runtime watermark related to the cell it is reported for -- audit, not gate. The gate
+#: is ``peak_source``; this says how much the runtime number is worth, and it is what makes the next
+#: table able to answer, from its own contents, whether the mark moves per cell on this hardware.
+#:
+#: * ``reset``    -- the backend cleared the mark for this region, so the reading is the region's.
+#: * ``raised``   -- no reset, but THIS cell's window raised the lifetime mark: the process
+#:   demonstrably held that many bytes while running this cell's program.
+#: * ``standing`` -- no reset and no rise: the mark was set before this cell's window. It still
+#:   BOUNDS this cell (see :func:`classify_peak`), it is simply not tight, and a cell judged on it
+#:   can be refused for an earlier, larger cell's footprint. Sound, loose, and visible.
+#: * ``none``     -- no runtime reading entered the reported number at all.
+PEAK_ATTRIBUTION_RESET = "reset"
+PEAK_ATTRIBUTION_RAISED = "raised"
+PEAK_ATTRIBUTION_STANDING = "standing"
+PEAK_ATTRIBUTION_NONE = "none"
+PEAK_ATTRIBUTIONS = (
+    PEAK_ATTRIBUTION_RESET,
+    PEAK_ATTRIBUTION_RAISED,
+    PEAK_ATTRIBUTION_STANDING,
+    PEAK_ATTRIBUTION_NONE,
+)
+#: Weakest last: aggregation over trials keeps the WORST attribution, exactly as it keeps the worst
+#: peak. Trial 1 of a cell raises the lifetime mark and trial 2 cannot, so a cell measured twice is
+#: honestly a ``standing`` cell however good its first trial looked.
+_ATTRIBUTION_STRENGTH = {
+    PEAK_ATTRIBUTION_RESET: 3,
+    PEAK_ATTRIBUTION_RAISED: 2,
+    PEAK_ATTRIBUTION_STANDING: 1,
+    PEAK_ATTRIBUTION_NONE: 0,
+}
+
 #: k=2 is the predeclared primary; k=4 is EXPLORATORY and runnable only in a cell M1 measured.
 LADDER_K = (2, 4)
 #: Powers-of-two divisors of GBS 256 spanning the default 32 (the reviewer accepted this rationale).
@@ -232,6 +277,34 @@ LADDER_MICROBATCH = (8, 16, 32, 64)
 LADDER_ARMS = ("rollout", "one_step")
 #: Repeats per cell. One trial cannot show a cell that only fits when the neighbours are idle.
 TRIALS_PER_CELL = 2
+
+#: F9b. The order the ladder is EXECUTED in — orchestration only, and load-bearing for exactly one
+#: reason.
+#:
+#: The runtime peak is a MONOTONE lifetime watermark with no reset facility on this stack (F9), so a
+#: cell that does not raise it is judged on the STANDING mark: a sound upper bound (the theorem is on
+#: :func:`classify_peak`) that belongs to whichever earlier cell was largest. Order therefore matters
+#: in exactly one way — **a cell whose own peak is ABOVE the headroom floor poisons the bound of
+#: every cell measured after it, and a cell below the floor cannot.** A standing bound under the
+#: floor still authorizes; a standing bound over it refuses cells that would have fitted.
+#:
+#: M1-6 measured exactly one cell above the floor: ``rollout`` at microbatch 8, at 30.18 GiB of a
+#: 31.246 GiB device (96.6%), which is refused on headroom on its own account whatever the order.
+#: Every other cell sits at 10-18 GiB, comfortably under. So running the sole above-floor cell LAST
+#: leaves every other cell's standing bound both sound and under the floor, and costs nothing: the
+#: cells, their recipes, the fingerprint and the exclusion mechanism are all untouched by this list.
+#:
+#: Ascending expected footprint, with ``rollout`` mb=8 (both k) at the end.
+LADDER_ORDER = (
+    ("one_step", 8),
+    ("one_step", 16),
+    ("one_step", 32),
+    ("one_step", 64),
+    ("rollout", 32),
+    ("rollout", 16),
+    ("rollout", 64),
+    ("rollout", 8),
+)
 
 #: THE RECIPE IS EVERYTHING EXCEPT THESE, each excluded for a written reason (review F1, LS-4).
 #:
@@ -358,7 +431,56 @@ def ladder(
     microbatches: Sequence[int] = LADDER_MICROBATCH,
     horizons: Sequence[int] = LADDER_K,
 ) -> tuple[FitCell, ...]:
-    return tuple(FitCell(arm=a, microbatch=m, k_b=k) for a in arms for m in microbatches for k in horizons)
+    """Every cell of the declared ladder, in :data:`LADDER_ORDER` — the order it is EXECUTED in.
+
+    The SET is unchanged and so is every cell's identity, recipe and fingerprint; only the sequence
+    the probe walks them in is declared here. See :data:`LADDER_ORDER` for why the sequence matters.
+
+    An ``(arm, microbatch)`` pair the declaration has no opinion about keeps the caller's own relative
+    order and runs after the ones it does name. That case does not arise for the real ladder —
+    :data:`LADDER_ORDER` covers it exactly, and a test asserts it — it exists so a custom ladder
+    (a counterexample, a one-cell probe) is re-ordered where the declaration speaks and never
+    silently dropped.
+    """
+    pairs = tuple(dict.fromkeys((str(arm), int(microbatch)) for arm in arms for microbatch in microbatches))
+    rank = {pair: index for index, pair in enumerate(LADDER_ORDER)}
+    ordered = sorted(pairs, key=lambda pair: rank.get(pair, len(rank)))
+    return tuple(FitCell(arm=arm, microbatch=microbatch, k_b=k) for arm, microbatch in ordered for k in horizons)
+
+
+def order_cells(cells: Sequence[FitCell]) -> tuple[FitCell, ...]:
+    """Put ANY requested sequence of cells into :data:`LADDER_ORDER` (review F9c, MAJOR 3).
+
+    F9b declared the execution order and :func:`ladder` honoured it — but ``run_fit_probe`` took an
+    explicit ``cells=`` sequence **verbatim**, so the ordering guarantee held only for the default
+    ladder and the public seam walked straight past it. The reviewer's construction was
+    ``cells=[rollout mb=8, one_step mb=8]``: two legitimate cells, in an order that pushes the
+    watermark over the headroom floor before the small cell is measured, and the small cell is then
+    refused on a bound that is not its own. The order has to be a property of the probe, not of the
+    caller's list, or it is not a guarantee.
+
+    Sorting rather than refusing is deliberate: a caller asking for a subset of the ladder is doing a
+    normal thing (adoption re-runs, a one-cell diagnostic), and the fix for a poisoning order is to
+    run it in the right order, not to fail. What IS refused is a cell the declaration does not name,
+    because for such a cell there is no declared position — silently appending it would put an
+    unknown footprint after the cell F9b exists to keep last.
+    """
+    requested = tuple(cells)
+    rank = {pair: index for index, pair in enumerate(LADDER_ORDER)}
+    unknown = sorted({(str(cell.arm), int(cell.microbatch)) for cell in requested if _pair(cell) not in rank})
+    if unknown:
+        raise ValueError(
+            f"{unknown} is not named in LADDER_ORDER, so this probe has no declared position for it. The "
+            f"execution order is what keeps a cell above the headroom floor from refusing every cell "
+            f"measured after it (see LADDER_ORDER); a cell with no declared position would be appended "
+            f"after the one that ordering exists to run last. Add the pair to LADDER_ORDER, with its "
+            f"reason, rather than passing it here."
+        )
+    return tuple(sorted(requested, key=lambda cell: (rank[_pair(cell)], int(cell.k_b))))
+
+
+def _pair(cell: FitCell) -> tuple:
+    return (str(cell.arm), int(cell.microbatch))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -962,11 +1084,27 @@ class CellMeasurement:
     #: footprint and a "<= 90% of capacity" rule needs an UPPER one, so this field is what lets
     #: `cell_verdict` refuse to authorize on a floor (review W1, A3). Re-decided on load.
     peak_source: str
+    #: F9 audit trail. These four do not gate anything -- ``peak_source`` does -- and they exist
+    #: because M1-6 published twelve numbers nobody could interrogate: the table could not say what
+    #: the runtime had reported, only that the probe had fallen back to the analysis. They default to
+    #: "not recorded" so a measurement built by hand (a reviewer's counterexample, an older artifact
+    #: replayed through this class) is still constructible; the MEASUREMENT PATH always fills them.
+    #:
+    #: ``peak_attribution`` is one of :data:`PEAK_ATTRIBUTIONS`; ``analysis_bytes`` is the compiled
+    #: memory analysis kept beside the reported peak whichever of the two won; ``watermark_bytes`` /
+    #: ``watermark_before_bytes`` are the raw allocator readings at the close and at the open of this
+    #: cell's window, so the next table answers "does the mark move per cell on v6e?" from its own
+    #: contents rather than from another 3.5-hour run.
+    peak_attribution: str = ""
+    analysis_bytes: int | None = None
+    watermark_bytes: int | None = None
+    watermark_before_bytes: int | None = None
 
     def as_payload(self) -> dict:
         return {
             "cell": self.cell.as_payload(),
             "peak_source": str(self.peak_source),
+            "peak_attribution": str(self.peak_attribution),
             "context_digest": str(self.context_digest),
             "compile_seconds": float(self.compile_seconds),
             "step_seconds": float(self.step_seconds),
@@ -975,6 +1113,9 @@ class CellMeasurement:
             "peak_bytes": int(self.peak_bytes),
             "capacity_bytes": int(self.capacity_bytes),
             "reservation_failures": int(self.reservation_failures),
+            "analysis_bytes": _optional_bytes(self.analysis_bytes),
+            "watermark_bytes": _optional_bytes(self.watermark_bytes),
+            "watermark_before_bytes": _optional_bytes(self.watermark_before_bytes),
         }
 
     @classmethod
@@ -992,6 +1133,13 @@ class CellMeasurement:
                 capacity_bytes=int(payload["capacity_bytes"]),
                 reservation_failures=int(payload["reservation_failures"]),
                 peak_source=str(payload["peak_source"]),
+                # REQUIRED keys, nullable values. The protocol version is what keeps a v5 artifact
+                # out of here; inside a v6 artifact, an absent audit field is a truncated record
+                # rather than an old one, and truncated records fail closed like everything else.
+                peak_attribution=str(payload["peak_attribution"]),
+                analysis_bytes=_optional_bytes(payload["analysis_bytes"]),
+                watermark_bytes=_optional_bytes(payload["watermark_bytes"]),
+                watermark_before_bytes=_optional_bytes(payload["watermark_before_bytes"]),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"{payload!r} is not a recorded cell measurement: {error}") from error
@@ -1017,6 +1165,57 @@ def _duration(value, what: str, *, strictly_positive: bool = False) -> float:
     return number
 
 
+def _optional_bytes(value) -> int | None:
+    """A byte count that may honestly be absent. ``None`` means "not recorded", never "zero"."""
+    if value is None:
+        return None
+    number = int(value)
+    if number < 0:
+        raise ValueError(f"a recorded byte count is non-negative, got {value!r}")
+    return number
+
+
+def _checked_peak_evidence(measurement: CellMeasurement) -> None:
+    """F9. The audit fields have to agree with the provenance claim beside them.
+
+    Only two rules here are load-bearing, and both are about the claim rather than the numbers:
+
+    * a RUNTIME source with ``none`` attribution is a claim nobody made -- the measurement path sets
+      the attribution from the same branch that sets the source, so the pair can only come apart by
+      hand-editing an artifact;
+    * a runtime peak BELOW the same cell's compiled analysis is not a ceiling. The analysis is this
+      program's own account of itself; a "measured" number smaller than it means the two disagree,
+      and :func:`classify_peak` never emits that pair -- so seeing it on load means the artifact was
+      built somewhere else.
+
+    An EMPTY attribution is "not recorded", which is what a measurement constructed outside the
+    measurement path carries; it is allowed, and it authorizes nothing on its own because the gate
+    remains ``peak_source``.
+    """
+    attribution = str(measurement.peak_attribution)
+    if attribution and attribution not in PEAK_ATTRIBUTIONS:
+        raise ValueError(f"{attribution!r} is not a peak attribution this probe produces ({list(PEAK_ATTRIBUTIONS)})")
+    if str(measurement.peak_source) in AUTHORIZING_PEAK_SOURCES and attribution == PEAK_ATTRIBUTION_NONE:
+        raise ValueError(
+            f"a measurement claiming {measurement.peak_source!r} records how the runtime reading was "
+            f"attributed to this cell; {PEAK_ATTRIBUTION_NONE!r} attribution says no reading entered the "
+            f"number, and the two cannot both be true"
+        )
+    for name in ("analysis_bytes", "watermark_bytes", "watermark_before_bytes"):
+        _optional_bytes(getattr(measurement, name))
+    analysis = measurement.analysis_bytes
+    if (
+        analysis is not None
+        and str(measurement.peak_source) in AUTHORIZING_PEAK_SOURCES
+        and int(measurement.peak_bytes) < int(analysis)
+    ):
+        raise ValueError(
+            f"this cell reports a runtime peak of {measurement.peak_bytes} bytes, below the "
+            f"{int(analysis)} bytes its own compiled memory analysis accounts for. A ceiling under the "
+            f"program's own floor is not a ceiling, and no measurement this probe takes can produce one"
+        )
+
+
 def _checked(measurement: CellMeasurement) -> None:
     """A missing measurement is not a zero. Each of these would otherwise flatter the cell."""
     _duration(measurement.step_seconds, "the steady-state step time", strictly_positive=True)
@@ -1039,6 +1238,7 @@ def _checked(measurement: CellMeasurement) -> None:
             f"a measurement carries the digest of the context it was measured under; "
             f"{measurement.context_digest!r} is not one"
         )
+    _checked_peak_evidence(measurement)
 
 
 def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
@@ -1067,6 +1267,8 @@ def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
             "headroom_fraction": HEADROOM_FRACTION,
             "reservation_failures": int(measurement.reservation_failures),
             "peak_source": str(measurement.peak_source),
+            "peak_attribution": str(measurement.peak_attribution),
+            "analysis_bytes": _optional_bytes(measurement.analysis_bytes),
             "compile_seconds": float(measurement.compile_seconds),
             "step_seconds": float(measurement.step_seconds),
             "eval_seconds": float(measurement.eval_seconds),
@@ -1120,9 +1322,31 @@ def aggregate_trials(measurements: Sequence[CellMeasurement]) -> tuple[CellMeasu
                     if len({str(trial.peak_source) for trial in trials}) == 1
                     else PEAK_SOURCE_ANALYSIS  # a mixed cell is only as good as its weakest evidence
                 ),
+                # ...and the provenance aggregates the same way the numbers do. Trial 1 of a cell
+                # raises the lifetime mark and trial 2 cannot, so a two-trial cell is honestly a
+                # `standing` cell: recording the better trial's attribution would be recording the
+                # one reading that happened to be first.
+                peak_attribution=_weakest_attribution(trials),
+                analysis_bytes=_worst(trials, "analysis_bytes", max),
+                watermark_bytes=_worst(trials, "watermark_bytes", max),
+                watermark_before_bytes=_worst(trials, "watermark_before_bytes", min),
             )
         )
     return tuple(aggregated)
+
+
+def _worst(trials: Sequence[CellMeasurement], field: str, pick) -> int | None:
+    """``pick`` over the trials that recorded ``field``; ``None`` when none of them did."""
+    values = [int(value) for value in (getattr(trial, field) for trial in trials) if value is not None]
+    return pick(values) if values else None
+
+
+def _weakest_attribution(trials: Sequence[CellMeasurement]) -> str:
+    """The least attributable trial decides. An unrecorded attribution makes the cell unrecorded."""
+    claims = [str(trial.peak_attribution) for trial in trials]
+    if any(not claim for claim in claims):
+        return ""
+    return min(claims, key=lambda claim: _ATTRIBUTION_STRENGTH[claim])
 
 
 def _positive_int(value, what: str) -> int:
@@ -2125,6 +2349,145 @@ TIMED_STEPS = 3
 DEV_COHORT_SIZE = 64
 
 
+@dataclasses.dataclass(frozen=True)
+class PeakEvidence:
+    """One cell's peak, the provenance of the number, and the readings it was decided from."""
+
+    peak_bytes: int
+    capacity_bytes: int
+    peak_source: str
+    peak_attribution: str
+    analysis_bytes: int | None
+    watermark_bytes: int | None
+    watermark_before_bytes: int | None
+
+
+class _MissingPeak(ValueError):
+    """The backend reported statistics WITHOUT a peak. The capacity survived; say so.
+
+    Losing the peak key must not lose the capacity too: the headroom rule is a fraction, and a probe
+    that can still read the denominator can still refuse a cell on its compiled analysis. Subclasses
+    of :class:`DeviceTelemetry` that override ``peak_and_capacity`` never raise this, so a test's
+    stand-in keeps behaving exactly as it did.
+    """
+
+    def __init__(self, message: str, capacity: int):
+        super().__init__(message)
+        self.capacity = int(capacity)
+
+
+def classify_peak(
+    *,
+    watermark: int | None,
+    capacity: int,
+    reset: bool,
+    watermark_before: int,
+    cell_watermark: int | None = None,
+    analysis_bytes: int | None = None,
+) -> PeakEvidence:
+    """Decide THIS cell's peak and where the number came from. The F9 rule, argued in full.
+
+    **The setting.** The allocator's ``peak_bytes_in_use`` is a monotone LIFETIME high-water mark
+    over the process, and this process walks the whole ladder: it loads a fresh backbone per cell,
+    compiles, warms up, and times two trials of every cell in turn. jaxlib 0.10.2 exposes no way to
+    clear the mark on any backend (``jaxlib._jax.Device`` has ``memory_stats`` and nothing that
+    resets it), so ``runtime-reset`` is a path kept for a backend that grows one, and everything real
+    happens in the raised branch.
+
+    **The soundness theorem.** Let ``W(t)`` be the mark, non-decreasing. Let this cell's window be
+    ``[t0, t1]``, ``watermark_before = W(t0)`` and ``watermark = W(t1)``. Let ``R`` be the per-device
+    bytes a dedicated training process at this cell would hold at its own peak. During ``[t0, t1]``
+    this process held everything the cell needs -- its backbone, its adapter, its optimizer state and
+    its step's temporaries -- plus whatever earlier cells had not yet released, so there is an
+    instant ``t*`` in the window with ``bytes_in_use(t*) >= R``. Monotonicity then gives::
+
+        R <= bytes_in_use(t*) <= W(t*) <= W(t1) = watermark
+
+    **``watermark`` is therefore an upper bound on ``R`` whether or not this cell raised it.** The
+    non-raising case is not a case where the bound fails; it is a case where the bound is loose. And
+    it is *self-correcting*: had ``R`` exceeded the standing mark, running the cell would have raised
+    the mark to at least ``R``, so "standing" can only ever be observed when ``R`` really is under
+    it. A ``peak <= 90% of capacity`` rule read off this number can refuse a cell that would have
+    fit; it cannot authorize one that would not.
+
+    **Why the standing case has to be admitted at all.** ``TRIALS_PER_CELL == 2``. Trial 2 of a cell
+    cannot raise the mark trial 1 has just set, so raise-only attribution is not merely
+    order-sensitive -- it is structurally incapable of authorizing any cell measured more than once.
+    A rule that can never fire is not a floor, it is an outage; M1-6 was the outage.
+
+    **The consistency guard, which is what keeps "standing" honest.** ``Compiled.memory_analysis()``
+    is this program's own account of itself. If the standing mark is BELOW that account, the two
+    disagree -- either the program never reached its peak inside this window, or the analysis
+    over-counts donated and aliased buffers -- and a number that fails its own program's floor is not
+    a demonstrated ceiling. It is discarded, and the reported number falls back to the analysis,
+    whose source the authorization floor refuses. With no analysis at all AND no rise there is
+    nothing cell-local to check the mark against, so the measurement **fails closed** exactly as F1b
+    requires (and as the reviewer's ``attack_f1b_inherited_peak`` guards).
+
+    **What gets reported.** ``max(admissible runtime mark, analysis)``, because the two bound the
+    footprint under different accounts of what "in use" means and a ceiling rule must never round
+    down. **This function** names the origin of the number it reports exactly: analysis wins ⇒
+    ``PEAK_SOURCE_ANALYSIS``, runtime wins ⇒ ``runtime-*``.
+
+    The invariant that survives the whole pipeline is the ONE-SIDED version of that, and it is the
+    one the floor actually needs (review F9c, MINOR): **the source never OVERSTATES its evidence.**
+    An authorization-eligible label implies the reported number is runtime-derived; the converse is
+    not guaranteed, because :func:`aggregate_trials` may conservatively label a cell
+    ``PEAK_SOURCE_ANALYSIS`` when its trials disagreed on provenance even though the numeric maximum
+    it reports came from a runtime reading. That downgrade can only ever refuse a cell it might have
+    authorized — it cannot upgrade one — so the floor can still trust
+    ``peak_source in AUTHORIZING_PEAK_SOURCES`` to mean "``peak_bytes`` is a runtime-derived upper
+    bound", with nothing else to check.
+
+    ``cell_watermark`` is the mark at the top of the CELL -- before its backbone load and its
+    compile. Attribution is decided against it rather than against ``watermark_before`` because the
+    cell's own warm-up steps run between the two, and a window that opens after them can never be
+    raised by the cell that opened it. That was the M1-6 defect, exactly.
+    """
+    standing = int(watermark_before)
+    opened = standing if cell_watermark is None else int(cell_watermark)
+    analysis = _optional_bytes(analysis_bytes) or None
+
+    runtime: int | None = None
+    attribution = PEAK_ATTRIBUTION_NONE
+    if watermark is not None:
+        mark = int(watermark)
+        if reset:
+            runtime, attribution = mark, PEAK_ATTRIBUTION_RESET
+        elif mark > opened:
+            runtime, attribution = mark, PEAK_ATTRIBUTION_RAISED
+        elif analysis is not None and mark >= analysis:
+            runtime, attribution = mark, PEAK_ATTRIBUTION_STANDING
+
+    sources: dict[str, int] = {}
+    if runtime is not None:
+        sources[PEAK_SOURCE_RUNTIME_RESET if reset else PEAK_SOURCE_RUNTIME_RAISED] = runtime
+    if analysis is not None:
+        sources[PEAK_SOURCE_ANALYSIS] = analysis
+    if not sources:
+        raise ValueError(
+            f"no per-cell steady-state peak could be obtained: the backend offers no way to reset the "
+            f"high-water mark, this cell's window did not raise it above the {opened} bytes already "
+            f"standing, and the compiled program reports no memory analysis to check the standing mark "
+            f"against. The lifetime mark bounds this cell but nothing here can show it describes it, so "
+            f"reporting it would publish an earlier cell's measurement under this cell's name."
+        )
+    name = max(sources, key=lambda key: sources[key])
+    if name == PEAK_SOURCE_ANALYSIS:
+        # The reported number is the analysis, so the reported provenance is the analysis. The
+        # runtime reading is kept below for audit; it is not what this cell is judged on.
+        attribution = PEAK_ATTRIBUTION_NONE
+    return PeakEvidence(
+        peak_bytes=int(sources[name]),
+        capacity_bytes=int(capacity),
+        peak_source=name,
+        peak_attribution=attribution,
+        analysis_bytes=analysis,
+        watermark_bytes=None if watermark is None else int(watermark),
+        watermark_before_bytes=opened,
+    )
+
+
 class DeviceTelemetry:
     """THE device boundary, and now the only one: what the runtime says about its own memory.
 
@@ -2159,12 +2522,32 @@ class DeviceTelemetry:
         missing = sorted(
             {key for _, entry in stats for key in ("peak_bytes_in_use", "bytes_limit") if key not in entry}
         )
+        if missing == ["peak_bytes_in_use"]:
+            # The capacity survived. F9: the headroom rule is a fraction, and a probe that can read
+            # the denominator can still refuse a cell on its compiled analysis rather than failing
+            # the whole ladder over a statistic one backend does not export.
+            raise _MissingPeak(
+                "the runtime's memory statistics do not report ['peak_bytes_in_use']; the peak cannot be read",
+                min(int(entry["bytes_limit"]) for _, entry in stats),
+            )
         if missing:
             raise ValueError(f"the runtime's memory statistics do not report {missing}; the peak cannot be read")
         return (
             max(int(entry["peak_bytes_in_use"]) for _, entry in stats),
             min(int(entry["bytes_limit"]) for _, entry in stats),
         )
+
+    def watermark_and_capacity(self) -> tuple[int | None, int]:
+        """``(lifetime high-water mark or None, capacity)``. A missing PEAK is not a missing device.
+
+        Routed through :meth:`peak_and_capacity` so a subclass that overrides that one -- every test
+        stand-in and every reviewer attack in the battery does -- keeps deciding both numbers.
+        """
+        try:
+            peak, capacity = self.peak_and_capacity()
+        except _MissingPeak as gap:
+            return None, int(gap.capacity)
+        return int(peak), int(capacity)
 
     def reset_peak(self) -> bool:
         """Ask the backend to clear its high-water mark. ``True`` when a facility exists and worked."""
@@ -2181,43 +2564,66 @@ class DeviceTelemetry:
                 break
         return cleared
 
-    def begin_steady_state(self) -> dict:
-        """Open the region whose peak may be attributed to this cell."""
+    def begin_cell(self) -> int | None:
+        """Open the CELL's attribution window, BEFORE its backbone load and its compile (F9).
+
+        This is the reading M1-6 never took. The steady-state window opens after the cell's own
+        warm-up steps, which have already pushed the lifetime mark to this cell's own peak — so the
+        timed steps re-run an identical program and cannot raise it, and every one of the twelve
+        cells fell through to the compiled analysis. Attribution is decided against THIS reading, so
+        a rise anywhere inside the cell — load, compile, warm-up or the timed steps — is the cell's.
+        """
+        return self.watermark_and_capacity()[0]
+
+    def begin_steady_state(self, *, cell_watermark: int | None = None) -> dict:
+        """Open the region whose peak may be attributed to this cell.
+
+        ``cell_watermark`` is :meth:`begin_cell`'s reading. Omitting it collapses the cell window
+        onto the steady-state one, which is the pre-F9 behaviour and what a caller measuring a bare
+        region (a reviewer's counterexample) gets.
+        """
         reset = self.reset_peak()
-        peak, capacity = self.peak_and_capacity()
-        return {"reset": reset, "peak_before": 0 if reset else int(peak), "capacity": int(capacity)}
+        peak, capacity = self.watermark_and_capacity()
+        standing = 0 if reset else int(peak or 0)
+        return {
+            "reset": reset,
+            "peak_before": standing,
+            "cell_watermark": standing if cell_watermark is None else int(cell_watermark),
+            "capacity": int(capacity),
+        }
+
+    def close_steady_state(self, before: Mapping) -> dict:
+        """Read the mark the instant the timed steps end, BEFORE anything else allocates.
+
+        Split out from :meth:`end_steady_state` because ``_program_bytes`` lowers and compiles to get
+        the analysis, and a compile allocates: computing it first would fold a re-compile's transient
+        into the number the cell is judged on.
+        """
+        watermark, capacity = self.watermark_and_capacity()
+        return {"watermark": watermark, "capacity": int(capacity)}
+
+    def steady_state_evidence(
+        self, before: Mapping, after: Mapping, *, program_bytes: int | None = None
+    ) -> PeakEvidence:
+        """This cell's peak with its provenance — see :func:`classify_peak` for the rule and its proof."""
+        return classify_peak(
+            watermark=after.get("watermark"),
+            capacity=int(after.get("capacity", before.get("capacity", 0))),
+            reset=bool(before.get("reset")),
+            watermark_before=int(before.get("peak_before", 0)),
+            cell_watermark=before.get("cell_watermark"),
+            analysis_bytes=program_bytes,
+        )
 
     def end_steady_state(self, before: Mapping, *, program_bytes: int | None = None) -> tuple[int, int, str]:
-        """``(peak, capacity, source)`` for THIS cell, or a refusal.
+        """``(peak, capacity, source)`` for THIS cell, or a refusal. Reads and classifies in one call.
 
-        Two attributable sources, and the larger wins because a peak is a ceiling:
-
-        * the runtime's high-water mark **when this region raised it** (after a reset, always; without
-          one, only when it exceeded everything that came before — otherwise the mark belongs to some
-          earlier cell or to the pipeline load and says nothing about this program);
-        * the compiled executable's own memory analysis, which is per-program by construction.
-
-        With neither, there is no cell-local number and the measurement fails closed. The alternative
-        — reporting the lifetime mark — is what let a 64-wide cell's peak authorize an 8-wide one.
+        Kept at this signature because it is the seam the reviewer battery drives directly; the
+        measurement path uses :meth:`close_steady_state` + :meth:`steady_state_evidence` so it can
+        keep the audit fields and control when the analysis is computed.
         """
-        peak, capacity = self.peak_and_capacity()
-        sources = {}
-        if bool(before.get("reset")) or int(peak) > int(before.get("peak_before", 0)):
-            sources[
-                "runtime high-water mark" + (" after reset" if before.get("reset") else " raised by this region")
-            ] = int(peak)
-        if program_bytes:
-            sources[PEAK_SOURCE_ANALYSIS] = int(program_bytes)
-        if not sources:
-            raise ValueError(
-                f"no per-cell steady-state peak could be obtained: this backend offers no way to reset the "
-                f"high-water mark, this region did not raise it above the {int(before.get('peak_before', 0))} "
-                f"bytes already standing, and the compiled program reports no memory analysis. The lifetime "
-                f"mark belongs to an earlier cell or to the model load, so reporting it would authorize this "
-                f"cell on somebody else's measurement."
-            )
-        name = max(sources, key=lambda key: sources[key])
-        return sources[name], int(capacity), name
+        evidence = self.steady_state_evidence(before, self.close_steady_state(before), program_bytes=program_bytes)
+        return evidence.peak_bytes, evidence.capacity_bytes, evidence.peak_source
 
 
 #: Structured first, then bounded exact phrases. The reviewer classified BOTH ``"boom in program
@@ -2420,6 +2826,11 @@ def measure_cell_on_device(
     allocation seen along the way. A ``RESOURCE_EXHAUSTED`` at any point is counted as a reservation
     failure and the cell is reported at capacity — measured and refused, which is a result, not a
     crash.
+
+    **That ordering is now what the code does.** Until F9c the peak was read straight after the timed
+    steps, two phases earlier than this paragraph claimed, so the evaluation's and the checkpoint's
+    allocations were outside the window while their seconds were inside the measurement. The window
+    closes last, as described here (review F9 MAJOR 1).
     """
     import time
 
@@ -2453,6 +2864,10 @@ def measure_cell_on_device(
             capacity_bytes=capacity,
             reservation_failures=1,
             peak_source=PEAK_SOURCE_REFUSED,
+            # No runtime reading entered this number: the cell hit the ceiling and the ceiling is
+            # what is reported. There is no attribution to invent, and the reservation failure
+            # refuses the cell on its own.
+            peak_attribution=PEAK_ATTRIBUTION_NONE,
         )
 
 
@@ -2471,6 +2886,13 @@ def _measure_under_mesh(*, cell, context, config, telemetry, source, started) ->
     # simply no statement to flush. One line before the long-running call is what makes the next
     # failure diagnosable from the log alone.
     print(f"[M1] entering {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: building and compiling", flush=True)
+    # F9: THE CELL'S ATTRIBUTION WINDOW OPENS HERE, before the backbone load and the compile.
+    # M1-6 opened it after the warm-up, by which point this cell's own steps had already set the
+    # lifetime mark; the timed steps then re-ran the identical program, could not raise it, and all
+    # twelve cells fell through to the compiled analysis and were refused on provenance. This is the
+    # earliest point at which a rise is still this cell's, and it is also the earliest point at which
+    # a backend with no memory statistics can be refused — before six minutes of XLA, not after.
+    cell_watermark = telemetry.begin_cell()
     program = build_probe_program(config, cell, model_source=source)
     # THE DEPLOYED SCOPE — mesh AND logical axis rules — around everything that is measured (W3).
     # Compilation, the timed steps, the scoring pass and the checkpoint all happen inside it, because
@@ -2491,20 +2913,26 @@ def _measure_under_mesh(*, cell, context, config, telemetry, source, started) ->
         # compilation, warm-up and the previous 31 cells from it, so a later cell inherited an earlier
         # one's peak and a load transient read as steady state. Two supported facilities are used and the
         # LARGER is reported: a reset where the backend offers one plus the high-water mark attributable
-        # to this region, and the compiled executable's OWN memory analysis, which is cell-local by
+        # to this cell, and the compiled executable's OWN memory analysis, which is cell-local by
         # construction. If neither yields a number attributable to this cell, the measurement fails
-        # closed rather than reporting somebody else's peak.
-        before = telemetry.begin_steady_state()
+        # closed rather than reporting somebody else's peak. `classify_peak` carries the rule and the
+        # soundness argument for the standing case F9 admits.
+        #
+        # **F9c, review MAJOR 1: the region spans the EVALUATION and the CHECKPOINT as well.** It used
+        # to close right after the timed steps, while this same function goes on to run a DEV scoring
+        # pass and write a real checkpoint -- and records the seconds of both in the measurement the
+        # authorization projects from. A phase whose cost the cell reports is a phase whose FOOTPRINT
+        # the cell must bound: with the window closed early, an evaluation that touched 95% of capacity
+        # was invisible, and the cell could be authorized on a sub-90% mark taken before it ran. At M3
+        # the loop evaluates and checkpoints on a cadence, so those allocations are part of the steady
+        # state the 90% rule is about, not something that happens after it.
+        before = telemetry.begin_steady_state(cell_watermark=cell_watermark)
 
         timed_started = time.perf_counter()
         for _ in range(TIMED_STEPS):
             params, opt_state, loss = program.step(params, opt_state, program.batch, program.draws)
         jax.block_until_ready(loss)
         step_seconds = (time.perf_counter() - timed_started) / TIMED_STEPS
-
-        peak, capacity, peak_source = telemetry.end_steady_state(
-            before, program_bytes=_program_bytes(program, params, opt_state)
-        )
 
         # The DEV instrument scores ONE example at a time, so the evaluation unit is a batch-one pass.
         jax.block_until_ready(program.score(params, program.eval_batch, program.eval_draws))
@@ -2514,9 +2942,20 @@ def _measure_under_mesh(*, cell, context, config, telemetry, source, started) ->
 
         checkpoint_seconds = _time_one_checkpoint(config, cell, params, opt_state)
 
+        # NOW close the window -- after every phase this cell reports -- and read the mark BEFORE
+        # computing the analysis, because that lowers and compiles and a compile allocates.
+        after = telemetry.close_steady_state(before)
+        evidence = telemetry.steady_state_evidence(
+            before, after, program_bytes=_program_bytes(program, params, opt_state)
+        )
+        peak, capacity, peak_source = evidence.peak_bytes, evidence.capacity_bytes, evidence.peak_source
+
         print(
             f"[M1] {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: peak {peak} bytes "
-            f"({peak_source}), step {step_seconds:.3f}s over {len(program.batch)} microbatches"
+            f"({peak_source}, {evidence.peak_attribution}; watermark "
+            f"{evidence.watermark_before_bytes} -> {evidence.watermark_bytes}, analysis "
+            f"{evidence.analysis_bytes}), step {step_seconds:.3f}s over {len(program.batch)} microbatches",
+            flush=True,
         )
         return CellMeasurement(
             cell=cell,
@@ -2529,6 +2968,10 @@ def _measure_under_mesh(*, cell, context, config, telemetry, source, started) ->
             capacity_bytes=capacity,
             reservation_failures=0,
             peak_source=peak_source,
+            peak_attribution=evidence.peak_attribution,
+            analysis_bytes=evidence.analysis_bytes,
+            watermark_bytes=evidence.watermark_bytes,
+            watermark_before_bytes=evidence.watermark_before_bytes,
         )
 
 
@@ -2566,9 +3009,14 @@ def _program_bytes(program: "ProbeProgram", params, opt_state) -> int | None:
 
 
 def _capacity_after_refusal(telemetry: DeviceTelemetry) -> int:
-    """After a refused allocation the peak is not meaningful; the CAPACITY still decides the verdict."""
+    """After a refused allocation the peak is not meaningful; the CAPACITY still decides the verdict.
+
+    Read through ``watermark_and_capacity`` since F9: a backend that reports a limit but no peak can
+    still record this miss, and refusing to record it would lose a genuinely measured refusal over a
+    statistic the refusal does not use.
+    """
     try:
-        return telemetry.peak_and_capacity()[1]
+        return telemetry.watermark_and_capacity()[1]
     except ValueError:
         raise ValueError(
             "this cell exhausted the device AND the backend reports no memory statistics, so the miss "
@@ -2649,7 +3097,21 @@ def run_fit_probe(
     They are named in the log and remain "never measured" at the gate, which is exactly true.
     """
     context = derive_probe_context(config, devices=devices)
-    requested = tuple(cells) if cells is not None else ladder()
+    # F9c, MAJOR 3: the DECLARED order governs every walk, not only the default one. `cells=` used to
+    # be taken verbatim, so the guarantee F9b established held for `ladder()` and not for the public
+    # seam -- and the reviewer's two-cell construction walked straight past it. Sorting is idempotent
+    # on `ladder()`, so the default path is unchanged; an explicit sequence is re-ordered and the
+    # re-ordering is LOGGED rather than done silently, because a caller who asked for one order and
+    # got another should be able to see that in the run log.
+    asked = tuple(cells) if cells is not None else ladder()
+    requested = order_cells(asked)
+    if requested != asked:
+        print(
+            f"[M1] the requested cell order is not the declared LADDER_ORDER and was re-ordered: "
+            f"{[str(cell) for cell in asked]} -> {[str(cell) for cell in requested]}. The order is what "
+            f"keeps a cell above the headroom floor from refusing every cell measured after it.",
+            flush=True,
+        )
     logical_batch = int(declared(config, "pos_logical_batch"))
 
     # F6: DECLARED-unreachable cells are removed BEFORE anything is built. Not measured, not compiled,
@@ -2762,10 +3224,24 @@ def run_fit_probe(
         f"[M1] context {context.digest()[:16]} on {context.device_kind}x{context.device_count} @ {context.code_sha[:12]}"
     )
     banked = {(row["arm"], row["microbatch"], row["k_b"]): row["provenance"] for row in published["cell_provenance"]}
+    # F9: name the peak and its ATTRIBUTION in the recap too. An ADOPTED cell never prints a
+    # measurement line this attempt, so this is the only place its provenance appears in this run's
+    # log -- and `raised` vs `standing` is exactly what says whether the ladder's ORDER is deciding
+    # the numbers. The numbers come from `measurements`: a `measured_cells` entry is the cell's
+    # IDENTITY (arm, microbatch, k_b) and carries no peak at all.
+    peaks = {
+        (row["cell"]["arm"], row["cell"]["microbatch"], row["cell"]["k_b"]): row for row in published["measurements"]
+    }
     for entry in published["measured_cells"]:
+        key = (entry["arm"], entry["microbatch"], entry["k_b"])
         state = "AUTHORIZED" if entry in published["authorized_cells"] else "refused"
-        source = banked.get((entry["arm"], entry["microbatch"], entry["k_b"]), PROVENANCE_MEASURED)
-        print(f"[M1] {entry['arm']:<9s} microbatch={entry['microbatch']:<3d} k={entry['k_b']}  {state}  [{source}]")
+        source = banked.get(key, PROVENANCE_MEASURED)
+        row = peaks.get(key, {})
+        print(
+            f"[M1] {entry['arm']:<9s} microbatch={entry['microbatch']:<3d} k={entry['k_b']}  {state}  "
+            f"[{source}] peak {row.get('peak_bytes', 'unrecorded')} "
+            f"({row.get('peak_source', 'unrecorded')}, {row.get('peak_attribution') or 'unrecorded'})"
+        )
     for entry in published["excluded_cells"]:
         print(f"[M1] {entry['arm']:<9s} microbatch={entry['microbatch']:<3d} k={entry['k_b']}  EXCLUDED  [declared]")
     adopted = sum(1 for text in banked.values() if text.startswith(ADOPTED_PREFIX))

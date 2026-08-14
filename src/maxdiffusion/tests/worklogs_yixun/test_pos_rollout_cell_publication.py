@@ -190,7 +190,10 @@ class _ZoneKilledTheVM(RuntimeError):
     """Not a bug in the probe: the failure mode this whole round exists to survive."""
 
 
-_LADDER = (probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2), probe.FitCell("one_step", 8, 2))
+#: In LADDER_ORDER, which is the order it EXECUTES in: F9c sorts every requested sequence into the
+#: declared order, so `rollout` mb=8 -- the one cell above the headroom floor -- is always last.
+#: The `die_after` tests below depend on which cells finish first, so the order has to be visible.
+_LADDER = (probe.FitCell("one_step", 8, 2), probe.FitCell("rollout", 16, 2), probe.FitCell("rollout", 8, 2))
 
 
 def _run(config, measurer, *, cells=_LADDER, trials=2, devices=None):
@@ -273,7 +276,7 @@ def test_a_finished_cell_is_published_immediately_with_a_verifying_digest(tmp_pa
     ladder ends — the 24-of-32 attempt would have banked 24 cells instead of nothing."""
     path = _attempt(tmp_path, "att-1")
     config = _config(pos_fit_authorization=path)
-    cell = probe.FitCell("rollout", 8, 2)
+    cell = probe.FitCell("one_step", 8, 2)  # cell 1 of the declared order (F9c)
     measurer = _CountingMeasurer(die_after=2)  # two trials of cell 1, then the VM dies
 
     with pytest.raises(_ZoneKilledTheVM):
@@ -437,7 +440,7 @@ def test_a_restart_adopts_the_finished_cells_and_measures_only_the_rest(tmp_path
     """The round trip, and the claim is a call count: an adopted cell is a cell the measurer is never
     asked about. Attempt 1 dies with 2 of 3 cells finished; attempt 2 measures exactly one."""
     first = _first_attempt(tmp_path, die_after=4)  # 2 cells x 2 trials, then the VM dies
-    assert first.cells == [probe.FitCell("rollout", 8, 2), probe.FitCell("rollout", 16, 2)]
+    assert first.cells == [probe.FitCell("one_step", 8, 2), probe.FitCell("rollout", 16, 2)]
 
     second_config = _config(
         pos_fit_authorization=_attempt(tmp_path, "att-2"), pos_fit_adoption_root=_adoption_root(tmp_path)
@@ -445,7 +448,7 @@ def test_a_restart_adopts_the_finished_cells_and_measures_only_the_rest(tmp_path
     second = _CountingMeasurer()
     table = _run(second_config, second)
 
-    assert second.cells == [probe.FitCell("one_step", 8, 2)], "the two published cells were not re-measured"
+    assert second.cells == [probe.FitCell("rollout", 8, 2)], "the two published cells were not re-measured"
     assert len(second.calls) == 2, "one cell, two trials — and nothing else"
     assert len(table["measured_cells"]) == 3, "the table still covers the whole ladder"
     assert len(table["authorized_cells"]) == 3
@@ -477,8 +480,8 @@ def test_the_table_records_which_cells_were_adopted_and_from_where(tmp_path):
     )
 
     provenance = {(row["arm"], row["microbatch"], row["k_b"]): row["provenance"] for row in table["cell_provenance"]}
-    assert provenance[("one_step", 8, 2)] == probe.PROVENANCE_MEASURED
-    for cell in (("rollout", 8, 2), ("rollout", 16, 2)):
+    assert provenance[("rollout", 8, 2)] == probe.PROVENANCE_MEASURED
+    for cell in (("one_step", 8, 2), ("rollout", 16, 2)):
         assert provenance[cell].startswith(probe.ADOPTED_PREFIX), provenance[cell]
         assert "att-1" in provenance[cell], "an adoption names the artifact it adopted"
     assert probe.load_authorization(path)["cell_provenance"] == table["cell_provenance"]
@@ -492,7 +495,7 @@ def test_an_adopted_cell_is_not_republished_into_the_new_attempt(tmp_path):
     path = _attempt(tmp_path, "att-2")
     _run(_config(pos_fit_authorization=path, pos_fit_adoption_root=_adoption_root(tmp_path)), _CountingMeasurer())
     written = sorted(Path(probe.cell_publication_dir(path)).glob("*.json"))
-    assert len(written) == 1 and written[0].name.startswith("one_step_m8_k2."), written
+    assert len(written) == 1 and written[0].name.startswith("rollout_m8_k2."), written
 
 
 def test_with_no_adoption_root_the_probe_measures_exactly_what_it_measured_before(tmp_path):
@@ -725,7 +728,7 @@ def test_the_run_level_digest_covers_adopted_content(tmp_path):
         _CountingMeasurer(),
     )
 
-    published = probe.cell_marker_path(_attempt(tmp_path, "att-1"), probe.FitCell("rollout", 8, 2))
+    published = probe.cell_marker_path(_attempt(tmp_path, "att-1"), probe.FitCell("one_step", 8, 2))
     _damage(published, lambda payload: [trial.update(step_seconds=99.0) for trial in payload["trials"]])
     tampered = _run(
         _config(pos_fit_authorization=_attempt(tmp_path, "att-4"), pos_fit_adoption_root=_adoption_root(tmp_path)),
@@ -1312,7 +1315,7 @@ def test_declaring_an_exclusion_does_not_invalidate_cells_already_banked(tmp_pat
     measurer = _CountingMeasurer()
     table = _run(
         _excluding(
-            "one_step:8:2",
+            "rollout:8:2",  # the cell att-1 did NOT reach; the two it banked must still adopt
             pos_fit_authorization=_attempt(tmp_path, "att-2"),
             pos_fit_adoption_root=_adoption_root(tmp_path),
         ),
@@ -1324,8 +1327,12 @@ def test_declaring_an_exclusion_does_not_invalidate_cells_already_banked(tmp_pat
 
 def test_the_protocol_names_the_shape_that_carries_exclusions():
     """v3 tables cannot express an excluded cell, so a v3 loader reading a v4 table would silently
-    treat an excluded cell as never-measured. Fail closed on the version, as for v3."""
-    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v5"
+    treat an excluded cell as never-measured. Fail closed on the version, as for v3.
+
+    v6 (F9): the measurements now carry the peak's ATTRIBUTION and the runtime/analysis readings it
+    was decided from. A v5 reader would take a ``peak_bytes`` whose provenance it cannot see."""
+    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v6"
+    assert probe.CELL_PROTOCOL == "exp06.fit_cell.v2"
 
 
 def test_excluding_the_whole_ladder_is_refused_rather_than_publishing_nothing(tmp_path):

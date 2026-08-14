@@ -685,7 +685,11 @@ def test_the_probe_walks_the_ladder_aggregates_projects_and_publishes(tmp_path):
         trials=2,
     )
     assert len(calls) == 16 * 2, "every declared cell, every trial"
-    assert calls[0] == probe.FitCell("rollout", 8, 2) and calls[-1] == probe.FitCell("one_step", 64, 4)
+    # F9b changed the ORDER, and only the order: the runtime watermark is monotone with no reset, so
+    # a cell above the headroom floor poisons the standing bound of every cell measured after it.
+    # `rollout` mb=8 is the sole such cell and now runs LAST. See `probe.LADDER_ORDER`.
+    assert calls[0] == probe.FitCell("one_step", 8, 2) and calls[-1] == probe.FitCell("rollout", 8, 4)
+    assert calls == [cell for cell in probe.ladder() for _ in range(2)], "the declared order, verbatim"
     assert len(published["measured_cells"]) == 16, "trials aggregate to one verdict per cell"
     assert {"arm": "rollout", "microbatch": 64, "k_b": 4, "reasons": ["headroom"]} in published["refused_cells"]
     assert len(published["authorized_cells"]) == 15
@@ -1679,7 +1683,17 @@ def test_the_checkpoint_unit_is_written_where_production_writes(tmp_path):
 
 def test_a_peak_this_cell_did_not_set_is_refused_not_reported():
     """F1b BLOCKER 3, the contamination that made 32 sequential cells share one number: nothing reset
-    the runtime's LIFETIME high-water mark between model load, compile, warm-up and the trials."""
+    the runtime's LIFETIME high-water mark between model load, compile, warm-up and the trials.
+
+    **F9 revised the middle case, and the revision is a strengthening.** A standing mark bounds this
+    cell whether or not this cell set it (``classify_peak`` carries the proof: the mark is monotone,
+    so it dominates every instant inside this cell's window, including the cell's own peak). What it
+    cannot be is a number smaller than this cell's own compiled analysis — that is not a ceiling —
+    and it cannot be reported with nothing cell-local to check it against. So: no analysis at all
+    still refuses; a 30-GiB standing mark over a 7-GiB analysis now reports **30 GiB**, the ceiling,
+    rather than the 7-GiB floor it used to report. The number went UP and the cell got HARDER to
+    authorize; what changed is that it is now judged on a bound instead of refused on provenance.
+    """
 
     class _NoReset(probe.DeviceTelemetry):
         def __init__(self, peak):
@@ -1697,9 +1711,23 @@ def test_a_peak_this_cell_did_not_set_is_refused_not_reported():
     with pytest.raises(ValueError, match="no per-cell steady-state peak could be obtained"):
         telemetry.end_steady_state(before, program_bytes=None)
 
-    # A cell-local analysis IS reportable — and, per review W1 A3, it is NOT authorizing.
+    # The standing mark DOMINATES this cell's analysis, so it is the reported ceiling...
     peak, capacity, source = telemetry.end_steady_state(before, program_bytes=7 * 1024**3)
-    assert (peak, capacity) == (7 * 1024**3, 32 * 1024**3) and source == probe.PEAK_SOURCE_ANALYSIS
+    assert (peak, capacity) == (30 * 1024**3, 32 * 1024**3) and source == probe.PEAK_SOURCE_RUNTIME_RAISED
+    assert probe.cell_verdict(
+        _measurement(
+            peak_bytes=peak,
+            capacity_bytes=capacity,
+            peak_source=source,
+            analysis_bytes=7 * 1024**3,
+            peak_attribution=probe.PEAK_ATTRIBUTION_STANDING,
+        )
+    ).reasons == ("headroom",), "30 of 32 GiB is 93.75%: refused on the rule, not on the provenance"
+
+    # ...and a standing mark BELOW this cell's own analysis is discarded: the two disagree, so the
+    # analysis is what gets reported, and per review W1 A3 an analysis is NOT authorizing.
+    peak, _, source = telemetry.end_steady_state(before, program_bytes=31 * 1024**3)
+    assert peak == 31 * 1024**3 and source == probe.PEAK_SOURCE_ANALYSIS
 
     telemetry._peak = 31 * 1024**3
     peak, _, source = telemetry.end_steady_state(before, program_bytes=None)
