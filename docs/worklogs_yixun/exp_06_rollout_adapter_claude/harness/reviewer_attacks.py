@@ -4,7 +4,7 @@ A-B1(a) module issue token · A-B1(b) public digest override · A-B2 unrestricte
 B-1 terminal-verdict resume · B-2 selection artifact after a crash in the write window.
 """
 
-import dataclasses, functools, hashlib, json, pathlib, tempfile
+import contextlib, dataclasses, functools, hashlib, json, pathlib, tempfile
 
 import jax.numpy as jnp
 
@@ -235,30 +235,67 @@ def attack_t5a_widen_the_anchor():
 
 
 def attack_t5a_test_into_the_anchor():
-    """Can a TEST-64 example be scored into the anchor summary?"""
+    """Can a TEST-64 example be scored into the anchor summary?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** ``summarize_samples`` stopped taking
+    ``checkpoint_step=``: a measurement is bound to the :class:`CheckpointIdentity` a restore
+    produced, and the code SHA and model revision are part of the same binding. The old call died on
+    the signature, and until F7d's universal guard `_report` scored that crash as a REFUSAL.
+
+    Re-expressed against the real call and deliberately legal in every OTHER respect: each row
+    carries the deployed grid digest and the deployed horizon, so the only thing wrong with this
+    summary is the held-out name inside it. A row that also failed the grid or horizon check would
+    produce a refusal that says nothing about the TEST screen — which is the F5b caution (watch the
+    thing the probe is named for).
+    """
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
     anchor, test_manifest, _ = _anchor_env()
     intruder = json.loads(pathlib.Path(test_manifest).read_text())["rows"][0]["name"]
-    rows = [{"name": n, "latent_mse": 1.0, "pixel_mse": 0.1, "ssim_avg": 0.3} for n in ("a", intruder)]
+    legal = {
+        "latent_mse": ev.HISTORICAL_ANCHOR.mean_latent_mse,
+        "pixel_mse": ev.HISTORICAL_ANCHOR.mean_pixel_mse,
+        "ssim_avg": ev.HISTORICAL_ANCHOR.mean_ssim,
+        "num_steps": ev.DEPLOYED_SAMPLING_STEPS,
+        "grid_sha256": ev.DEPLOYED_GRID_SHA256,
+    }
+    rows = [{"name": name, **legal} for name in ("a", intruder)]
     try:
-        anchor.summarize_samples(rows, checkpoint_step=30000, test_manifest_path=test_manifest)
+        anchor.summarize_samples(
+            rows,
+            checkpoint=_identity(),
+            code_sha="a" * 40,
+            model_revision="rev@" + "b" * 40,
+            test_manifest_path=test_manifest,
+        )
     except ValueError as error:
         return f"REFUSED: {str(error).splitlines()[0][:110]}"
     return f"SUCCEEDED: {intruder} scored into the anchor summary"
 
 
 def attack_t5a_rederive_the_benchmark(tmp):
-    """Can the frozen benchmark row be silently re-derived with different numbers?"""
+    """Can the frozen benchmark row be silently re-derived with different numbers?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** ``freeze_benchmark_row`` stopped taking the cohort,
+    the per-example values, the checkpoint, the code SHA and the model revision as five independent
+    caller assertions; it derives every one of them from ONE bound ``ScoreTable``. The old
+    five-argument call died on ``cohort=`` and the crash was filed as a refusal.
+
+    The attack itself is unchanged and is issue #10 in the small: freeze the baseline, then freeze a
+    BETTER one at the same path. Both tables are legitimately built and differ only in their numbers,
+    so a refusal here is about republication and not about the artifact being malformed.
+    """
     from maxdiffusion import pos_rollout_dev_instrument as instrument
 
     anchor, _, dev = _anchor_env()
     cohort = instrument.load_dev_cohort(dev)
+    names = list(cohort.names)
     path = str(pathlib.Path(tmp) / "bench.json")
-    common = dict(checkpoint={"step": 30000}, code_sha="a" * 40, model_revision="rev@" + "b" * 40)
-    anchor.freeze_benchmark_row(path, cohort=cohort, per_example={n: 0.25 for n in cohort.names}, **common)
+    frozen = anchor.freeze_benchmark_row(path, table=_gate_table(names, 0.25, cohort=cohort))
     try:
-        anchor.freeze_benchmark_row(path, cohort=cohort, per_example={n: 0.95 for n in cohort.names}, **common)
+        anchor.freeze_benchmark_row(path, table=_gate_table(names, 0.95, cohort=cohort))
     except ValueError as error:
-        return f"REFUSED: {str(error).splitlines()[0][:110]}"
+        return f"REFUSED (mean stayed {frozen['mean_ssim']:.2f}): {str(error).splitlines()[0][:90]}"
     return "SUCCEEDED: the frozen baseline was rewritten with better numbers"
 
 
@@ -302,53 +339,253 @@ def _gate_env():
     return g, cohort, names
 
 
+@contextlib.contextmanager
+def _cohort_records(cohort):
+    """In-memory records for THIS cohort's rows, installed for the block and then REMOVED.
+
+    ``cohort_derangement`` reads every example's real action bytes through ``CohortBatchReader`` —
+    that is what makes "no example received byte-identical actions" a measurement rather than a
+    promise about a name list — so a derangement cannot be built on a laptop without records.
+
+    ``_fake_environment`` supplies records, but it also installs an in-memory ``gs://`` filesystem
+    and a shard binder **process-wide and permanently**, and the T5b probes run BEFORE the T7/P1/P3
+    probes, which have never been measured under those fakes. Installing it here would change what
+    twenty later probes are standing on. This patches the two seams a derangement actually needs and
+    restores both, so the blast radius is the ``with`` block.
+    """
+    import numpy as np
+
+    from maxdiffusion import null_adapter_manifest_io, run_wan_null_inversion
+
+    geometry = {"z_i0": (48, 1, 12, 20), "z_video": (48, 9, 12, 20), "actions": (32, 7)}
+    by_shard = {}
+    for row in cohort.rows:
+        by_shard.setdefault(str(row["shard_path"]), []).append(dict(row))
+
+    def fill(name):
+        """Distinct per example, so the cohort legitimately SUPPORTS a derangement. (The
+        byte-identical case is `G3-8`'s attack, and it uses `_fake_environment(identical=True)`.)"""
+        return float(int(hashlib.sha256(str(name).encode()).hexdigest()[:6], 16) % 9973) / 10.0 + 1.0
+
+    def reader(shard_path, wanted):
+        for row in by_shard[str(shard_path)]:
+            if str(row["name"]) not in set(wanted):
+                continue
+            value = fill(row["name"])
+            yield (
+                str(row["name"]),
+                int(row["ordinal"]),
+                np.full(geometry["z_i0"], value, np.float32),
+                np.full(geometry["z_video"], value, np.float32),
+                np.full(geometry["actions"], value, np.float32),
+            )
+
+    def binder(shard_path):
+        row = by_shard[str(shard_path)][0]
+        return {"generation": str(row["shard_generation"]), "size": int(row["shard_size"])}
+
+    saved = (run_wan_null_inversion._tfrecord_reader, null_adapter_manifest_io.shard_binding)
+    run_wan_null_inversion._tfrecord_reader = reader
+    null_adapter_manifest_io.shard_binding = binder
+    try:
+        yield
+    finally:
+        run_wan_null_inversion._tfrecord_reader, null_adapter_manifest_io.shard_binding = saved
+
+
 def _tbl(names, ssim):
+    """A naked mapping. Kept for `T5b-4`, whose attack is the POSITIONAL call itself — those
+    arguments never reach the gate's body, so what they are is irrelevant to what it tests."""
     return {n: {"ssim": float(ssim), "mse": 1.0} for n in names}
 
 
+def _gate_table(
+    names,
+    ssim,
+    *,
+    cohort=None,
+    condition="true",
+    arm="rollout",
+    run="rb",
+    mse=1.0,
+    derangement=None,
+    draw_key_for=None,
+    checkpoint=None,
+    incomplete=False,
+):
+    """A LEGITIMATE built :class:`ScoreTable` — the artifact every gate has required since F8's drift.
+
+    **Why this exists (F8).** The 2026-08-09 rework stopped letting a gate read
+    ``{name: {"ssim": …}}``: a mapping cannot say which checkpoint, whose actions or which noise
+    produced it, and those identities are precisely what a gate cross-checks. Five probes below were
+    still handing over mappings, so every one of them died inside ``as_gate_table``'s type refusal
+    **before its own attack ran**, and scored as a refusal for four days.
+
+    So the probes need a real artifact to attack. This builds one through the real constructor, with
+    per-row action digests and pinned per-example noise keys, which lets each probe apply its ONE
+    mutation to an otherwise-legal table and learn what production does about *that* — rather than
+    collecting a refusal that was really about the argument type.
+    """
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
+    cohort = _gate_env()[1] if cohort is None else cohort
+    rows = {}
+    for index, name in enumerate(names):
+        if condition == "zero":
+            donor = None
+        elif condition == "wrong" and derangement is not None:
+            donor = derangement.donor(name)
+        else:
+            donor = name
+        # The digests come from the DERANGEMENT artifact whenever there is one: that is what the gate
+        # cross-checks, and a hand-written digest would not be what the cohort's records hold.
+        if derangement is not None and donor is not None:
+            digest = derangement.action_sha256[donor]
+        else:
+            digest = hashlib.sha256(str(donor).encode()).hexdigest()
+        drawn = name if draw_key_for is None else draw_key_for(name)
+        rows[str(name)] = {
+            "ssim": float(ssim(index)) if callable(ssim) else float(ssim),
+            "mse": float(mse),
+            "actions_from": donor,
+            "actions_sha256": digest,
+            "draw_key_sha256": ev.draw_key_digest(ev.evaluation_draw_key(drawn)),
+            "num_steps": ev.DEPLOYED_SAMPLING_STEPS,
+        }
+    return ev.build_score_table(
+        rows=rows,
+        cohort=cohort,
+        condition=condition,
+        arm=arm,
+        checkpoint=_identity(run=run, step=10000, source="selection") if checkpoint is None else checkpoint,
+        num_steps=ev.DEPLOYED_SAMPLING_STEPS,
+        derangement_sha256=derangement.fingerprint if (condition == "wrong" and derangement is not None) else None,
+        allow_incomplete=incomplete,
+    )
+
+
 def attack_t5b_lower_the_bar():
-    """Can the +0.05 margin or the CI condition be relaxed from the outside?"""
+    """Can the +0.05 margin or the CI condition be relaxed from the outside?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** Both calls handed the gate naked mappings and died
+    inside ``as_gate_table``'s type refusal *before either half of the attack ran*; the ``TypeError``
+    was filed as "no margin argument exists", a claim about production the probe had not tested.
+    With real artifacts the two halves finally measure the MARGIN rather than the argument type.
+
+    The second half is the one that matters: +0.04 with a spotless CI is exactly the run that would
+    want a caller-supplied margin to exist. **The old body also mis-scored its own first half** — an
+    ACCEPTED override was appended to the notes and the verdict was still taken from the second call,
+    so the attack could have succeeded and reported REFUSED. It now returns on that branch.
+    """
     g, cohort, names = _gate_env()
+
+    def arms():
+        return dict(
+            rollout=_gate_table(names, 0.34, cohort=cohort),
+            control=_gate_table(names, 0.30, cohort=cohort, arm="control", run="c0"),
+            cohort=cohort,
+        )
+
     notes = []
     try:
-        g.primary_gate(rollout=_tbl(names, 0.34), control=_tbl(names, 0.30), cohort=cohort, margin=0.01)
-        notes.append("margin override ACCEPTED")
-    except TypeError:
-        notes.append("no margin argument exists")
-    verdict = g.primary_gate(rollout=_tbl(names, 0.34), control=_tbl(names, 0.30), cohort=cohort)
-    notes.append(f"+0.04 with a clean CI passed={verdict.passed}")
-    return ("SUCCEEDED: " if verdict.passed else "REFUSED: ") + "; ".join(notes)
+        g.primary_gate(**arms(), margin=0.01)
+    except TypeError as error:
+        notes.append(f"no margin argument exists ({str(error).splitlines()[0][:52]})")
+    else:
+        return "SUCCEEDED: the primary margin was overridden by a caller"
+    verdict = g.primary_gate(**arms())
+    if verdict.passed:
+        return f"SUCCEEDED: a +0.04 delta passed the +{g.PRIMARY_MARGIN} gate; " + "; ".join(notes)
+    ci = [round(float(value), 4) for value in verdict.numbers["ci"]]
+    notes.append(f"+0.04 at CI {ci} (CI-low clean) still failed on {list(verdict.reasons)}")
+    return "REFUSED: " + "; ".join(notes)
 
 
-def attack_t5b_score_test_first():
-    """Can TEST be scored without a passing DEV gate?"""
+def attack_t5b_score_test_first(tmp):
+    """Can TEST be scored without a passing DEV gate?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** Two signatures moved at once: ``dev_certificate``
+    stopped accepting a caller's ``GateVerdict`` (it COMPUTES the gate and publishes to a path), and
+    ``confirm_on_test`` takes a certificate **path** plus a ``TestCohort``. The probe died on the
+    mapping tables before it ever reached the TEST door.
+
+    Re-expressed with both attempts made real, and the second one sharpened. The old "hand-written
+    pass" was ``{"passed": True}``, which `G3-5` already covers as a bare marker. The interesting
+    forgery now is a certificate that is **complete, correctly digested and internally
+    well-formed** — production's own failing certificate with ``passed`` flipped to True and its
+    ``reasons`` erased, republished so the file's digest describes its own payload. Nothing about it
+    is detectable by integrity checking; only re-deciding the verdict from its own numbers catches it.
+    """
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
     g, cohort, names = _gate_env()
-    failing = g.dev_certificate(
-        g.primary_gate(rollout=_tbl(names, 0.30), control=_tbl(names, 0.30), cohort=cohort), cohort, num_steps=25
+    test_cohort = g.load_test_cohort(TEST)
+    honest = str(pathlib.Path(tmp) / "dev_cert_failing.json")
+    # A genuinely failing DEV gate, computed by production from real tables: R-B does not beat C0.
+    published = g.dev_certificate(
+        honest,
+        rollout=_gate_table(names, 0.30, cohort=cohort),
+        control=_gate_table(names, 0.30, cohort=cohort, arm="control", run="c0"),
+        cohort=cohort,
     )
-    for label, cert in (("failing certificate", failing), ("hand-written pass", {"passed": True})):
+    forged_payload = {
+        **{key: value for key, value in published.items() if key != "sha256"},
+        "passed": True,
+        "reasons": [],
+    }
+    forged = str(pathlib.Path(tmp) / "dev_cert_forged.json")
+    ev.publish_certificate(forged, forged_payload)  # recomputes the digest: the file is self-consistent
+    # BOTH refusals are recorded, not just the last one: each is a different production rule, and a
+    # probe that prints only its final attempt hides which door actually held (the T5a-2 repair).
+    refusals = []
+    for label, path in (("the gate's own failing certificate", honest), ("a digest-consistent forged pass", forged)):
         try:
-            g.confirm_on_test(cert, test_manifest_path=str(MD / "test64.json"), rollout={}, control={})
-        except ValueError as error:
-            last = f"REFUSED ({label}): {str(error).splitlines()[0][:80]}"
+            g.confirm_on_test(path, test_cohort=test_cohort, derangement=None, tables={}, control_tables={})
+        except (TypeError, ValueError) as error:
+            reason = str(error).splitlines()[0]
+            refusals.append(f"{label} -> {reason.split(': ', 1)[-1][:78]}")
         else:
-            return f"SUCCEEDED: TEST scored with a {label}"
-    return last
+            return f"SUCCEEDED: TEST was scored behind {label}"
+    return "REFUSED: " + "; ".join(refusals)
 
 
 def attack_t5b_forge_the_derangement():
-    """Can a wrong-action assignment secretly hand examples their own actions back?"""
+    """Can a wrong-action assignment secretly hand examples their own actions back?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** ``cohort_derangement`` became ``cohort_derangement(cohort)``
+    returning a :class:`DerangementArtifact`: it reads the cohort's own action bytes, so the legality
+    of the shuffle is measured. The old call passed ``names`` positionally **and** ``cohort=`` and
+    died on the argument binding before any forgery was attempted.
+
+    Re-expressed at full strength rather than as its dead letter. A naive rewrite of the permutation
+    is caught by the fingerprint, which would make this a test of tamper detection instead of the
+    fixed-point rule — so the forgery **recomputes the fingerprint after the edit**. The artifact that
+    reaches production is internally consistent: its hash correctly describes its own permutation and
+    digests, and the only thing wrong with it is that one example is its own donor. The score tables
+    are built under the forged mapping as well, so a relaxation of the artifact check would still
+    have to get past the row-level identity checks inside the gate.
+    """
+    import dataclasses as dc
+
     g, cohort, names = _gate_env()
-    blobs = {n: f"a{i}".encode() for i, n in enumerate(names)}
-    good = g.cohort_derangement(names, cohort="dev64", action_bytes=blobs)
-    sneaky = {**good, names[0]: names[0]}
-    try:
-        g.action_use_gate(
-            true_table=_tbl(names, 0.36), wrong_table=_tbl(names, 0.30), cohort=cohort, derangement=sneaky
-        )
-    except ValueError as error:
-        return f"REFUSED: {str(error).splitlines()[0][:110]}"
-    return "SUCCEEDED: an example was scored against its own actions as the wrong-action row"
+    with _cohort_records(cohort):
+        honest = g.cohort_derangement(cohort)
+        sneaky = dc.replace(honest, permutation={**honest.permutation, names[0]: names[0]})
+        sneaky = dc.replace(sneaky, fingerprint=g.derangement_fingerprint(sneaky))
+        if g.derangement_fingerprint(sneaky) != sneaky.fingerprint:
+            return "SUCCEEDED: the harness failed to build the self-consistent forgery it means to test"
+        try:
+            g.action_use_gate(
+                true_table=_gate_table(names, 0.36, cohort=cohort),
+                wrong_table=_gate_table(names, 0.30, cohort=cohort, condition="wrong", derangement=sneaky),
+                cohort=cohort,
+                derangement=sneaky,
+            )
+        except (TypeError, ValueError) as error:
+            return (
+                f"REFUSED (fingerprint re-derived, so this is not tamper detection): {str(error).splitlines()[0][:78]}"
+            )
+        return f"SUCCEEDED: {names[0]} was scored against its own actions as the wrong-action row"
 
 
 def attack_t5b_swap_arm_and_control():
@@ -361,24 +598,39 @@ def attack_t5b_swap_arm_and_control():
     return "SUCCEEDED: positional arguments let the control be reported as the arm"
 
 
+def _arm_battery(g, cohort, names, derangement, *, arm="rollout", run="rb", values=(0.36, 0.30, 0.20, 0.10)):
+    """The arm's four legal condition tables — the shape `action_use_report` requires (F8)."""
+    true_ssim, wrong_ssim, zero_ssim, disabled_ssim = values
+    common = dict(cohort=cohort, arm=arm, run=run, derangement=derangement)
+    return {
+        "true": _gate_table(names, true_ssim, condition="true", **common),
+        "wrong": _gate_table(names, wrong_ssim, condition="wrong", **common),
+        "zero": _gate_table(names, zero_ssim, condition="zero", **common),
+        "adapter_disabled": _gate_table(names, disabled_ssim, condition="adapter_disabled", **common),
+    }
+
+
 def attack_t5b_drop_the_control_battery():
-    """Can 'the adapter uses its actions' be published without matched-C0's own battery?"""
+    """Can 'the adapter uses its actions' be published without matched-C0's own battery?
+
+    **F8 — dead since 2026-08-09 (`76117df`).** Two signatures moved at once: ``cohort_derangement``
+    became ``cohort_derangement(cohort)`` (the probe passed ``names`` positionally *and* ``cohort=``),
+    and ``action_use_report`` takes the arm's four conditions as ONE ``tables`` mapping rather than
+    four keyword arguments. It died on the derangement call, before the report was ever asked for.
+
+    Re-expressed with a COMPLETE and legal arm battery, built under the cohort's real derangement, so
+    the refusal that fires is the one about matched-C0's missing battery rather than a complaint about
+    the arm's own coverage. Publishing "the adapter uses its actions" without the control is publishing
+    it without the comparison that says whether rollout training uses actions MORE than one-step does.
+    """
     g, cohort, names = _gate_env()
-    blobs = {n: f"a{i}".encode() for i, n in enumerate(names)}
-    mapping = g.cohort_derangement(names, cohort="dev64", action_bytes=blobs)
-    try:
-        g.action_use_report(
-            cohort,
-            derangement=mapping,
-            true_table=_tbl(names, 0.36),
-            wrong_table=_tbl(names, 0.30),
-            zero_table=_tbl(names, 0.20),
-            adapter_disabled_table=_tbl(names, 0.10),
-            control_tables={},
-        )
-    except ValueError as error:
-        return f"REFUSED: {str(error).splitlines()[0][:110]}"
-    return "SUCCEEDED: the action-use finding was published without its comparison"
+    with _cohort_records(cohort):
+        art = g.cohort_derangement(cohort)
+        try:
+            g.action_use_report(cohort, derangement=art, tables=_arm_battery(g, cohort, names, art), control_tables={})
+        except (TypeError, ValueError) as error:
+            return f"REFUSED: {str(error).splitlines()[0][:110]}"
+        return "SUCCEEDED: the action-use finding was published without matched-C0's comparison"
 
 
 # =================================================================================================
@@ -938,18 +1190,79 @@ def _report(label, fn, *args):
         _VERDICTS.append("UNPARSED")
 
 
+#: **The HONEST CONTROLS' verdicts, counted separately from the attacks' (review F8b, MAJOR 2).**
+#: A control is not an attack and must never be summed with one — see :func:`_control`.
+_CONTROL_VERDICTS: list[str] = []
+
+
+def _control(label, fn, *args):
+    """A probe's HONEST CONTROL, executed by the SAME battery run as its attack (F8b, MAJOR 2).
+
+    **The hole this closes.** F8 revived nine dead probes and paired each with a reachability check —
+    point production at the LEGITIMATE input and confirm it is *not* refused — but those checks were
+    run by hand, beside the battery, and written up in the worklog. The reviewer's objection is
+    exact: the recurring battery invokes only the attacks, so **a production regression that refused
+    everything would still print nine green REFUSED lines**. A refusal only means something if the
+    same code path can be shown to accept something. Unexecuted evidence is the F7d lesson wearing a
+    different hat, and it took four days to learn the first time.
+
+    **Why controls get their own verdict words rather than being folded into `_report`.** A control
+    that fails is not "the attack succeeded" — production has not let anything through, it has
+    stopped letting legitimate work through, which is a different defect with a different fix. Two
+    rounds of this campaign were lost to a probe reporting one thing while its name claimed another
+    (`F5-5`, `T5a-2`), so the vocabulary stays honest: attacks say REFUSED/DECLARED/SUCCEEDED,
+    controls say CONTROL-PASSED/CONTROL-REFUSED, and :func:`_summarize` counts them on separate
+    lines. The runner exits non-zero on either kind of failure.
+
+    The did-not-run guard is inherited verbatim from `_report`: a verdict is a RETURNED string, and
+    anything that escapes the body is the control's own failure, scored CONTROL-REFUSED so a control
+    can never go quiet the way the nine probes did.
+    """
+    try:
+        verdict = str(fn(*args))
+    except Exception as error:  # noqa: BLE001 -- an escape is a non-run, whatever its class
+        verdict = (
+            f"CONTROL-REFUSED: THE CONTROL DID NOT RUN -- {type(error).__name__}: "
+            f"{str(error).splitlines()[0][:110]}; this probe's refusal is now unwitnessed"
+        )
+    print(f"{label}: {verdict}")
+    for name in ("CONTROL-PASSED", "CONTROL-REFUSED"):
+        if verdict.startswith(name):
+            _CONTROL_VERDICTS.append(name)
+            break
+    else:
+        _CONTROL_VERDICTS.append("UNPARSED")
+
+
 def _summarize():
-    """The honest headline. A single "N refused" number hid a false refusal for two rounds."""
+    """The honest headline. A single "N refused" number hid a false refusal for two rounds.
+
+    Since F8b it is TWO headlines, because the battery now runs two kinds of thing and summing them
+    would be the same category error the three-way verdict split was introduced to stop.
+    """
     counts = {name: _VERDICTS.count(name) for name in ("REFUSED", "DECLARED", "SUCCEEDED", "UNPARSED")}
     print(
         f"\nSUMMARY: {len(_VERDICTS)} probes -- {counts['REFUSED']} REFUSED, {counts['DECLARED']} DECLARED "
         f"(accepted residual, see the harness README), {counts['SUCCEEDED']} SUCCEEDED, "
         f"{counts['UNPARSED']} UNPARSED"
     )
+    controls = {name: _CONTROL_VERDICTS.count(name) for name in ("CONTROL-PASSED", "CONTROL-REFUSED", "UNPARSED")}
+    print(
+        f"SUMMARY: {len(_CONTROL_VERDICTS)} honest controls -- {controls['CONTROL-PASSED']} CONTROL-PASSED, "
+        f"{controls['CONTROL-REFUSED']} CONTROL-REFUSED, {controls['UNPARSED']} UNPARSED. A control asserts "
+        f"production still ACCEPTS the legitimate case, so its probe's REFUSED means something."
+    )
+    failed = False
     if counts["SUCCEEDED"] or counts["UNPARSED"]:
         print("SUMMARY: FAILED -- a SUCCEEDED or UNPARSED line is production-guilty until you have read the probe.")
-        return False
-    return True
+        failed = True
+    if controls["CONTROL-REFUSED"] or controls["UNPARSED"]:
+        print(
+            "SUMMARY: FAILED -- a CONTROL-REFUSED line means production stopped accepting the legitimate case, so "
+            "every refusal it witnesses is now worthless. That is a defect too, and a different one."
+        )
+        failed = True
+    return not failed
 
 
 # =================================================================================================
@@ -1076,7 +1389,20 @@ def _identity(run=None, step=30000, source="historical"):
     return ev.CheckpointIdentity(run_name=name, step=step, root=f"gs://b/{name}/checkpoints", source=source)
 
 
-def _rows(names, num_steps=25):
+def _rows(names, num_steps=25, grid_sha256=None):
+    """Anchor sample rows that are legal in every respect the caller is not deliberately breaking.
+
+    **F8b: this helper omitted ``grid_sha256``, and writing the anchor family's honest control is
+    what exposed it.** ``summarize_samples`` checks the grid BEFORE the horizon and long before
+    ``reproduce_anchor`` ever sees a name, so every probe built on `_summary` was refused with
+    ``these samples were rolled out on grids ['']`` — and `G3-1 foreign names`, `G3-2 wrong order`,
+    `G3-3 foreign checkpoint` and `G3-4 short rollout` were all scored REFUSED for a reason that has
+    nothing to do with what they are named for. Three probes green, zero coverage of the rules they
+    claim, which is the fourth caution (`F5-5`) in three more places.
+
+    The rows now carry the deployed grid, so each of those probes reaches its own rule. A probe that
+    wants to break the grid says so explicitly.
+    """
     from maxdiffusion import eval_wan_pos_rollout as ev
 
     return [
@@ -1086,6 +1412,7 @@ def _rows(names, num_steps=25):
             "pixel_mse": ev.HISTORICAL_ANCHOR.mean_pixel_mse,
             "ssim_avg": ev.HISTORICAL_ANCHOR.mean_ssim,
             "num_steps": num_steps,
+            "grid_sha256": ev.DEPLOYED_GRID_SHA256 if grid_sha256 is None else grid_sha256,
         }
         for n in names
     ]
@@ -1549,7 +1876,11 @@ def attack_f1_entrypoint_cannot_measure(tmp):
     except NotImplementedError as error:
         return f"SUCCEEDED (M1 still dies): {str(error)[:90]}"
     except Exception as error:  # noqa: BLE001 -- reaching the real weights load is the point
-        reaches.append(f"reached the real model load ({type(error).__name__})")
+        # F8b (review MINOR): this used to say "reached the real model load", which stopped being true
+        # when the blind-backend refusal moved ahead of the load. A hardcoded description of WHERE
+        # production stopped is a second thing to keep in step with production -- so it now QUOTES the
+        # refusal instead of restating it, and cannot go stale again.
+        reaches.append(f"the real path ran and refused it ({type(error).__name__}: {str(error).splitlines()[0][:64]})")
     return f"SUCCEEDED: measurer still raises" if raises else f"REFUSED: the measurement path is real -- {reaches[0]}"
 
 
@@ -1691,19 +2022,56 @@ def attack_f3a_structurally_valid_but_foreign_grid():
 
 
 def attack_f3a_score_in_float32_under_a_bf16_config():
-    """EV-1: can a run configured at bfloat16 end up drawing its noise in float32?"""
+    """EV-1: can a run configured at bfloat16 end up drawing its noise in float32?
+
+    **F8 — dead since ~2026-08-09 (F3c).** The probe injected ``DeviceBackend(velocity_for=…)``, and
+    **F3c removed that seam deliberately**: handing out a callable with the weights already bound is
+    the spelling that let ``jax.jit`` bake the 5B backbone into the lowered module as 10.18 GB of
+    literals, which killed three consecutive M1 compiles on ``TPU_VM_HEALTH_TIMEOUT``. The backend
+    now exposes no bound-velocity seam at all, so there is nothing left to bind.
+
+    **The modern equivalent of "bind a foreign velocity" is** :func:`build_rollout_kernel`. Device
+    work is still injectable — that is the Planner's boundary, *device work may be injected,
+    orchestration may not* — but the injection point moved INSIDE the single ``jax.jit`` boundary and
+    the weights cross it as arguments rather than as a closure. So this attack is **not**
+    unconstructible: it changed shape, and it is re-expressed at the new seam rather than downgraded
+    to an assertion.
+
+    Two things, both EXECUTED against production rather than read off its source:
+
+    * **The removed spelling really is gone.** The constructors are interrogated, so a re-added
+      ``velocity_for`` — or a ``velocity_fn`` back on ``rollout_prediction`` — re-arms this probe
+      instead of silently restoring the capture defect F3c paid three dead compiles to find.
+    * **EV-1 itself.** A bf16-configured backend is handed float32 latents, actions and context (the
+      cached reader really does hand this evaluator float32) and must cast BEFORE it draws, because
+      :func:`initial_latents` draws in ``z_video.dtype``. Casting after the draw is a different
+      measurement: T5a's A13 finding measured native ``[0.387, 0.183, -1.0]`` against fp32-routed
+      ``[1.625, 2.031, -0.434]``, so the anchor would fail on WIRING and be read as model quality.
+    """
+    import inspect as _inspect
+
     import jax.numpy as jnp
     import numpy as np
 
     from maxdiffusion import eval_wan_pos_rollout as ev
 
+    restored = [
+        name
+        for name, function in (("velocity_for", ev.DeviceBackend.__init__), ("velocity_fn", ev.rollout_prediction))
+        if name in _inspect.signature(function).parameters
+    ]
+    if restored:
+        return f"SUCCEEDED: the pre-bound velocity seam is back ({restored}); F3c removed it to stop the capture"
+
     seen = {}
 
-    def velocity_for(params, actions, adapter_enabled):
+    def velocity_builder(params, frozen_state, actions, adapter_enabled):
+        """The kernel's OWN injection point — what `velocity_for` became when it moved inside jit."""
         seen["actions"] = actions.dtype
-        del params, adapter_enabled
+        del params, frozen_state, adapter_enabled
 
         def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+            seen["latents"] = hidden_states.dtype
             seen["context"] = encoder_hidden_states.dtype
             del timestep
             return jnp.zeros_like(hidden_states)
@@ -1711,34 +2079,39 @@ def attack_f3a_score_in_float32_under_a_bf16_config():
         return velocity_fn
 
     sigmas, timesteps = ev.deployed_grid()
+    params = {"w": jnp.zeros((1,), jnp.float32)}
     backend = ev.DeviceBackend(
-        velocity_for=velocity_for,
+        kernel=ev.build_rollout_kernel(velocity_builder),
         decode_fn=lambda x: jnp.asarray(np.repeat(np.asarray(x, np.float32).mean(axis=1)[..., None], 3, axis=-1)),
         sigmas=sigmas,
         timesteps=timesteps,
         context=jnp.zeros((1, 7, 8), jnp.float32),
         guide_scale=5.0,
-        params={"w": jnp.zeros((1,), jnp.float32)},
+        params=params,
         eval_dtype=jnp.bfloat16,
-    ).bound({"w": jnp.zeros((1,), jnp.float32)})
+        frozen_state=None,
+    ).bound(params)
     execution, _ = backend.score(
         z_i0=jnp.zeros((1, 4, 1, 4, 6), jnp.float32),
         z_video=jnp.zeros((1, 4, 2, 4, 6), jnp.float32),
         actions=jnp.zeros((1, 4, 7), jnp.float32),
         key=ev.evaluation_draw_key("x"),
     )
-    wrong = [
-        name
-        for name, dtype in (
-            ("z_pred", execution.z_pred.dtype),
-            ("actions", seen.get("actions")),
-            ("context", seen.get("context")),
-        )
-        if dtype != jnp.bfloat16
-    ]
+    observed = {
+        "z_pred": execution.z_pred.dtype,
+        "latents": seen.get("latents"),
+        "actions": seen.get("actions"),
+        "context": seen.get("context"),
+    }
+    # A kernel that never ran would leave `seen` empty, and three of these would be None -- which
+    # `!= bfloat16` would happily report as a float32 finding. That is the W4 "time a pruned scorer"
+    # mistake in miniature, so the non-observation is separated from the observation.
+    if any(dtype is None for dtype in observed.values()):
+        return f"SUCCEEDED: the kernel never ran, so nothing was observed ({observed})"
+    wrong = sorted(name for name, dtype in observed.items() if dtype != jnp.bfloat16)
     if wrong:
         return f"SUCCEEDED: {wrong} stayed float32 under a bfloat16 configuration"
-    return "REFUSED: the restored backend casts latents, actions and context before drawing"
+    return "REFUSED: the bound backend casts latents, actions and context to bf16 before it draws the noise"
 
 
 # =================================================================================================
@@ -1765,24 +2138,45 @@ def attack_f1b_wrong_adapter(tmp):
 
 
 def attack_f1b_microbatch_timed_as_update(tmp):
-    """The timed unit was one microbatch; `max_train_steps` counts LOGICAL updates."""
-    import f1_shims
+    """The timed unit was one microbatch; `max_train_steps` counts LOGICAL updates.
 
-    f1_shims.install()
-    from probe_f1_smoke import TinyModelSource, _config as _tiny
+    **F8 — dead since ~2026-08-09.** The probe imported ``f1_shims`` and ``probe_f1_smoke``, two
+    session-scratchpad modules that were never committed to the tree, so it died on
+    ``ModuleNotFoundError`` at its first line and `_report` filed the crash as a refusal.
+
+    **The intent is not obsolete, so this is re-expressed rather than deleted.** ``build_probe_program``
+    still decides the unit M1 times, and ``step_seconds`` is still multiplied by ``max_train_steps``,
+    which counts logical updates — so timing one microbatch would still understate GBS-256
+    computation by 4-32x and never make the accumulation state resident.
+
+    The two dead modules' maintained successors live in the canonical suite
+    (``maxdiffusion.tests.worklogs_yixun.test_pos_rollout_fit_probe``): ``_install_import_shims``,
+    ``_TinySource`` — the WEIGHTS seam at test dimensions — and ``_tiny_probe_config``. They are
+    IMPORTED rather than copied in here deliberately: a hand-rolled tiny backbone living in the
+    harness is exactly the "copy that agrees by coincidence" W1's ``build_adapter_stack`` finding was
+    about, and it would drift from production the first time the seam moved. The cost is that this
+    one probe needs the test package importable, which it is wherever the canonical suite runs.
+    """
+    from maxdiffusion.tests.worklogs_yixun.test_pos_rollout_fit_probe import (
+        _TinySource,
+        _install_import_shims,
+        _tiny_probe_config,
+    )
 
     fp = _probe_env()
-    config = _tiny(
-        pretrained_model_name_or_path=str(_HARNESS_MODEL),
-        pos_logical_batch=8,
-        pos_microbatch=2,
-        checkpoint_dir=tempfile.mkdtemp(),
-    )
-    program = fp.build_probe_program(config, fp.FitCell("rollout", 2, 2), model_source=TinyModelSource())
+    _install_import_shims()
+    logical, microbatch = 8, 2
+    expected = logical // microbatch
+    config = _tiny_probe_config(pathlib.Path(tmp), pos_logical_batch=logical, pos_microbatch=microbatch)
+    program = fp.build_probe_program(config, fp.FitCell("rollout", microbatch, 2), model_source=_TinySource())
     parts = len(program.batch) if isinstance(program.batch, tuple) else 1
     width = program.eval_batch["z_video"].shape[0] if program.eval_batch is not None else None
-    if parts == 1:
-        return f"SUCCEEDED: the timed unit is ONE microbatch of a {8 // 2}-microbatch logical batch"
+    if parts != expected:
+        return f"SUCCEEDED: the timed unit is {parts} of the {expected} microbatches in one logical batch"
+    if len(program.draws) != parts:
+        return f"SUCCEEDED: {parts} microbatches were built but carry {len(program.draws)} draws"
+    if width != 1:
+        return f"SUCCEEDED: the evaluation unit is batch-{width}, not the DEV instrument's own batch-one"
     return f"REFUSED: the timed unit accumulates all {parts} microbatches; the eval unit is batch-{width}"
 
 
@@ -1955,25 +2349,73 @@ def attack_w1_reshuffle_a_snapshot(tmp):
 
 
 def attack_w1_hand_rebuild_the_adapter(tmp):
-    """M1 must build the adapter through the SHARED factory, dtypes and precision included."""
-    import ast as _ast
-    import inspect as _inspect
-    import textwrap as _textwrap
+    """M1 must build the adapter through the SHARED factory, dtypes and precision included.
+
+    **F8 — dead since ~2026-08-09 (W3).** The probe read the source of
+    ``ProductionModelSource.build``, and **W3 removed that method**: the source is the WEIGHTS seam
+    and nothing more (``load`` returns the shared ``LoadedBackbone`` from ``load_backbone``), while
+    the adapter is finalized inside ``build_training_program``, which the live trainer and M1 both
+    enter. The probe died on ``AttributeError`` and `_report` filed the crash as a refusal.
+
+    Re-expressed against the current seam **and upgraded from an AST check to a BEHAVIOURAL one**,
+    for the reason the canonical suite's own strengthening battery recorded (G07): the first version
+    of this test grepped for ``optax.adamw(``, and a private optimizer spelled ``_o.adamw(`` walked
+    straight past it. A source string is not the property; the same objection retires the old
+    ``"dtype=" in source`` check below it.
+
+    Two halves, both executed against the real construction:
+
+    * **M1 enters the shared factory.** ``build_adapter_stack`` is instrumented and M1's program is
+      built; an adapter M1 rolled by hand would simply never call it.
+    * **The reviewer's actual W1 finding.** The probe's and the trainer's constructions "agreed only
+      by coincidence of the pinned defaults", so the day someone sets ``activations_dtype: float32``
+      for a debugging run M1 would measure a bf16 adapter and authorize an fp32 one. M1's program is
+      therefore built at TWO different dtypes and the adapter parameters it would measure must
+      actually differ — which is the property, rather than the spelling of an argument.
+    """
+    import jax
+
+    from maxdiffusion import pos_rollout_update
+    from maxdiffusion.tests.worklogs_yixun.test_pos_rollout_fit_probe import (
+        _TinySource,
+        _install_import_shims,
+        _tiny_probe_config,
+    )
 
     fp = _probe_env()
-    source = _textwrap.dedent(_inspect.getsource(fp.ProductionModelSource.build))
-    called = {
-        node.func.id
-        for node in _ast.walk(_ast.parse(source))
-        if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name)
-    }
-    from maxdiffusion.pos_rollout_update import build_adapter_stack
+    _install_import_shims()
 
-    factory = _inspect.getsource(build_adapter_stack)
-    missing = [a for a in ("dtype=", "weights_dtype=", "precision=") if a not in factory]
-    if "build_adapter_stack" not in called or missing:
-        return f"SUCCEEDED: M1 calls {sorted(called)}; factory missing {missing}"
-    return "REFUSED: M1 calls the shared factory, which passes the production dtypes and precision"
+    def build_m1_program(dtype, recorder=None):
+        config = _tiny_probe_config(
+            pathlib.Path(tempfile.mkdtemp(dir=tmp)), weights_dtype=dtype, activations_dtype=dtype
+        )
+        real = pos_rollout_update.build_adapter_stack
+        if recorder is not None:
+
+            def watched(*args, **kwargs):
+                recorder.append(args)
+                return real(*args, **kwargs)
+
+            pos_rollout_update.build_adapter_stack = watched
+        try:
+            return fp.build_probe_program(config, fp.FitCell("rollout", 2, 2), model_source=_TinySource())
+        finally:
+            pos_rollout_update.build_adapter_stack = real
+
+    entered = []
+    programs = {"float32": build_m1_program("float32", entered), "bfloat16": build_m1_program("bfloat16")}
+    if not entered:
+        return "SUCCEEDED: M1 built its program without ever entering the shared adapter factory"
+    dtypes = {
+        label: sorted({str(leaf.dtype) for leaf in jax.tree.leaves(program.params)})
+        for label, program in programs.items()
+    }
+    if dtypes["float32"] == dtypes["bfloat16"]:
+        return f"SUCCEEDED: the adapter M1 measures is {dtypes['float32']} at BOTH configured dtypes"
+    return (
+        f"REFUSED: M1 enters build_adapter_stack ({len(entered)}x) and the adapter it measures follows the "
+        f"config ({dtypes['float32']} vs {dtypes['bfloat16']})"
+    )
 
 
 # =================================================================================================
@@ -2744,6 +3186,263 @@ def attack_f5_a_killed_ladder_banks_nothing(tmp):
     return "REFUSED: both finished cells were banked, digest-verified, before the cell that died"
 
 
+# =================================================================================================
+# Round F8b — THE HONEST CONTROLS, executed by the battery itself (review F8b, MAJOR 2).
+#
+# Every one of these points production at the LEGITIMATE case and requires it to be ACCEPTED. They
+# exist because a refusal proves nothing on its own: a production regression that refused everything
+# would leave the attacks printing green REFUSED lines forever. F8 ran these by hand and wrote them
+# up; the reviewer's objection is that unexecuted evidence is not evidence, which is the F7d lesson
+# in a new costume. They are now part of the recurring run and the runner fails on CONTROL-REFUSED.
+#
+# **Which families have a control, and which are deliberately attack-only.** A control is only worth
+# having where the legitimate case is genuinely available to the harness; manufacturing one would be
+# inventing evidence. Covered: the anchor family (T5a-2, G3-1..G3-4), the anchor's TEST screen
+# (T5a-3), benchmark publication (T5a-4), the primary gate (T5b-1, T5b-4), the TEST door (T5b-2,
+# G3-5, G3-12), the derangement (T5b-3, G3-7, G3-8), the action-use report (T5b-5, G3-10, G3-11),
+# the sigma grid (F3a-3, F3a-4), the evaluator's dtype boundary (F3a-5), M1's accumulation plan
+# (F1b-2) and M1's adapter construction (W1-3).
+#
+# **Attack-only, and why**: the authorization/publication families (T7, P3, F5, F6, F7) — their
+# "legitimate case" is a full multi-phase publish/adopt cycle against the in-memory bucket, which is
+# a fixture with its own failure modes rather than a cheap witness, and several of those probes
+# already assert a positive outcome internally (`F5-6` requires two cells BANKED and re-loadable,
+# `F7-1` requires the launch AUTHORIZED). The launcher family (W2b) and the source-shape probes
+# (G3-13, W2-1, W2-2) assert presence rather than refusal, so a control would restate the probe.
+# =================================================================================================
+
+
+def _m1_program(tmp, **over):
+    """M1's real program at test dimensions — the shared path `F1b-2` and `W1-3` measure."""
+    from maxdiffusion.tests.worklogs_yixun.test_pos_rollout_fit_probe import (
+        _TinySource,
+        _install_import_shims,
+        _tiny_probe_config,
+    )
+
+    fp = _probe_env()
+    _install_import_shims()
+    microbatch = int(over.pop("pos_microbatch", 2))
+    config = _tiny_probe_config(pathlib.Path(tempfile.mkdtemp(dir=tmp)), pos_microbatch=microbatch, **over)
+    return fp.build_probe_program(config, fp.FitCell("rollout", microbatch, 2), model_source=_TinySource())
+
+
+def control_anchor_reproduces_from_a_real_measurement():
+    """T5a-2/G3-1..G3-4: the anchor's OWN samples, means and checkpoint must reproduce it.
+
+    Without this, "the anchor refuses everything" and "the anchor refuses what it should" look
+    identical — and they were not identical: this control is what exposed `_rows` omitting
+    ``grid_sha256``, which had four probes refusing on the grid instead of on their own rules.
+    """
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
+    verdict = ev.reproduce_anchor(_summary())
+    if not getattr(verdict, "reproduced", False):
+        return f"CONTROL-REFUSED: the anchor does not reproduce from its own recorded measurement ({verdict})"
+    return "CONTROL-PASSED: the recorded samples, means and checkpoint reproduce the anchor"
+
+
+def control_a_clean_anchor_summary_is_accepted():
+    """T5a-3: the same call with no held-out name must SUMMARIZE, or the TEST screen means nothing."""
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
+    measurement = ev.summarize_samples(
+        _rows(("a", "b")),
+        checkpoint=_identity(),
+        code_sha="a" * 40,
+        model_revision="rev@" + "b" * 40,
+        test_manifest_path=TEST,
+    )
+    if int(measurement.payload["num_samples"]) != 2:
+        return f"CONTROL-REFUSED: a clean summary counted {measurement.payload['num_samples']} samples"
+    return "CONTROL-PASSED: the same summary without a TEST name is accepted (2 samples)"
+
+
+def control_an_identical_refreeze_is_adopted(tmp):
+    """T5a-4: republishing the SAME benchmark row must be ADOPTED, not refused.
+
+    Issue #10's rule has two halves and the attack only tests one. If publication refused every
+    second call, a queue retry could never adopt its own published artifact — and `T5a-4` would sail
+    on looking green.
+    """
+    from maxdiffusion import pos_rollout_dev_instrument as instrument
+
+    anchor, _, dev = _anchor_env()
+    cohort = instrument.load_dev_cohort(dev)
+    names = list(cohort.names)
+    path = str(pathlib.Path(tmp) / "control_bench.json")
+    first = anchor.freeze_benchmark_row(path, table=_gate_table(names, 0.25, cohort=cohort))
+    second = anchor.freeze_benchmark_row(path, table=_gate_table(names, 0.25, cohort=cohort))
+    if first["sha256"] != second["sha256"]:
+        return f"CONTROL-REFUSED: an identical re-freeze changed the digest {first['sha256'][:12]} -> {second['sha256'][:12]}"
+    return f"CONTROL-PASSED: an identical re-freeze is adopted at digest {first['sha256'][:12]}"
+
+
+def control_a_real_margin_passes_the_primary_gate():
+    """T5b-1/T5b-4: +0.06 with a clean CI must PASS, or the +0.04 refusal is not about the margin."""
+    g, cohort, names = _gate_env()
+    verdict = g.primary_gate(
+        rollout=_gate_table(names, 0.36, cohort=cohort),
+        control=_gate_table(names, 0.30, cohort=cohort, arm="control", run="c0"),
+        cohort=cohort,
+    )
+    if not verdict.passed:
+        return f"CONTROL-REFUSED: a +0.06 delta failed the +{g.PRIMARY_MARGIN} gate on {list(verdict.reasons)}"
+    return f"CONTROL-PASSED: +0.06 passes (mean_delta={verdict.numbers['mean_delta']:.2f}, CI-low > 0)"
+
+
+def control_a_passing_certificate_opens_the_test_door(tmp):
+    """T5b-2/G3-5/G3-12: a genuinely passing DEV certificate must UNLOCK TEST and confirm both gates."""
+    g, dev, dev_names = _gate_env()
+    test_cohort = g.load_test_cohort(TEST)
+    path = str(pathlib.Path(tmp) / "control_dev_cert.json")
+    certificate = g.dev_certificate(
+        path,
+        rollout=_gate_table(dev_names, 0.36, cohort=dev),
+        control=_gate_table(dev_names, 0.30, cohort=dev, arm="control", run="c0"),
+        cohort=dev,
+    )
+    if not certificate["passed"]:
+        return f"CONTROL-REFUSED: a +0.06 DEV gate did not issue a passing certificate ({certificate['reasons']})"
+    names = list(test_cohort.names)
+    with _cohort_records(test_cohort):
+        art = g.cohort_derangement(test_cohort)
+        arm = _arm_battery(g, test_cohort, names, art)
+        control_tables = {
+            condition: table
+            for condition, table in _arm_battery(
+                g, test_cohort, names, art, arm="control", run="c0", values=(0.30, 0.29, 0.20, 0.10)
+            ).items()
+            if condition != "adapter_disabled"
+        }
+        confirmation = g.confirm_on_test(
+            path, test_cohort=test_cohort, derangement=art, tables=arm, control_tables=control_tables
+        )
+    if not confirmation["confirmed"]:
+        return f"CONTROL-REFUSED: TEST did not confirm behind a passing certificate ({confirmation})"
+    return "CONTROL-PASSED: a passing DEV certificate opens TEST and both gates confirm"
+
+
+def control_the_honest_derangement_is_accepted():
+    """T5b-3/G3-7/G3-8: the cohort's OWN derangement must build and gate, or the forgery proves nothing."""
+    g, cohort, names = _gate_env()
+    with _cohort_records(cohort):
+        art = g.cohort_derangement(cohort)
+        verdict = g.action_use_gate(
+            true_table=_gate_table(names, 0.36, cohort=cohort, derangement=art),
+            wrong_table=_gate_table(names, 0.30, cohort=cohort, condition="wrong", derangement=art),
+            cohort=cohort,
+            derangement=art,
+        )
+    if not verdict.passed:
+        return f"CONTROL-REFUSED: the honest derangement failed its own gate on {list(verdict.reasons)}"
+    return f"CONTROL-PASSED: the cohort's own derangement builds and gates (delta={verdict.numbers['mean_delta']:.2f})"
+
+
+def control_the_full_battery_publishes():
+    """T5b-5/G3-10/G3-11: WITH matched-C0's battery the action-use report must publish."""
+    g, cohort, names = _gate_env()
+    with _cohort_records(cohort):
+        art = g.cohort_derangement(cohort)
+        control_tables = {
+            condition: table
+            for condition, table in _arm_battery(
+                g, cohort, names, art, arm="control", run="c0", values=(0.33, 0.32, 0.20, 0.10)
+            ).items()
+            if condition != "adapter_disabled"
+        }
+        report = g.action_use_report(
+            cohort, derangement=art, tables=_arm_battery(g, cohort, names, art), control_tables=control_tables
+        )
+    if not report["reported"].get("coverage_ok"):
+        return f"CONTROL-REFUSED: a complete battery reported incomplete coverage ({report['reported']})"
+    return "CONTROL-PASSED: the complete arm + matched-C0 battery publishes with full coverage"
+
+
+def control_the_deployed_grid_is_accepted():
+    """F3a-3/F3a-4: the grid production itself builds must PASS its own check."""
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
+    digest = ev.assert_deployed_grid(*ev.deployed_grid())
+    if digest != ev.DEPLOYED_GRID_SHA256:
+        return f"CONTROL-REFUSED: the deployed grid hashes {digest[:16]}, pinned {ev.DEPLOYED_GRID_SHA256[:16]}"
+    return f"CONTROL-PASSED: the deployed grid passes its own check ({digest[:16]})"
+
+
+def control_the_eval_dtype_follows_the_config():
+    """F3a-5: under a float32 configuration the SAME path must produce float32.
+
+    The attack observes all-bf16 under a bf16 config. That is only evidence of a cast if the cast
+    follows the CONFIG — a backend that hardcoded bf16 would pass the attack and silently mismeasure
+    every fp32 debugging run.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from maxdiffusion import eval_wan_pos_rollout as ev
+
+    seen = {}
+
+    def velocity_builder(params, frozen_state, actions, adapter_enabled):
+        seen["actions"] = actions.dtype
+        del params, frozen_state, adapter_enabled
+
+        def velocity_fn(hidden_states, timestep, encoder_hidden_states):
+            seen["latents"] = hidden_states.dtype
+            seen["context"] = encoder_hidden_states.dtype
+            del timestep
+            return jnp.zeros_like(hidden_states)
+
+        return velocity_fn
+
+    sigmas, timesteps = ev.deployed_grid()
+    params = {"w": jnp.zeros((1,), jnp.float32)}
+    backend = ev.DeviceBackend(
+        kernel=ev.build_rollout_kernel(velocity_builder),
+        decode_fn=lambda x: jnp.asarray(np.repeat(np.asarray(x, np.float32).mean(axis=1)[..., None], 3, axis=-1)),
+        sigmas=sigmas,
+        timesteps=timesteps,
+        context=jnp.zeros((1, 7, 8), jnp.float32),
+        guide_scale=5.0,
+        params=params,
+        eval_dtype=jnp.float32,
+        frozen_state=None,
+    ).bound(params)
+    execution, _ = backend.score(
+        z_i0=jnp.zeros((1, 4, 1, 4, 6), jnp.float32),
+        z_video=jnp.zeros((1, 4, 2, 4, 6), jnp.float32),
+        actions=jnp.zeros((1, 4, 7), jnp.float32),
+        key=ev.evaluation_draw_key("x"),
+    )
+    observed = {"z_pred": execution.z_pred.dtype, **{key: seen.get(key) for key in ("latents", "actions", "context")}}
+    wrong = sorted(name for name, dtype in observed.items() if dtype != jnp.float32)
+    if wrong:
+        return f"CONTROL-REFUSED: under a float32 config {wrong} did not come back float32 ({observed})"
+    return "CONTROL-PASSED: the cast follows the config -- a float32 configuration measures in float32"
+
+
+def control_the_accumulation_tracks_the_config(tmp):
+    """F1b-2: the microbatch count must FOLLOW the config, not sit at a constant that happens to pass."""
+    program = _m1_program(tmp, pos_logical_batch=16, pos_microbatch=2)
+    parts = len(program.batch) if isinstance(program.batch, tuple) else 1
+    if parts != 8 or len(program.draws) != 8:
+        return (
+            f"CONTROL-REFUSED: a 16/2 logical batch built {parts} microbatches and {len(program.draws)} draws, not 8"
+        )
+    return "CONTROL-PASSED: the accumulation plan tracks the config (16/2 -> 8 microbatches, 8 draws)"
+
+
+def control_the_adapter_follows_the_configured_dtype(tmp):
+    """W1-3: M1's adapter must actually BE the configured dtype, not merely differ between two."""
+    import jax
+
+    program = _m1_program(tmp, weights_dtype="bfloat16", activations_dtype="bfloat16")
+    dtypes = {str(leaf.dtype) for leaf in jax.tree.leaves(program.params)}
+    if "bfloat16" not in dtypes:
+        return f"CONTROL-REFUSED: a bfloat16 configuration produced an adapter carrying {sorted(dtypes)}"
+    return f"CONTROL-PASSED: a bfloat16 configuration produces a bfloat16 adapter ({sorted(dtypes)})"
+
+
 if __name__ == "__main__":
     _report("A-B1(a) module issue token   :", attack_a_b1a)
     _report("A-B1(b) public digest override:", attack_a_b1b)
@@ -2753,14 +3452,21 @@ if __name__ == "__main__":
         _report("B-2    selection crash window:", attack_b2, tmp)
         _report("T5a-1  restore falls back     :", attack_t5a_restore_falls_back)
         _report("T5a-2  widen/miss the anchor  :", attack_t5a_widen_the_anchor)
+        _control("  ctrl anchor reproduces      :", control_anchor_reproduces_from_a_real_measurement)
         _report("T5a-3  TEST into the anchor   :", attack_t5a_test_into_the_anchor)
+        _control("  ctrl clean summary accepted :", control_a_clean_anchor_summary_is_accepted)
         _report("T5a-4  re-derive the benchmark:", attack_t5a_rederive_the_benchmark, tmp)
+        _control("  ctrl identical refreeze     :", control_an_identical_refreeze_is_adopted, tmp)
         _report("T5a-5  forge a DEV cohort     :", attack_t5a_forge_a_dev_cohort, tmp)
         _report("T5b-1  lower the primary bar  :", attack_t5b_lower_the_bar)
-        _report("T5b-2  score TEST first       :", attack_t5b_score_test_first)
+        _control("  ctrl +0.06 passes the gate  :", control_a_real_margin_passes_the_primary_gate)
+        _report("T5b-2  score TEST first       :", attack_t5b_score_test_first, tmp)
+        _control("  ctrl real cert opens TEST   :", control_a_passing_certificate_opens_the_test_door, tmp)
         _report("T5b-3  forge the derangement  :", attack_t5b_forge_the_derangement)
+        _control("  ctrl honest derangement     :", control_the_honest_derangement_is_accepted)
         _report("T5b-4  swap arm and control   :", attack_t5b_swap_arm_and_control)
         _report("T5b-5  drop C0's battery      :", attack_t5b_drop_the_control_battery)
+        _control("  ctrl full battery publishes :", control_the_full_battery_publishes)
         _report("T7-1   run an unmeasured cell :", attack_t7_run_an_unmeasured_cell, tmp)
         _report("T7-2   forge an authorization :", attack_t7_forge_an_authorization, tmp)
         _report("T7-3   edit an authorization  :", attack_t7_edit_a_published_authorization, tmp)
@@ -2806,9 +3512,12 @@ if __name__ == "__main__":
         _report("F3a-2  inf pixel MSE certifies :", attack_f3a_nan_pixel_mse_certifies)
         _report("F3a-3  all-ones grid accepted  :", attack_f3a_all_ones_grid)
         _report("F3a-4  foreign-shift grid      :", attack_f3a_structurally_valid_but_foreign_grid)
+        _control("  ctrl deployed grid accepted :", control_the_deployed_grid_is_accepted)
         _report("F3a-5  float32 under bf16 cfg  :", attack_f3a_score_in_float32_under_a_bf16_config)
+        _control("  ctrl dtype follows config   :", control_the_eval_dtype_follows_the_config)
         _report("F1b-1  wrong adapter type   ", attack_f1b_wrong_adapter, tmp)
         _report("F1b-2  microbatch as update ", attack_f1b_microbatch_timed_as_update, tmp)
+        _control("  ctrl accumulation tracks cfg:", control_the_accumulation_tracks_the_config, tmp)
         _report("F1b-3  inherited peak       ", attack_f1b_inherited_peak, tmp)
         _report("F1b-4  'boom' is not OOM    ", attack_f1b_boom_is_not_oom, tmp)
         _report("F1b-5  swap the weights     ", attack_f1b_swap_the_weights, tmp)
@@ -2818,6 +3527,7 @@ if __name__ == "__main__":
         _report("W1-1   authorize on a floor ", attack_w1_authorize_on_a_floor, tmp)
         _report("W1-2   reshuffle a snapshot ", attack_w1_reshuffle_a_snapshot, tmp)
         _report("W1-3   hand-rebuild adapter ", attack_w1_hand_rebuild_the_adapter, tmp)
+        _control("  ctrl adapter follows dtype  :", control_the_adapter_follows_the_configured_dtype, tmp)
         _report("W2-1   trainer cannot train  ", attack_w2_the_trainer_still_cannot_train)
         _report("W2-2   bypass the factories  ", attack_w2_bypass_the_shared_factories)
         _report("W2-3   publish a foreign tree", attack_w2_publish_an_attempt_for_a_foreign_tree, tmp)

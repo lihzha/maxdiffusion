@@ -120,6 +120,22 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff)
 - **Workaround (exp_06 F6, reviewed):** declared cell exclusion — the 4 unreachable cells are recorded EXCLUDED-with-reason in a v4 authorization table that accounts for every ladder cell; quoting an excluded cell fails loudly. Scientifically free for M2/M3: microbatch is not a matched-control property; both arms run at mb=16 (measured + authorized).
 - **Status:** worked around; the underlying XLA bug is unreported upstream (needs a minimal repro — deferred; low priority while the exclusion stands).
 
+### 19. TPU queue central scheduler outage — jobs never leave `PENDING` (infra, OPEN 2026-08-14)
+- **Symptom:** a submitted job uploads its spec + code tarball fine but never leaves `PENDING`; `tpu status <id>` says "Job not found" and `tpu list` shows nothing (the CLI only sees scheduler-ingested jobs). Authoritative check: `gsutil cat gs://v6_east1d/tpu-job-queue/jobs/<id>/status.json` — `last_updated == created_at`, `current_qr_state: null`.
+- **Diagnosis (infra):** the central `tpu scheduler` process (hosted in the lab, not on this machine) stopped after the queue drained at **2026-08-13T21:41:06Z** — the last status update it wrote to any job. Confirmed still down at 2026-08-15T05:28Z (~32 h). Note `gs://v6_east1d/tpu-job-queue/scheduler_state.json` is stale since June and is NOT a liveness signal; use the newest job's `last_updated`.
+- **Workaround:** ping whoever hosts the scheduler (Lihan / lab channel) to restart it. Pending jobs are picked up unmodified when it returns — do NOT resubmit.
+- **Numbering note:** the parallel exp_02 session filed this same outage as **#16** on branch `read-only-exp02`; on `yixun-dev` #16 is the Aug-9 health-timeout cluster. Reconcile the numbering when those branches merge.
+- **Status:** OPEN; exp_06's M1-8 and exp_02's Job 52 both wait on it.
+
+### 20. Queue attempt cap: `tpu retry` does NOT re-arm a job that exhausted `max_attempts` (infra, standing)
+- **Symptom:** M1-5 burned all 20 attempts to zone churn; `tpu retry <id>` returned "Retry requested" and nothing happened — the job stayed terminal and no attempt 21 ever provisioned.
+- **Rule:** mid-cap retries work; a capped job needs a **fresh submission** (new job id). Budget for it: at ~20-40 min VM lifetimes a 3.5 h ladder can exhaust the cap without finishing, which is exactly what per-cell banking (exp_06 F5) exists to survive.
+
+### 21. Adversarial probes can die silently and score as refusals (process hazard, FIXED in exp_06's harness — pattern applies to any battery)
+- **Symptom:** ten probes in exp_06's reviewer battery stopped executing when production signatures changed (2026-08-09) and their crash-before-attack was caught and scored `REFUSED`. Every battery headline from 80/80 through 92 counted dead probes; four more probes were separately refusing on an unrelated missing field rather than the rule in their name.
+- **Fix (standing pattern):** (a) any exception escaping a probe body scores `SUCCEEDED: THE PROBE DID NOT RUN` and the runner exits non-zero — a verdict is a *returned string*, never an absence of one; (b) every probe pairs with an **honest control** that must PASS inside the same run (`CONTROL-REFUSED` fails the battery) — this is what caught the four misfiring probes; (c) grep the harness for call sites in the same commit as any production signature change.
+- **Status:** fixed for exp_06; adopt the same three rules in any future battery.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)

@@ -11,7 +11,10 @@ review-package artifacts and are kept current in this folder.
 - `reviewer_attacks.py` — every probe the campaign has accumulated, each one an attack that must be
   REFUSED. Rounds are additive: a probe is never removed, and the final run of a round executes all
   of them. Run from the repository root with `PYTHONPATH=src`.
-- `attacks_f6_20260812.log` — **current**: round F6 `cell-exclusion`, **89 probes — 88 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**. Adds `F6-1 quote an excluded cell`: a cell DECLARED unreachable must be as unconstructible as a refused one, and refused AS an exclusion rather than as one merely never measured.
+- `attacks_f8b_20260814.log` — **current**: round F8b `controls-in-battery`, **92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED** *and* **11 honest controls — 11 CONTROL-PASSED, 0 CONTROL-REFUSED**, exit 0. The controls are the headline: F8's reachability checks were run by hand beside the battery, so a production regression that refused everything would have left nine green REFUSED lines standing. They now run in the same battery, with their own verdict words and their own SUMMARY line. Writing them immediately caught four probes (`G3-1`..`G3-4`) that had been refusing on a missing grid digest instead of on their own rules.
+- `attacks_f8_20260813.log` — round F8 `probe-revival`, **92 probes — 91 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**, exit 0. The nine probes F7d exposed as dead were revived one at a time against the real current APIs. **Every one of them refused: the four-day hole was in COVERAGE, not in production's rules.** This is the first honestly green battery since the universal guard was installed — and the first whose number is worth quoting, because it is the first that is not counting probes that never ran.
+- `attacks_f7d_20260813.log` — round F7d: **92 probes — 82 REFUSED, 1 DECLARED, 9 SUCCEEDED, 0 UNPARSED**, exit 1. **Honestly red, and deliberately kept.** Turning on the universal guard took the battery from a fake 92/0 to this; the nine `SUCCEEDED: THE PROBE DID NOT RUN` lines are the inventory F8 worked from. Read it beside the F8 log: the pair is the whole lesson.
+- `attacks_f6_20260812.log` — round F6 `cell-exclusion`, **89 probes — 88 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**. Adds `F6-1 quote an excluded cell`: a cell DECLARED unreachable must be as unconstructible as a refused one, and refused AS an exclusion rather than as one merely never measured. **Its headline overstates coverage** — like every log from `attacks_after_w5b` through `attacks_f7c`, it counted probes that were not executing.
 - `attacks_f5d_20260812.log` — round F5d: **88 probes — 87 REFUSED, 1 DECLARED, 0 SUCCEEDED, 0 UNPARSED**. Added the `DECLARED` allowlist, the non-zero exit, and restored `P3-5` to actually executing.
 - `attacks_f5c_20260812.log` — round F5c: **88 probes — 87/1/0/0**. Introduced the three-way accounting, `F5-8` (the in-boundary forgery, DECLARED), and split `F5-5` to the foreign-manifest case it actually tests. **Its `P3-5` line is a false refusal** — the probe could not run (see the fifth caution).
 - `attacks_f5b_20260812.log` — round F5b: **87 probes, 87 refused**. **Superseded and overstated**: its `F5-5` tested a foreign-manifest artifact while reporting as though it covered forgery generally; the in-boundary forgery it did not test is adopted. Kept as record.
@@ -24,8 +27,12 @@ review-package artifacts and are kept current in this folder.
 PYTHONPATH=src JAX_PLATFORMS=cpu python docs/worklogs_yixun/exp_06_rollout_adapter_claude/harness/reviewer_attacks.py
 ```
 
-Every line is `<probe>: <VERDICT>: <why>`, and the run ends with a `SUMMARY:` counting each verdict
-separately. **There are three verdicts, and the third was added in F5c because a single "N refused"
+Every line is `<probe>: <VERDICT>: <why>`, and the run ends with **two** `SUMMARY:` lines — one for
+the attacks, one for the honest controls — each counting its verdicts separately. The battery runs
+**two kinds of thing**, and summing them would be the very category error the verdict split exists
+to prevent.
+
+**The attacks have three verdicts, and the third was added in F5c because a single "N refused"
 headline hid a false refusal for two rounds:**
 
 - **REFUSED** — production stopped the attack. What you want to see.
@@ -42,10 +49,21 @@ headline hid a false refusal for two rounds:**
   worklog and the probe text to be updated together.** `F5-8` says so in its own return value.
 - **SUCCEEDED** — a defect in production, not in the probe.
 
-An `UNPARSED` line means a probe returned a verdict the summary could not classify, or reached for
-`DECLARED` without being on the allowlist; the classifier is deliberately strict (`startswith`), so fix
-the probe rather than loosening it. **The run exits non-zero** if any probe is SUCCEEDED or UNPARSED,
-so the battery is a gate and not just a report.
+**The honest controls have two verdicts** (F8b — see the eighth caution, which is the standing rule
+here). A control points production at the LEGITIMATE case and requires it to be accepted, because a
+refusal proves nothing on its own:
+
+- **CONTROL-PASSED** — production still accepts the legitimate case, so the refusals this control
+  witnesses are worth something.
+- **CONTROL-REFUSED** — production has stopped accepting legitimate work. **This is a defect too, and
+  a different one from SUCCEEDED**: nothing got through, but every refusal beside it is now
+  unwitnessed. Also the verdict a control gets when it cannot run at all.
+
+An `UNPARSED` line means a probe returned a verdict the summary could not classify, reached for
+`DECLARED` without being on the allowlist, or (for a control) answered in the attacks' vocabulary;
+the classifier is deliberately strict (`startswith`), so fix the probe rather than loosening it.
+**The run exits non-zero** if any probe is SUCCEEDED or UNPARSED, or any control is CONTROL-REFUSED
+or UNPARSED — so the battery is a gate and not just a report.
 
 ## A caution the harness earned in W2b
 
@@ -54,6 +72,67 @@ probe comparing two empty maps read as SUCCEEDED (`both arms write and restore N
 lying about production. It now REFUSES to return when a launch produced nothing, and a probe that
 deliberately expects a non-launch opts out with `_expect_failure`. When adding a probe that inspects
 launcher argv, make sure it fails loudly if the launcher did not run.
+
+## The eighth caution, earned in F8b — a refusal proves nothing unless the same battery shows an acceptance
+
+**This is the standing defense, and it resolves the seventh caution rather than sitting beside it.**
+F8's rule was "every revival needs a reachability check". F8 obeyed it — and ran the nine checks *by
+hand*, beside the battery, recording them in the worklog. The reviewer's objection is the one this
+harness keeps re-learning: **unexecuted evidence is not evidence.** The recurring run invoked only
+the attacks, so a production regression that refused everything would have gone on printing nine
+green `REFUSED` lines, and the worklog paragraph asserting otherwise would have aged into a lie.
+
+**The rule: a probe's honest control runs in the SAME battery as its attack, or the probe's refusal
+does not count.** Concretely:
+
+- Controls are invoked through `_control`, not `_report`, and speak a different vocabulary:
+  **`CONTROL-PASSED` / `CONTROL-REFUSED`**. A control is *not* an attack — a failing control means
+  production stopped accepting legitimate work, which is a different defect with a different fix,
+  and folding it into `SUCCEEDED` would be the same category error the three-way split exists to
+  stop. `_summarize` prints them on their own line and counts them separately.
+- **The runner exits non-zero on `CONTROL-REFUSED` or an unparsed control**, so the battery cannot be
+  green while its refusals are unwitnessed.
+- `_control` inherits the F7d discriminator verbatim: a verdict is a RETURNED string, and anything
+  escaping the body is the control's own failure. A control cannot go quiet the way the nine did.
+- **Do not manufacture controls.** One is worth having only where the legitimate case is genuinely
+  cheap to reach; a fabricated one is invented evidence. The section header above the controls in
+  `reviewer_attacks.py` lists what is covered and states which families are deliberately
+  attack-only (the T7/P3/F5/F6/F7 authorization and publication families, whose "legitimate case" is
+  a whole multi-phase publish/adopt cycle, and the source-shape probes, where a control would merely
+  restate the probe).
+
+**It paid for itself on the first run.** Writing the anchor family's control exposed `_rows`
+omitting `grid_sha256`: `summarize_samples` checks the grid before anything else, so `G3-1 foreign
+names`, `G3-2 wrong order`, `G3-3 foreign checkpoint` and `G3-4 short rollout` had all been refused
+with `grids ['']` — four probes green, and none of them testing the rule in its own name. That is
+the fourth caution (`F5-5`, watching the wrong observable) in four more places, and no amount of
+re-reading the attacks would have found it. Asking "does the honest case still pass?" found it
+immediately.
+
+## The seventh caution, earned in F7d/F8 — reviving a dead probe is not the same as making it green
+
+F7d moved the guard into `_report` and the battery went from a reported 92/0 to **82 REFUSED /
+1 DECLARED / 9 SUCCEEDED**. Nine probes had been dead since `76117df` (2026-08-09) and had been
+counted as coverage in five consecutive green batteries. F8 revived them one at a time; all nine
+refused, so **production's rules had been intact the whole time and the loss was pure coverage**.
+Three rules came out of doing it:
+
+1. **Re-express the attack's SPIRIT, never its dead letter.** A probe whose API moved is not repaired
+   by making the call compile. `W1-3` read the source of a method W3 deleted; it is now a behavioural
+   check that instruments the shared factory and builds M1's program at two dtypes. `F3a-5` lost the
+   `velocity_for` seam F3c removed on purpose — the attack was re-expressed at
+   `build_rollout_kernel`, where injection moved, rather than deleted as obsolete.
+2. **Every revival needs a reachability check.** Point the probe at the legitimate case and confirm
+   it does NOT refuse. A revived probe that refuses for a reason unrelated to its name is the F5b
+   defect wearing a fresh timestamp — and the cheapest way to find one is to check that the honest
+   input passes. All nine revivals in F8 got one, run separately and recorded.
+3. **Prefer a scoped fake to `_fake_environment` when your probe runs early.** `_fake_environment`
+   installs an in-memory `gs://` filesystem process-wide and never removes it, so a probe that calls
+   it changes the ground twenty later probes stand on. F8's `_cohort_records` patches only the two
+   seams a derangement needs and restores both.
+
+**A dead probe is evidence of nothing in either direction.** That is why the nine had to be executed
+rather than reasoned about, and why the honest red log is kept next to the green one.
 
 ## The sixth caution, earned in F7c — the fifth caution was not enough, and the rule had a hole
 
@@ -72,11 +151,14 @@ and the guard covered the one call that had broken last time, which is never the
 next.
 
 **The sharpened rule: the did-not-run guard wraps the WHOLE probe body, not one call.**
-`_must_execute` is a decorator, it is applied to every probe that calls a production API whose
-signature has churned, and a `TypeError` from anywhere inside scores `SUCCEEDED: THE PROBE DID NOT
-RUN`. The runner exits non-zero on it, so the battery cannot be green while a probe is silently
-absent. The grep rule stands as well — a guard that turns a silent hole into a loud one is a safety
-net, not a substitute for updating the call.
+F7c's version of this was `_must_execute`, a decorator applied to every probe that called a
+production API whose signature had churned. **F7d deleted it**, because a hand-applied decorator is
+another list to keep in step and it caught only `TypeError`: the guard now lives in `_report`, which
+every probe is invoked through, and the discriminator is structural — *a verdict is a RETURNED
+string; anything that escapes the probe body is the probe's own failure*. See the seventh caution.
+The runner exits non-zero on it, so the battery cannot be green while a probe is silently absent.
+The grep rule stands as well — a guard that turns a silent hole into a loud one is a safety net, not
+a substitute for updating the call.
 
 ## A fifth caution, earned in F5d — a probe that CANNOT RUN scores as a refusal
 
