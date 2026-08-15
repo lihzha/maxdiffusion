@@ -263,3 +263,19 @@ Append-only lab notebook. Entry template in `experiment_SOP.md`.
 - **Decision (Yixun, verbatim): "extend to 10k"** — D10 extension approved in response to the delivered verdict.
 - **Launch** — Job 23 `20260801-032202-ee7d478b-exp02-overfit100-s3ext10k-yixun` (v6e-64): resume wan-overfit100-s3-20260730 from step 2500 → 10,000 steps, checkpoints {5000,7500,10000}, COMMIT=81ae571 (code == fc9ac52). Acceptance in `_command.md` Job 23. Follow-on evals at fc9ac52-lineage code (resume staging ON, ffmpeg fix live): intermediates at 5000/7500, segment-final+full-set at 10000.
 - **Next** — Monitor training (~2 h compute); analysis review deferred until the 10k results finalize the analysis.
+
+## 2026-08-13 — post-campaign: `launch_wan_train.sh` overfit100 arm (Yixun request)
+
+- **What** — the canonical launcher now supports exp_02: `WAN_EXPERIMENT=overfit100` submits
+  `train_wan_overfit100.sh` with the campaign recipe as defaults (train100/1629/100, LR 1e-5,
+  warmup 250, step-list cadence with CHECKPOINT_EVERY=0, per-device 4.0 → GBS-echo 256,
+  SAVE_FINAL=False) and every ladder knob env-respecting (RUN_NAME resume, MAX_TRAIN_STEPS,
+  CHECKPOINT_STEPS, LEARNING_RATE, DATA_DIR/EXPECTED_WINDOWS/NUM_TEXT_SLOTS for train10).
+  Also added launcher-wide: `DRY_RUN=1` (print the submit command, submit nothing) and optional
+  `WANDB_ENTITY` forwarding; `train_wan_overfit100.sh` gained a 3-line guard so a forwarded
+  `WANDB_API_KEY` survives the worker's provisioned `secrets.env` (the clobber that put
+  `maxdiffusion-wan-overfit100` in the wrong W&B entity — CLAUDE.md "W&B entity facts").
+- **Verified** — `bash -n` both files; DRY_RUN assemblies: arm default, Job-23-style resume
+  segment (exported RUN_NAME + 10k + extended step list), v6e-8 train10 smoke; regression:
+  pre_context/full_ft submissions env-identical to the pre-change script (no exp_02 leakage).
+  No job was submitted (announcement 02: DRY_RUN only).
