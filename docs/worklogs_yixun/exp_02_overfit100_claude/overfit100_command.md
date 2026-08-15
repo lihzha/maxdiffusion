@@ -641,3 +641,33 @@ cd ~/Home/maxdiffusion-worktrees/claude-exp_02_overfit100 && source ~/.config/ir
   compute); 5 checkpoints; **a W&B run visible at `wandb.ai/yh4742-princeton-university/maxdiffusion-wan-overfit100`**
   with step-loss lines — the W&B acceptance is the new part.
 - **Job id:** `20260814-035533-1ef9f34c-wan-overfit100-yixun`.
+
+
+## Job 53 — v6e-8 VIDEO PASS (write_videos=True) @ lr1e4 ckpt 20,000 — launched 2026-08-15T20:44Z
+
+**Approved by Yixun** (instruction: finish the 20k-video task and submit). Closes the gap he identified:
+the 20k verdict passes (Jobs 49/50/51) ran SSIM-only, so GCS carries comparison mp4s only at 2,500 and
+10,000 (Jobs 29–30) — the "final" videos anyone pulls today are 10k, not the 20k headline checkpoint.
+
+Job `20260815-204405-b94c7dc8-exp02-o100-vid-20000-yixun`, COMMIT `fdd0bc50b5c2778afe38f4dc91c03516599de75a`
+(branch tip; executable tree clean at submission).
+
+**ISOLATION (the one design decision here).** `validation/step_020000_s3_intermediate/` is `_PUBLISHED`
+verdict evidence, and the eval **refuses to touch a published role directory** — so this pass writes to a
+SEPARATE root, `.../wan-overfit100-s3ext-lr1e4-20260804/validation_videos/`. No verdict artifact is read,
+written, adopted, or re-staged; the two-tier verdict at 20,000 is untouched by construction.
+
+**Scope (forced by the role contract, not chosen):** `s3_intermediate` requires the FULL canonical cohort
+(1 seed, correct mode, 100 windows) — `pass_role_plan_reasons` refuses a subset. So all 100 windows are
+rolled out and rendered; *which* clips to hand Yixun is a free post-hoc choice from the same artifact.
+
+- **Cost:** ~40–50 min on v6e-8 once scheduled (Jobs 29–30 precedent: same 100-window + mp4-encode shape).
+- **Acceptance:** `role_validation` ok; 100 windows; `comparison_gt_top_pred_bottom.mp4` present per window;
+  and the validity check that matters — **the seed-0 correct SSIM column must reproduce Job 49's landed
+  0.9536 mean / 67 of 100 ≥ 0.95**. A mismatch invalidates the video pass, never the verdict.
+- **Delivery plan:** the same five representative windows used at 2,500/10,000 so the checkpoints are
+  visually comparable — worst `ep30738_v0_s00132` · 25th `ep4358_v0_s00040` · median `ep4015_v0_s00000` ·
+  75th `ep50125_v0_s00028` · best `ep36295_v0_s00020` (ranked by 10k m_corr), plus the 20k best window if
+  it differs. Pull commands handed to Yixun on completion.
+- **Blocked at submission:** the lab TPU queue's central scheduler has been down since 2026-08-13T21:41Z
+  (issue #19/#16) — the job is queued and will not start until it is restarted.
