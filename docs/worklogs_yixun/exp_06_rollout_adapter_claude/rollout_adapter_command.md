@@ -134,3 +134,26 @@ The F6 reviewer reproduced both manifests and proved the point: F6 changes manif
 **The verdict: `authorized_cells: []` — every cell refused on `peak_source`** (mb=8 additionally on `headroom`: peak 32.41 GB = 96.6% of 33.55 GB capacity > the 90% floor — a genuine, correct refusal). Every measurement records `peak_source: "compiled memory analysis"`; the plan (v2.8 §4-P1) requires runtime-derived evidence (`runtime-reset` / `runtime-raised`), and the authorization floor refused exactly as reviewed ("analysis floors refuse, never authorize"). The probe's measurement path never implemented the runtime capture — the CPU fakes could not exercise TPU `memory_stats`, the same structural blind-spot family as F3's constants.
 
 **Consequences:** (1) M1-7 at the F7 tip would reproduce the same all-refused table — the pending submission ask to Yixun is WITHDRAWN. (2) F9 opened: capture runtime peaks per cell (device `memory_stats` peak watermark; `runtime-reset` where resettable, else `runtime-raised`; fallback NEVER fakes — records analysis and lets the floor refuse). (3) One real sizing fact already stands: rollout mb=8 is over the headroom floor and will stay refused; mb∈{16,32,64} are the viable rollout cells pending runtime evidence.
+
+
+---
+
+## 2026-08-15 ~20:45Z — M1-8 SUBMITTED (Yixun): the first run that can AUTHORIZE
+
+**Job:** `20260815-204530-3e2bd050-exp06-m1g-fitprobe-yixun` (v6e-8), tip `7f23ac3` — F3 (constants as jit
+arguments) + F4 (scan accumulation) + F5 (per-cell banking) + F6 (declared exclusions) + F7 (identity =
+running bytes + runtime policy) + F9 (runtime HBM peaks, declared ladder order) all aboard, plus F8's
+honest battery. `submit_m1g.sh` archived; RUN_NAME pinned `exp06-m1-fitprobe`; adoption root `$M1ROOT`.
+
+**Why this one differs from M1-6 (which authorized ZERO):** M1-6's every cell carried
+`peak_source: "compiled memory analysis"` and the authorization floor refuses analysis-only evidence.
+F9 makes the probe capture a real runtime watermark bracketing load → steps → eval → checkpoint, and F9b/c
+run the sole above-floor cell (`rollout mb=8`) LAST so the monotone mark cannot taint the others' bounds.
+
+**Expected table:** 10 authorized (rollout mb 16/32/64 + one_step mb 8/16, × k∈{2,4}) with runtime-sourced
+peaks; `rollout mb=8` refused on genuine headroom (30.18 GiB = 96.6% > the 90% floor); 4 EXCLUDED (issue #18).
+The bank starts empty at this tip (F7 changed manifest-covered files — the last such reset) and accumulates
+across attempts.
+
+**Blocked at submission:** the lab queue's central scheduler has been down since 2026-08-13T21:41Z
+(issue #19) — this job is `PENDING` and will not start until it is restarted. Three jobs now wait on it.
