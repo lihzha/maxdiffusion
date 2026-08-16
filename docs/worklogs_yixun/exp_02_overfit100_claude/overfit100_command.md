@@ -671,3 +671,31 @@ rolled out and rendered; *which* clips to hand Yixun is a free post-hoc choice f
   it differs. Pull commands handed to Yixun on completion.
 - **Blocked at submission:** the lab TPU queue's central scheduler has been down since 2026-08-13T21:41Z
   (issue #19/#16) — the job is queued and will not start until it is restarted.
+
+### Jobs 52 + 53 outcome (2026-08-16T00:32Z) — BOTH FAILED, my launcher bug (`MODEL_DIR`)
+
+Job 53 = `20260814-154948-a8db04d4-wan-overfit100-yixun` (submitted 08-14T15:49Z, tip `fdd0bc5`),
+a duplicate of Job 52 with its own fresh RUN_NAME.
+
+- **Queue history:** both sat un-ingested `PENDING` for 45 h / 33 h behind the lab scheduler outage
+  (issue #16 — scheduler silent 2026-08-13T21:41Z → 2026-08-16T00:28Z). When it returned it ran both
+  immediately; each died ~3 min in, `APPLICATION_ERROR`, worker-0 exit 1, `retryable: false`.
+- **Cause — a defect in the new launcher arm, not in exp_02's code.** `train_wan_overfit100.sh:183`
+  resolves `MODEL_DIR` **itself**, from the local cache only, to the snapshot dir of the revision
+  pinned in the manifest, and then (`:194`) refuses any path not carrying that sha — the cycle-C
+  guard against a mutable hub default silently swapping the transformer or the T5 that builds the
+  context table. Its resolution is gated on `[ -z "${MODEL_DIR:-}" ]`. `launch_wan_train.sh` forwards
+  `--env MODEL_DIR="Wan-AI/Wan2.2-TI2V-5B-Diffusers"` for every arm, so the resolution was skipped and
+  the guard correctly fired: `FATAL: resolved MODEL_DIR='Wan-AI/Wan2.2-TI2V-5B-Diffusers' does not
+  carry the pinned revision b8fff7315c…`. The campaign's hand-rolled `tpu create` blocks never passed
+  `MODEL_DIR` at all, which is why they worked. **The guard did its job; the launcher fed it wrong.**
+- **Fix:** `SUBMIT_MODEL_DIR` — what goes out as `--env MODEL_DIR`, set EMPTY for the overfit100 arm
+  only (`SETUP_CMD`'s prefetch keeps the repo id via `MODEL_DIR`). DRY_RUN-verified: overfit100 emits
+  `--env MODEL_DIR=` while pre_context / side_adapter / full_ft still emit the repo id unchanged.
+- **Everything else in the submission was correct** — both worker logs confirm
+  `WANDB_PROJECT=maxdiffusion-wan-overfit100`, the forwarded key, train100 / 1,629 / 100 slots,
+  LR 1e-5, 2,500 steps, ckpts [250,500,1000,1750,2500], per-device 4.0, and the manifest-derived
+  `MODEL_REVISION=b8fff7315c…`. The W&B acceptance criterion is still **unmeasured** (the run never
+  reached `wandb.init`).
+- **Cost:** 2 x v6e-64 x ~4 min. No checkpoints, no artifacts, nothing published.
+- **Relaunch:** NOT done — awaiting Yixun (code changed since the last approval).
