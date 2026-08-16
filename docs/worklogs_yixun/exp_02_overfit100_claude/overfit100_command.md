@@ -672,13 +672,15 @@ rolled out and rendered; *which* clips to hand Yixun is a free post-hoc choice f
 - **Blocked at submission:** the lab TPU queue's central scheduler has been down since 2026-08-13T21:41Z
   (issue #19/#16) — the job is queued and will not start until it is restarted.
 
-### Jobs 52 + 53 outcome (2026-08-16T00:32Z) — BOTH FAILED, my launcher bug (`MODEL_DIR`)
+### Jobs 52 + 52b outcome (2026-08-16T00:32Z) — BOTH FAILED, launcher bug (`MODEL_DIR`, issue #23)
 
-Job 53 = `20260814-154948-a8db04d4-wan-overfit100-yixun` (submitted 08-14T15:49Z, tip `fdd0bc5`),
-a duplicate of Job 52 with its own fresh RUN_NAME.
+**Job 52b** = `20260814-154948-a8db04d4-wan-overfit100-yixun` (submitted 08-14T15:49Z, tip `fdd0bc5`),
+a duplicate submission of Job 52 with its own fresh RUN_NAME. *(Numbered 52b, not 53: the parallel
+exp_02 session independently used **Job 53** for its v6e-8 20k video pass. Two sessions appending to
+this ledger at once — check the last heading before claiming the next number.)*
 
 - **Queue history:** both sat un-ingested `PENDING` for 45 h / 33 h behind the lab scheduler outage
-  (issue #16 — scheduler silent 2026-08-13T21:41Z → 2026-08-16T00:28Z). When it returned it ran both
+  (issue #19 on yixun-dev / #16 on the read-only branch — scheduler silent 2026-08-13T21:41Z → 2026-08-16T00:28Z). When it returned it ran both
   immediately; each died ~3 min in, `APPLICATION_ERROR`, worker-0 exit 1, `retryable: false`.
 - **Cause — a defect in the new launcher arm, not in exp_02's code.** `train_wan_overfit100.sh:183`
   resolves `MODEL_DIR` **itself**, from the local cache only, to the snapshot dir of the revision
