@@ -194,3 +194,39 @@ same adoption root, same exclusion list; the COMMIT labels differ only by docs c
 binding is the running bytes, so both would adopt each other's banked cells. **This session cancelled its
 own later duplicate**; M1-9 is the canonical run. Cross-session lesson: with one experiment lane reachable
 from two sessions, check `gsutil ls gs://v6_east1d/tpu-job-queue/jobs/ | grep <name>` before submitting.
+
+### M1-9 outcome (2026-08-16T20:23Z) — job SUCCEEDED, ladder fully measured, **AUTHORIZATION EMPTY (all cells REFUSED on `peak_source`)**
+
+Authoritative root: `gs://v6_east1d/datasets/droid_wan_pos_rollout/m1/att-0816-172718` —
+`fit_authorization.json` sha256 `79253ea5…3fe826`, protocol `exp06.fit_authorization.v6`, exit 0.
+One spot preemption (17:23Z) absorbed by the F5 cell bank: attempt 2 adopted `one_step m8 k2/k4`
+from attempt 1's root (`att-0816-164423`) and reproduced `one_step m16 k2` bit-identically
+(10,754,255,744 B; 3.109 s vs 3.123 s). Aug-12/13 banked cells correctly refused (`fit_cell.v1` ≠ `v2`).
+10 cells measured this attempt + 2 adopted + 4 EXCLUDED (issue #18), 0 skipped.
+
+**Measured ladder** (peak = `analysis_bytes`; capacity 33,550,233,600 B; 2 trials each, exact agreement):
+
+| arm | mb | k | peak (B / GiB / %cap) | step s | note |
+|---|---|---|---|---|---|
+| one_step | 8 | 2/4 | 15,991,929,696 / 14.89 / 47.7% | 4.88 / 4.90–5.05 | |
+| one_step | 16 | 2/4 | 10,754,255,744 / 10.02 / 32.1% | 3.11 / 3.12 | |
+| rollout | 32 | 2/4 | 12,932,769,696 · 12,941,453,376 / 12.04–12.05 / 38.6% | 14.22 / 28.33 | k=4 ≈ 2× time, ≈ flat memory |
+| rollout | 16 | 2/4 | 18,417,237,024 · 18,421,529,760 / 17.15–17.16 / 54.9% | 15.64 / 31.13 | |
+| rollout | 64 | 2/4 | 19,389,143,680 · 19,406,838,368 / 18.06–18.07 / 57.8% | 11.09 / 22.10 | |
+| rollout | 8 | 2/4 | 32,405,364,416 · 32,408,018,592 / 30.18 / **96.6%** | 25.35 / 50.47 | REFUSED also on `headroom` (>90% floor) — as predicted |
+| one_step | ≥32 | 2/4 | — | — | 4 × EXCLUDED (issue #18) |
+
+**Why zero authorizations:** every measurement carries `peak_source: "compiled memory analysis"`,
+`peak_attribution: "none"`, and a runtime watermark (4.23→4.87 GiB across the ladder) that plainly does
+not see the step's scratch memory — the allocation-watermark instrument cannot observe XLA's
+preallocated arena on TPU, so no runtime-sourced peak ever materialized and the record fell back to the
+compile-time analysis. The authorization gate then refused all 12 measured cells on `peak_source`
+(the m8 rollout pair additionally on genuine `headroom`), exactly per the fail-closed contract
+("analysis floors refuse, never authorize" — the M1-6 lesson). **The floor worked; the F9 runtime-peak
+instrument did not produce runtime evidence on hardware.** M2 cannot be authorized from this run.
+
+**Triage: real instrumentation gap, not infra.** Next step belongs to the owning session: an F10-class
+fix that sources a true runtime peak (per-device memory stats read inside the step bracket, not an
+allocation watermark), then a resubmit — the bank will adopt all 12 measured cells' timings, so only
+re-measurement of peaks under the new instrument is at stake. Recorded by the exp_02 session, which
+monitored this job.
