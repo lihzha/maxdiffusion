@@ -709,3 +709,29 @@ exiting `SETUP_ERROR` / non-retryable. Not our code and not `--worker0-only`: th
 now declared **2 workers** while provisioning brings up one — issue #22 (the same failure killed exp_06's
 M1-8 in the same minute; v6-64 jobs cleared setup fine that day). **No videos were written.** Resubmit
 verbatim once the resource config is fixed; the submit script is unchanged at `submit_exp02_vid20k.sh`.
+
+## Job 54 — v6e-64 RELAUNCH after the MODEL_DIR fix — launched 2026-08-16T15:42Z
+
+**Approved by Yixun** ("I give you the approval to relaunch exp_02 through the fixed launcher
+(v6e-64, ~40 min)"); submitted from the session under that explicit in-conversation permission.
+Supersedes Jobs 52 / 52b, which died on issue #23.
+
+```bash
+cd ~/Home/maxdiffusion-worktrees/claude-exp_02_overfit100 && source ~/.config/irom-tpu/secrets.env && \
+  WAN_EXPERIMENT=overfit100 bash bash_scripts/launch_wan_train.sh
+```
+
+- **Job id:** `20260816-154239-0da19998-wan-overfit100-yixun`; tip `64b5381` (carries the
+  `SUBMIT_MODEL_DIR` fix `42c7035`); RUN_NAME `wan-overfit100-v6e64-full-gbs256-fresh-20260816-154239`.
+- **Fix verified in the uploaded spec:** `MODEL_DIR: ''` (empty ⇒ the wrapper resolves the
+  manifest-pinned snapshot itself), `WANDB_PROJECT=maxdiffusion-wan-overfit100`, `WANDB_API_KEY`
+  forwarded, train100 / 1,629 / 100 slots, LR 1e-5, 2,500 steps, ckpts [250,500,1000,1750,2500],
+  per-device 4.0, v6e-64.
+- **Pre-flight:** worktree clean; scheduler confirmed alive (another user's v6-64 job RUNNING at
+  14:42Z); v6e-64 is unaffected by the v6-8 setup-barrier regression (issue #22).
+- **Acceptance:** (i) **W&B — the new criterion:** worker log shows `Config param wandb_project:`
+  NON-empty and a `wandb.ai/...` run URL; a run appears under
+  `wandb.ai/yh4742-princeton-university/maxdiffusion-wan-overfit100` with step-loss lines.
+  (ii) loss ≈0.586 → ≈0.145 over 2,500 steps (S3 reproduced). (iii) 5 checkpoints retained.
+- **Nature:** launcher + W&B end-to-end validation. **No scientific claim rides on it**; exp_02's
+  formal verdict (`partial`, 69/100 ≥ 0.95 @ 20k) is unchanged.
