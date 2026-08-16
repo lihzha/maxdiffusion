@@ -165,3 +165,23 @@ lab-side: `v6-8` is now declared **2 workers** but provisions one — issue #22;
 exp_02's Job 53 in the same minute, while v6-64 jobs cleared setup the same day. **The F9 runtime-peak code
 was never exercised** — this says nothing about the fix. Resubmit unchanged (`submit_m1g.sh`, RULED
 `7f23ac3`) once the resource config is repaired; the empty bank means nothing was lost.
+
+## M1-9 — fit-probe resubmit after the v6-8 repair — launched 2026-08-16T16:32Z
+
+**Submitted by the exp_02 session on Yixun's instruction** ("Currently the v6e-8 is fixed, could you
+please turn on the exp06?"). Unchanged resubmit of `submit_m1g.sh` per M1-8's outcome note — no code,
+config or cell-list change.
+
+- **Job id:** `20260816-163233-09339cf7-exp06-m1g-fitprobe-yixun`; `COMMIT=768eeb9` (docs tip; the
+  executable tree is **byte-identical to the RULED `7f23ac3`** — `git diff 7f23ac3 HEAD -- src bash_scripts`
+  is empty, verified pre-submission), worktree clean at submission.
+- **Issue #22 verified repaired before submitting:** `tpu admin resources` now lists
+  **`v6-8  v6e-8  8 chips  1 WORKERS`** (was 2), and the uploaded `spec.json` for this job records
+  `workers: 1` — the setup barrier that deadlocked M1-8 cannot recur for it.
+- **Unchanged from M1-8:** `RUN_NAME=exp06-m1-fitprobe`, `M1ROOT=gs://v6_east1d/datasets/droid_wan_pos_rollout/m1`,
+  attempt-scoped root `$M1ROOT/att-<ts>`, `POS_FIT_EXCLUDED_CELLS=one_step:32:{2,4},one_step:64:{2,4}`
+  (issue #18). Bank starts empty, as M1-8 measured zero cells.
+- **Acceptance (from the M1-8 package):** 10 authorized cells with runtime-sourced peaks
+  (rollout mb 16/32/64 + one_step mb 8/16, × k∈{2,4}); `rollout mb=8` expected to refuse on genuine
+  headroom; 4 EXCLUDED. **The F9 runtime-peak code has never been exercised on hardware** — M1-8 died
+  before reaching it, so this run is its first real test.
