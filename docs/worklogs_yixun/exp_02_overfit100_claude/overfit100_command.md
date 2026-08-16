@@ -699,3 +699,11 @@ a duplicate of Job 52 with its own fresh RUN_NAME.
   reached `wandb.init`).
 - **Cost:** 2 x v6e-64 x ~4 min. No checkpoints, no artifacts, nothing published.
 - **Relaunch:** NOT done — awaiting Yixun (code changed since the last approval).
+
+**OUTCOME — Job 53 FAILED at the setup barrier, zero rollouts (2026-08-16T00:57Z).** The scheduler came
+back at 00:28Z and gave the job a VM; worker 0 completed setup and then waited 1800 s for a second worker
+that does not exist (`Setup barrier progress: 1/2 workers`, no `worker-1.log`, only `setup-ready/worker-0`),
+exiting `SETUP_ERROR` / non-retryable. Not our code and not `--worker0-only`: the lab's `v6-8` resource is
+now declared **2 workers** while provisioning brings up one — issue #22 (the same failure killed exp_06's
+M1-8 in the same minute; v6-64 jobs cleared setup fine that day). **No videos were written.** Resubmit
+verbatim once the resource config is fixed; the submit script is unchanged at `submit_exp02_vid20k.sh`.
