@@ -143,6 +143,14 @@ Last updated: 2026-08-07 ~05:30Z (model-change handoff)
 - **Fix (standing pattern):** (a) any exception escaping a probe body scores `SUCCEEDED: THE PROBE DID NOT RUN` and the runner exits non-zero — a verdict is a *returned string*, never an absence of one; (b) every probe pairs with an **honest control** that must PASS inside the same run (`CONTROL-REFUSED` fails the battery) — this is what caught the four misfiring probes; (c) grep the harness for call sites in the same commit as any production signature change.
 - **Status:** fixed for exp_06; adopt the same three rules in any future battery.
 
+### 22. `v6-8` declares 2 workers but provisions 1 — every v6e-8 job dies at the setup barrier (infra regression, OPEN 2026-08-16)
+- **Symptom:** a v6-8 job gets a VM, runs setup on worker 0, then logs `Setup barrier progress: 1/2 workers` every poll for 1800 s and exits `SETUP_ERROR` / `retryable: false` — no rollouts, no output, ~30 min of TPU burned per attempt.
+- **Root cause (read from the deployed tooling):** `tpu admin resources` now lists **`v6-8  v6e-8  8 chips  2 WORKERS`** (the whole v6 family is declared at 4 chips/worker: v6-16=4, v6-32=8, v6-64=16). The startup script sets `EXPECTED_WORKERS = resources.workers` and worker 0 waits for that many `setup-ready/worker-*` markers. Only **worker 0** ever appears — no `worker-1.log`, and `attempts/attempt-1/setup-ready/` contains only `worker-0` — so the barrier can never reach 2/2.
+- **It is a regression, not our flags:** the same v6-8 resource on 2026-08-13 logged `Setup complete on worker 0; waiting for 1 workers` → `All 1 workers completed setup` (EXPECTED_WORKERS was 1) and ran ~30 jobs fine. `--worker0-only` is NOT implicated: `run_on_all_workers=false` gates only the run command in `startup_script.py`, never setup or the barrier.
+- **Blast radius:** every v6e-8 user. v6-64 is unaffected (two different users' v6-64 jobs cleared setup on 2026-08-16). Killed on first contact: exp_02 Job 53 (20k video pass) and exp_06 M1-8 — both non-retryable, both need resubmission after the fix.
+- **Fix (lab-side, Lihan):** set `v6-8` WORKERS back to 1 if v6e-8 is a single 8-chip host, or fix provisioning so the second worker VM boots. **No safe client-side workaround:** the only lever is a different resource class, and both blocked jobs are pinned to v6e-8 by their measurement contract (M1 measures v6e-8 cells; exp_02's eval must reproduce a landed seed-0 SSIM at that topology).
+- **Status:** OPEN, reported to Yixun 2026-08-16 for relay to Lihan.
+
 ## RESOLVED (kept for the record)
 
 ### R1. `side_adapter_noise_mode=fixed` train/val mismatch (real bug, fixed)
