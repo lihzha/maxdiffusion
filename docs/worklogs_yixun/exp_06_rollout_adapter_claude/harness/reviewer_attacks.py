@@ -1030,16 +1030,26 @@ def attack_p3_one_arm_authorizes_the_other(tmp):
 
 
 def attack_p3_contradictory_duplicate_trials(tmp):
-    """T7-3: the same cell published once fitting and once at 96.9% with a reservation failure."""
+    """T7-3: the same cell published once fitting and once at 96.9% with a reservation failure.
+
+    **F10b:** the two trials as written also disagree about the cell's compiled analysis, which
+    production now refuses at aggregation instead of collapsing (``analysis_disagreement``). Both
+    outcomes are refusals of the same attack -- the cell must not reach a training run -- so the
+    probe accepts either and says which one it got, rather than pinning the mechanism.
+    """
     fp = _probe_env()
     context = _ctx(fp)
-    published = _auth(
-        fp,
-        tmp,
-        [_fit(fp, context), _fit(fp, context, peak_bytes=int(32 * 1024**3 * 0.969), reservation_failures=1)],
-        name="p3_dup.json",
-        context=context,
-    )
+    missed = int(32 * 1024**3 * 0.969)
+    try:
+        published = _auth(
+            fp,
+            tmp,
+            [_fit(fp, context), _fit(fp, context, peak_bytes=missed, analysis_bytes=missed, reservation_failures=1)],
+            name="p3_dup.json",
+            context=context,
+        )
+    except ValueError as error:
+        return f"REFUSED at aggregation: {str(error).splitlines()[0][:110]}"
     try:
         fp.assert_cell_authorized(published, fp.FitCell("rollout", 32, 2), context=context)
     except ValueError as error:
@@ -3245,13 +3255,18 @@ def _f10_gate(fp, tmp, name, measurement, context):
 
     Returns ``(reloaded_table, refusal_or_None)`` — the refusal is what `assert_cell_authorized`
     raised, and ``None`` means the cell got through to a training run.
+
+    ``measurement`` may be one measurement or a list of TRIALS of one cell (F10b): the aggregation
+    is part of the path a trial-local fault has to survive, so the probes that attack it have to go
+    through this same publish → reload → gate sequence rather than stopping at the aggregate.
     """
-    published = _auth(fp, tmp, [measurement], name=name, context=context)
+    trials = list(measurement) if isinstance(measurement, (list, tuple)) else [measurement]
+    published = _auth(fp, tmp, trials, name=name, context=context)
     reloaded = fp.load_authorization(str(pathlib.Path(tmp) / name))
     if reloaded["authorized_cells"] != published["authorized_cells"]:
         raise AssertionError("the loader and the publisher disagree about this table")
     try:
-        fp.assert_cell_authorized(reloaded, measurement.cell, context=context)
+        fp.assert_cell_authorized(reloaded, trials[0].cell, context=context)
     except ValueError as error:
         return reloaded, str(error).splitlines()[0][:110]
     return reloaded, None
@@ -3378,6 +3393,148 @@ def attack_f10_read_a_v6_table_as_a_v7_one(tmp):
     if survivors:
         return f"SUCCEEDED: {'; '.join(survivors)}"
     return "REFUSED: loader, training gate and republication all refuse a table decided under another rule"
+
+
+# =================================================================================================
+# Round F10b — the three fail-closed gaps the F10 review found IN the new gate. Each one was
+# executed by the reviewer through publication, reload and `assert_cell_authorized`; each probe
+# below walks that same path rather than stopping at a verdict object.
+# =================================================================================================
+
+
+def attack_f10b_no_mark_at_all(tmp):
+    """An analysis-bounded cell with NO watermark: nothing cross-checked it, so nothing authorizes it.
+
+    Review MAJOR 1. F10 only compared the watermark when one was recorded, so the cross-check the
+    contract RETAINS was skipped exactly when it was missing — and the case is reachable, not
+    theoretical: a backend that reports ``bytes_limit`` without ``peak_bytes_in_use`` produces this
+    record. The F10 test suite pinned the authorization, which is how the gap survived review-by-test.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    measurement = _fit(fp, context, watermark_bytes=None, watermark_before_bytes=None)
+    table, refusal = _f10_gate(fp, tmp, "f10b_nomark.json", measurement, context)
+    if refusal is None:
+        return "SUCCEEDED: a cell with a bound and no runtime cross-check at all authorized a training run"
+    reasons = table["refused_cells"][0]["reasons"]
+    if "watermark_missing" not in reasons:
+        return f"SUCCEEDED: the table refused for {reasons} -- the absent cross-check was not named"
+    return f"REFUSED: {reasons}; the gate says {refusal!r}"
+
+
+def attack_f10b_a_friendly_trial_cancels_a_contradicted_one(tmp):
+    """Two trials of one cell, one of them contradicted: the cell must not authorize.
+
+    Review MAJOR 2, the reviewer's executed exploits. Aggregation took ``max`` of the peak, the
+    analysis and the watermark INDEPENDENTLY, so a second trial's friendlier numbers covered the
+    first trial's fault and the aggregate — which is all the published table carries — looked clean.
+    Three shapes are attacked here: a mark that cleared the bound in one trial, a peak that did, and
+    a trial that recorded no bound at all beside one that did.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    bound = 20 * 1024**3  # both trials of every pair agree on the cell's own bound, as they must
+    cases = {
+        "mark over the bound in trial 2": [
+            _fit(fp, context, analysis_bytes=bound, watermark_bytes=4 * 1024**3),
+            _fit(fp, context, analysis_bytes=bound, watermark_bytes=25 * 1024**3),
+        ],
+        "peak over the bound in trial 1": [
+            _fit(fp, context, peak_bytes=31 * 1024**3, analysis_bytes=bound, watermark_bytes=1 * 1024**3),
+            _fit(fp, context, analysis_bytes=bound, watermark_bytes=1 * 1024**3),
+        ],
+        "no bound in trial 1": [_fit(fp, context, analysis_bytes=None), _fit(fp, context, analysis_bytes=bound)],
+        "no mark in trial 1": [
+            _fit(fp, context, analysis_bytes=bound, watermark_bytes=None),
+            _fit(fp, context, analysis_bytes=bound),
+        ],
+    }
+    survivors = []
+    for index, (name, trials) in enumerate(cases.items()):
+        try:
+            table, refusal = _f10_gate(fp, tmp, f"f10b_trial_{index}.json", trials, context)
+        except ValueError:
+            continue  # refused before publication -- also a refusal of this attack
+        if refusal is None:
+            survivors.append(f"{name}: authorized {table['authorized_cells']}")
+    if survivors:
+        return f"SUCCEEDED: a friendly trial cancelled a contradicted one -- {'; '.join(survivors)}"
+    return f"REFUSED: all {len(cases)} trial-local contradictions survived aggregation and refused the cell"
+
+
+def attack_f10b_two_bounds_for_one_executable(tmp):
+    """Trials that disagree about the analysis: ``analysis=10/watermark=11`` beside ``analysis=20``.
+
+    Review MAJOR 2's first exploit, and the one no per-field aggregate can fix: the larger bound
+    covers the smaller trial's contradicted mark. It is one compiled executable measured twice, so
+    two accounts of its footprint are two programs — refused, not collapsed.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    trials = [
+        _fit(fp, context, analysis_bytes=10 * 1024**3, watermark_bytes=11 * 1024**3),
+        _fit(fp, context, analysis_bytes=20 * 1024**3),
+    ]
+    try:
+        table, refusal = _f10_gate(fp, tmp, "f10b_twobounds.json", trials, context)
+    except ValueError as error:
+        if "analysis_disagreement" not in str(error):
+            return f"SUCCEEDED: refused, but not as a disagreement about the cell's own bound: {str(error)[:110]}"
+        return f"REFUSED at aggregation: {str(error).splitlines()[0][:120]}"
+    if refusal is None:
+        return f"SUCCEEDED: two different bounds for one cell authorized it ({table['measurements'][0]})"
+    return f"REFUSED: {table['refused_cells'][0]['reasons']}; the gate says {refusal!r}"
+
+
+def attack_f10b_fractional_bytes(tmp):
+    """The reviewer's truncation construction: ``analysis = watermark = peak = 9.9`` of a 10-byte device.
+
+    Review MODERATE. ``int()`` rounds toward zero, so a 99%-of-capacity record parsed as ``9/10`` and
+    authorized. A byte count is an integer; a record carrying anything else was not measured here.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    survivors = []
+    for name, over in (
+        ("9.9 of a 10-byte device", dict(peak_bytes=9.9, analysis_bytes=9.9, watermark_bytes=9.9, capacity_bytes=10)),
+        ("a boolean bound", dict(analysis_bytes=True, watermark_bytes=True, peak_bytes=True, capacity_bytes=10)),
+    ):
+        try:
+            table, refusal = _f10_gate(
+                fp, tmp, f"f10b_frac_{abs(hash(name))}.json", _fit(fp, context, **over), context
+            )
+        except ValueError:
+            continue  # the record does not parse: refused before anything could be decided from it
+        if refusal is None:
+            survivors.append(f"{name}: authorized on {table['measurements'][0]['analysis_bytes']} bytes")
+    if survivors:
+        return f"SUCCEEDED: {'; '.join(survivors)}"
+    return "REFUSED: a fractional or boolean byte count is a malformed record, not a small measurement"
+
+
+def attack_f10b_round_the_headroom_boundary_down(tmp):
+    """A cell truly above 90% whose float division lands exactly ON the boundary.
+
+    Review MODERATE, second half. ``analysis/capacity`` is a float division of two byte counts; at
+    this magnitude the quotient rounds to exactly ``0.9`` while ``10*analysis > 9*capacity`` — so the
+    old comparison authorized a cell that is over the pinned rule. The magnitudes are absurd for HBM;
+    the point is that a pinned gate must not inherit the mantissa's limits.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    analysis, capacity = 8106479329266895, 9007199254740994
+    if not (analysis / capacity == fp.HEADROOM_FRACTION and 10 * analysis > 9 * capacity):
+        return "SUCCEEDED: THE PROBE DID NOT RUN -- the chosen pair no longer separates the two comparisons"
+    measurement = _fit(
+        fp, context, peak_bytes=analysis, analysis_bytes=analysis, watermark_bytes=1, capacity_bytes=capacity
+    )
+    table, refusal = _f10_gate(fp, tmp, "f10b_boundary.json", measurement, context)
+    if refusal is None:
+        return "SUCCEEDED: a cell above the 90% rule authorized because the float division rounded down"
+    reasons = table["refused_cells"][0]["reasons"]
+    if "headroom" not in reasons:
+        return f"SUCCEEDED: refused for {reasons} -- not on the headroom rule it is actually over"
+    return f"REFUSED: {reasons} -- the boundary is decided in exact integers"
 
 
 # =================================================================================================
@@ -3686,6 +3843,53 @@ def control_a_watermark_at_the_bound_is_not_an_excess(tmp):
     return "CONTROL-PASSED: watermark == analysis authorizes; only a mark ABOVE the bound refuses"
 
 
+def control_two_agreeing_trials_authorize(tmp):
+    """F10b's honest case: **the ladder measures every cell twice**, so if the new per-trial rules
+    over-refused, M1-10 would authorize nothing at all — the exact outage F10 was written to end.
+
+    Two trials that agree on the bound, differ only in their marks (both under it) and carry a full
+    evidence pair must aggregate to one authorized cell and gate a launch.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    trials = [
+        _fit(fp, context, watermark_bytes=4 * 1024**3),
+        _fit(fp, context, watermark_bytes=5 * 1024**3),
+    ]
+    table, refusal = _f10_gate(fp, tmp, "f10b_control_trials.json", trials, context)
+    if refusal is not None:
+        return f"CONTROL-REFUSED: two agreeing trials of a fitting cell do not authorize -- {refusal}"
+    if len(table["measured_cells"]) != 1 or not table["authorized_cells"]:
+        return f"CONTROL-REFUSED: the table is {table['measured_cells']} / {table['authorized_cells']}"
+    recorded = table["measurements"][0]
+    if recorded["watermark_bytes"] != 5 * 1024**3 or recorded["analysis_bytes"] != 20 * 1024**3:
+        return f"CONTROL-REFUSED: the aggregate lost the worst mark or the shared bound ({recorded})"
+    return "CONTROL-PASSED: two agreeing trials aggregate to one authorized cell, worst mark kept"
+
+
+def control_exactly_ninety_percent_authorizes(tmp):
+    """F10b's boundary on the other side: the headroom rule did not get stricter, only exact.
+
+    A cell whose bound is EXACTLY 90% of capacity must still authorize — otherwise the integer
+    comparison would have quietly moved the pinned line, and every refusal above it would be
+    evidence of nothing.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    capacity = 40 * 1024**3
+    exactly = capacity * fp.HEADROOM_NUMERATOR // fp.HEADROOM_DENOMINATOR
+    if exactly * fp.HEADROOM_DENOMINATOR != capacity * fp.HEADROOM_NUMERATOR:
+        return "CONTROL-REFUSED: the chosen capacity does not have an exact 90% point"
+    measurement = _fit(
+        fp, context, peak_bytes=exactly, analysis_bytes=exactly, watermark_bytes=1, capacity_bytes=capacity
+    )
+    table, refusal = _f10_gate(fp, tmp, "f10b_control_exact.json", measurement, context)
+    if refusal is not None:
+        return f"CONTROL-REFUSED: a bound at exactly {fp.HEADROOM_FRACTION:.0%} of capacity was refused -- {refusal}"
+    fraction = table["projections"][0]["authorized_fraction"]
+    return f"CONTROL-PASSED: a bound at exactly {fraction:.1%} of capacity authorizes; one byte above refuses"
+
+
 if __name__ == "__main__":
     _report("A-B1(a) module issue token   :", attack_a_b1a)
     _report("A-B1(b) public digest override:", attack_a_b1b)
@@ -3802,5 +4006,12 @@ if __name__ == "__main__":
         _report("F10-3  peak above a quiet bound", attack_f10_peak_above_a_quiet_bound, tmp)
         _control("  ctrl analysis-bounded cell  :", control_an_analysis_bounded_cell_authorizes, tmp)
         _report("F10-4  read a v6 table as v7  ", attack_f10_read_a_v6_table_as_a_v7_one, tmp)
+        _report("F10b-1 no mark at all         ", attack_f10b_no_mark_at_all, tmp)
+        _report("F10b-2 friendly trial cancels ", attack_f10b_a_friendly_trial_cancels_a_contradicted_one, tmp)
+        _control("  ctrl two agreeing trials    :", control_two_agreeing_trials_authorize, tmp)
+        _report("F10b-3 two bounds, one cell   ", attack_f10b_two_bounds_for_one_executable, tmp)
+        _report("F10b-4 fractional byte counts ", attack_f10b_fractional_bytes, tmp)
+        _report("F10b-5 round the boundary down", attack_f10b_round_the_headroom_boundary_down, tmp)
+        _control("  ctrl exactly 90% authorizes :", control_exactly_ninety_percent_authorizes, tmp)
     if not _summarize():
         raise SystemExit(1)

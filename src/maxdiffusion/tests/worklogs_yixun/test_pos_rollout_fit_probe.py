@@ -300,13 +300,21 @@ def test_a_measurement_must_be_complete_and_finite():
 def test_contradictory_trials_of_one_cell_refuse_it(tmp_path):
     """T7-3, the reviewer's executed attack: the same cell published once fitting and once at 96.9%
     HBM with a reservation failure appeared in BOTH lists and was authorized, because publication
-    appended trials independently while assertion returned on the first authorized occurrence."""
+    appended trials independently while assertion returned on the first authorized occurrence.
+
+    **F10b detail:** the two trials now share one ``analysis_bytes``. They are two runs of ONE
+    compiled executable, so its own account of its footprint is the same number both times, and
+    since F10b two different analyses are refused outright rather than collapsed
+    (``analysis_disagreement`` — its own test in the runtime-peak file). What differs here is what
+    genuinely differs between two runs: the elapsed time and the reservation failure.
+    """
     context = _context()
+    missed = int(_CAPACITY * 0.969)
     published = _publish(
         tmp_path,
         [
-            _measurement(context),
-            _measurement(context, peak_bytes=int(_CAPACITY * 0.969), reservation_failures=1),
+            _measurement(context, peak_bytes=missed, analysis_bytes=missed),
+            _measurement(context, peak_bytes=missed, analysis_bytes=missed, reservation_failures=1),
         ],
         context=context,
     )
@@ -319,17 +327,27 @@ def test_contradictory_trials_of_one_cell_refuse_it(tmp_path):
 
 
 def test_repeated_trials_aggregate_to_the_worst_of_each():
+    """The worst peak, the worst step time, the summed reservation failures — per cell.
+
+    **F10b:** the two trials of the rollout cell share one analysis (one executable, one account of
+    its footprint) while their reported peaks differ, which is the shape a runtime mark produces.
+    """
     context = _context()
     aggregated = probe.aggregate_trials(
         [
-            _measurement(context, peak_bytes=10 * 1024**3, step_seconds=3.0, reservation_failures=1),
-            _measurement(context, peak_bytes=12 * 1024**3, step_seconds=4.0, reservation_failures=2),
+            _measurement(
+                context, peak_bytes=10 * 1024**3, analysis_bytes=12 * 1024**3, step_seconds=3.0, reservation_failures=1
+            ),
+            _measurement(
+                context, peak_bytes=12 * 1024**3, analysis_bytes=12 * 1024**3, step_seconds=4.0, reservation_failures=2
+            ),
             _measurement(context, arm="one_step", peak_bytes=8 * 1024**3),
         ]
     )
     assert len(aggregated) == 2, "one measurement per cell, in first-seen order"
     worst = aggregated[0]
     assert worst.peak_bytes == 12 * 1024**3 and worst.step_seconds == 4.0
+    assert worst.analysis_bytes == 12 * 1024**3 and worst.watermark_bytes == 4 * 1024**3
     assert worst.reservation_failures == 3, "reservation failures are totalled, never averaged away"
     assert aggregated[1].cell.arm == "one_step"
 

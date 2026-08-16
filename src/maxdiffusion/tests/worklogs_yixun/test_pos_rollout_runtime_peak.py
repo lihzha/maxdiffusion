@@ -140,25 +140,44 @@ def test_an_unreadable_watermark_is_recorded_as_an_analysis_and_never_as_a_runti
     """THE never-fake rule, unchanged: a backend that reports no usable peak produces
     ``"compiled memory analysis"`` and says so.
 
-    **What F10 changed is what happens NEXT.** Under F9 that cell was refused on ``peak_source``;
-    under Yixun's Option A the analysis is the bound, so a cell with an analysis under the floor and
-    no watermark to contradict it AUTHORIZES -- there is a bound and nothing falsifies it. The
-    never-fake rule is about provenance, and it still holds: no runtime source was minted.
+    **F10b, review MAJOR 1 — and the F10 version of this test was the defect.** It asserted that a
+    cell with a bound and NO watermark authorizes, on the reasoning that nothing falsified the
+    bound. That pinned the implementation rather than the contract: Yixun's Option A RETAINS the
+    watermark as a cross-check, and a cross-check that is skipped whenever it is absent is optional,
+    not retained. Nothing had cross-checked that cell. The classification below is unchanged --
+    provenance is still never invented -- and the verdict now refuses on ``watermark_missing``.
     """
     evidence = _classified(watermark=None, analysis_bytes=9 * _GIB)
     assert evidence.peak_source == probe.PEAK_SOURCE_ANALYSIS
     assert evidence.peak_attribution == probe.PEAK_ATTRIBUTION_NONE
     assert evidence.peak_bytes == 9 * _GIB and evidence.watermark_bytes is None
     verdict = probe.cell_verdict(_measurement(**_from(evidence)))
-    assert verdict.fits and verdict.numbers["authorized_bytes"] == 9 * _GIB
+    assert not verdict.fits and verdict.reasons == ("watermark_missing",)
+    assert verdict.numbers["authorized_bytes"] == 9 * _GIB, "the bound is still recorded, and still refused"
     assert verdict.numbers["watermark_bytes"] is None, "no reading is recorded as none, never as zero"
-    # ...and the same cell with its analysis over the floor is refused on the bound, as before.
+    # ...and the same cell with its analysis over the floor is refused on BOTH counts.
     big = _classified(watermark=None, analysis_bytes=int(_CAPACITY * 0.95))
-    assert probe.cell_verdict(_measurement(**_from(big))).reasons == ("headroom",)
+    assert probe.cell_verdict(_measurement(**_from(big))).reasons == ("watermark_missing", "headroom")
 
     # ...and with nothing at all it fails closed rather than inventing either one.
     with pytest.raises(ValueError, match="no per-cell steady-state peak could be obtained"):
         _classified(watermark=None, analysis_bytes=None)
+
+
+def test_a_backend_that_reports_a_capacity_but_no_MARK_authorizes_nothing():
+    """F10b: the missing-watermark refusal is REACHABLE, not hypothetical.
+
+    ``DeviceTelemetry.watermark_and_capacity`` returns ``(None, capacity)`` for a backend that
+    reports ``bytes_limit`` without ``peak_bytes_in_use`` -- the "present but useless" shape this
+    file has always tested at the telemetry level. Followed through to the verdict, that cell has a
+    bound and no cross-check, and it must not authorize.
+    """
+    telemetry = _telemetry([_Reporting(30 * _GIB, keys=("bytes_limit",))])
+    before = telemetry.begin_steady_state(cell_watermark=telemetry.begin_cell())
+    evidence = telemetry.steady_state_evidence(before, telemetry.close_steady_state(before), program_bytes=11 * _GIB)
+    assert evidence.peak_bytes == 11 * _GIB and evidence.watermark_bytes is None
+    verdict = probe.cell_verdict(_measurement(**_from(evidence)))
+    assert not verdict.fits and "watermark_missing" in verdict.reasons
 
 
 def test_no_code_path_can_mint_a_runtime_source_without_a_watermark():
@@ -479,6 +498,58 @@ def test_F10_authorizes_on_the_ANALYSIS_with_the_watermark_only_as_a_cross_check
     ).reasons == ("watermark_exceeds_analysis",)
 
 
+def test_the_headroom_boundary_is_decided_in_EXACT_INTEGER_ARITHMETIC():
+    """**F10b, review MODERATE.** The rule and its boundary are unchanged -- exactly 90% authorizes,
+    one byte above refuses -- but the comparison is no longer a float division.
+
+    A pinned gate should not depend on where the mantissa runs out. At HBM magnitudes the two forms
+    agree; the pair below is chosen so they do NOT (``a/c`` evaluates to exactly ``0.9`` while
+    ``10a > 9c``), which is the whole point: the predicate is the rule, and floating point is an
+    implementation detail it must not inherit.
+    """
+    assert probe.HEADROOM_NUMERATOR / probe.HEADROOM_DENOMINATOR == probe.HEADROOM_FRACTION
+    capacity = 40 * _GIB
+    exactly_ninety = capacity * probe.HEADROOM_NUMERATOR // probe.HEADROOM_DENOMINATOR
+    assert exactly_ninety * probe.HEADROOM_DENOMINATOR == capacity * probe.HEADROOM_NUMERATOR, "an exact 90%"
+    at_the_line = _measurement(
+        peak_bytes=exactly_ninety, analysis_bytes=exactly_ninety, watermark_bytes=1, capacity_bytes=capacity
+    )
+    assert probe.cell_verdict(at_the_line).fits, "exactly 90% of capacity authorizes"
+    one_byte_over = dataclasses.replace(at_the_line, analysis_bytes=exactly_ninety + 1, peak_bytes=exactly_ninety + 1)
+    assert probe.cell_verdict(one_byte_over).reasons == ("headroom",), "one byte above it does not"
+
+    # The pair float division cannot separate: 10*analysis > 9*capacity, and analysis/capacity == 0.9.
+    analysis, capacity = 8106479329266895, 9007199254740994
+    assert analysis / capacity == probe.HEADROOM_FRACTION and 10 * analysis > 9 * capacity
+    rounded = _measurement(peak_bytes=analysis, analysis_bytes=analysis, watermark_bytes=1, capacity_bytes=capacity)
+    assert probe.cell_verdict(rounded).reasons == ("headroom",), "the float form authorized this cell"
+
+
+def test_a_fractional_or_boolean_byte_count_is_a_MALFORMED_RECORD_not_a_measurement():
+    """**F10b, review MODERATE.** ``int()`` rounds toward zero, so ``analysis = peak = watermark =
+    9.9`` against a capacity of 10 used to become ``9/10`` and authorize, and ``True`` used to parse
+    as one byte. A byte count is an integer; anything else was not measured by this probe, and it is
+    refused the way every other structural defect is -- as a record that does not parse.
+    """
+    for override in (
+        {"analysis_bytes": 9.9},
+        {"watermark_bytes": 0.5},
+        {"peak_bytes": 20 * _GIB + 0.5},
+        {"capacity_bytes": float(_CAPACITY) + 0.5},
+        {"analysis_bytes": True},
+        {"peak_bytes": True},
+        {"reservation_failures": True},
+    ):
+        with pytest.raises(ValueError):
+            probe.cell_verdict(_measurement(**override))
+    # The reviewer's exact construction, in the shape it would have arrived in: 9.9 of a 10-byte
+    # device is 99% and authorized as 9/10.
+    with pytest.raises(ValueError):
+        probe.cell_verdict(_measurement(peak_bytes=9.9, analysis_bytes=9.9, watermark_bytes=9.9, capacity_bytes=10))
+    # ...while an integral float is a whole number of bytes written another way, and still parses.
+    assert probe.cell_verdict(_measurement(analysis_bytes=float(20 * _GIB))).fits
+
+
 def test_a_reported_peak_above_the_bound_that_no_watermark_explains_is_refused_too():
     """The residue of the same fault. ``classify_peak`` reports ``max(runtime, analysis)``, so a
     peak above the analysis always has a watermark behind it -- unless the record was assembled
@@ -572,6 +643,109 @@ def test_the_WORST_watermark_of_the_trials_is_what_the_F10_cross_check_reads():
     )
     assert aggregated.watermark_bytes == 25 * _GIB and aggregated.analysis_bytes == 20 * _GIB
     assert probe.cell_verdict(aggregated).reasons == ("watermark_exceeds_analysis",)
+
+
+def _gated(tmp_path, name, trials, context):
+    """Publish these TRIALS, reload the table, and try to gate a launch with the cell they describe.
+
+    The reviewer's three exploits were executed end to end -- publication, reload,
+    ``assert_cell_authorized`` -- because an aggregation defect that stops at the aggregate is a
+    curiosity and one that reaches the gate is a 64-chip reservation. Returns ``(table, refusal)``;
+    ``refusal is None`` means the cell reached a training run.
+    """
+    evidence = probe.build_evidence(context, trials, max_train_steps=10_000, eval_every=1_000, checkpoint_every=1_000)
+    probe.publish_authorization(str(tmp_path / name), evidence)
+    table = probe.load_authorization(str(tmp_path / name))
+    try:
+        probe.assert_cell_authorized(table, trials[0].cell, context=context)
+    except ValueError as error:
+        return table, str(error)
+    return table, None
+
+
+def test_a_TRIAL_LOCAL_contradiction_survives_aggregation_and_reaches_the_gate_as_a_refusal(tmp_path):
+    """**F10b, review MAJOR 2 — the two exploits that agreed on the analysis.**
+
+    The published table carries ONE aggregated record per cell, so a fault that lives in one trial
+    has to survive into that record or nothing downstream can ever see it: the loader re-decides the
+    aggregate, and the launch gate reads the loader's answer. With the analyses equal, the maxima do
+    that -- but it is the END-TO-END path that has to demonstrate it, which is what the reviewer's
+    executed exploits did and what this test does.
+    """
+    context = _context()
+    # A mark that cleared the bound in the SECOND trial only.
+    table, refusal = _gated(
+        tmp_path,
+        "trial_mark.json",
+        [_measurement(context, watermark_bytes=4 * _GIB), _measurement(context, watermark_bytes=25 * _GIB)],
+        context,
+    )
+    assert refusal is not None and table["authorized_cells"] == []
+    assert table["refused_cells"][0]["reasons"] == ["watermark_exceeds_analysis"]
+
+    # A peak that cleared the bound in the FIRST trial only.
+    table, refusal = _gated(
+        tmp_path,
+        "trial_peak.json",
+        [
+            _measurement(context, peak_bytes=31 * _GIB, watermark_bytes=1 * _GIB),
+            _measurement(context, watermark_bytes=1 * _GIB),
+        ],
+        context,
+    )
+    assert refusal is not None and table["authorized_cells"] == []
+    assert table["refused_cells"][0]["reasons"] == ["peak_exceeds_analysis"]
+
+
+def test_ONE_trial_without_the_evidence_makes_the_CELL_without_it(tmp_path):
+    """**F10b, review MAJOR 2's third exploit.** ``max`` over "the trials that recorded it" answered
+    with the friendly trial's number, so one trial with no analysis beside one with a 20 GiB bound
+    authorized on a bound only half the cell had. An absent number now makes the cell absent."""
+    context = _context()
+    table, refusal = _gated(
+        tmp_path,
+        "trial_no_bound.json",
+        [_measurement(context, analysis_bytes=None, peak_source=probe.PEAK_SOURCE_ANALYSIS), _measurement(context)],
+        context,
+    )
+    assert refusal is not None and table["authorized_cells"] == []
+    assert table["refused_cells"][0]["reasons"] == ["analysis_missing"]
+    assert table["measurements"][0]["analysis_bytes"] is None, "the aggregate carries the absence, not the number"
+
+    # ...and the same for the cross-check reading.
+    table, refusal = _gated(
+        tmp_path,
+        "trial_no_mark.json",
+        [_measurement(context, watermark_bytes=None), _measurement(context)],
+        context,
+    )
+    assert refusal is not None and table["refused_cells"][0]["reasons"] == ["watermark_missing"]
+    assert table["measurements"][0]["watermark_bytes"] is None
+
+
+def test_TRIALS_THAT_DISAGREE_ABOUT_THE_ANALYSIS_ARE_REFUSED_OUTRIGHT():
+    """**F10b, review MAJOR 2 — the exploits that needed two different bounds.**
+
+    ``analysis=10, watermark=11`` beside ``analysis=20, watermark=5`` aggregated to
+    ``analysis=20, watermark=11`` and authorized: the larger bound covered the smaller trial's
+    contradicted mark. No choice of per-field aggregate fixes that, because the two trials disagree
+    about what this cell IS. It is one compiled executable measured twice, so its own account of its
+    footprint is one number -- M1-9's banked artifacts agree exactly, trial for trial, on all twelve
+    cells -- and two numbers are refused the way two contexts already were: not collapsed.
+    """
+    context = _context()
+    for left, right in (
+        ({"analysis_bytes": 10 * _GIB, "watermark_bytes": 11 * _GIB}, {"analysis_bytes": 20 * _GIB}),
+        (
+            {"analysis_bytes": 8 * _GIB, "peak_bytes": 31 * _GIB, "watermark_bytes": 1 * _GIB},
+            {"analysis_bytes": 32 * _GIB, "peak_bytes": 32 * _GIB},
+        ),
+    ):
+        with pytest.raises(ValueError, match="analysis_disagreement"):
+            probe.aggregate_trials([_measurement(context, **left), _measurement(context, **right)])
+    # The honest case is untouched: two trials of one executable report one number, and it aggregates.
+    (agreed,) = probe.aggregate_trials([_measurement(context), _measurement(context)])
+    assert agreed.analysis_bytes == 20 * _GIB and probe.cell_verdict(agreed).fits
 
 
 def test_the_audit_fields_survive_a_publication_round_trip(tmp_path):

@@ -31,7 +31,11 @@ accepted it — because production never passed a context to compare against. Fo
 fitting, once at 96.9% HBM with a reservation failure — and it appeared in both lists and was
 authorized. :func:`aggregate_trials` takes the WORST of every trial (max peak, max step time, summed
 reservation failures, min capacity), so a cell that missed once is a cell that missed; the published
-lists are unique and disjoint, and :func:`load_authorization` re-checks that on the way in.
+lists are unique and disjoint, and :func:`load_authorization` re-checks that on the way in. **F10b
+made "worst" mean worst VERDICT rather than worst field:** the F10 evidence pair aggregates
+unanimous-or-absent and the trials must agree on the analysis, because independent per-field maxima
+let a friendly trial cancel a contradicted one — three executed exploits, all of which reached a
+launch gate.
 
 **What is honestly UNKNOWN before this probe has run.** Plan §10 says cost and HBM beyond the k=2
 reference are UNKNOWN, and the two measured points nearby are exp_03's: its B arm cost **2.713x** the
@@ -211,6 +215,15 @@ __all__ = [
 AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v7"
 #: Plan §4-P1. Steady state, not transient: a peak measured during compilation is not this number.
 HEADROOM_FRACTION = 0.90
+#: **The same rule as an exact rational, and it is what actually decides (F10b, review MODERATE).**
+#: ``bound / capacity > 0.90`` is a float division of two byte counts, and at HBM magnitudes an
+#: over-90% pair can round down onto the boundary and authorize. :func:`cell_verdict` therefore
+#: compares ``HEADROOM_DENOMINATOR * analysis`` against ``HEADROOM_NUMERATOR * capacity`` in
+#: integers, which is the same predicate with no rounding. ``HEADROOM_FRACTION`` remains the
+#: declared constant (it is what the artifact records and what a reader compares against); these two
+#: are its exact form, and a test pins that they still describe the same rule.
+HEADROOM_NUMERATOR = 9
+HEADROOM_DENOMINATOR = 10
 
 # --- F5: per-cell publication and adoption -----------------------------------------------------
 #: The per-cell artifact's own protocol, versioned separately from the run-level table. ``v2`` (F9):
@@ -1206,11 +1219,40 @@ def _duration(value, what: str, *, strictly_positive: bool = False) -> float:
     return number
 
 
+def _exact_count(value, what: str) -> int:
+    """A WHOLE number of bytes (or events), or a malformed record -- never a silent truncation.
+
+    F10b, review MODERATE. This used to be a bare ``int(value)``, which rounds toward zero: a record
+    carrying ``analysis = watermark = peak = 9.9`` against a capacity of ``10`` became ``9/10`` and
+    authorized, and ``True`` became ``1``. A byte count is an integer; a value that is not one was
+    not measured by this probe, so it is refused here as a MALFORMED RECORD (``ValueError``, the same
+    handling every other structural defect in :func:`_checked` gets, wrapped by
+    :meth:`CellMeasurement.from_payload` into "is not a recorded cell measurement" and refused by
+    :func:`load_authorization`) rather than being decided as if it were a measurement.
+
+    ``bool`` is rejected explicitly because it IS an ``int`` in Python: ``True`` would otherwise
+    parse as one byte, which is a claim nobody made about anything.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"{what} is a byte count, not a flag; got {value!r}")
+    if not isinstance(value, int):
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{what} is a whole number of bytes; got {value!r} ({error})") from error
+        if not math.isfinite(number) or not number.is_integer():
+            raise ValueError(
+                f"{what} is a WHOLE number of bytes; got {value!r}, and truncating it toward zero is how a "
+                f"record that does not fit acquires a number that does"
+            )
+    return int(value)
+
+
 def _optional_bytes(value) -> int | None:
     """A byte count that may honestly be absent. ``None`` means "not recorded", never "zero"."""
     if value is None:
         return None
-    number = int(value)
+    number = _exact_count(value, "a recorded byte count")
     if number < 0:
         raise ValueError(f"a recorded byte count is non-negative, got {value!r}")
     return number
@@ -1263,11 +1305,11 @@ def _checked(measurement: CellMeasurement) -> None:
     _duration(measurement.compile_seconds, "the compile time")
     _duration(measurement.eval_seconds, "the evaluation overhead")
     _duration(measurement.checkpoint_seconds, "the checkpoint overhead")
-    if int(measurement.peak_bytes) <= 0:
+    if _exact_count(measurement.peak_bytes, "the per-device peak") <= 0:
         raise ValueError(f"the per-device peak must be positive, got {measurement.peak_bytes!r}")
-    if int(measurement.capacity_bytes) <= 0:
+    if _exact_count(measurement.capacity_bytes, "the device capacity") <= 0:
         raise ValueError(f"the device capacity must be positive, got {measurement.capacity_bytes!r}")
-    if int(measurement.reservation_failures) < 0:
+    if _exact_count(measurement.reservation_failures, "reservation failures") < 0:
         raise ValueError(f"reservation failures are counted, got {measurement.reservation_failures!r}")
     if str(measurement.peak_source) not in PEAK_SOURCES:
         raise ValueError(
@@ -1293,8 +1335,17 @@ def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
     * ``analysis_bytes`` is recorded and non-zero. **No bound, no authorization** -- the rule names
       one number as the bound, and a record that does not carry it authorizes nothing, however
       attributable its runtime reading is (``analysis_missing``).
-    * ``analysis_bytes <= HEADROOM_FRACTION * capacity_bytes``. The headroom rule is unchanged; what
-      moved is which number it reads (``headroom``).
+    * ``watermark_bytes`` is recorded (``watermark_missing``). **F10b, review MAJOR 1.** The contract
+      RETAINS the watermark as a cross-check, and a cross-check that is skipped whenever it is absent
+      is not retained -- it is optional. It is also reachable: a backend that reports ``bytes_limit``
+      but no ``peak_bytes_in_use`` yields exactly this record (see :meth:`DeviceTelemetry.
+      watermark_and_capacity`), so an analysis-only cell could have authorized with nothing having
+      cross-checked it. The v6e path M1 runs on always reports one.
+    * ``analysis_bytes <= HEADROOM_FRACTION * capacity_bytes``, evaluated in EXACT INTEGER ARITHMETIC
+      as ``10 * analysis <= 9 * capacity`` (``headroom``). The rule and its boundary are unchanged --
+      exactly 90% authorizes, one byte above refuses -- but a float division of two large byte counts
+      can round an over-90% pair down onto the boundary, and the pinned rule should not depend on
+      where the mantissa runs out (review F10b, MODERATE).
     * the recorded watermark does not exceed the analysis (``watermark_exceeds_analysis``). A
       watermark ABOVE the claimed upper bound falsifies the upper-bound premise the authorization
       rests on: the two accounts of the same cell disagree, and the disagreement is decided against
@@ -1324,8 +1375,13 @@ def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
     reasons = []
     if bound is None:
         reasons.append("analysis_missing")
-    else:
-        if bound / capacity > HEADROOM_FRACTION:
+    if watermark is None:
+        reasons.append("watermark_missing")
+    if bound is not None:
+        # The pinned 90% in exact integers: `bound/capacity > 0.9` <=> `10*bound > 9*capacity`, with
+        # no rounding anywhere. HEADROOM_FRACTION stays the declared constant and the published
+        # `authorized_fraction` stays a float for reading; neither decides anything.
+        if HEADROOM_DENOMINATOR * bound > HEADROOM_NUMERATOR * capacity:
             reasons.append("headroom")
         if watermark is not None and int(watermark) > bound:
             # ONE fault -- the analysis is not an upper bound for this record -- and the watermark is
@@ -1376,6 +1432,33 @@ def aggregate_trials(measurements: Sequence[CellMeasurement]) -> tuple[CellMeasu
     publication appended each trial independently while assertion returned on the first authorized
     occurrence. Aggregating conservatively removes the contradiction rather than adjudicating it: a
     cell that missed on any trial is a cell that missed.
+
+    **F10b, review MAJOR 2: "worst of every trial" has to mean worst of every trial's VERDICT, not
+    worst of each field independently.** Taking ``max`` of the peak, the analysis and the watermark
+    separately let a contradicted trial be cancelled by a friendlier one, and the reviewer executed
+    three of these end to end through publication, reload and :func:`assert_cell_authorized`:
+
+    * trial 1 ``analysis=10, watermark=11`` (refused: the mark cleared the bound) with trial 2
+      ``analysis=20, watermark=5`` aggregated to ``analysis=20, watermark=11`` and AUTHORIZED;
+    * trial 1 ``analysis=8, peak=31`` with trial 2 ``analysis=32, peak=32`` masked
+      ``peak_exceeds_analysis``;
+    * one trial with NO analysis beside one with ``analysis=20`` authorized on the other's bound.
+
+    The published table carries one aggregated record per cell and no trials (the trials live in the
+    banked cell artifact), so a per-trial fault has to survive INTO that record or it is gone by the
+    time any reader re-decides it. Two rules make every fault survive, and they are the only change:
+
+    1. **An absent number makes the cell absent.** ``analysis_bytes`` and ``watermark_bytes``
+       aggregate to ``None`` if ANY trial failed to record them, rather than to the best trial that
+       did — so "one trial had no bound" reads as "this cell has no bound", and the missing-evidence
+       refusals fire on the aggregate exactly as they fire on the trial.
+    2. **The trials must AGREE on the analysis.** It is one compiled executable measured twice, so
+       its own account of its footprint is the same number both times (M1-9's banked artifacts agree
+       exactly, trial for trial, on all twelve cells). Two different analyses are two different
+       programs' accounts, which is the same fault the context-digest check above refuses and is
+       refused the same way: **``analysis_disagreement``, raised here rather than published**. With
+       the analyses equal, ``max`` of the watermark and ``max`` of the peak are enough — any trial
+       whose mark or peak cleared the shared bound clears it on the aggregate too.
     """
     if not measurements:
         raise ValueError("an aggregation over no trials measures nothing; run the ladder first")
@@ -1395,6 +1478,15 @@ def aggregate_trials(measurements: Sequence[CellMeasurement]) -> tuple[CellMeasu
             raise ValueError(
                 f"{cell} was measured under {len(digests)} different contexts; those are measurements of "
                 f"different programs and cannot be averaged into one cell"
+            )
+        analyses = sorted({int(value) for value in (trial.analysis_bytes for trial in trials) if value is not None})
+        if len(analyses) > 1:
+            raise ValueError(
+                f"analysis_disagreement: {cell}'s trials report {analyses} bytes of compiled memory analysis. "
+                f"It is ONE executable measured {len(trials)} times, so its own account of its footprint is one "
+                f"number; two numbers are two programs, and collapsing them would publish a bound that neither "
+                f"trial measured (the larger one hides the smaller trial's contradicted mark and peak). Re-measure "
+                f"this cell -- do not average, and do not pick"
             )
         aggregated.append(
             CellMeasurement(
@@ -1417,8 +1509,11 @@ def aggregate_trials(measurements: Sequence[CellMeasurement]) -> tuple[CellMeasu
                 # `standing` cell: recording the better trial's attribution would be recording the
                 # one reading that happened to be first.
                 peak_attribution=_weakest_attribution(trials),
-                analysis_bytes=_worst(trials, "analysis_bytes", max),
-                watermark_bytes=_worst(trials, "watermark_bytes", max),
+                # F10b: BOTH gate inputs are unanimous-or-absent. One trial that did not record the
+                # bound, or did not record the mark, makes the cell one that does not have it.
+                analysis_bytes=_unanimous(trials, "analysis_bytes", max),
+                watermark_bytes=_unanimous(trials, "watermark_bytes", max),
+                # Audit only, and the old rule stands for it: the earliest opening any trial saw.
                 watermark_before_bytes=_worst(trials, "watermark_before_bytes", min),
             )
         )
@@ -1429,6 +1524,17 @@ def _worst(trials: Sequence[CellMeasurement], field: str, pick) -> int | None:
     """``pick`` over the trials that recorded ``field``; ``None`` when none of them did."""
     values = [int(value) for value in (getattr(trial, field) for trial in trials) if value is not None]
     return pick(values) if values else None
+
+
+def _unanimous(trials: Sequence[CellMeasurement], field: str, pick) -> int | None:
+    """``pick`` over the trials, or ``None`` if ANY of them did not record ``field`` (F10b).
+
+    The difference from :func:`_worst` is the whole of review MAJOR 2's third exploit: a cell with
+    one bound-less trial is a cell whose bound one trial contradicts, and reporting the trial that
+    did record it publishes evidence the cell does not have.
+    """
+    values = [getattr(trial, field) for trial in trials]
+    return None if any(value is None for value in values) else pick(int(value) for value in values)
 
 
 def _weakest_attribution(trials: Sequence[CellMeasurement]) -> str:
@@ -2528,11 +2634,11 @@ def classify_peak(
     number is a runtime reading; the converse is not guaranteed, because :func:`aggregate_trials`
     may conservatively label a mixed-provenance cell ``PEAK_SOURCE_ANALYSIS`` even though the
     numeric maximum it reports came from a runtime reading — and the label no longer decides
-    anything either way. What decides is the aggregated pair, and :func:`aggregate_trials` takes the
-    MAX of both: a cell whose watermark exceeded its analysis in any trial is refused on the
-    aggregate too, unless another trial recorded a LARGER analysis — i.e. unless the two trials
-    disagreed about the same compiled program's own footprint, in which case the published bound is
-    the larger one and it does bound the watermark.
+    anything either way. What decides is the aggregated pair, and since F10b :func:`aggregate_trials`
+    makes that pair carry every trial's fault: the analyses must AGREE (two accounts of one
+    executable are refused as ``analysis_disagreement``, not collapsed), an absent bound or absent
+    mark in ANY trial makes the cell's absent, and the watermark and peak are the maxima — so a cell
+    whose mark or peak cleared its bound in any trial is refused on the aggregate too.
 
     ``cell_watermark`` is the mark at the top of the CELL -- before its backbone load and its
     compile. Attribution is decided against it rather than against ``watermark_before`` because the
