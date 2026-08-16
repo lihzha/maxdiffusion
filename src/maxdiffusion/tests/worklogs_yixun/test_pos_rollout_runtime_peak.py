@@ -550,6 +550,63 @@ def test_a_fractional_or_boolean_byte_count_is_a_MALFORMED_RECORD_not_a_measurem
     assert probe.cell_verdict(_measurement(analysis_bytes=float(20 * _GIB))).fits
 
 
+def test_the_integrality_test_is_against_the_ORIGINAL_value_and_not_a_float_of_it():
+    """**F10c, review MODERATE (a).** F10b tested ``float(value).is_integer()``, and ``float`` is
+    where the precision goes: a genuinely fractional ``Fraction``/``Decimal`` at this magnitude
+    rounds to an integral float, truncates, and the truncated number sits exactly ON the 90% line
+    while the true one is over it. The comparison is now ``value == int(value)``, which is exact for
+    all three types. Digit STRINGS are rejected outright for the same reason: ``int("9")`` parses,
+    and a record written as text was not written by this probe.
+    """
+    import decimal
+    import fractions
+
+    capacity = 9007199254740990  # divisible by 10, so its 90% point is exact
+    exact_ninety = 9 * capacity // 10  # 8106479329266891 -- exactly on the line, and authorizing
+    fractional = fractions.Fraction(2 * exact_ninety + 1, 2)  # ...891.5: OVER the line
+    assert float(fractional).is_integer(), "the F10b test would have accepted this as a whole number"
+    assert 10 * fractional > 9 * capacity, "the true value violates the headroom rule"
+    assert 10 * int(fractional) == 9 * capacity, "...and its truncation sits exactly on it, authorizing"
+    for value in (fractional, decimal.Decimal("8106479329266891.5"), "8106479329266891", b"9"):
+        with pytest.raises(ValueError):
+            probe.cell_verdict(
+                _measurement(peak_bytes=value, analysis_bytes=value, watermark_bytes=1, capacity_bytes=capacity)
+            )
+    # The legitimate spellings of a whole number still parse: int, integral Fraction/Decimal, float.
+    for value in (exact_ninety, fractions.Fraction(exact_ninety, 1), decimal.Decimal(exact_ninety)):
+        assert probe.cell_verdict(
+            _measurement(peak_bytes=value, analysis_bytes=value, watermark_bytes=1, capacity_bytes=capacity)
+        ).fits
+
+
+def test_a_recorded_payload_is_parsed_EXACTLY_rather_than_coerced():
+    """**F10c, review MODERATE (b), at the deserialization boundary itself.**
+
+    ``CellMeasurement.from_payload`` applied bare ``int()`` to the three counts, which runs BEFORE
+    ``_checked`` ever sees the record — so a stored payload carrying ``peak_bytes: 9.9`` or ``true``
+    became a well-formed measurement on the way in. The cell-artifact round trip (publish a
+    malformed bank, attempt adoption, require re-measurement) is in the publication test file; this
+    is the boundary in isolation, including the cell IDENTITY, where a truncation would authorize a
+    DIFFERENT cell than the one measured.
+    """
+    payload = _measurement().as_payload()
+    for field, value in (
+        ("peak_bytes", 9.9),
+        ("peak_bytes", True),
+        ("capacity_bytes", "34359738368"),
+        ("reservation_failures", 0.9),
+        ("analysis_bytes", 9.9),
+        ("watermark_bytes", True),
+    ):
+        with pytest.raises(ValueError, match="not a recorded cell measurement"):
+            probe.CellMeasurement.from_payload({**payload, field: value})
+    for field in ("microbatch", "k_b"):
+        with pytest.raises(ValueError):
+            probe.FitCell.from_payload({**payload["cell"], field: 8.5})
+    # The honest payload still round-trips, unchanged.
+    assert probe.CellMeasurement.from_payload(payload).as_payload() == payload
+
+
 def test_a_reported_peak_above_the_bound_that_no_watermark_explains_is_refused_too():
     """The residue of the same fault. ``classify_peak`` reports ``max(runtime, analysis)``, so a
     peak above the analysis always has a watermark behind it -- unless the record was assembled

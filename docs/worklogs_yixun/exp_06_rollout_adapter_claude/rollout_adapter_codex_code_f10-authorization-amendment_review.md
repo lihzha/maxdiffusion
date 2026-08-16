@@ -35,3 +35,51 @@ Reviewer: codex gpt-5.6-sol, model_reasoning_effort=xhigh, 2026-08-16T~23:40Z. R
 Verification: the four touched non-launcher test files passed, **299 passed**. The full 2,313-test command collected all tests but this sandbox rejects Bash `/dev/fd` process substitution, producing **2,119 passed / 157 failed / 37 errors**, all in launcher execution. The same restriction prevented four legacy battery launcher probes from running; all F10-1..4 probes and all 13 controls passed. The battery still needs the missing-watermark, cross-trial-masking, and exact-analysis-headroom cases above.
 
 **REWORK**
+
+---
+
+# Focused re-review of F10b (4e264dc..1e5dda9) — same reviewer, 2026-08-16T~23:50Z
+
+(First invocation of this re-review was killed by the OpenAI-side cyber-risk filter on the prompt's adversarial phrasing — false positive on our own module's defensive review; re-issued with neutral wording, identical obligations.)
+
+
+1. **MODERATE — malformed count values can still be truncated and authorize a banked cell.**  
+   [pos_rollout_fit_probe.py:1186](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:1186), [pos_rollout_fit_probe.py:1238](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:1238)
+
+   Two executed residuals remain:
+
+   - `_exact_count` tests integrality after `float(value)`. A non-integral `Fraction` or `Decimal` of `81064793292668928.5` rounds to an integral float, is truncated to `81064793292668928`, and authorizes exactly at 90%, even though the original value satisfies `10a > 9c`.
+   - `CellMeasurement.from_payload` applies bare `int()` to `peak_bytes`, `capacity_bytes`, and `reservation_failures` before `_checked` sees them. Digest-valid bank artifacts containing `peak_bytes=9.9`, `peak_bytes=True`, or `reservation_failures=0.9` were loaded, adopted, republished, and accepted by `assert_cell_authorized`.
+   - Digit strings are also accepted and authorize. Ordinary `int` subclasses are correctly accepted; every tested negative count was refused.
+
+   **Concrete fix:** compare against the original numeric value without passing through `float`, explicitly reject strings/bytes and booleans, and use `_exact_count` directly in `from_payload` and serialization. For example, obtain `count = int(value)` and require `value == count`; this preserves legitimate integral subclasses while rejecting large fractional `Decimal`/`Fraction` values. Add an adopted-cell round-trip test, not only direct-dataclass tests.
+
+2. **MODERATE — a banked analysis disagreement permanently poisons retries.**  
+   [pos_rollout_fit_probe.py:1482](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:1482), [pos_rollout_fit_probe.py:2255](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:2255), [pos_rollout_fit_probe.py:2501](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:2501)
+
+   I published a cell artifact whose individually valid trials reported analyses 10 and 20. Two consecutive retries both adopted it successfully and then stopped at publication with `analysis_disagreement`. Thus the retry-robustness concern is concrete.
+
+   **Concrete fix:** retain the table-wide raise, but validate `aggregate_trials(artifact.trials)` before banking and while loading/adopting a banked cell. An inconsistent cached artifact should be rejected and remeasured rather than adopted into another guaranteed publication failure.
+
+## Original finding status
+
+- **Finding 1: CLOSED.** `watermark_missing` is unconditional. A cross-product of valid analysis, peak, capacity, source, and failure shapes produced zero authorizations without a watermark. F10b-1 also refused as expected.
+- **Finding 2: CLOSED for authorization correctness.** The first two original counterexamples raise `analysis_disagreement`; the missing-analysis pair aggregates to `analysis=None` and refuses. All-trial absence and a peak-only trial refuse with both missing-evidence reasons. Changing `watermark_before_bytes` never changed a verdict.
+- **Finding 3: NOT-CLOSED.** Exact integer headroom arithmetic and ordinary `9.9`/boolean direct records are fixed, but Finding 1 above leaves both a large-number direct truncation and the banked-record deserialization path.
+
+## Design ruling
+
+I accept **raising on analysis disagreement** rather than converting it to `analysis_missing`: disagreement means the claimed single executable did not produce stable evidence, and silently replacing two recorded values with “missing” loses that distinction. However, the bank must quarantine that artifact before adoption as described in Finding 2; otherwise the fail-closed choice becomes a permanent retry outage.
+
+## Protocol ruling
+
+A v8 bump is **not required** under the stated facts. Refusal reasons are derived, not trusted enum inputs, and loading requires byte-identical reconstruction. An old/new reader encountering a verdict affected by `watermark_missing` or exact headroom will reject the table rather than mis-authorize it. With no published v7 table requiring compatibility, retaining v7 is sufficient.
+
+## Verification
+
+- Focused pytest suite: **280 passed**.
+- Harness: all F10b attacks refused and **15/15 controls passed**. The four `SUCCEEDED` entries were exactly the known sandbox-blocked launcher probes; effective result is the expected 100 refused / 1 declared / 0 succeeded outside this sandbox.
+- `watermark == analysis`, standing-lifetime behavior, and v7 handling remain covered and passing.
+- Diff scope is seven declared files: production module, two tests, harness/README/log, and the prior review document. Binding, manifest, adoption-policy, trainer, and phase-bracketing code had no diff hunks.
+
+**Final verdict: REWORK**

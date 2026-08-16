@@ -475,7 +475,13 @@ class FitCell:
 
     @classmethod
     def from_payload(cls, payload: Mapping) -> "FitCell":
-        return cls(arm=str(payload["arm"]), microbatch=int(payload["microbatch"]), k_b=int(payload["k_b"]))
+        # F10c: EXACT, like every other count read off a stored payload. A truncated identity is
+        # worse than a truncated number -- `microbatch: 8.5` would name, and authorize, cell 8.
+        return cls(
+            arm=str(payload["arm"]),
+            microbatch=_exact_count(payload["microbatch"], "a cell's microbatch"),
+            k_b=_exact_count(payload["k_b"], "a cell's horizon"),
+        )
 
 
 def ladder(
@@ -1164,9 +1170,11 @@ class CellMeasurement:
             "step_seconds": float(self.step_seconds),
             "eval_seconds": float(self.eval_seconds),
             "checkpoint_seconds": float(self.checkpoint_seconds),
-            "peak_bytes": int(self.peak_bytes),
-            "capacity_bytes": int(self.capacity_bytes),
-            "reservation_failures": int(self.reservation_failures),
+            # F10c: exact on the way OUT as well as on the way in -- serializing a malformed count
+            # as a rounded one is how a record that never parsed becomes a record that does.
+            "peak_bytes": _exact_count(self.peak_bytes, "the per-device peak"),
+            "capacity_bytes": _exact_count(self.capacity_bytes, "the device capacity"),
+            "reservation_failures": _exact_count(self.reservation_failures, "reservation failures"),
             "analysis_bytes": _optional_bytes(self.analysis_bytes),
             "watermark_bytes": _optional_bytes(self.watermark_bytes),
             "watermark_before_bytes": _optional_bytes(self.watermark_before_bytes),
@@ -1174,7 +1182,15 @@ class CellMeasurement:
 
     @classmethod
     def from_payload(cls, payload: Mapping) -> "CellMeasurement":
-        """Deserialize a recorded measurement so its verdict can be RECOMPUTED on load (LS-5)."""
+        """Deserialize a recorded measurement so its verdict can be RECOMPUTED on load (LS-5).
+
+        **F10c, review MODERATE (b): the counts are parsed EXACTLY here, not coerced.** These three
+        used bare ``int()``, which runs BEFORE :func:`_checked` ever sees the record — so a
+        digest-valid banked artifact carrying ``peak_bytes: 9.9``, ``peak_bytes: true`` or
+        ``reservation_failures: 0.9`` was silently rounded into a well-formed measurement and went
+        on through load -> adopt -> republish -> ``assert_cell_authorized``. The strictness has to
+        live at the deserialization boundary, because that is the boundary a stored payload crosses.
+        """
         try:
             return cls(
                 cell=FitCell.from_payload(payload["cell"]),
@@ -1183,9 +1199,11 @@ class CellMeasurement:
                 step_seconds=float(payload["step_seconds"]),
                 eval_seconds=float(payload["eval_seconds"]),
                 checkpoint_seconds=float(payload["checkpoint_seconds"]),
-                peak_bytes=int(payload["peak_bytes"]),
-                capacity_bytes=int(payload["capacity_bytes"]),
-                reservation_failures=int(payload["reservation_failures"]),
+                peak_bytes=_exact_count(payload["peak_bytes"], "the recorded per-device peak"),
+                capacity_bytes=_exact_count(payload["capacity_bytes"], "the recorded device capacity"),
+                reservation_failures=_exact_count(
+                    payload["reservation_failures"], "the recorded reservation failures"
+                ),
                 peak_source=str(payload["peak_source"]),
                 # REQUIRED keys, nullable values. The protocol version is what keeps a v5 artifact
                 # out of here; inside a v6 artifact, an absent audit field is a truncated record
@@ -1232,20 +1250,30 @@ def _exact_count(value, what: str) -> int:
 
     ``bool`` is rejected explicitly because it IS an ``int`` in Python: ``True`` would otherwise
     parse as one byte, which is a claim nobody made about anything.
+
+    **F10c, review MODERATE (a): the integrality test is against the ORIGINAL value, with no float
+    round trip.** F10b tested ``float(value).is_integer()``, and ``float`` is where the precision
+    goes: ``Fraction(162129586585337857, 2)`` — a genuinely fractional count — rounds to an integral
+    float, truncates, and the truncated number authorizes at exactly 90% while the true one is over
+    it. ``value == count`` is exact for ``int``, ``Fraction`` and ``Decimal`` alike, and it still
+    admits the legitimate cases (an ``int`` subclass, a numpy integer, an integral float).
+    ``str``/``bytes`` are rejected outright: ``int("9")`` parses, and a digit string is a record
+    written by something that was not this probe.
     """
     if isinstance(value, bool):
         raise ValueError(f"{what} is a byte count, not a flag; got {value!r}")
-    if not isinstance(value, int):
-        try:
-            number = float(value)
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"{what} is a whole number of bytes; got {value!r} ({error})") from error
-        if not math.isfinite(number) or not number.is_integer():
-            raise ValueError(
-                f"{what} is a WHOLE number of bytes; got {value!r}, and truncating it toward zero is how a "
-                f"record that does not fit acquires a number that does"
-            )
-    return int(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        raise ValueError(f"{what} is a number, not text; got {value!r}")
+    try:
+        count = int(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError(f"{what} is a whole number of bytes; got {value!r} ({error})") from error
+    if value != count:
+        raise ValueError(
+            f"{what} is a WHOLE number of bytes; got {value!r}, and truncating it toward zero is how a "
+            f"record that does not fit acquires a number that does"
+        )
+    return count
 
 
 def _optional_bytes(value) -> int | None:
@@ -2320,6 +2348,12 @@ def publish_cell(marker_path: str, artifact: CellArtifact) -> dict:
     """
     if not isinstance(artifact, CellArtifact):
         raise ValueError(f"publish_cell takes a CellArtifact, not {type(artifact).__name__}")
+    # F10c, review MODERATE 2 -- BANKING SIDE OF THE QUARANTINE. A cell whose trials do not
+    # aggregate is a cell no table can be published from, so it must not enter the bucket: the run
+    # that measured it is going to stop at `build_evidence` with the same message either way, and
+    # stopping HERE keeps the next attempt's adoption root clean. The adoption side (which cannot
+    # raise, because adoption may never end a ladder) is in `_adoption_refusal`.
+    aggregate_trials(artifact.trials)
     payload = artifact.as_payload()
     digest = _digest(payload)
     if storage_exists(marker_path):
@@ -2448,7 +2482,26 @@ def adoption_candidates(
 
 
 def _adoption_refusal(artifact: CellArtifact, *, cell: FitCell, context: ProbeContext, job_identity: str, trials: int):
-    """Why THIS process may not use that artifact — or ``""`` if it may. Every branch re-measures."""
+    """Why THIS process may not use that artifact — or ``""`` if it may. Every branch re-measures.
+
+    **F10c, review MODERATE 2 — THE QUARANTINE.** The reviewer banked a cell whose two trials are
+    each individually valid and report analyses of 10 and 20 GiB, and watched two consecutive
+    retries ADOPT it and then die at ``build_evidence`` with ``analysis_disagreement``: issue #10's
+    permanent wedge, made concrete, because the poison is in the cache the retry reads. The
+    table-wide raise stays (a disagreement means the single executable this cell claims to be did
+    not produce stable evidence, and no table can be published from it) — but a CACHED artifact that
+    cannot aggregate is refused for adoption here, which turns a permanent outage into one extra
+    measurement. The banking side of the same rule is in :func:`publish_cell`, where it may raise;
+    this side never can, because adoption is an optimization that must never end a ladder.
+    """
+    try:
+        aggregate_trials(artifact.trials)
+    except ValueError as error:
+        return (
+            f"its trials do not aggregate ({str(error).splitlines()[0][:150]}). A cached cell that cannot be "
+            f"collapsed into one measurement would fail every publication that adopted it, so it is quarantined "
+            f"and this cell is re-measured instead"
+        )
     if artifact.cell != cell:
         return f"it records {artifact.cell} and this is {cell}"
     if str(artifact.job_identity) != str(job_identity):

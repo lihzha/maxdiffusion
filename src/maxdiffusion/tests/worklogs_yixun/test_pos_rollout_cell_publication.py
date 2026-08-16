@@ -1062,6 +1062,100 @@ def test_the_retired_two_object_scheme_really_did_tear(tmp_path):
     assert probe.load_cell_artifact(marker).trials[0].step_seconds == 25.347
 
 
+def test_a_banked_cell_whose_trials_DISAGREE_is_QUARANTINED_and_re_measured(tmp_path, capsys):
+    """**F10c, review MODERATE 2 — issue #10's wedge, made concrete and then closed.**
+
+    F10b refuses to publish a table whose trials disagree about the cell's compiled analysis (one
+    executable measured twice has one account of its footprint). The reviewer then banked exactly
+    that artifact — two individually valid trials reporting 10 and 20 GiB — and watched two
+    consecutive retries ADOPT it and die at publication with ``analysis_disagreement``: the poison
+    lives in the cache the retry reads, so every attempt after it fails identically and forever.
+
+    The table-wide raise stays. What changes is that a CACHED artifact which cannot aggregate is
+    refused for adoption, which converts a permanent outage into one extra measurement.
+    """
+    published = _publish_one(tmp_path)
+    _damage(published, lambda payload: payload["trials"][1].update(analysis_bytes=10 * 1024**3))
+    assert probe.load_cell_artifact(published), "the artifact itself is still well-formed and digest-valid"
+
+    measurer, table = _resume(tmp_path)
+    assert len(measurer.calls) == 2, "the poisoned cell is MEASURED, not adopted"
+    printed = capsys.readouterr().out
+    assert "not adopting" in printed and "do not aggregate" in printed, printed
+    assert len(table["authorized_cells"]) == 1, "and the retry publishes a table instead of dying"
+
+    # ...and the cost is ONE extra measurement, not one per attempt forever: the retry banked a
+    # clean artifact of its own, and the attempt after it adopts that one rather than the poison.
+    again, table = _resume(tmp_path, attempt="att-3")
+    assert again.calls == [], "the third attempt adopts the clean cell the second one banked"
+    assert len(table["authorized_cells"]) == 1
+    assert any(row["provenance"].startswith(probe.ADOPTED_PREFIX) for row in table["cell_provenance"])
+
+
+def test_banking_REFUSES_to_write_a_cell_whose_trials_do_not_aggregate(tmp_path):
+    """The other half of the quarantine: this probe never puts such an artifact in the bucket.
+
+    The run that measured it is going to stop at ``build_evidence`` with the same message either
+    way, so stopping at banking costs nothing and keeps the next attempt's adoption root clean.
+    """
+    context = _context()
+    cell = probe.FitCell("rollout", 8, 2)
+    marker = probe.cell_marker_path(_attempt(tmp_path, "att-bank"), cell)
+    artifact = probe.CellArtifact(
+        cell=cell,
+        context=context,
+        job_identity=_RUN,
+        trials=(
+            _measurement(context, cell),
+            dataclasses.replace(_measurement(context, cell), analysis_bytes=10 * 1024**3),
+        ),
+    )
+    with pytest.raises(ValueError, match="analysis_disagreement"):
+        probe.publish_cell(marker, artifact)
+    assert not Path(marker).exists(), "nothing was banked, so nothing can be adopted from it"
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("peak_bytes", 9.9),
+        ("peak_bytes", True),
+        ("capacity_bytes", 32.5 * 1024**3 + 0.5),
+        ("reservation_failures", 0.9),
+        ("analysis_bytes", 20 * 1024**3 + 0.5),
+    ],
+)
+def test_a_banked_cell_carrying_a_MALFORMED_count_is_not_adopted(tmp_path, capsys, field, value):
+    """**F10c, review MODERATE (b), as the ROUND TRIP the reviewer asked for.**
+
+    ``CellMeasurement.from_payload`` used bare ``int()`` on the three counts, which runs before
+    ``_checked`` ever sees the record — so a digest-valid banked artifact carrying ``peak_bytes:
+    9.9`` or ``true`` was rounded into a well-formed measurement and travelled load -> adopt ->
+    republish -> ``assert_cell_authorized``. Parsing is exact now, so the artifact does not load at
+    all, adoption logs it and the cell is measured instead. (A negative count was already refused
+    and still is — the case below the parametrisation.)
+    """
+    published = _publish_one(tmp_path)
+    _damage(published, lambda payload: payload["trials"][0].update({field: value}))
+    with pytest.raises(ValueError):
+        probe.load_cell_artifact(published)
+
+    measurer, table = _resume(tmp_path)
+    assert len(measurer.calls) == 2, "a malformed banked count is re-measured, never rounded"
+    assert "not adopting" in capsys.readouterr().out
+    assert len(table["authorized_cells"]) == 1
+    for recorded in table["measurements"]:
+        assert isinstance(recorded["peak_bytes"], int) and not isinstance(recorded["peak_bytes"], bool)
+
+
+def test_a_banked_cell_carrying_a_NEGATIVE_count_is_still_not_adopted(tmp_path):
+    """The case F10b already refused, kept as a test because F10c rewrote the parser around it."""
+    published = _publish_one(tmp_path)
+    _damage(published, lambda payload: payload["trials"][0].update(analysis_bytes=-1))
+    with pytest.raises(ValueError, match="non-negative"):
+        probe.load_cell_artifact(published)
+
+
 def test_the_accepted_residual_a_bucket_writer_can_forge_a_cell(tmp_path):
     """**This test asserts a WEAKNESS, deliberately, so that it cannot be forgotten or overstated.**
 

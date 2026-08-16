@@ -3538,6 +3538,75 @@ def attack_f10b_round_the_headroom_boundary_down(tmp):
 
 
 # =================================================================================================
+# Round F10c — the two residuals the F10b review executed: a malformed count that survived the
+# deserialization boundary, and a poisoned BANK that wedged every retry.
+# =================================================================================================
+
+
+def attack_f10c_poison_the_bank_forever(tmp):
+    """Bank a cell whose trials disagree, then retry twice: issue #10's wedge, made concrete.
+
+    Review MODERATE 2. F10b refuses to publish a table whose trials disagree about the cell's own
+    compiled analysis — correct, and the reviewer then put exactly that artifact in the CACHE the
+    retry reads: two consecutive attempts adopted it and died at ``build_evidence``, forever. The
+    fix keeps the table-wide raise and quarantines the artifact instead: an inconsistent cached cell
+    is refused for adoption and re-measured, so the outage costs one measurement, not the campaign.
+    """
+    fp = _probe_env()
+    published = _f5_publish(fp, tmp, "poison")
+    _f5_edit(published, lambda payload: payload["trials"][1].update(analysis_bytes=10 * 1024**3))
+    try:
+        calls, table = _f5_resume(fp, tmp, "poison")
+    except ValueError as error:
+        return f"SUCCEEDED: the retry DIED on a cached artifact instead of re-measuring it: {str(error)[:110]}"
+    if not calls:
+        return "SUCCEEDED: an artifact whose trials cannot be aggregated was adopted"
+    if not table.get("authorized_cells"):
+        return f"SUCCEEDED: the retry published nothing usable ({table.get('refused_cells')})"
+    # ...and the attempt AFTER the repair adopts the clean cell the retry banked, so the cost is one
+    # measurement rather than one per attempt.
+    try:
+        again, _ = _f5_resume(fp, tmp, "poison", attempt="att-3")
+    except ValueError as error:
+        return f"SUCCEEDED: the third attempt died on the quarantined artifact: {str(error)[:110]}"
+    if again:
+        return f"SUCCEEDED: the quarantine is not self-healing -- attempt 3 re-measured {len(again)} trials again"
+    return f"REFUSED: the poisoned cell was quarantined and re-measured ({len(calls)} trials), then adopted clean"
+
+
+def attack_f10c_bank_a_malformed_count(tmp):
+    """A digest-valid banked artifact carrying ``peak_bytes: 9.9`` / ``true`` / a digit string.
+
+    Review MODERATE (b). ``CellMeasurement.from_payload`` coerced the three counts with bare
+    ``int()`` BEFORE ``_checked`` saw them, so the reviewer loaded these artifacts through
+    load -> adopt -> republish -> ``assert_cell_authorized``. Parsing is exact now, so the artifact
+    does not load, adoption logs it, and the cell is measured instead of rounded.
+    """
+    fp = _probe_env()
+    survivors = []
+    for index, (name, mutation) in enumerate(
+        (
+            ("peak_bytes 9.9", {"peak_bytes": 9.9}),
+            ("peak_bytes true", {"peak_bytes": True}),
+            ("reservation_failures 0.9", {"reservation_failures": 0.9}),
+            ("analysis_bytes as text", {"analysis_bytes": "21474836480"}),
+        )
+    ):
+        slot = f"malformed{index}"
+        published = _f5_publish(fp, tmp, slot)
+        _f5_edit(published, lambda payload, m=mutation: payload["trials"][0].update(m))
+        try:
+            calls, table = _f5_resume(fp, tmp, slot)
+        except ValueError:
+            continue  # refused on the way in, which is a refusal of this attack
+        if not calls:
+            survivors.append(f"{name}: adopted without measurement ({table['measurements'][0]['peak_bytes']})")
+    if survivors:
+        return f"SUCCEEDED: {'; '.join(survivors)}"
+    return "REFUSED: every malformed banked count is refused at parse and the cell is re-measured"
+
+
+# =================================================================================================
 # Round F8b — THE HONEST CONTROLS, executed by the battery itself (review F8b, MAJOR 2).
 #
 # Every one of these points production at the LEGITIMATE case and requires it to be ACCEPTED. They
@@ -3867,6 +3936,28 @@ def control_two_agreeing_trials_authorize(tmp):
     return "CONTROL-PASSED: two agreeing trials aggregate to one authorized cell, worst mark kept"
 
 
+def control_a_consistent_banked_cell_still_adopts(tmp):
+    """F10c's honest case, and the one the quarantine could have broken: **banking still works.**
+
+    The adoption path now validates that a cached artifact's trials aggregate. If that check were
+    wrong — or if banking refused to write a perfectly good cell — every restart would re-measure
+    the whole ladder and F5's entire reason for existing would be gone, silently, behind two green
+    refusals above.
+    """
+    fp = _probe_env()
+    _f5_publish(fp, tmp, "adoptcontrol")
+    try:
+        calls, table = _f5_resume(fp, tmp, "adoptcontrol")
+    except ValueError as error:
+        return f"CONTROL-REFUSED: a consistent banked cell could not be resumed at all -- {str(error)[:110]}"
+    if calls:
+        return f"CONTROL-REFUSED: a consistent banked cell was re-measured ({len(calls)} trials)"
+    adopted = [row for row in table["cell_provenance"] if row["provenance"].startswith(fp.ADOPTED_PREFIX)]
+    if not adopted or not table["authorized_cells"]:
+        return f"CONTROL-REFUSED: nothing was adopted or nothing authorized ({table['cell_provenance']})"
+    return "CONTROL-PASSED: a consistent banked cell is still adopted without measurement, and still authorizes"
+
+
 def control_exactly_ninety_percent_authorizes(tmp):
     """F10b's boundary on the other side: the headroom rule did not get stricter, only exact.
 
@@ -4013,5 +4104,8 @@ if __name__ == "__main__":
         _report("F10b-4 fractional byte counts ", attack_f10b_fractional_bytes, tmp)
         _report("F10b-5 round the boundary down", attack_f10b_round_the_headroom_boundary_down, tmp)
         _control("  ctrl exactly 90% authorizes :", control_exactly_ninety_percent_authorizes, tmp)
+        _report("F10c-1 poison the bank forever", attack_f10c_poison_the_bank_forever, tmp)
+        _report("F10c-2 bank a malformed count ", attack_f10c_bank_a_malformed_count, tmp)
+        _control("  ctrl consistent bank adopts :", control_a_consistent_banked_cell_still_adopts, tmp)
     if not _summarize():
         raise SystemExit(1)
