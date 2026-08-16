@@ -603,3 +603,18 @@ tpu create v6 -n 64 --name exp03-c-lr5e5-20k-yixun ... -- bash bash_scripts/trai
 - **Cost estimate:** 0.299 steps/s measured (Job 18 fit smoke; combined + N=2 accumulation) → **~18.6 h** compute; Orbax resume from listed checkpoints on preemption.
 - **Deliverables (post-training, ~3 hand-offs):** instrument job over all 10 checkpoints (val-loss curve; fixed-RNG one-step loss on the same 1,629 windows — no held-out set exists in this design); canonical-100 SSIM x 10 checkpoints (SSIM-vs-steps); full-set 1,629 metrics @20k -> rank -> videos for best/75th/median/25th/worst; train-loss curve from W&B. Figures local.
 - **Note:** this is a post-closure follow-on run under exp_03's certified code (af29d5a), NOT a reopening of exp_03's adjudicated gates; comparator context = exp_02's 20k trajectory (canonical 0.9536 @20k via lr1e4 escalation path).
+
+### Job 26 FAILED (2026-08-16T21:14Z) — keyless wandb.init killed the pod; fix + Job 26b prepared
+
+Attempt 1 died 17 min in: the process-0 worker (worker 8) reached `wandb.init` and raised
+`wandb.errors.UsageError: No API key configured` — the v6-64 worker image provisions NO
+WANDB_API_KEY and our submission forwarded none (only WANDB_PROJECT). Process 0 died; the other 15
+hosts timed out at the shutdown barrier (exit 134, "1/16 reached"). NOT the historical barrier-134
+infra pattern — an application failure with a clean root cause. No training step ran, no checkpoint
+written, W&B shows nothing anywhere (Yixun asked; this is the answer).
+
+**Two fixes:** (1) `83d3302` — forward-key guard in `train_wan_exp03.sh` (forwarded WANDB_API_KEY
+survives worker-secrets sourcing; exp_02 cc6e3a1 pattern). (2) Job 26b submit script sources
+Yixun's local secrets and passes `--env WANDB_API_KEY`, so the run lands under HIS entity
+(the new-launcher behavior). Guards: src pinned unchanged since af29d5a; bash_scripts pinned at
+83d3302. All training parameters identical to Job 26. Awaiting Yixun's `!` resubmission.
