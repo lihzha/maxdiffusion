@@ -230,3 +230,26 @@ fix that sources a true runtime peak (per-device memory stats read inside the st
 allocation watermark), then a resubmit — the bank will adopt all 12 measured cells' timings, so only
 re-measurement of peaks under the new instrument is at stake. Recorded by the exp_02 session, which
 monitored this job.
+
+### M1-9 adjudication escalated (owning session, 2026-08-16T~21:40Z) — PLAN-AMENDMENT DECISION → Yixun
+
+The exp_02 session's outcome entry above is adopted as the measured record. Owning-session diagnosis
+goes one step further than "instrument gap": the authorization design is **unsatisfiable in the
+common case** — three individually-reviewed rules (peak = max(watermark, analysis); peak_source
+names the origin of the max; the floor authorizes only runtime-sourced peaks) jointly imply
+authorization can occur ONLY when the compile analysis UNDERestimates true usage. On hardware the
+PJRT watermark (4.2–4.9 GiB) never sees XLA's temp arena while analysis (10–30 GiB) is an upper
+bound, so analysis wins the max everywhere and every cell refuses by construction. CPU fakes were
+built with watermark > analysis, so no test could see it; coder + 3 Codex passes missed the joint
+implication. Evidence consistent with analysis-as-upper-bound: rollout m8 (analysis 30.18 GiB,
+96.6% cap) ran with reservation_failures=0 at watermark 4.87 GiB.
+
+Because plan v2.8 §4-P1 predeclared *runtime* evidence as the authorization requirement, changing
+that requirement is a plan amendment — **Yixun's call (announcement 03), not a fix round**. Options
+delivered: **(A, recommended)** authorize on compiled-memory-analysis as conservative upper bound
+(headroom errs safe; watermark recorded + cross-check watermark ≤ analysis, violation = refuse);
+under A the banked table authorizes 10/16 cells (both arms at mb=16 included — M2 unblocked) and
+refuses rollout mb=8 on genuine headroom (96.6% > 90%); F10 = classify/floor change + tests + one
+Codex pass + M1-10 resubmit adopting all 12 banked cells (~cheap, re-derivation only).
+**(B)** investigate libtpu-level metrics that see the temp arena (unknown cost/feasibility on
+jax 0.10.2). **(C)** A now + B as background hardening. Awaiting Yixun.
