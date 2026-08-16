@@ -157,3 +157,11 @@ across attempts.
 
 **Blocked at submission:** the lab queue's central scheduler has been down since 2026-08-13T21:41Z
 (issue #19) — this job is `PENDING` and will not start until it is restarted. Three jobs now wait on it.
+
+**OUTCOME — M1-8 FAILED at the setup barrier, zero cells measured (2026-08-16T00:57Z).** Worker 0 finished
+setup, then waited 1800 s for a second worker that never booted (`Setup barrier progress: 1/2 workers`;
+only `worker-0.log` and `setup-ready/worker-0` exist) and exited `SETUP_ERROR` / non-retryable. Cause is
+lab-side: `v6-8` is now declared **2 workers** but provisions one — issue #22; the identical failure hit
+exp_02's Job 53 in the same minute, while v6-64 jobs cleared setup the same day. **The F9 runtime-peak code
+was never exercised** — this says nothing about the fix. Resubmit unchanged (`submit_m1g.sh`, RULED
+`7f23ac3`) once the resource config is repaired; the empty bank means nothing was lost.
