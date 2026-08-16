@@ -580,3 +580,26 @@ collided with "gs://" URLs (third shell-quoting incident this experiment; rule r
 loops must never colon-split, and every submission's env block is now spelled explicitly). All 7
 failed fast and were relaunched individually: {'cinst2': '20260808-181438-e25ac804-exp03-c-inst2-yixun', 'cssim3': '20260808-181559-cded0c2e-exp03-c-ssim3-yixun', 'lam25inst2': '20260808-181648-6db3ea6b-exp03-lam25-inst2-yixun', 'lam75inst2': '20260808-181757-fe412acf-exp03-lam75-inst2-yixun', 'lam25ssim2': '20260808-181840-e6213b6f-exp03-lam25-ssim2-yixun', 'lam75ssim2': '20260808-181946-d2944540-exp03-lam75-ssim2-yixun', 'aextssim2': '20260808-182023-0f183bc0-exp03-aext-ssim2-yixun'}. A-ext instrument (solo-launched, correct)
 LANDED: 12,500 anchor 0.1186258 (must equal 0.1186258 — VALID), 15,000 0.1164789, 17,500 0.1153891.
+
+## Job 26 — POST-CLOSURE FOLLOW-ON (Yixun 2026-08-16): C @ LR 5e-5, 20k from init — launched 2026-08-16T20:46Z
+
+**Yixun's direct request** (post-closure follow-on, motivated by the exp_02 VAE-ceiling/plateau
+discussion): objective **C (combined, lambda=0.5)** from init at **LR 5e-5**, **20,000 steps**,
+GBS 256, train100 (1,629 windows / 100 slots), W&B on. Approved in-conversation; submitted by
+Yixun via `!` (session TPU submissions classifier-blocked).
+
+```
+tpu create v6 -n 64 --name exp03-c-lr5e5-20k-yixun ... -- bash bash_scripts/train_wan_exp03.sh
+  RUN_NAME=wan-exp03-c-lr5e5-20k-20260816
+  EXP03_OBJECTIVE=combined EXP03_LAMBDA=0.5 EXP03_K_A=2 EXP03_K_B=2
+  EXP03_P_SS_MAX=0.5 EXP03_P_SS_RAMP_STEPS=500 EXP03_RAMP_ORIGIN=0 EXP03_GRAD_ACCUMULATION=2
+  LEARNING_RATE=5e-5 WARMUP_STEPS=250 MAX_TRAIN_STEPS=20000
+  CHECKPOINT_STEPS=[250,1000,2500,5000,7500,10000,12500,15000,17500,20000]
+  DATA_DIR=gs://v6_east1d/datasets/exp02_overfit100/train100 EXPECTED_WINDOWS=1629 NUM_TEXT_SLOTS=100
+  WANDB_PROJECT=maxdiffusion-wan-overfit100 COMMIT=005d188 (tip; last code commit af29d5a, guard-verified)
+```
+
+- **Job id:** `20260816-204616-dae49225-exp03-c-lr5e5-20k-yixun` (v6e-64). Spec env verified in-bucket post-submit.
+- **Cost estimate:** 0.299 steps/s measured (Job 18 fit smoke; combined + N=2 accumulation) → **~18.6 h** compute; Orbax resume from listed checkpoints on preemption.
+- **Deliverables (post-training, ~3 hand-offs):** instrument job over all 10 checkpoints (val-loss curve; fixed-RNG one-step loss on the same 1,629 windows — no held-out set exists in this design); canonical-100 SSIM x 10 checkpoints (SSIM-vs-steps); full-set 1,629 metrics @20k -> rank -> videos for best/75th/median/25th/worst; train-loss curve from W&B. Figures local.
+- **Note:** this is a post-closure follow-on run under exp_03's certified code (af29d5a), NOT a reopening of exp_03's adjudicated gates; comparator context = exp_02's 20k trajectory (canonical 0.9536 @20k via lr1e4 escalation path).
