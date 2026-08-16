@@ -53,6 +53,10 @@ WAN_EXPERIMENT="${WAN_EXPERIMENT:-pre_context}"
 TPU_CHIPS="${TPU_CHIPS:-64}"
 
 MODEL_DIR="Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+# What actually goes out as `--env MODEL_DIR`. Identical to MODEL_DIR for every arm except
+# overfit100, which must receive it EMPTY -- see the overfit100 override block for why.
+# (MODEL_DIR itself stays the repo id because SETUP_CMD's prefetch takes a repo id.)
+SUBMIT_MODEL_DIR="$MODEL_DIR"
 TRAIN_DATA_DIR="gs://v6_east1d/datasets/droid_wan_side_adapter/train"
 EVAL_DATA_DIR="gs://v6_east1d/datasets/droid_wan_side_adapter/val"
 
@@ -151,6 +155,16 @@ fi
 # forwarded (the campaign's Jobs 9-51 all ran this shape). SAVE_FINAL_CHECKPOINT=False
 # matches the wrapper's own default: the segment end is always IN the step list.
 if [ "$WAN_EXPERIMENT" = "overfit100" ]; then
+  # MODEL_DIR MUST reach the wrapper EMPTY (2026-08-16 fix; jobs 20260814-035533 / -154948 died
+  # here). train_wan_overfit100.sh resolves MODEL_DIR itself, from the LOCAL cache only, to the
+  # snapshot dir of the revision PINNED IN THE MANIFEST (`.../snapshots/<sha>/`), and then refuses
+  # any path not carrying that sha -- the guard that stops a mutable hub default from silently
+  # swapping the transformer or the T5 that builds the context table. Its resolution block is
+  # `if [ -z "${MODEL_DIR:-}" ]`, so forwarding the bare repo id SKIPS the resolution and then
+  # trips the guard. The campaign's hand-rolled `tpu create` blocks never passed MODEL_DIR at all;
+  # this reproduces that. SETUP_CMD's prefetch still uses the repo id via MODEL_DIR, and the
+  # wrapper re-prefetches at the pinned revision anyway.
+  SUBMIT_MODEL_DIR=""
   DATA_DIR="${DATA_DIR:-gs://v6_east1d/datasets/exp02_overfit100/train100}"
   EVAL_DATA_DIR="$DATA_DIR"
   EXPECTED_WINDOWS="${EXPECTED_WINDOWS:-1629}"
@@ -254,7 +268,7 @@ SUBMIT=( tpu create v6 -n "$TPU_CHIPS"
   --env TRAIN_DATA_DIR="$TRAIN_DATA_DIR"
   --env EVAL_DATA_DIR="$EVAL_DATA_DIR"
   --env OUTPUT_DIR="$OUTPUT_DIR"
-  --env MODEL_DIR="$MODEL_DIR"
+  --env MODEL_DIR="$SUBMIT_MODEL_DIR"
   --env PRE_CONTEXT_TOKENS="8"
   --env PRE_CONTEXT_HEADS="8"
   --env SIDE_ADAPTER_NOISE_MODE="fresh"
