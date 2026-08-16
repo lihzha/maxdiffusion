@@ -166,3 +166,11 @@ Side-adapter (~240M) and earlier pre-context history: see `docs/side_adaptor.md`
 - **Cross-check CLEAN:** recomputed per-clip future-SSIM matches published `gate_tables.json` within fp16-storage tolerance (max |Δ| 0.052); provenance binds J1-4 `3bdbd2a` / K1-2 `bb845ea`. 8-clip means: a2 0.469, a1_probe 0.167, b1 0.923, b2 0.178, b1_probe 0.439.
 - **Deviation (recorded, exp_05 worklog 2026-08-09):** rendered subset = 8 *lowest-ordinal* DEV clips, not J1-4's first-8-by-manifest-row (the record `ordinal` is a global dataset ordinal). Overlap with the A1 videos: ep12399/ep19599/ep21099. Optional cheap follow-up: row-order re-render — Yixun's call.
 - **No gate implications:** both experiments' STOPs stand; this is visualization only. Next step: fold into the P4/P4′ HTML reports.
+
+## exp_02 relaunch attempt via the unified launcher — 2026-08-14 → 16 (FAILED, fixed, relaunch pending)
+
+- **Purpose:** end-to-end validation of (a) `launch_wan_train.sh`'s new `WAN_EXPERIMENT=overfit100` arm and (b) the W&B fix — a fresh-from-base repeat of the S3 recipe. **No scientific claim rides on it**; exp_02's verdict (`partial`, 69/100 ≥ 0.95 @ 20k) is unchanged.
+- **Two jobs, both FAILED 2026-08-16T00:32Z:** `20260814-035533-1ef9f34c` (tip `77184a4`) and a duplicate `20260814-154948-a8db04d4` (tip `fdd0bc5`). Both sat un-ingested 45 h / 33 h behind the scheduler outage (#19), then died ~3 min in on **#22** — the launcher forwarded `MODEL_DIR` to a wrapper that must resolve it itself against the manifest-pinned revision. The wrapper's guard behaved exactly as designed; the launcher fed it wrong.
+- **Fixed** in `42c7035` (`SUBMIT_MODEL_DIR`, empty for the overfit100 arm; DRY_RUN-verified across all arms). **Unverified on hardware — relaunch needs Yixun's approval** (code changed since the last one).
+- **W&B acceptance is still unmeasured:** the runs never reached `wandb.init`. Both worker logs do confirm the submitted env was otherwise right, including `WANDB_PROJECT=maxdiffusion-wan-overfit100` and the forwarded key — the two things that were broken before (see the 2026-08-13 W&B correction above).
+- **Relaunch command (from the exp_02 worktree, after `source ~/.config/irom-tpu/secrets.env`):** `WAN_EXPERIMENT=overfit100 bash bash_scripts/launch_wan_train.sh`.
