@@ -763,3 +763,19 @@ cd ~/Home/maxdiffusion-worktrees/claude-exp_02_overfit100 && source ~/.config/ir
 - **Standing:** launcher arm + W&B plumbing are validated end to end. **No scientific claim** — exp_02's
   formal verdict (`partial`, 69/100 ≥ 0.95 @ 20k) is unchanged; the D2 instrument remains the
   authoritative loss record for analysis.
+
+**OUTCOME — Job 54 SUCCEEDED (2026-08-16T16:59:59Z, JOB_EXIT=0): the 20k comparison videos exist.**
+Resubmission of Job 53 after issue #22 was repaired (v6-8 back to 1 worker; the run logged
+`All 1 workers completed setup`). Artifact root — deliberately isolated from the verdict evidence:
+`gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-overfit100/wan-overfit100-s3ext-lr1e4-20260804/validation_videos/step_020000_s3_intermediate/`
+(now `_PUBLISHED` in its own tree; `validation/step_020000_*` untouched).
+
+**Acceptance — all four checks pass:**
+- `role_validation: true`, role `s3_intermediate`, 100 rows, 0 canonical windows uncovered;
+- **100** `comparison_gt_top_pred_bottom.mp4` (plus `ground_truth.mp4` / `sample.mp4` / `metrics.json` per window);
+- **validity: seed-0 correct mean SSIM = 0.9536 and 67/100 ≥ 0.95 — reproducing Job 49's landed values exactly.**
+  The 1-worker topology change did not perturb the recipe.
+- Extremes at 20k: best `ep22546_v0_s00020` 0.9793 · worst `ep34212_v0_s00000` 0.8721.
+
+Delivered to Yixun: pull commands for the five 10k-ranked representative windows (worst/25th/median/75th/best)
+plus the 20k best and 20k worst, so 10k↔20k comparisons use the same clips.
