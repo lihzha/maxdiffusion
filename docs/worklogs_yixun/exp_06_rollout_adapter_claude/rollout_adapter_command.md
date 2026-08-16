@@ -185,3 +185,12 @@ config or cell-list change.
   (rollout mb 16/32/64 + one_step mb 8/16, × k∈{2,4}); `rollout mb=8` expected to refuse on genuine
   headroom; 4 EXCLUDED. **The F9 runtime-peak code has never been exercised on hardware** — M1-8 died
   before reaching it, so this run is its first real test.
+
+**Duplicate-submission note (2026-08-16T16:35Z).** Two identical fit-probe jobs briefly existed: the exp_02
+session submitted M1-9 (`20260816-163233-09339cf7`, COMMIT `768eeb9`) at 16:32:33Z on Yixun's instruction,
+and this session submitted `20260816-163416-c29777f8` (COMMIT `8aa86cb`) 103 s later, having independently
+verified the v6-8 repair on hardware. The two specs are equivalent — same RUN_NAME `exp06-m1-fitprobe`,
+same adoption root, same exclusion list; the COMMIT labels differ only by docs commits, and under F7 the
+binding is the running bytes, so both would adopt each other's banked cells. **This session cancelled its
+own later duplicate**; M1-9 is the canonical run. Cross-session lesson: with one experiment lane reachable
+from two sessions, check `gsutil ls gs://v6_east1d/tpu-job-queue/jobs/ | grep <name>` before submitting.
