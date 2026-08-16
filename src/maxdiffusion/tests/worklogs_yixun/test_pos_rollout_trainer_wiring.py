@@ -331,7 +331,13 @@ def _authorize(config, *, microbatch=_MICRO, k_b=_K, arm="rollout"):
         peak_bytes=1024,
         capacity_bytes=1024**3,
         reservation_failures=0,
-        peak_source=probe.PEAK_SOURCE_RUNTIME_RESET,
+        # F10: a cell authorizes on its compiled analysis, with the runtime watermark recorded below
+        # it as the cross-check. An authorization published without an analysis authorizes nothing.
+        peak_source=probe.PEAK_SOURCE_ANALYSIS,
+        peak_attribution=probe.PEAK_ATTRIBUTION_NONE,
+        analysis_bytes=1024,
+        watermark_bytes=512,
+        watermark_before_bytes=256,
     )
     evidence = probe.build_evidence(
         context,

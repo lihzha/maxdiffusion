@@ -202,9 +202,18 @@ def _measurement(context=None, *, arm="rollout", microbatch=32, k_b=2, **overrid
         "peak_bytes": 20 * 1024**3,
         "capacity_bytes": _CAPACITY,
         "reservation_failures": 0,
-        "peak_source": probe.PEAK_SOURCE_RUNTIME_RESET,
+        # F10: the shape M1-9 actually measured on v6e, and the shape that authorizes under Yixun's
+        # Option A. The compiled analysis IS the reported peak and the bound; the runtime watermark
+        # sits far below it (the PJRT mark never sees XLA's temp arena) and is kept as a cross-check.
+        "peak_source": probe.PEAK_SOURCE_ANALYSIS,
+        "peak_attribution": probe.PEAK_ATTRIBUTION_NONE,
+        "watermark_bytes": 4 * 1024**3,
+        "watermark_before_bytes": 3 * 1024**3,
     }
     values.update(overrides)
+    # The analysis TRACKS the peak unless a case sets it: every `peak_bytes=` case in this file was
+    # written to move the number the headroom rule reads, and since F10 that number is the analysis.
+    values.setdefault("analysis_bytes", values["peak_bytes"])
     return probe.CellMeasurement(**values)
 
 
@@ -666,7 +675,11 @@ def _stub_measurer(peaks=None, *, calls=None):
             peak_bytes=peak,
             capacity_bytes=_CAPACITY,
             reservation_failures=0,
-            peak_source=probe.PEAK_SOURCE_RUNTIME_RESET,
+            peak_source=probe.PEAK_SOURCE_ANALYSIS,
+            peak_attribution=probe.PEAK_ATTRIBUTION_NONE,
+            analysis_bytes=peak,
+            watermark_bytes=4 * 1024**3,
+            watermark_before_bytes=3 * 1024**3,
         )
 
     return measure
@@ -1277,16 +1290,22 @@ def test_the_real_m1_entrypoint_measures_and_publishes(tmp_path):
     schema, real ``main``, real program build, real compile, real optimizer steps, real forward-only
     scoring pass, real Orbax checkpoint write, real publication. Only the memory-statistics source
     and the pretrained-weights source are controlled, and both are named in the sitecustomize.
+
+    **F10 note on the controlled watermark.** The peak this backend reports is 1 KiB, BELOW the
+    compiled analysis of every cell (this tiny program's analyses are a few hundred KiB), which is
+    the shape M1-9 measured on v6e at scale (watermarks 4.2-4.9 GiB under 10-30 GiB analyses). Until
+    F10 this test drove the peak to 20 GiB precisely because only a runtime-sourced peak could
+    authorize; under Yixun's Option A that same number is a watermark towering over the cell's own
+    bound, and the next test is what it now demonstrates.
     """
     authorization = tmp_path / "m1.json"
-    proc = _run_real_entrypoint(
-        tmp_path, peak=20 * 1024**3, capacity=_CAPACITY, pos_fit_authorization=str(authorization)
-    )
+    proc = _run_real_entrypoint(tmp_path, peak=1024, capacity=_CAPACITY, pos_fit_authorization=str(authorization))
     assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-4000:]
     assert "[M1] published" in proc.stdout, proc.stdout[-3000:]
     assert authorization.exists(), "M1 published nothing"
 
     published = probe.load_authorization(str(authorization))
+    assert published["protocol"] == "exp06.fit_authorization.v7"
     assert len(published["authorized_cells"]) == 4, published["authorized_cells"]
     assert {entry["arm"] for entry in published["authorized_cells"]} == {"rollout", "one_step"}
     assert {entry["k_b"] for entry in published["authorized_cells"]} == {2, 4}
@@ -1295,23 +1314,53 @@ def test_the_real_m1_entrypoint_measures_and_publishes(tmp_path):
         assert measurement["compile_seconds"] > 0.0
         assert measurement["checkpoint_seconds"] > 0.0, "a real Orbax write was timed"
         assert measurement["eval_seconds"] > 0.0
+        # F10: the bound each cell was authorized on is its own compiled analysis, and the runtime
+        # reading is published beside it, below it, as the cross-check that did not fire.
+        assert measurement["peak_source"] == probe.PEAK_SOURCE_ANALYSIS
+        assert measurement["analysis_bytes"] == measurement["peak_bytes"] > 0
+        assert measurement["watermark_bytes"] == 1024 < measurement["analysis_bytes"]
     assert published["context"]["device_kind"] == "cpu"
     assert "@manifest:" in published["context"]["model_revision"]
     assert len(published["projections"]) == 4
 
 
-def test_the_real_entrypoint_refuses_a_cell_that_misses_the_headroom_rule(tmp_path):
-    """The same real path, driven over the 90% rule by the controlled backend alone."""
-    authorization = tmp_path / "m1_refused.json"
+def test_the_real_entrypoint_refuses_on_the_MARK_and_on_the_HEADROOM_rule(tmp_path):
+    """The same real path, driven into each of F10's two refusals by the controlled backend alone.
+
+    Run 1 reports a watermark of 97% of capacity while every cell's compiled analysis is a few
+    hundred KiB: the mark contradicts the bound, and every cell is refused as inconsistent. Run 2
+    puts the watermark back under the analyses and shrinks the CAPACITY — derived from run 1's
+    published analyses rather than hard-coded, so a change in this tiny program's footprint moves
+    the threshold with it — until the analyses themselves are over the 90% rule.
+    """
+    first, second = tmp_path / "mark", tmp_path / "headroom"  # one stub tree per real run
+    first.mkdir()
+    second.mkdir()
+    marked = first / "m1_marked.json"
     proc = _run_real_entrypoint(
-        tmp_path, peak=int(_CAPACITY * 0.97), capacity=_CAPACITY, pos_fit_authorization=str(authorization)
+        first, peak=int(_CAPACITY * 0.97), capacity=_CAPACITY, pos_fit_authorization=str(marked)
     )
     assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-4000:]
-    published = probe.load_authorization(str(authorization))
-    assert published["authorized_cells"] == [], "97% of capacity is a miss"
+    published = probe.load_authorization(str(marked))
+    assert published["authorized_cells"] == [], "a mark above the bound authorizes nothing"
+    assert len(published["refused_cells"]) == 4
+    assert all(entry["reasons"] == ["watermark_exceeds_analysis"] for entry in published["refused_cells"])
+    assert published["projections"] == [], "a cell that does not fit gets no wall-clock"
+
+    smallest = min(measurement["analysis_bytes"] for measurement in published["measurements"])
+    over_floor = second / "m1_headroom.json"
+    proc = _run_real_entrypoint(
+        second,
+        peak=1024,
+        capacity=int(smallest / 0.95),  # every analysis is now >= 95% of the device
+        pos_fit_authorization=str(over_floor),
+    )
+    assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-4000:]
+    published = probe.load_authorization(str(over_floor))
+    assert published["authorized_cells"] == [], "95% of capacity is a miss"
     assert len(published["refused_cells"]) == 4
     assert all(entry["reasons"] == ["headroom"] for entry in published["refused_cells"])
-    assert published["projections"] == [], "a cell that does not fit gets no wall-clock"
+    assert published["projections"] == []
 
 
 def test_the_only_device_specific_surface_is_the_telemetry_and_the_weights(tmp_path):
@@ -1720,9 +1769,13 @@ def test_a_peak_this_cell_did_not_set_is_refused_not_reported():
             capacity_bytes=capacity,
             peak_source=source,
             analysis_bytes=7 * 1024**3,
+            watermark_bytes=peak,
             peak_attribution=probe.PEAK_ATTRIBUTION_STANDING,
         )
-    ).reasons == ("headroom",), "30 of 32 GiB is 93.75%: refused on the rule, not on the provenance"
+        # F10: 30 GiB of watermark over a 7 GiB bound is the INCONSISTENCY, not the headroom rule --
+        # the bound itself is 21.9% of the device. The mark and the analysis disagree about the same
+        # cell by a factor of four, and the contract refuses that rather than picking a winner.
+    ).reasons == ("watermark_exceeds_analysis",)
 
     # ...and a standing mark BELOW this cell's own analysis is discarded: the two disagree, so the
     # analysis is what gets reported, and per review W1 A3 an analysis is NOT authorizing.
@@ -1734,29 +1787,40 @@ def test_a_peak_this_cell_did_not_set_is_refused_not_reported():
     assert peak == 31 * 1024**3 and source == probe.PEAK_SOURCE_RUNTIME_RAISED
 
 
-def test_an_analysis_FLOOR_can_refuse_a_cell_but_never_authorize_one():
-    """Review W1, A3 — and this test is the inversion of one this file previously got wrong.
+def test_the_ANALYSIS_is_the_authorization_bound_and_the_refused_capacity_still_is_not():
+    """**Review W1/A3, INVERTED by F10 (Yixun's Option A, plan v2.9 §4-P1)** — and the history is
+    kept because it is the reason the inversion needed a decision.
 
-    The earlier version asserted that a 30-GiB standing mark plus a 7-GiB compiled analysis reports
-    7 GiB, and stopped there — institutionalising the unsafe case. ``Compiled.memory_analysis()`` is
-    a LOWER bound: it omits whatever the program closed over as a constant, which for this arm is the
-    frozen 5B. A "peak <= 90% of capacity" rule is a CEILING test, and a lower bound cannot clear a
-    ceiling. So the analysis may refuse a cell (a floor already above 90% is decisive) and may never
-    authorize one.
+    W1/A3 refused to authorize on the analysis: it was a LOWER bound (it could not see the frozen 5B,
+    captured as a constant), and a "<= 90% of capacity" rule is a ceiling test. Both halves of that
+    premise have since moved. F3 made the backbone an explicit argument of the compiled update, so
+    the analysis counts it; and M1-9 measured the pair on v6e, where the analysis ran 2-7x ABOVE the
+    allocator's watermark on every one of twelve cells. The conservative number is now the analysis,
+    the old rule authorized nothing, and the bound is the analysis with the watermark cross-checking
+    it. What is still never an authorization is the capacity a REFUSED allocation hit.
     """
-    floor = _measurement(peak_bytes=7 * 1024**3, peak_source=probe.PEAK_SOURCE_ANALYSIS)
-    verdict = probe.cell_verdict(floor)
-    assert not verdict.fits, "an analysis floor must not authorize, however small it is"
-    assert "peak_source" in verdict.reasons
+    bound = _measurement(peak_bytes=7 * 1024**3)
+    verdict = probe.cell_verdict(bound)
+    assert verdict.fits, "an analysis under the floor, with nothing contradicting it, authorizes"
     assert verdict.numbers["peak_source"] == probe.PEAK_SOURCE_ANALYSIS
+    assert verdict.numbers["authorized_bytes"] == 7 * 1024**3
 
-    # ...and the same floor ABOVE the headroom rule refuses for both reasons.
-    high = probe.cell_verdict(_measurement(peak_bytes=int(_CAPACITY * 0.95), peak_source=probe.PEAK_SOURCE_ANALYSIS))
-    assert not high.fits and set(high.reasons) == {"headroom", "peak_source"}
+    # ...and the same bound ABOVE the headroom rule refuses on the rule.
+    high = probe.cell_verdict(_measurement(peak_bytes=int(_CAPACITY * 0.95)))
+    assert not high.fits and high.reasons == ("headroom",)
 
+    # The one source that authorizes nothing: a cell that hit a refused allocation reports the
+    # capacity, and a capacity is not a footprint.
+    missed = probe.cell_verdict(
+        _measurement(peak_bytes=_CAPACITY, capacity_bytes=_CAPACITY, peak_source=probe.PEAK_SOURCE_REFUSED)
+    )
+    assert not missed.fits and "peak_source" in missed.reasons
     for source in probe.AUTHORIZING_PEAK_SOURCES:
-        assert probe.cell_verdict(_measurement(peak_source=source)).fits, source
-    assert probe.PEAK_SOURCE_ANALYSIS not in probe.AUTHORIZING_PEAK_SOURCES
+        attribution = (
+            probe.PEAK_ATTRIBUTION_NONE if source == probe.PEAK_SOURCE_ANALYSIS else probe.PEAK_ATTRIBUTION_RAISED
+        )
+        assert probe.cell_verdict(_measurement(peak_source=source, peak_attribution=attribution)).fits, source
+    assert probe.PEAK_SOURCE_ANALYSIS in probe.AUTHORIZING_PEAK_SOURCES
     assert probe.PEAK_SOURCE_REFUSED not in probe.AUTHORIZING_PEAK_SOURCES
 
 
@@ -1769,22 +1833,30 @@ def test_the_peak_source_is_required_recorded_and_re_decided(tmp_path):
 
     context = _context()
     published = _publish(tmp_path, [_measurement(context)], context=context, name="src.json")
-    assert published["measurements"][0]["peak_source"] == probe.PEAK_SOURCE_RUNTIME_RESET
+    assert published["measurements"][0]["peak_source"] == probe.PEAK_SOURCE_ANALYSIS
     loaded = probe.load_authorization(str(tmp_path / "src.json"))
-    assert loaded["measurements"][0]["peak_source"] == probe.PEAK_SOURCE_RUNTIME_RESET
+    assert loaded["measurements"][0]["peak_source"] == probe.PEAK_SOURCE_ANALYSIS
 
-    # An artifact whose measurements were taken on a floor authorizes nothing when re-decided.
-    floor_context = _context()
-    floor = _publish(
+    # An artifact whose measurements carry NO BOUND authorizes nothing when re-decided (F10): the
+    # provenance is recorded either way, and it is the missing analysis that refuses the cell.
+    unbounded_context = _context()
+    unbounded = _publish(
         tmp_path,
-        [_measurement(floor_context, peak_source=probe.PEAK_SOURCE_ANALYSIS)],
-        context=floor_context,
-        name="floor.json",
+        [
+            _measurement(
+                unbounded_context,
+                analysis_bytes=None,
+                peak_source=probe.PEAK_SOURCE_RUNTIME_RESET,
+                peak_attribution=probe.PEAK_ATTRIBUTION_RESET,
+            )
+        ],
+        context=unbounded_context,
+        name="unbounded.json",
     )
-    assert floor["authorized_cells"] == []
-    assert floor["refused_cells"][0]["reasons"] == ["peak_source"]
+    assert unbounded["authorized_cells"] == []
+    assert unbounded["refused_cells"][0]["reasons"] == ["analysis_missing"]
     with pytest.raises(ValueError, match="M1 did not authorize"):
-        probe.assert_cell_authorized(floor, probe.FitCell("rollout", 32, 2), context=floor_context)
+        probe.assert_cell_authorized(unbounded, probe.FitCell("rollout", 32, 2), context=unbounded_context)
 
 
 def test_an_unrecognised_peak_source_is_refused_on_load():
@@ -1793,16 +1865,26 @@ def test_an_unrecognised_peak_source_is_refused_on_load():
 
 
 def test_a_mixed_cell_is_only_as_good_as_its_weakest_evidence():
-    """Trials aggregate conservatively in provenance too: one floor trial and the cell is a floor."""
+    """Trials aggregate conservatively in provenance too: one analysis-labelled trial and the cell
+    is labelled with the analysis. **F10: the label no longer refuses the cell** — what refuses a
+    cell is its worst NUMBERS, and the aggregate takes the worst of every one of them (here the
+    runtime trial's 25 GiB mark against a 20 GiB bound)."""
     context = _context()
     aggregated = probe.aggregate_trials(
         [
-            _measurement(context, peak_source=probe.PEAK_SOURCE_RUNTIME_RESET),
+            _measurement(
+                context,
+                peak_source=probe.PEAK_SOURCE_RUNTIME_RESET,
+                peak_attribution=probe.PEAK_ATTRIBUTION_RESET,
+                peak_bytes=25 * 1024**3,
+                analysis_bytes=20 * 1024**3,
+                watermark_bytes=25 * 1024**3,
+            ),
             _measurement(context, peak_source=probe.PEAK_SOURCE_ANALYSIS),
         ]
     )
     assert aggregated[0].peak_source == probe.PEAK_SOURCE_ANALYSIS
-    assert not probe.cell_verdict(aggregated[0]).fits
+    assert probe.cell_verdict(aggregated[0]).reasons == ("watermark_exceeds_analysis",)
 
 
 def test_a_backend_that_can_reset_gives_an_attributable_peak():

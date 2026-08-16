@@ -42,9 +42,13 @@ is exactly why **k=4 is exploratory only** and may never be the headline.
 
 **measure -> aggregate -> project -> authorize:**
 
-* :func:`cell_verdict` decides ONE cell against the headroom rule — steady-state peak <= 90% of
-  capacity — and **refuses rather than warns**. exp_03's C arm missed by 0.1%; a rule that warns and
-  proceeds is a rule that loses a 64-chip reservation.
+* :func:`cell_verdict` decides ONE cell against the headroom rule — 90% of capacity — and **refuses
+  rather than warns**. exp_03's C arm missed by 0.1%; a rule that warns and proceeds is a rule that
+  loses a 64-chip reservation. **F10 (Yixun's Option A, plan v2.9 §4-P1) changed the EVIDENCE that
+  rule reads, not the rule:** the bound is the cell's compiled memory analysis, taken as a
+  conservative over-estimate; the runtime allocation watermark is still measured and recorded per
+  cell, now as a cross-check that can only refuse — a cell whose watermark exceeds its analysis is
+  refused as inconsistent, and a cell with no analysis at all has no bound and is refused too.
 * :func:`project_wall_clock` counts evaluations and checkpoints on their OWN cadences (the launcher
   exposes ``EVAL_EVERY`` and ``CHECKPOINT_EVERY`` independently) and takes every overhead from the
   MEASUREMENT rather than from an argument, because the reviewer turned two negative overheads into
@@ -197,7 +201,14 @@ __all__ = [
 #: ``v6`` (F9) because every measurement now carries ``peak_attribution`` and the runtime/analysis
 #: audit fields. A v5 reader would take a ``peak_bytes`` whose provenance it cannot see -- and the
 #: whole point of this round is that a peak without its provenance is not evidence.
-AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v6"
+#:
+#: ``v7`` (F10) because the AUTHORIZATION IS DERIVED DIFFERENTLY: the bound is the cell's compiled
+#: memory analysis, and the runtime watermark is a recorded CROSS-CHECK that can refuse the cell but
+#: never authorize it (Yixun's Option A, plan v2.9 §4-P1). The fields are the same fields; what a
+#: table's ``authorized_cells`` MEANS is not the same claim, so a v6 reader deciding a v7 table --
+#: or a v7 reader adopting a v6 one -- would be reading a verdict it did not derive. The version is
+#: the fail-closed signal at exactly the boundary where the meaning moved.
+AUTHORIZATION_PROTOCOL = "exp06.fit_authorization.v7"
 #: Plan §4-P1. Steady state, not transient: a peak measured during compilation is not this number.
 HEADROOM_FRACTION = 0.90
 
@@ -226,16 +237,34 @@ PROVENANCE_MEASURED = "measured"
 #: ...and the prefix for one it adopted, followed by the artifact path it adopted.
 ADOPTED_PREFIX = "adopted from "
 
-#: Where a reported peak came from. The first two are attributable UPPER bounds on this cell's
-#: footprint; the third is a cell-local LOWER bound, good enough to refuse a cell and never good
-#: enough to authorize one (review W1, A3).
+#: Where a reported peak came from. The first two are readings of the process's allocation
+#: watermark; the third is the compiled program's own account of itself.
 PEAK_SOURCE_RUNTIME_RESET = "runtime high-water mark after reset"
 PEAK_SOURCE_RUNTIME_RAISED = "runtime high-water mark raised by this region"
 PEAK_SOURCE_ANALYSIS = "compiled memory analysis"
 #: A cell whose allocation was refused reports the capacity it hit; it is never an authorization.
 PEAK_SOURCE_REFUSED = "device capacity after a refused allocation"
-AUTHORIZING_PEAK_SOURCES = (PEAK_SOURCE_RUNTIME_RESET, PEAK_SOURCE_RUNTIME_RAISED)
-PEAK_SOURCES = AUTHORIZING_PEAK_SOURCES + (PEAK_SOURCE_ANALYSIS, PEAK_SOURCE_REFUSED)
+#: The two sources that are readings of the allocator, kept apart from the authorization vocabulary
+#: because the CONSISTENCY rules below are about the runtime reading specifically.
+RUNTIME_PEAK_SOURCES = (PEAK_SOURCE_RUNTIME_RESET, PEAK_SOURCE_RUNTIME_RAISED)
+#: **F10 (Yixun's Option A, plan v2.9 §4-P1) INVERTS what W1/A3 decided here, and the reason is a
+#: measured fact rather than an argument.** Until F10 only a runtime-sourced peak could authorize,
+#: on the reading that ``Compiled.memory_analysis()`` is a LOWER bound (it omitted whatever the
+#: program closed over as a constant) and a 90%-CEILING rule cannot be cleared by a floor. F3 made
+#: the frozen backbone an explicit argument of the compiled update, so those bytes are now counted;
+#: and M1-9 measured the other half on the real hardware: the PJRT allocation watermark never sees
+#: XLA's temp-buffer arena, so the ladder's watermarks came in at **4.2-4.9 GiB against analyses of
+#: 10-30 GiB**, and ``rollout`` mb=8 ran to completion at 96.6% of the ANALYSIS with zero reservation
+#: failures. Under the old rule ``peak = max(watermark, analysis)`` + "the source names the max's
+#: origin" + "only a runtime source authorizes" jointly authorize a cell only when the analysis
+#: UNDERSTATES the footprint -- so all twelve measured cells refused on ``peak_source``, and the
+#: rule was unsatisfiable in the common case rather than conservative.
+#:
+#: The authorized bound is therefore the analysis, taken as the CONSERVATIVE over-estimate (erring
+#: high is the safe direction for OOM protection), and the watermark is retained as a recorded
+#: cross-check that can only ever REFUSE: see :func:`cell_verdict`.
+AUTHORIZING_PEAK_SOURCES = RUNTIME_PEAK_SOURCES + (PEAK_SOURCE_ANALYSIS,)
+PEAK_SOURCES = AUTHORIZING_PEAK_SOURCES + (PEAK_SOURCE_REFUSED,)
 
 #: F9. HOW the runtime watermark related to the cell it is reported for -- audit, not gate. The gate
 #: is ``peak_source``; this says how much the runtime number is worth, and it is what makes the next
@@ -293,6 +322,17 @@ TRIALS_PER_CELL = 2
 #: Every other cell sits at 10-18 GiB, comfortably under. So running the sole above-floor cell LAST
 #: leaves every other cell's standing bound both sound and under the floor, and costs nothing: the
 #: cells, their recipes, the fingerprint and the exclusion mechanism are all untouched by this list.
+#:
+#: **F10 keeps this list and re-states why it earns its place.** The authorization no longer reads
+#: the watermark as the peak, so a standing mark can no longer refuse a later cell on *headroom* —
+#: but it can still refuse one on the CROSS-CHECK: a lifetime mark left standing above a smaller
+#: cell's analysis is a ``watermark_exceeds_analysis`` refusal of a cell that fits. Ascending order
+#: is what keeps a standing mark from towering over the cells that follow it. It does not make that
+#: impossible — the declaration orders by EXPECTED footprint, and M1-6 measured ``one_step`` mb=8
+#: (14.9 GiB) above ``one_step`` mb=16 (10.0 GiB) — but such a refusal is now visible and names the
+#: conflict, where under the old rule it read as "headroom" and named nothing. (On the hardware M1-9
+#: actually measured, the mark runs 4.2-4.9 GiB against 10-30 GiB analyses and the cross-check never
+#: fires at all.)
 #:
 #: Ascending expected footprint, with ``rollout`` mb=8 (both k) at the end.
 LADDER_ORDER = (
@@ -1080,9 +1120,10 @@ class CellMeasurement:
     capacity_bytes: int
     reservation_failures: int
     #: WHERE the peak came from, and REQUIRED — there is no default, because a default would be a
-    #: claim about provenance that nobody made. A compiled-memory analysis is a LOWER bound on the
-    #: footprint and a "<= 90% of capacity" rule needs an UPPER one, so this field is what lets
-    #: `cell_verdict` refuse to authorize on a floor (review W1, A3). Re-decided on load.
+    #: claim about provenance that nobody made. Re-decided on load. **Since F10 it no longer decides
+    #: the authorization** (the analysis is the bound and the watermark is the cross-check —
+    #: :func:`cell_verdict`); what it still does is name the origin of ``peak_bytes`` truthfully, and
+    #: keep a cell that hit a refused allocation out of the authorized list.
     peak_source: str
     #: F9 audit trail. These four do not gate anything -- ``peak_source`` does -- and they exist
     #: because M1-6 published twelve numbers nobody could interrogate: the table could not say what
@@ -1189,13 +1230,13 @@ def _checked_peak_evidence(measurement: CellMeasurement) -> None:
       built somewhere else.
 
     An EMPTY attribution is "not recorded", which is what a measurement constructed outside the
-    measurement path carries; it is allowed, and it authorizes nothing on its own because the gate
-    remains ``peak_source``.
+    measurement path carries; it is allowed, and it decides nothing on its own -- since F10 the
+    authorization is derived from the analysis and the watermark, and this pair is audit.
     """
     attribution = str(measurement.peak_attribution)
     if attribution and attribution not in PEAK_ATTRIBUTIONS:
         raise ValueError(f"{attribution!r} is not a peak attribution this probe produces ({list(PEAK_ATTRIBUTIONS)})")
-    if str(measurement.peak_source) in AUTHORIZING_PEAK_SOURCES and attribution == PEAK_ATTRIBUTION_NONE:
+    if str(measurement.peak_source) in RUNTIME_PEAK_SOURCES and attribution == PEAK_ATTRIBUTION_NONE:
         raise ValueError(
             f"a measurement claiming {measurement.peak_source!r} records how the runtime reading was "
             f"attributed to this cell; {PEAK_ATTRIBUTION_NONE!r} attribution says no reading entered the "
@@ -1206,7 +1247,7 @@ def _checked_peak_evidence(measurement: CellMeasurement) -> None:
     analysis = measurement.analysis_bytes
     if (
         analysis is not None
-        and str(measurement.peak_source) in AUTHORIZING_PEAK_SOURCES
+        and str(measurement.peak_source) in RUNTIME_PEAK_SOURCES
         and int(measurement.peak_bytes) < int(analysis)
     ):
         raise ValueError(
@@ -1242,17 +1283,59 @@ def _checked(measurement: CellMeasurement) -> None:
 
 
 def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
-    """Does this cell fit? Headroom rule + reservation failures, and it REFUSES rather than warns."""
+    """Does this cell fit? **The F10 authorization rule, and it REFUSES rather than warns.**
+
+    Yixun's Option A (plan v2.9 §4-P1), verbatim: *use the compiled memory analysis as the
+    conservative authorization bound, retain the runtime watermark as a cross-check, and refuse any
+    cell where the runtime watermark exceeds the analysis value.* As code, a cell authorizes only if
+    ALL of these hold:
+
+    * ``analysis_bytes`` is recorded and non-zero. **No bound, no authorization** -- the rule names
+      one number as the bound, and a record that does not carry it authorizes nothing, however
+      attributable its runtime reading is (``analysis_missing``).
+    * ``analysis_bytes <= HEADROOM_FRACTION * capacity_bytes``. The headroom rule is unchanged; what
+      moved is which number it reads (``headroom``).
+    * the recorded watermark does not exceed the analysis (``watermark_exceeds_analysis``). A
+      watermark ABOVE the claimed upper bound falsifies the upper-bound premise the authorization
+      rests on: the two accounts of the same cell disagree, and the disagreement is decided against
+      the cell. This can only ever refuse -- a watermark below the analysis is exactly what the
+      conservative bound predicts, and it authorizes nothing by itself.
+    * the reported ``peak_bytes`` does not exceed the analysis either (``peak_exceeds_analysis``).
+      In the measurement path this is implied by the watermark rule (:func:`classify_peak` reports
+      ``max(admissible runtime mark, analysis)``), so it fires only on a record whose reported peak
+      is not explained by either of its own numbers.
+    * the source is one this probe can authorize on (``peak_source``): since F10 that is every
+      source except :data:`PEAK_SOURCE_REFUSED`, which reports the capacity a refused allocation hit
+      rather than a footprint.
+    * no reservation failure was counted (``reservation_failures``).
+
+    **Why the ceiling-vs-floor argument that used to live here no longer decides it:** review W1/A3
+    refused to authorize on the analysis because it was a LOWER bound (it could not see the frozen
+    backbone, captured as a constant). F3 made the backbone an explicit argument, and M1-9 measured
+    the analysis running 2-7x ABOVE the watermark on real v6e hardware -- the conservative direction.
+    The constant that stayed is :data:`HEADROOM_FRACTION`; the evidence it reads is what changed.
+    """
     _checked(measurement)
-    fraction = int(measurement.peak_bytes) / int(measurement.capacity_bytes)
+    capacity = int(measurement.capacity_bytes)
+    fraction = int(measurement.peak_bytes) / capacity
+    analysis = _optional_bytes(measurement.analysis_bytes)
+    watermark = _optional_bytes(measurement.watermark_bytes)
+    bound = int(analysis) if analysis else None
     reasons = []
-    if fraction > HEADROOM_FRACTION:
-        reasons.append("headroom")
+    if bound is None:
+        reasons.append("analysis_missing")
+    else:
+        if bound / capacity > HEADROOM_FRACTION:
+            reasons.append("headroom")
+        if watermark is not None and int(watermark) > bound:
+            # ONE fault -- the analysis is not an upper bound for this record -- and the watermark is
+            # named as its cause whenever it explains it, because that is the cross-check the
+            # contract is about. The `peak` branch is the residue: a reported peak above the bound
+            # that the cell's own watermark does not account for.
+            reasons.append("watermark_exceeds_analysis")
+        elif int(measurement.peak_bytes) > bound:
+            reasons.append("peak_exceeds_analysis")
     if str(measurement.peak_source) not in AUTHORIZING_PEAK_SOURCES:
-        # A floor cannot clear a ceiling rule. `Compiled.memory_analysis()` is cell-local, which is
-        # why it is trusted to REFUSE a cell, but it omits whatever the program closed over as a
-        # constant -- so a cell whose only evidence is the analysis may be far larger than it looks,
-        # and authorizing it would be authorizing a lower bound against a 90% ceiling (review W1, A3).
         reasons.append("peak_source")
     if int(measurement.reservation_failures) > 0:
         reasons.append("reservation_failures")
@@ -1262,13 +1345,20 @@ def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
         numbers={
             **measurement.cell.as_payload(),
             "peak_bytes": int(measurement.peak_bytes),
-            "capacity_bytes": int(measurement.capacity_bytes),
+            "capacity_bytes": capacity,
             "peak_fraction": fraction,
             "headroom_fraction": HEADROOM_FRACTION,
+            # F10: the number the headroom rule was actually decided on, and its fraction, beside
+            # the reported peak rather than in place of it. They coincide on every authorized cell
+            # (a peak above the bound is refused); on a refused one, saying which number decided it
+            # is the difference between a table a reader can re-derive and one they must trust.
+            "authorized_bytes": bound,
+            "authorized_fraction": None if bound is None else bound / capacity,
+            "watermark_bytes": watermark,
             "reservation_failures": int(measurement.reservation_failures),
             "peak_source": str(measurement.peak_source),
             "peak_attribution": str(measurement.peak_attribution),
-            "analysis_bytes": _optional_bytes(measurement.analysis_bytes),
+            "analysis_bytes": analysis,
             "compile_seconds": float(measurement.compile_seconds),
             "step_seconds": float(measurement.step_seconds),
             "eval_seconds": float(measurement.eval_seconds),
@@ -2419,25 +2509,30 @@ def classify_peak(
     is this program's own account of itself. If the standing mark is BELOW that account, the two
     disagree -- either the program never reached its peak inside this window, or the analysis
     over-counts donated and aliased buffers -- and a number that fails its own program's floor is not
-    a demonstrated ceiling. It is discarded, and the reported number falls back to the analysis,
-    whose source the authorization floor refuses. With no analysis at all AND no rise there is
-    nothing cell-local to check the mark against, so the measurement **fails closed** exactly as F1b
-    requires (and as the reviewer's ``attack_f1b_inherited_peak`` guards).
+    a demonstrated ceiling. It is discarded, and the reported number falls back to the analysis. With
+    no analysis at all AND no rise there is nothing cell-local to check the mark against, so the
+    measurement **fails closed** exactly as F1b requires (and as the reviewer's
+    ``attack_f1b_inherited_peak`` guards).
 
     **What gets reported.** ``max(admissible runtime mark, analysis)``, because the two bound the
     footprint under different accounts of what "in use" means and a ceiling rule must never round
     down. **This function** names the origin of the number it reports exactly: analysis wins ⇒
     ``PEAK_SOURCE_ANALYSIS``, runtime wins ⇒ ``runtime-*``.
 
-    The invariant that survives the whole pipeline is the ONE-SIDED version of that, and it is the
-    one the floor actually needs (review F9c, MINOR): **the source never OVERSTATES its evidence.**
-    An authorization-eligible label implies the reported number is runtime-derived; the converse is
-    not guaranteed, because :func:`aggregate_trials` may conservatively label a cell
-    ``PEAK_SOURCE_ANALYSIS`` when its trials disagreed on provenance even though the numeric maximum
-    it reports came from a runtime reading. That downgrade can only ever refuse a cell it might have
-    authorized — it cannot upgrade one — so the floor can still trust
-    ``peak_source in AUTHORIZING_PEAK_SOURCES`` to mean "``peak_bytes`` is a runtime-derived upper
-    bound", with nothing else to check.
+    **F10 reads that pair differently, and this function is unchanged by it.** The authorization is
+    now derived from ``analysis_bytes`` with ``watermark_bytes`` as a cross-check, so the case where
+    the runtime mark WINS the max -- i.e. the watermark exceeded the analysis -- is exactly the case
+    :func:`cell_verdict` refuses as inconsistent. Everything this function does is still measure and
+    name; nothing here decides. The one label rule that survives is the one-sided one (review F9c,
+    MINOR): **the source never OVERSTATES its evidence.** A ``runtime-*`` label implies the reported
+    number is a runtime reading; the converse is not guaranteed, because :func:`aggregate_trials`
+    may conservatively label a mixed-provenance cell ``PEAK_SOURCE_ANALYSIS`` even though the
+    numeric maximum it reports came from a runtime reading — and the label no longer decides
+    anything either way. What decides is the aggregated pair, and :func:`aggregate_trials` takes the
+    MAX of both: a cell whose watermark exceeded its analysis in any trial is refused on the
+    aggregate too, unless another trial recorded a LARGER analysis — i.e. unless the two trials
+    disagreed about the same compiled program's own footprint, in which case the published bound is
+    the larger one and it does bound the watermark.
 
     ``cell_watermark`` is the mark at the top of the CELL -- before its backbone load and its
     compile. Attribution is decided against it rather than against ``watermark_before`` because the

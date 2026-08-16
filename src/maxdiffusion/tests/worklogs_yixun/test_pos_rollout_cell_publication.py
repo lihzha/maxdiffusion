@@ -157,7 +157,14 @@ def _measurement(context, cell, *, peak=20 * 1024**3, step=3.5):
         peak_bytes=peak,
         capacity_bytes=_CAPACITY,
         reservation_failures=0,
-        peak_source=probe.PEAK_SOURCE_RUNTIME_RESET,
+        # F10: the authorized bound is the compiled analysis and the watermark is the cross-check,
+        # so the fixture standing in for a fitting cell carries both, in M1-9's measured shape (the
+        # runtime mark far below the analysis).
+        peak_source=probe.PEAK_SOURCE_ANALYSIS,
+        peak_attribution=probe.PEAK_ATTRIBUTION_NONE,
+        analysis_bytes=peak,
+        watermark_bytes=4 * 1024**3,
+        watermark_before_bytes=3 * 1024**3,
     )
 
 
@@ -317,7 +324,9 @@ def test_the_published_content_is_the_measurement_that_was_taken(tmp_path):
     expected = [_measurement(context, cell, step=3.5 * 2 + 0.16).as_payload() for _ in range(2)]
     assert [trial.as_payload() for trial in artifact.trials] == expected
     assert artifact.trials[0].peak_bytes == 20 * 1024**3
-    assert artifact.trials[0].peak_source == probe.PEAK_SOURCE_RUNTIME_RESET
+    assert artifact.trials[0].peak_source == probe.PEAK_SOURCE_ANALYSIS
+    assert artifact.trials[0].analysis_bytes == 20 * 1024**3, "F10: the bound is banked with the cell"
+    assert artifact.trials[0].watermark_bytes == 4 * 1024**3, "...and so is the reading that cross-checks it"
 
 
 def test_a_content_object_without_its_marker_is_not_adoptable(tmp_path):
@@ -865,8 +874,9 @@ def test_a_cell_measured_by_other_running_bytes_is_re_measured(tmp_path, capsys)
 
     def forge(payload):
         for trial in payload["trials"]:
-            trial["peak_bytes"] = 1
-            trial["peak_source"] = probe.PEAK_SOURCE_RUNTIME_RESET
+            # F10: a cheap cell is now one whose BOUND is cheap, and whose watermark does not
+            # contradict it. A forger sets all three, because all three are inside the artifact.
+            trial["peak_bytes"] = trial["analysis_bytes"] = trial["watermark_bytes"] = 1
         payload["context"]["manifest_digest"] = "0" * 64
 
     _damage(published, forge)
@@ -1069,8 +1079,9 @@ def test_the_accepted_residual_a_bucket_writer_can_forge_a_cell(tmp_path):
 
     def forge_in_boundary(payload):
         for trial in payload["trials"]:
-            trial["peak_bytes"] = 1
-            trial["peak_source"] = probe.PEAK_SOURCE_RUNTIME_RESET
+            # F10: the cheap cell is a cheap BOUND with a watermark that agrees with it. Nothing in
+            # the artifact contradicts anything else, which is exactly why it is adopted.
+            trial["peak_bytes"] = trial["analysis_bytes"] = trial["watermark_bytes"] = 1
         # The context -- manifest digest included -- is copied EXACTLY as published. Nothing foreign.
 
     _damage(published, forge_in_boundary)
@@ -1330,8 +1341,13 @@ def test_the_protocol_names_the_shape_that_carries_exclusions():
     treat an excluded cell as never-measured. Fail closed on the version, as for v3.
 
     v6 (F9): the measurements now carry the peak's ATTRIBUTION and the runtime/analysis readings it
-    was decided from. A v5 reader would take a ``peak_bytes`` whose provenance it cannot see."""
-    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v6"
+    was decided from. A v5 reader would take a ``peak_bytes`` whose provenance it cannot see.
+
+    v7 (F10): the same fields, decided by a different rule — the analysis is the authorization bound
+    and the watermark is a cross-check — so a v6 reader would re-decide a v7 table under a rule it
+    was not published under. The CELL protocol deliberately stays at v2: what a trial measures did
+    not change, and bumping it would strand every banked cell for no measurement reason."""
+    assert probe.AUTHORIZATION_PROTOCOL == "exp06.fit_authorization.v7"
     assert probe.CELL_PROTOCOL == "exp06.fit_cell.v2"
 
 

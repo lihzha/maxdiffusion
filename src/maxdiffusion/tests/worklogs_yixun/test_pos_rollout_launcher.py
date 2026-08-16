@@ -1036,9 +1036,15 @@ def _write_authorization(path: Path, *, code_sha: str, cells=((("rollout", 32, 2
             peak_bytes=20 * 1024**3,
             capacity_bytes=32 * 1024**3,
             reservation_failures=0,
-            # Review W1 A3: provenance is a REQUIRED field, and only a runtime-attributable peak
-            # authorizes. This fixture stands in for a probe that ran on a resettable backend.
-            peak_source=probe.PEAK_SOURCE_RUNTIME_RESET,
+            # F10 (Yixun's Option A): provenance is still a REQUIRED field, but the authorization is
+            # decided from the compiled analysis with the runtime watermark as a cross-check. This
+            # fixture stands in for a probe that measured this cell on v6e, where the watermark
+            # comes in far below the analysis.
+            peak_source=probe.PEAK_SOURCE_ANALYSIS,
+            peak_attribution=probe.PEAK_ATTRIBUTION_NONE,
+            analysis_bytes=20 * 1024**3,
+            watermark_bytes=4 * 1024**3,
+            watermark_before_bytes=3 * 1024**3,
         )
         for arm, microbatch, k_b in cells
     ]
