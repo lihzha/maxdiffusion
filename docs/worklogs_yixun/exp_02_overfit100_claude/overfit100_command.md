@@ -735,3 +735,31 @@ cd ~/Home/maxdiffusion-worktrees/claude-exp_02_overfit100 && source ~/.config/ir
   (ii) loss ≈0.586 → ≈0.145 over 2,500 steps (S3 reproduced). (iii) 5 checkpoints retained.
 - **Nature:** launcher + W&B end-to-end validation. **No scientific claim rides on it**; exp_02's
   formal verdict (`partial`, 69/100 ≥ 0.95 @ 20k) is unchanged.
+
+### Job 54 outcome (2026-08-16T16:41Z) — SUCCEEDED, attempt 1, all three acceptance criteria met
+
+- **(i) W&B — the new criterion — PASSED.** Run
+  `wandb.ai/yh4742-princeton-university/maxdiffusion-wan-overfit100/runs/3ycuc5g0`
+  (`wan-overfit100-v6e64-full-gbs256-fresh-20260816-154239`), state `finished`, final `_step` 2500,
+  with `train/loss`, `train/grad_norm`, `train/lr`, `train/steps_per_sec` history. **Project created
+  2026-08-16T16:05:40Z — it did not exist before this run**, which is the direct confirmation that
+  every prior exp_02 training job had `wandb_project` empty and never called `wandb.init`.
+  Under **Yixun's** entity, as intended.
+- **(ii) Loss — PASSED.** Final `train/loss` **0.14738** (10-step average of the training loss at
+  step 2500) against the S3 reference: training-log ≈0.145 and the fixed-`(t,ε)` D2 instrument
+  **0.14598**. Within ~1 % — the recipe reproduced. `grad_norm` 0.1389, `lr` 1e-5 (constant after
+  warmup), **1.899 steps/s** on v6e-64.
+- **(iii) Checkpoints — PASSED.** All five retained under
+  `…/wan-ti2v-overfit100/wan-overfit100-v6e64-full-gbs256-fresh-20260816-154239/checkpoints/`:
+  **250, 500, 1000, 1750, 2500**.
+- **Wall clock:** provisioned 15:56Z → `wandb.init` 16:05:40Z → first logged step after the 5B load +
+  context-table build + XLA compile → 2,500 steps done 16:41Z. ~45 min end to end.
+- **Issue #23 (`MODEL_DIR`) VERIFIED ON HARDWARE:** the worker log shows
+  `MODEL_DIR=/root/.cache/huggingface/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers/snapshots/b8fff7315c…`
+  — the wrapper resolved the manifest-pinned snapshot itself and the guard passed.
+- **Note on granularity:** this run logged at `log_period=10` (the launcher's shared default) versus
+  the campaign's wrapper default of 1 ⇒ 250 W&B points, not 2,500. Pass `LOG_PERIOD=1` to match the
+  old per-step density.
+- **Standing:** launcher arm + W&B plumbing are validated end to end. **No scientific claim** — exp_02's
+  formal verdict (`partial`, 69/100 ≥ 0.95 @ 20k) is unchanged; the D2 instrument remains the
+  authoritative loss record for analysis.
