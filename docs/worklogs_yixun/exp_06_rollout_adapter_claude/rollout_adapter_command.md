@@ -253,3 +253,30 @@ refuses rollout mb=8 on genuine headroom (96.6% > 90%); F10 = classify/floor cha
 Codex pass + M1-10 resubmit adopting all 12 banked cells (~cheap, re-derivation only).
 **(B)** investigate libtpu-level metrics that see the temp arena (unknown cost/feasibility on
 jax 0.10.2). **(C)** A now + B as background hardening. Awaiting Yixun.
+
+### F10 SERIES COMPLETE + APPROVED (2026-08-17T~02:20Z) — the plan-v2.9 authorization amendment is implemented; M1-10 package to Yixun
+
+Six implementation rounds (F10 `4e264dc` → F10b `1e5dda9` → F10c `39f164e` → F10d `9830264` →
+F10e `623107a` → F10f `f872a42`) against six review passes (initial REWORK + four verification
+REWORKs + final **APPROVE, findings NONE**), all by codex gpt-5.6-sol xhigh; full trail with
+appended verdicts in `rollout_adapter_codex_code_f10-authorization-amendment_review.md`.
+
+**What the amendment now is, as built:** authorization bound = compiled memory analysis
+(≤ 90% capacity in EXACT integer arithmetic, 10·a ≤ 9·c); runtime watermark recorded and
+cross-checked (watermark > analysis, or missing watermark, or missing/partial/unparseable
+analysis ⇒ refuse); per-trial refusal survival + unanimous analysis across trials (disagreement
+raises at publication; a poisoned banked artifact is quarantined at adoption and re-measured —
+proven self-healing); exact-count parsing of every payload/identity/binding/evidence number in
+both directions, with a 20-site AST-verified survivor enumeration written into the module;
+protocol v6→v7 (fit_cell.v2 unchanged). Suite 2308 → **2345 passed / 0 failed**; battery 91 →
+**106 probes (105 REFUSED / 1 DECLARED F5-8 / 0 SUCCEEDED), 18/18 honest controls, exit 0**.
+Four review-found production defects beyond the amendment itself were fixed on the way
+(missing-watermark bypass, trial-max masking, coercion truncations, partial-analysis
+under-bound) — the reviewer executed a live counterexample for every one.
+
+**M1-10:** `submit_m1h.sh` ready at RULED=`f872a42`; full re-measure (~2.5–3.5 h v6e-8) because
+the F10 edits moved the deployed manifest and the M1-9 bank is correctly non-adoptable
+(adoption discipline held exactly as designed). Expected from M1-9's numbers re-derived under
+the amended rule: **10/12 authorized** (one_step mb=8/16, rollout mb=16/32/64, both k),
+rollout mb=8 refused on true headroom (96.6%), 4 cells declared-excluded (issue #18).
+Awaiting Yixun's launch approval per announcement 02.

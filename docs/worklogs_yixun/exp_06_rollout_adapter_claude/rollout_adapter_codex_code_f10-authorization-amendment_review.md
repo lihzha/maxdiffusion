@@ -189,3 +189,21 @@ Verification:
 - Binding fields/digests, manifest logic, adoption policy, trainer gating, and measurement bracketing are unchanged.
 
 **REWORK**
+
+---
+
+# Verification pass of F10f (623107a..f872a42) — same reviewer, 2026-08-17T~02:15Z
+
+
+Absent-attribute item: **CLOSED**.
+
+- Executed the original `10 / 5 / 100` counterexample: `analysis_bytes=None`, `fits=False`, reason `analysis_missing`.
+- Tests cover one-, two-, and three-of-four-present analyses.
+- All five malformed-component rows contain four fields; instrumentation confirmed each reaches `_exact_count` and fails on its spoiled value.
+- Focused suite: **306 passed**, 9 warnings.
+- Harness: effective **105 REFUSED / 1 DECLARED / 0 SUCCEEDED**; **18/18 controls passed**. The four raw successes were exactly the known `/dev/fd` launcher limitations.
+- F10e-1 covers **7 shapes**; “ctrl a real analysis sums” passed with legitimate zero components.
+- AST census: exactly **20** bare `int()`/`float()` calls in both `623107a` and `f872a42`.
+- Production change is the single intended executable line at [pos_rollout_fit_probe.py:3390](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:3390). No hunks appeared outside the declared source, tests, harness, log, README, and review record.
+
+**APPROVE**
