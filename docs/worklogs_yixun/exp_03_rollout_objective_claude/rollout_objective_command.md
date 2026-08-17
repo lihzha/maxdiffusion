@@ -618,3 +618,13 @@ survives worker-secrets sourcing; exp_02 cc6e3a1 pattern). (2) Job 26b submit sc
 Yixun's local secrets and passes `--env WANDB_API_KEY`, so the run lands under HIS entity
 (the new-launcher behavior). Guards: src pinned unchanged since af29d5a; bash_scripts pinned at
 83d3302. All training parameters identical to Job 26. Awaiting Yixun's `!` resubmission.
+
+### Job 26b SUBMITTED (2026-08-17T01:52Z, by Yixun via `!`)
+
+**Job id:** `20260817-015206-5e16ed42-exp03-c-lr5e5-20k-yixun` (v6e-64). Identical training params to
+Job 26; launcher fix 83d3302 aboard; Yixun's WANDB_API_KEY forwarded (run lands under his entity in
+`maxdiffusion-wan-overfit100`). COMMIT=6f76d16. ~18.6 h to 20k.
+**Disclosed defect in the submit script (Planner's):** the script's `set -x` after sourcing secrets
+xtrace-printed the forwarded WANDB_API_KEY into the submitting terminal (issue-#12 class). The key
+also lives in the job spec on GCS (lab-standard for forwarded secrets). Rotation is Yixun's call;
+future submit scripts must not re-enable xtrace around secret-bearing commands.
