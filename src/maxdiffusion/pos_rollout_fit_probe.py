@@ -1264,9 +1264,11 @@ class CellVerdict:
 #
 # Anything else is a bug of the class this comment exists to close. **F10e adds the rule for what a
 # parser's REFUSAL means where the value is EVIDENCE rather than a record: it demotes, it does not
-# crash.** One unusable component of the compiled memory analysis discards the whole analysis
-# (`_program_bytes`), so the cell has no bound and refuses on `analysis_missing` -- the same
-# fail-closed answer as a backend that reports nothing, reached without ending a 3.5-hour ladder.
+# crash.** One unusable OR ABSENT component of the compiled memory analysis discards the whole
+# analysis (`_program_bytes`, F10f: an absent field is unknown evidence, not a zero contribution, so
+# a partial sum can never become a bound), and the cell then has no bound and refuses on
+# `analysis_missing` -- the same fail-closed answer as a backend that reports nothing, reached
+# without ending a 3.5-hour ladder.
 # F10d's census (20 bare `int()`/`float()` sites, in the three classes above) is UNCHANGED by F10e:
 # both of its fixes replaced a coercion with a parser call and added none.
 
@@ -3361,10 +3363,17 @@ def _program_bytes(program: "ProbeProgram", params, opt_state) -> int | None:
     ``None``, a negative, a fraction) makes the ANALYSIS unusable rather than smaller: the cell then
     has no bound and refuses on ``analysis_missing``. A legitimate zero is still a legitimate zero.
 
-    The one thing that is NOT fatal is a field this XLA build does not expose at all: it is not part
-    of the sum and never was, and treating an absent attribute as a poisoned analysis would refuse
-    every cell on a build that names its fields differently. An analysis with no exposed field sums
-    to zero and returns ``None``, which is the same fail-closed answer by the same rule.
+    **F10f, reviewer RULING (against this function's previous skip): an ABSENT component is fatal
+    too.** The F10e version treated a field this XLA build does not expose as "not part of the sum",
+    and the reviewer executed what that costs: an analysis exposing only ``argument_size_in_bytes =
+    10`` returned a bound of 10, and against a watermark of 5 on a 100-byte device the cell
+    AUTHORIZED on a partial sum. **An absent field is UNKNOWN evidence, not a zero contribution** --
+    the four components are one bound, and three quarters of a bound is not a conservative one. A
+    build that names them differently provides no trustworthy implementation of this bound, and
+    refusing every cell on that unsupported structure is the correct fail-closed outcome; the
+    Planner concurs, noting that the pinned jax exposes all four and that any jax/XLA upgrade moves
+    the runtime-policy and manifest identity anyway, so a differently-shaped analysis legitimately
+    triggers re-review rather than silent partial sums.
     """
     try:
         compiled = program.step.lower(params, opt_state, program.batch, program.draws).compile()
@@ -3378,7 +3387,7 @@ def _program_bytes(program: "ProbeProgram", params, opt_state) -> int | None:
         try:
             value = getattr(analysis, field)  # two-arg by rule: issue #11 forbids the defaulted form
         except AttributeError:
-            continue  # a field this XLA build does not expose is not part of the sum
+            return None  # F10f: an absent component is UNKNOWN, and a partial sum is not a bound
         try:
             total += _exact_count(value, f"the compiled analysis's {field}", minimum=0)
         except ValueError:

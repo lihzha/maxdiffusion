@@ -1497,17 +1497,28 @@ def _measured_with_analysis(monkeypatch, **fields):
     )
 
 
+#: The four components an analysis must expose, as a WHOLE analysis. Every bad-component case below
+#: is this dict with ONE field replaced -- so it tests the component parse and not F10f's absence
+#: rule, which now also returns None and would otherwise make all five pass for the wrong reason.
+_WHOLE_ANALYSIS = {
+    "argument_size_in_bytes": 100,
+    "temp_size_in_bytes": 0,
+    "output_size_in_bytes": 0,
+    "alias_size_in_bytes": 0,
+}
+
+
 @pytest.mark.parametrize(
-    "fields, why",
+    "bad, why",
     [
-        ({"argument_size_in_bytes": 100, "temp_size_in_bytes": -90}, "a negative component subtracts from a real one"),
-        ({"argument_size_in_bytes": False, "temp_size_in_bytes": 100}, "False is not a byte count"),
-        ({"argument_size_in_bytes": "", "temp_size_in_bytes": 100}, "an empty string is not a byte count"),
-        ({"argument_size_in_bytes": None, "temp_size_in_bytes": 100}, "a component the analysis did not fill"),
-        ({"argument_size_in_bytes": 9.9, "temp_size_in_bytes": 100}, "a fractional component"),
+        ({"temp_size_in_bytes": -90}, "a negative component subtracts from a real one"),
+        ({"argument_size_in_bytes": False}, "False is not a byte count"),
+        ({"argument_size_in_bytes": ""}, "an empty string is not a byte count"),
+        ({"argument_size_in_bytes": None}, "a component the analysis did not fill"),
+        ({"argument_size_in_bytes": 9.9}, "a fractional component"),
     ],
 )
-def test_ONE_bad_ANALYSIS_COMPONENT_discards_the_whole_analysis(monkeypatch, fields, why):
+def test_ONE_bad_ANALYSIS_COMPONENT_discards_the_whole_analysis(monkeypatch, bad, why):
     """**F10e, review MODERATE — and the reviewer's executed case is the first row.**
 
     ``_exact_count(value or 0, ...)`` let ``False`` and ``""`` through as a legal-looking zero and
@@ -1516,10 +1527,40 @@ def test_ONE_bad_ANALYSIS_COMPONENT_discards_the_whole_analysis(monkeypatch, fie
     and the cell AUTHORIZED on a bound an order of magnitude under its real footprint. An understated
     bound authorizing a cell is the exact severity class this whole amendment exists to prevent.
     """
-    measurement = _measured_with_analysis(monkeypatch, **fields)
+    measurement = _measured_with_analysis(monkeypatch, **{**_WHOLE_ANALYSIS, **bad})
     assert measurement.analysis_bytes is None, why
     verdict = probe.cell_verdict(measurement)
     assert not verdict.fits and "analysis_missing" in verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "present",
+    [
+        ("argument_size_in_bytes",),
+        ("argument_size_in_bytes", "temp_size_in_bytes"),
+        ("argument_size_in_bytes", "temp_size_in_bytes", "output_size_in_bytes"),
+    ],
+)
+def test_an_ABSENT_ANALYSIS_COMPONENT_is_UNKNOWN_evidence_and_discards_the_bound(monkeypatch, present):
+    """**F10f, reviewer RULING — and this test is the inversion of the one F10e shipped.**
+
+    F10e skipped a component the build does not expose, on the reasoning that a field nobody
+    reports was never part of the sum. The reviewer executed what that costs: an analysis exposing
+    only ``argument_size_in_bytes = 10`` returned a bound of 10, and against a watermark of 5 on a
+    100-byte device the cell AUTHORIZED — on three quarters of a bound. An absent field is UNKNOWN
+    evidence, not a zero contribution, so a partial sum can never become the authorized bound; a
+    build shaped differently from the pinned one is an unsupported structure and every cell on it
+    refuses (and moves the runtime-policy/manifest identity anyway, which re-opens review).
+    """
+    partial = {field: _WHOLE_ANALYSIS[field] for field in present}
+    measurement = _measured_with_analysis(monkeypatch, **partial)
+    assert measurement.analysis_bytes is None, f"{len(present)} of four components is not a bound"
+    verdict = probe.cell_verdict(measurement)
+    assert not verdict.fits and "analysis_missing" in verdict.reasons
+    # The reviewer's exact numbers, spelled out: 10 of a 100-byte device with a 5-byte mark would
+    # have authorized, and does not, because there is no bound to authorize against.
+    single = _measured_with_analysis(monkeypatch, argument_size_in_bytes=10)
+    assert single.analysis_bytes is None and probe.cell_verdict(single).reasons[:1] == ("analysis_missing",)
 
 
 def test_a_LEGITIMATE_ZERO_component_is_still_a_component(monkeypatch):

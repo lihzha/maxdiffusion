@@ -3781,15 +3781,30 @@ def attack_f10e_shrink_the_bound_with_a_bad_component(tmp):
     the genuine ones. The reviewer's executed case is the first row here — ``(100, -90, 0, 0)`` sums
     to 10, and a 10-byte bound against a 5-byte watermark on a 100-byte device AUTHORIZES. An
     understated bound that authorizes is the severity class the whole amendment exists to prevent.
+
+    **F10f adds the ABSENT component**, on the reviewer's ruling against F10e's skip: an analysis
+    that exposes only some of the four is not a small bound, it is an unknown one, and a partial sum
+    must never become the authorized number.
     """
     fp = _probe_env()
+    whole = {
+        "argument_size_in_bytes": 100,
+        "temp_size_in_bytes": 0,
+        "output_size_in_bytes": 0,
+        "alias_size_in_bytes": 0,
+    }
     survivors = []
     for name, fields in (
-        ("a negative component", {"argument_size_in_bytes": 100, "temp_size_in_bytes": -90}),
-        ("False", {"argument_size_in_bytes": False, "temp_size_in_bytes": 100}),
-        ("an empty string", {"argument_size_in_bytes": "", "temp_size_in_bytes": 100}),
-        ("an unfilled component", {"argument_size_in_bytes": None, "temp_size_in_bytes": 100}),
-        ("a fractional component", {"argument_size_in_bytes": 9.9, "temp_size_in_bytes": 100}),
+        ("a negative component", {**whole, "temp_size_in_bytes": -90}),
+        ("False", {**whole, "argument_size_in_bytes": False}),
+        ("an empty string", {**whole, "argument_size_in_bytes": ""}),
+        ("an unfilled component", {**whole, "argument_size_in_bytes": None}),
+        ("a fractional component", {**whole, "argument_size_in_bytes": 9.9}),
+        # F10f: an ABSENT component is unknown evidence, not zero. The reviewer's shape: an analysis
+        # exposing only `argument_size_in_bytes = 10` used to be a 10-byte bound, and a 10-byte bound
+        # against a 5-byte watermark on a 100-byte device AUTHORIZED on three quarters of a bound.
+        ("only one of the four components", {"argument_size_in_bytes": 10}),
+        ("three of the four components", {k: v for k, v in whole.items() if k != "alias_size_in_bytes"}),
     ):
         program = _f10e_program(fp, **fields)
         analysis = fp._program_bytes(program, program.params, program.opt_state)
@@ -3800,7 +3815,10 @@ def attack_f10e_shrink_the_bound_with_a_bad_component(tmp):
         survivors.append(f"{name}: analysis {analysis}, verdict {'AUTHORIZED' if verdict.fits else verdict.reasons}")
     if survivors:
         return f"SUCCEEDED: {'; '.join(survivors)}"
-    return "REFUSED: one bad component discards the whole analysis, so the cell has no bound and refuses"
+    return (
+        "REFUSED: one bad OR ABSENT component discards the whole analysis (7 shapes), so the cell has no "
+        "bound and refuses"
+    )
 
 
 # =================================================================================================

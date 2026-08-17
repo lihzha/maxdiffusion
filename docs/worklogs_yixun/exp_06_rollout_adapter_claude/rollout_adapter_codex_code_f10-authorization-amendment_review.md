@@ -157,3 +157,35 @@ Verification:
 - F10d-1 and F10d-2 both refused under the current implementation.
 
 **Final verdict: REWORK**
+
+---
+
+# Verification pass of F10e (9830264..623107a) — same reviewer, 2026-08-17T~01:50Z
+
+
+**REWORK**
+tokens used
+106,868
+1. **MODERATE — An absent analysis attribute can still produce an incomplete authorizing bound.** [src/maxdiffusion/pos_rollout_fit_probe.py:3380](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:3380)
+
+   `_program_bytes` skips an absent attribute. Executed with only `argument_size_in_bytes=10`, it returned `10`; with watermark `5` and capacity `100`, the cell authorized. An absent field is unknown evidence, not zero contribution.
+
+   **Concrete fix:** change the `AttributeError` branch from `continue` to `return None`. Add a partial-analysis test where one of the four required attributes is absent and assert `analysis_missing`.
+
+F10d finding status:
+
+- **MODERATE `_program_bytes`: CLOSED** for all submitted counterexamples. Negative, `""`, `False`, `None`, and fractional components returned `None` and refused on `analysis_missing`; legitimate zero components summed correctly.
+- **MINOR banked header: CLOSED.** `device_count=True`, `"1"`, `1.0000001`, and `0` were refused against a one-device context; honest integer `1` loaded.
+- **MINOR probe sensitivity: CLOSED.** The forged payload retains raw `8.5` in the outer hash while derived fields use normalized `8`. With a truncating `ProbeContext.from_payload` restored in memory, F10d-2 adopted the artifact and reported `SUCCEEDED`, proving genuine regression sensitivity.
+
+**Item 4 ruling:** require absent-attribute-fatal. A build exposing differently named fields provides no trustworthy implementation of this four-component bound. Refusing all cells on that unsupported structure is the correct fail-closed outcome; skipping only becomes dangerous when some fields remain and the partial sum authorizes.
+
+Verification:
+
+- Focused pytest: **303 passed**, 9 warnings.
+- Harness: raw **101 REFUSED / 1 DECLARED / 4 SUCCEEDED**; the four successes were exactly P3-1/P3-3/P3-4/P3-9 launcher sandbox artifacts. Effective result: **105 REFUSED / 1 DECLARED / 0 SUCCEEDED**. **18/18 controls passed**.
+- AST census: exactly **20** bare `int()`/`float()` calls in both revisions—2 parser internals, 3 guarded text parses, 10 aggregation/helper sites, and 5 projection sites.
+- Previously closed behavior remains green: `watermark_missing`, unanimous aggregation, disagreement raising and quarantine recovery, exact headroom, F10c/F10d identity/binding/trial-count parsing, watermark equality, standing-lifetime behavior, and v7 enforcement.
+- Binding fields/digests, manifest logic, adoption policy, trainer gating, and measurement bracketing are unchanged.
+
+**REWORK**
