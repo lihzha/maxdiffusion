@@ -1262,7 +1262,13 @@ class CellVerdict:
 #    function) and the arithmetic in `project_wall_clock` (its measurement passed `cell_verdict` ->
 #    `_checked` on the line above).
 #
-# Anything else is a bug of the class this comment exists to close.
+# Anything else is a bug of the class this comment exists to close. **F10e adds the rule for what a
+# parser's REFUSAL means where the value is EVIDENCE rather than a record: it demotes, it does not
+# crash.** One unusable component of the compiled memory analysis discards the whole analysis
+# (`_program_bytes`), so the cell has no bound and refuses on `analysis_missing` -- the same
+# fail-closed answer as a backend that reports nothing, reached without ending a 3.5-hour ladder.
+# F10d's census (20 bare `int()`/`float()` sites, in the three classes above) is UNCHANGED by F10e:
+# both of its fixes replaced a coercion with a parser call and added none.
 
 
 def _seconds(value, what: str) -> float:
@@ -2349,11 +2355,19 @@ class CellArtifact:
                 f"the recorded context digest {payload.get('context_digest')!r} does not describe the recorded "
                 f"context: the two would bind different programs"
             )
-        for field, value in (
-            ("code_sha", context.code_sha),
-            ("device_count", context.device_count),
-            ("recipe_fingerprint", context.recipe_fingerprint),
+        # F10e, review MINOR: the redundant header is PARSED before it is compared. Python equality
+        # made `device_count: True` agree with a one-device context (`True == 1`), so the header --
+        # which exists so a refusal can name the three fields an operator reads without rebuilding a
+        # context -- could carry a value the declared invariant forbids. It changes no binding (the
+        # context above is authoritative), and an artifact that states its own identity in a type
+        # this module never writes is still not an artifact this module wrote.
+        if _exact_count(payload.get("device_count"), "the recorded device count header", minimum=1) != (
+            context.device_count
         ):
+            raise ValueError(
+                f"the recorded device_count {payload.get('device_count')!r} contradicts the recorded context"
+            )
+        for field, value in (("code_sha", context.code_sha), ("recipe_fingerprint", context.recipe_fingerprint)):
             if payload.get(field) != value:
                 raise ValueError(f"the recorded {field} {payload.get(field)!r} contradicts the recorded context")
         trials = tuple(CellMeasurement.from_payload(entry) for entry in payload["trials"])
@@ -3335,6 +3349,22 @@ def _program_bytes(program: "ProbeProgram", params, opt_state) -> int | None:
     an authorization measured before F3 is not comparable with one measured after — already enforced,
     because every authorization carries the ``code_sha`` it was measured on and the launcher refuses
     a training job whose SHA differs.
+
+    **F10e, review MODERATE — the components are parsed, and one bad component discards the whole
+    analysis.** F10d parsed them exactly but wrote ``_exact_count(value or 0, ...)``, and ``or 0`` is
+    a hole exactly the shape this amendment exists to close: ``False`` and ``""`` both became a
+    legal-looking zero, and a NEGATIVE component was accepted and SUBTRACTED from the genuine ones.
+    The reviewer executed the severe case — fields ``(100, -90, 0, 0)`` summed to an analysis of 10
+    against a watermark of 5 and a capacity of 100, and the cell AUTHORIZED on a bound an order of
+    magnitude under its real footprint, which is an understated bound authorizing a cell. Each
+    component is now ``>= 0`` and exactly a whole number, and anything else (a bool, a string, a
+    ``None``, a negative, a fraction) makes the ANALYSIS unusable rather than smaller: the cell then
+    has no bound and refuses on ``analysis_missing``. A legitimate zero is still a legitimate zero.
+
+    The one thing that is NOT fatal is a field this XLA build does not expose at all: it is not part
+    of the sum and never was, and treating an absent attribute as a poisoned analysis would refuse
+    every cell on a build that names its fields differently. An analysis with no exposed field sums
+    to zero and returns ``None``, which is the same fail-closed answer by the same rule.
     """
     try:
         compiled = program.step.lower(params, opt_state, program.batch, program.draws).compile()
@@ -3346,16 +3376,13 @@ def _program_bytes(program: "ProbeProgram", params, opt_state) -> int | None:
     total = 0
     for field in ("argument_size_in_bytes", "temp_size_in_bytes", "output_size_in_bytes", "alias_size_in_bytes"):
         try:
-            value = getattr(analysis, field)
+            value = getattr(analysis, field)  # two-arg by rule: issue #11 forbids the defaulted form
         except AttributeError:
             continue  # a field this XLA build does not expose is not part of the sum
         try:
-            # F10d: exact, like every other byte count -- and an analysis that answers with something
-            # that is not one is an UNUSABLE analysis, which is a missing source (the cell then has no
-            # bound and is refused), never a rounded one and never a dead ladder.
-            total += _exact_count(value or 0, f"the compiled analysis's {field}")
+            total += _exact_count(value, f"the compiled analysis's {field}", minimum=0)
         except ValueError:
-            return None
+            return None  # a component that is not a byte count makes the ANALYSIS unusable
     return total or None
 
 

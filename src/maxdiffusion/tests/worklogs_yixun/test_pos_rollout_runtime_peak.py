@@ -1430,6 +1430,132 @@ def test_a_cell_whose_program_reports_no_analysis_has_no_bound_and_is_refused(mo
     assert probe.cell_verdict(measurement).reasons == ("analysis_missing",)
 
 
+class _FakeAnalysis:
+    """What ``Compiled.memory_analysis()`` answers -- with whatever component values a test wants."""
+
+    def __init__(self, **fields):
+        for name, value in fields.items():
+            setattr(self, name, value)
+
+
+class _FakeStep:
+    """A ``program.step`` that is callable AND lowers/compiles to a chosen memory analysis."""
+
+    def __init__(self, analysis):
+        self._analysis = analysis
+
+    def __call__(self, params, opt_state, batch, draws):
+        return params, opt_state, 0.0
+
+    def lower(self, *args, **kwargs):
+        return self
+
+    def compile(self):
+        return self
+
+    def memory_analysis(self):
+        return self._analysis
+
+
+def _measured_with_analysis(monkeypatch, **fields):
+    """Run the real measurement path over a program whose compiled analysis reports ``fields``."""
+    step = _FakeStep(_FakeAnalysis(**fields))
+    monkeypatch.setattr(
+        probe,
+        "build_probe_program",
+        lambda config, cell, *, model_source=None: probe.ProbeProgram(
+            step=step, score=lambda params, batch, draws: 0.0, params={}, opt_state={}, batch={}, draws=()
+        ),
+    )
+    monkeypatch.setattr(probe, "_time_one_checkpoint", lambda config, cell, params, opt_state: 0.01)
+
+    class _Telemetry(probe.DeviceTelemetry):
+        """The reviewer's magnitudes: a mark that RISES to 5 inside the cell, under a capacity of 100.
+
+        It has to rise: with no rise AND no analysis there is nothing cell-local at all and the
+        measurement fails closed before any verdict exists (the F1b rule). Rising is what lets these
+        cases reach `cell_verdict` and be refused on the missing BOUND rather than on the missing
+        reading.
+        """
+
+        def __init__(self):
+            self.calls = 0
+
+        def reset_peak(self):
+            return False
+
+        def peak_and_capacity(self):
+            self.calls += 1
+            return (5 if self.calls > 1 else 1), 100
+
+    return probe.measure_cell_on_device(
+        cell=probe.FitCell("rollout", 32, 2),
+        context=_context(),
+        config=_tiny_config(),
+        telemetry=_Telemetry(),
+        model_source=object(),
+    )
+
+
+@pytest.mark.parametrize(
+    "fields, why",
+    [
+        ({"argument_size_in_bytes": 100, "temp_size_in_bytes": -90}, "a negative component subtracts from a real one"),
+        ({"argument_size_in_bytes": False, "temp_size_in_bytes": 100}, "False is not a byte count"),
+        ({"argument_size_in_bytes": "", "temp_size_in_bytes": 100}, "an empty string is not a byte count"),
+        ({"argument_size_in_bytes": None, "temp_size_in_bytes": 100}, "a component the analysis did not fill"),
+        ({"argument_size_in_bytes": 9.9, "temp_size_in_bytes": 100}, "a fractional component"),
+    ],
+)
+def test_ONE_bad_ANALYSIS_COMPONENT_discards_the_whole_analysis(monkeypatch, fields, why):
+    """**F10e, review MODERATE — and the reviewer's executed case is the first row.**
+
+    ``_exact_count(value or 0, ...)`` let ``False`` and ``""`` through as a legal-looking zero and
+    accepted NEGATIVE components, which then SUBTRACTED from the genuine ones: fields
+    ``(100, -90, 0, 0)`` summed to an analysis of 10 against a watermark of 5 and a capacity of 100,
+    and the cell AUTHORIZED on a bound an order of magnitude under its real footprint. An understated
+    bound authorizing a cell is the exact severity class this whole amendment exists to prevent.
+    """
+    measurement = _measured_with_analysis(monkeypatch, **fields)
+    assert measurement.analysis_bytes is None, why
+    verdict = probe.cell_verdict(measurement)
+    assert not verdict.fits and "analysis_missing" in verdict.reasons
+
+
+def test_a_LEGITIMATE_ZERO_component_is_still_a_component(monkeypatch):
+    """The other direction, and why the rule is ``>= 0`` rather than ``> 0``: a program that really
+    allocates no temporaries reports zero, and its analysis is still an analysis."""
+    measurement = _measured_with_analysis(
+        monkeypatch,
+        argument_size_in_bytes=40,
+        temp_size_in_bytes=0,
+        output_size_in_bytes=0,
+        alias_size_in_bytes=0,
+    )
+    assert measurement.analysis_bytes == 40
+    assert probe.cell_verdict(measurement).fits, "40 of a 100-byte device, with a watermark of 5, authorizes"
+
+
+def test_a_banked_HEADER_device_count_is_parsed_before_it_is_compared():
+    """**F10e, review MINOR.** The artifact repeats three context fields in its header so a refusal
+    can name them without rebuilding a context. Python equality made ``device_count: True`` agree
+    with a ONE-device context, so the header could carry a value the declared invariant forbids. It
+    changes no binding — the recorded context is authoritative — and an artifact that states its own
+    identity in a type this module never writes is still not an artifact this module wrote."""
+    context = dataclasses.replace(_context(), device_count=1)
+    artifact = probe.CellArtifact(
+        cell=probe.FitCell("rollout", 32, 2),
+        context=context,
+        job_identity="j",
+        trials=(_measurement(context=context),),
+    )
+    payload = artifact.as_payload()
+    assert probe.CellArtifact.from_payload(payload).context.device_count == 1, "the honest header still loads"
+    for value in (True, 1.0000001, "1", 0):
+        with pytest.raises(ValueError):
+            probe.CellArtifact.from_payload({**payload, "device_count": value})
+
+
 def test_the_window_closes_after_every_phase_the_cell_reports():
     """The structural companion: the close follows the eval and the checkpoint in the source, and the
     docstring that describes the order is now describing what happens."""

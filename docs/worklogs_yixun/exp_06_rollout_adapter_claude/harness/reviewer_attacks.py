@@ -2860,22 +2860,41 @@ def _f5_edit(marker, mutate):
     fractional-``device_count`` attack died inside `_f5_edit` with `THE PROBE DID NOT RUN` the first
     time, because the resync went through `from_payload`, which now refuses it. A real forger has
     the payload and the digest recipe (both public) and needs neither.
+
+    **F10e: and the derived fields are computed from the value production WOULD PARSE, not from the
+    raw one.** F10d hashed the raw ``8.5`` into the context digest, the header and the trial
+    bindings — so if bare-``int()`` truncation ever regressed, production would rebuild ``8``, all
+    three of those would disagree, and the probe would go on printing REFUSED while being blind to
+    the exact regression it exists to catch (the fourth caution: watching the wrong observable). The
+    derived fields are now computed over the NORMALIZED context, which is what the original exploit
+    did and what a competent forger does; the OUTER payload keeps the raw value and is hashed as-is,
+    so the only thing that can refuse it is the parse.
     """
     from maxdiffusion import pos_rollout_fit_probe as fp
 
     def _digest(mapping):
         return hashlib.sha256(json.dumps(mapping, sort_keys=True).encode("utf-8")).hexdigest()
 
+    def _as_production_would_parse(context):
+        """The context a bare-``int()`` reader would rebuild: numbers truncated, everything else as-is."""
+        parsed = dict(context)
+        try:
+            parsed["device_count"] = int(context["device_count"])
+        except (TypeError, ValueError):
+            pass
+        return parsed
+
     digest = pathlib.Path(marker).read_text().strip()
     content = pathlib.Path(fp._content_for_marker(marker, digest))
     payload = json.loads(content.read_text())["payload"]
     mutate(payload)
     recorded = payload["context"]
-    payload["context_digest"] = _digest(recorded)
-    payload["code_sha"] = recorded["code_sha"]
-    payload["device_count"] = recorded["device_count"]
-    payload["recipe_fingerprint"] = recorded["recipe_fingerprint"]
-    binding = _digest({key: recorded[key] for key in fp.ProbeContext.BINDING_FIELDS})
+    normalized = _as_production_would_parse(recorded)
+    payload["context_digest"] = _digest(normalized)
+    payload["code_sha"] = normalized["code_sha"]
+    payload["device_count"] = normalized["device_count"]
+    payload["recipe_fingerprint"] = normalized["recipe_fingerprint"]
+    binding = _digest({key: normalized[key] for key in fp.ProbeContext.BINDING_FIELDS})
     for trial in payload["trials"]:
         trial["context_digest"] = binding
     forged = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
@@ -3712,6 +3731,79 @@ def attack_f10d_bank_a_fractional_binding(tmp):
 
 
 # =================================================================================================
+# Round F10e — the last hole in the coercion invariant: the compiled analysis's own COMPONENTS.
+# =================================================================================================
+
+
+class _F10eAnalysis:
+    """A compiled memory analysis with whatever component values an attack wants."""
+
+    def __init__(self, **fields):
+        for name, value in fields.items():
+            setattr(self, name, value)
+
+
+class _F10eStep:
+    """A ``program.step`` that lowers and compiles to a chosen analysis (and is callable)."""
+
+    def __init__(self, analysis):
+        self._analysis = analysis
+
+    def __call__(self, params, opt_state, batch, draws):
+        return params, opt_state, 0.0
+
+    def lower(self, *args, **kwargs):
+        return self
+
+    def compile(self):
+        return self
+
+    def memory_analysis(self):
+        return self._analysis
+
+
+def _f10e_program(fp, **fields):
+    return fp.ProbeProgram(
+        step=_F10eStep(_F10eAnalysis(**fields)),
+        score=lambda params, batch, draws: 0.0,
+        params={},
+        opt_state={},
+        batch={},
+        draws=(),
+    )
+
+
+def attack_f10e_shrink_the_bound_with_a_bad_component(tmp):
+    """Understate the analysis by feeding its COMPONENTS values that are not byte counts.
+
+    Review MODERATE. ``_exact_count(value or 0, ...)`` was the last ``or 0`` in the module: ``False``
+    and ``""`` became a legal-looking zero, and a NEGATIVE component was accepted and SUBTRACTED from
+    the genuine ones. The reviewer's executed case is the first row here — ``(100, -90, 0, 0)`` sums
+    to 10, and a 10-byte bound against a 5-byte watermark on a 100-byte device AUTHORIZES. An
+    understated bound that authorizes is the severity class the whole amendment exists to prevent.
+    """
+    fp = _probe_env()
+    survivors = []
+    for name, fields in (
+        ("a negative component", {"argument_size_in_bytes": 100, "temp_size_in_bytes": -90}),
+        ("False", {"argument_size_in_bytes": False, "temp_size_in_bytes": 100}),
+        ("an empty string", {"argument_size_in_bytes": "", "temp_size_in_bytes": 100}),
+        ("an unfilled component", {"argument_size_in_bytes": None, "temp_size_in_bytes": 100}),
+        ("a fractional component", {"argument_size_in_bytes": 9.9, "temp_size_in_bytes": 100}),
+    ):
+        program = _f10e_program(fp, **fields)
+        analysis = fp._program_bytes(program, program.params, program.opt_state)
+        if analysis is None:
+            continue
+        measurement = _fit(fp, peak_bytes=analysis, analysis_bytes=analysis, watermark_bytes=5, capacity_bytes=100)
+        verdict = fp.cell_verdict(measurement)
+        survivors.append(f"{name}: analysis {analysis}, verdict {'AUTHORIZED' if verdict.fits else verdict.reasons}")
+    if survivors:
+        return f"SUCCEEDED: {'; '.join(survivors)}"
+    return "REFUSED: one bad component discards the whole analysis, so the cell has no bound and refuses"
+
+
+# =================================================================================================
 # Round F8b — THE HONEST CONTROLS, executed by the battery itself (review F8b, MAJOR 2).
 #
 # Every one of these points production at the LEGITIMATE case and requires it to be ACCEPTED. They
@@ -4063,6 +4155,32 @@ def control_a_consistent_banked_cell_still_adopts(tmp):
     return "CONTROL-PASSED: a consistent banked cell is still adopted without measurement, and still authorizes"
 
 
+def control_a_real_analysis_still_sums(tmp):
+    """F10e's control: a well-formed analysis -- INCLUDING legitimate zero components -- still sums.
+
+    The fix discards a whole analysis on one bad component. If it discarded a good one too, every
+    cell would refuse on `analysis_missing`, which is the M1-6 outage wearing a new reason, and every
+    attack above would still print REFUSED.
+    """
+    fp = _probe_env()
+    program = _f10e_program(
+        fp,
+        argument_size_in_bytes=40,
+        temp_size_in_bytes=0,
+        output_size_in_bytes=0,
+        alias_size_in_bytes=0,
+    )
+    analysis = fp._program_bytes(program, program.params, program.opt_state)
+    if analysis != 40:
+        return f"CONTROL-REFUSED: a well-formed analysis with a zero component summed to {analysis!r}, not 40"
+    verdict = fp.cell_verdict(
+        _fit(fp, peak_bytes=analysis, analysis_bytes=analysis, watermark_bytes=5, capacity_bytes=100)
+    )
+    if not verdict.fits:
+        return f"CONTROL-REFUSED: a 40-byte bound on a 100-byte device did not authorize ({verdict.reasons})"
+    return "CONTROL-PASSED: a real analysis still sums (zero components included) and still authorizes"
+
+
 def control_the_ordinary_numbers_still_parse(tmp):
     """F10d's control, and the one an exactness sweep most needs: **the honest values still work.**
 
@@ -4253,5 +4371,7 @@ if __name__ == "__main__":
         _report("F10d-1 truncate id/binding/cnt", attack_f10d_truncate_an_identity_a_binding_and_a_count, tmp)
         _report("F10d-2 bank a fractional bind ", attack_f10d_bank_a_fractional_binding, tmp)
         _control("  ctrl ordinary numbers parse :", control_the_ordinary_numbers_still_parse, tmp)
+        _report("F10e-1 shrink the bound       ", attack_f10e_shrink_the_bound_with_a_bad_component, tmp)
+        _control("  ctrl a real analysis sums   :", control_a_real_analysis_still_sums, tmp)
     if not _summarize():
         raise SystemExit(1)

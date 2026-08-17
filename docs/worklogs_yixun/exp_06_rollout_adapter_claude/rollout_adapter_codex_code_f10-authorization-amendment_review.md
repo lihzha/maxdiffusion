@@ -118,3 +118,42 @@ Verification:
 - Battery: printed **98 REFUSED / 1 DECLARED / 4 SUCCEEDED**, with the four successes exactly the known launcher sandbox failures; effective result **102 REFUSED / 1 DECLARED / 0 SUCCEEDED**. All **16 controls passed**.
 
 **REWORK**
+
+---
+
+# Verification pass of F10d (39f164e..9830264) — same reviewer, 2026-08-17T~01:00Z
+
+   [_program_bytes](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:3356)
+
+   `value or 0` bypasses `_exact_count` for `False` and `""`, while negative integers are accepted and subtract from genuine components. Executed example: fields `(100, -90, 0, 0)` produced analysis `10`; with watermark `5` and capacity `100`, `cell_verdict` authorized.
+
+   **Fix:** remove `or 0` and require `_exact_count(value, ..., minimum=0)`. Any invalid, negative, boolean, text, or missing value should return `None`; legitimate zero remains valid. Add end-to-end cases for `""`, `False`, and a negative component offsetting a positive one.
+
+2. **MINOR — the redundant banked `device_count` header is not parsed exactly.**  
+   [CellArtifact.from_payload](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:2352)
+
+   It is compared with Python equality rather than `_exact_count`; for a one-device context, `device_count=True` loads successfully. This does not alter the authoritative context binding, but contradicts the stated “every payload number, both directions” invariant.
+
+   **Fix:** parse the header with `_exact_count(..., minimum=1)` before comparing it with `context.device_count`.
+
+3. **MINOR — F10d-2 is green but not regression-sensitive to the original truncation.**  
+   [_f5_edit](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/docs/worklogs_yixun/exp_06_rollout_adapter_claude/harness/reviewer_attacks.py:2873), [F10d-2](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/docs/worklogs_yixun/exp_06_rollout_adapter_claude/harness/reviewer_attacks.py:3702)
+
+   The helper now computes context/header/trial digests from raw `8.5`. If bare `int()` truncation returns, production rebuilds `8`, so the probe still refuses on three internal inconsistencies and falsely reports success. A competent forger would compute those derived fields from normalized `8`, as the original exploit and publication unit test do.
+
+   **Fix:** let this attack preserve/recompute derived fields for normalized `8`, while hashing the complete outer payload containing raw `context.device_count=8.5`.
+
+**COERCION RESIDUAL: NOT-CLOSED.** The original four counterexamples are closed. My AST census matched exactly 20 bare calls: 2 parser internals, 3 guarded exclusion-text parses, 10 aggregation/helper sites, and 5 projection sites. The 15 class-3 calls are dominated on every production call path by `_checked` or `cell_verdict`; none were omitted or misclassified. Findings 1–2 nevertheless invalidate the broader module-wide invariant.
+
+**Item 4 ruling: ACCEPT the positive-integer checks.** Sampling steps, tensor dimensions, action dimensions, and logical batch sizes cannot meaningfully be zero or negative; early refusal is appropriate. Do not replace them with minimum-free `_exact_count`.
+
+Regression status: previously closed behavior remains closed—`watermark_missing`, unanimous aggregation, disagreement raising and quarantine self-healing, exact headroom, F10c exact counts, watermark equality, standing lifetime, v7 enforcement, binding/manifest/adoption policy, trainer gating, and phase bracketing. No unexpected trainer or policy hunks appeared.
+
+Verification:
+
+- Focused pytest: **296 passed**.
+- Harness: raw **100 REFUSED / 1 DECLARED / 4 SUCCEEDED**, with exactly P3-1/P3-3/P3-4/P3-9 being the known launcher sandbox artifacts; effective **104 REFUSED / 1 DECLARED / 0 SUCCEEDED**.
+- Controls: **17/17 passed**, including “ordinary numbers parse.”
+- F10d-1 and F10d-2 both refused under the current implementation.
+
+**Final verdict: REWORK**

@@ -553,19 +553,31 @@ def _damage(marker: str, mutate, *, resync=True):
     which proves nothing about whether adoption checks it against THIS process. Every derived field
     is therefore recomputed here before the re-hash, so the only thing left to refuse the artifact is
     the comparison this round is about.
+
+    **F10e: the derived fields are computed from the value production WOULD PARSE, not the raw one,
+    and without going through ``ProbeContext``** (which now refuses the malformed payloads these
+    forgeries need to write). Hashing the raw ``8.5`` would make the artifact self-inconsistent under
+    a REGRESSED production that truncated it to ``8`` — so the case would still be refused, on three
+    digest mismatches, while being blind to the truncation it exists to catch.
     """
     content = _content_of(marker)
     stored = json.loads(content.read_text())
     payload = stored["payload"]
     mutate(payload)
     if resync and isinstance(payload.get("context"), dict):
-        context = probe.ProbeContext.from_payload(payload["context"])
-        payload["context_digest"] = context.digest()
-        payload["code_sha"] = context.code_sha
-        payload["device_count"] = context.device_count
-        payload["recipe_fingerprint"] = context.recipe_fingerprint
+        recorded = payload["context"]
+        normalized = dict(recorded)
+        try:  # what a bare-`int()` reader would rebuild
+            normalized["device_count"] = int(recorded["device_count"])
+        except (TypeError, ValueError, KeyError):
+            pass
+        payload["context_digest"] = probe._digest(normalized)
+        payload["code_sha"] = normalized["code_sha"]
+        payload["device_count"] = normalized["device_count"]
+        payload["recipe_fingerprint"] = normalized["recipe_fingerprint"]
+        binding = probe._digest({key: normalized[key] for key in probe.ProbeContext.BINDING_FIELDS})
         for trial in payload["trials"]:
-            trial["context_digest"] = context.binding_digest()
+            trial["context_digest"] = binding
     # The forger REPUBLISHES properly -- new content object at its own digest, marker moved to it,
     # old object removed. Anything less would be refused by the content-addressing rather than by the
     # binding under test, and the test would then be measuring the wrong refusal.
@@ -1154,7 +1166,9 @@ def test_a_banked_cell_whose_BINDING_count_is_fractional_is_not_adopted(tmp_path
     did, through a truncation in the BINDING field itself. The count is parsed exactly on both sides
     now, so the artifact does not load and the cell is measured instead."""
     published = _publish_one(tmp_path)
-    _damage(published, lambda payload: payload["context"].update(device_count=8.5), resync=False)
+    # A COMPETENT forger: every derived field agrees with the 8 a truncating reader would rebuild,
+    # so the parse is the only thing standing between this artifact and adoption.
+    _damage(published, lambda payload: payload["context"].update(device_count=8.5))
     with pytest.raises(ValueError):
         probe.load_cell_artifact(published)
 
