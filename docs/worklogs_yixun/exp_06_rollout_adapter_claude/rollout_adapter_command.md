@@ -287,3 +287,18 @@ Awaiting Yixun's launch approval per announcement 02.
 guards passed). Full re-measure, ~2.5–3.5 h + queue weather. Expected: 10/12 authorized, rollout mb=8
 headroom-refused, 4 declared-excluded. On SUCCEEDED: read the newest att root's fit_authorization.json
 (protocol v7), verify against expectation, then M2 proposal.
+
+### M1-10 SUCCEEDED — M1 PHASE COMPLETE (2026-08-17T~05:20Z)
+
+Single attempt, ~3.3 h, exit 0. Authoritative root `gs://v6_east1d/datasets/droid_wan_pos_rollout/m1/att-0817-015756`;
+`fit_authorization.json` sha256 `ed6262a1…539a25`, protocol **exp06.fit_authorization.v7**. Table verified
+EXACTLY as predicted from M1-9's numbers re-derived under plan v2.9: **10 authorized** (one_step mb=8/16,
+rollout mb=16/32/64, both k), **2 refused** (rollout mb=8 k=2/4, reasons `['headroom']` only — no
+peak_source refusals remain), **4 declared-excluded** (#18), **0 watermark cross-check firings**, all 12
+measurements analysis-sourced with watermark fields recorded. Every re-measured value byte-identical to
+M1-9 (e.g. rollout m16 18,417,237,024 B; one_step m16 step 3.113 s). Old banks refused adoption for the
+right reasons in the log (manifest_digest differ; fit_cell v1≠v2). The F10 amendment did on hardware
+precisely what it was ruled to do. **M1 (v6e-8) is COMPLETE; M2 is unblocked pending Yixun's approval;
+M1′ (v6e-64 topology re-run) remains required before M3 per plan v2.7.**
+
+Step-time basis for M2 costing (GBS-256 cells): rollout mb=16 k=2 = 15.634 s/step; one_step mb=16 = 3.113 s/step.
