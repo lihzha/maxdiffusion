@@ -465,23 +465,27 @@ class FitCell:
     k_b: int
 
     def __post_init__(self) -> None:
+        """Validate AND normalize the identity (F10d, review MODERATE).
+
+        ``FitCell("rollout", 8.5, 2.5)`` used to construct, serialize as ``8/2`` and load back as the
+        cell at microbatch 8 — an identity a truncation invented, carrying the authorization of a
+        cell nobody measured. The two numbers are parsed exactly here, once, and the normalized
+        values are what every downstream reader (payload, filename, ladder rank) sees.
+        """
         if self.arm not in LADDER_ARMS:
             raise ValueError(f"unknown arm {self.arm!r}; exp_06 declares {list(LADDER_ARMS)}")
-        if int(self.microbatch) <= 0 or int(self.k_b) <= 0:
-            raise ValueError(f"a cell needs a positive microbatch and horizon, got {self.microbatch}/{self.k_b}")
+        object.__setattr__(self, "microbatch", _exact_count(self.microbatch, "a cell's microbatch", minimum=1))
+        object.__setattr__(self, "k_b", _exact_count(self.k_b, "a cell's horizon", minimum=1))
 
     def as_payload(self) -> dict:
-        return {"arm": str(self.arm), "microbatch": int(self.microbatch), "k_b": int(self.k_b)}
+        # The fields are already exact whole numbers: `__post_init__` normalized them.
+        return {"arm": str(self.arm), "microbatch": self.microbatch, "k_b": self.k_b}
 
     @classmethod
     def from_payload(cls, payload: Mapping) -> "FitCell":
-        # F10c: EXACT, like every other count read off a stored payload. A truncated identity is
-        # worse than a truncated number -- `microbatch: 8.5` would name, and authorize, cell 8.
-        return cls(
-            arm=str(payload["arm"]),
-            microbatch=_exact_count(payload["microbatch"], "a cell's microbatch"),
-            k_b=_exact_count(payload["k_b"], "a cell's horizon"),
-        )
+        # The parsing lives in `__post_init__` (F10d), so a cell built from a payload and a cell
+        # built in memory are the same cell by the same rule -- there is no second definition here.
+        return cls(arm=str(payload["arm"]), microbatch=payload["microbatch"], k_b=payload["k_b"])
 
 
 def ladder(
@@ -501,7 +505,14 @@ def ladder(
     (a counterexample, a one-cell probe) is re-ordered where the declaration speaks and never
     silently dropped.
     """
-    pairs = tuple(dict.fromkeys((str(arm), int(microbatch)) for arm in arms for microbatch in microbatches))
+    # F10d: the caller's ladder inputs are parsed exactly here, before they become ranks or cells.
+    pairs = tuple(
+        dict.fromkeys(
+            (str(arm), _exact_count(microbatch, "a ladder microbatch", minimum=1))
+            for arm in arms
+            for microbatch in microbatches
+        )
+    )
     rank = {pair: index for index, pair in enumerate(LADDER_ORDER)}
     ordered = sorted(pairs, key=lambda pair: rank.get(pair, len(rank)))
     return tuple(FitCell(arm=arm, microbatch=microbatch, k_b=k) for arm, microbatch in ordered for k in horizons)
@@ -526,7 +537,7 @@ def order_cells(cells: Sequence[FitCell]) -> tuple[FitCell, ...]:
     """
     requested = tuple(cells)
     rank = {pair: index for index, pair in enumerate(LADDER_ORDER)}
-    unknown = sorted({(str(cell.arm), int(cell.microbatch)) for cell in requested if _pair(cell) not in rank})
+    unknown = sorted({(str(cell.arm), cell.microbatch) for cell in requested if _pair(cell) not in rank})
     if unknown:
         raise ValueError(
             f"{unknown} is not named in LADDER_ORDER, so this probe has no declared position for it. The "
@@ -535,11 +546,12 @@ def order_cells(cells: Sequence[FitCell]) -> tuple[FitCell, ...]:
             f"after the one that ordering exists to run last. Add the pair to LADDER_ORDER, with its "
             f"reason, rather than passing it here."
         )
-    return tuple(sorted(requested, key=lambda cell: (rank[_pair(cell)], int(cell.k_b))))
+    return tuple(sorted(requested, key=lambda cell: (rank[_pair(cell)], cell.k_b)))
 
 
 def _pair(cell: FitCell) -> tuple:
-    return (str(cell.arm), int(cell.microbatch))
+    # The cell's identity is exact by construction (FitCell.__post_init__, F10d).
+    return (str(cell.arm), cell.microbatch)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -569,7 +581,9 @@ class ProbeContext:
             "manifest_digest": str(self.manifest_digest),
             "model_revision": str(self.model_revision),
             "device_kind": str(self.device_kind),
-            "device_count": int(self.device_count),
+            # F10d: a BINDING field, so exact in both directions -- a fractional count would
+            # otherwise serialize as a whole one and bind this context to a topology nobody ran.
+            "device_count": _exact_count(self.device_count, "the device count", minimum=1),
             "geometry": [[str(key), _plain(value)] for key, value in self.geometry],
             "recipe_fingerprint": str(self.recipe_fingerprint),
         }
@@ -612,7 +626,7 @@ class ProbeContext:
             manifest_digest=str(payload["manifest_digest"]),
             model_revision=str(payload["model_revision"]),
             device_kind=str(payload["device_kind"]),
-            device_count=int(payload["device_count"]),
+            device_count=_exact_count(payload["device_count"], "the recorded device count", minimum=1),
             geometry=tuple((str(key), value) for key, value in payload["geometry"]),
             recipe_fingerprint=str(payload["recipe_fingerprint"]),
         )
@@ -738,6 +752,9 @@ def parse_excluded_cells(config) -> tuple:
         arm, microbatch, horizon = (field.strip() for field in fields)
         if arm not in LADDER_ARMS:
             raise ValueError(f"{entry!r} names arm {arm!r}; exp_06 declares {list(LADDER_ARMS)}")
+        # The one place a NUMBER legitimately arrives as text: this key is a config string of the
+        # form "arm:microbatch:k". `isdigit()` is the exactness guard (no sign, no point, no
+        # exponent), and `FitCell.__post_init__` re-parses what comes out of it (F10d).
         for label, value in (("microbatch", microbatch), ("k", horizon)):
             if not value.isdigit() or int(value) <= 0:
                 raise ValueError(f"{entry!r}: {label} must be a positive whole number, got {value!r}")
@@ -1166,10 +1183,10 @@ class CellMeasurement:
             "peak_source": str(self.peak_source),
             "peak_attribution": str(self.peak_attribution),
             "context_digest": str(self.context_digest),
-            "compile_seconds": float(self.compile_seconds),
-            "step_seconds": float(self.step_seconds),
-            "eval_seconds": float(self.eval_seconds),
-            "checkpoint_seconds": float(self.checkpoint_seconds),
+            "compile_seconds": _seconds(self.compile_seconds, "the compile time"),
+            "step_seconds": _seconds(self.step_seconds, "the steady-state step time"),
+            "eval_seconds": _seconds(self.eval_seconds, "the evaluation overhead"),
+            "checkpoint_seconds": _seconds(self.checkpoint_seconds, "the checkpoint overhead"),
             # F10c: exact on the way OUT as well as on the way in -- serializing a malformed count
             # as a rounded one is how a record that never parsed becomes a record that does.
             "peak_bytes": _exact_count(self.peak_bytes, "the per-device peak"),
@@ -1195,10 +1212,10 @@ class CellMeasurement:
             return cls(
                 cell=FitCell.from_payload(payload["cell"]),
                 context_digest=str(payload["context_digest"]),
-                compile_seconds=float(payload["compile_seconds"]),
-                step_seconds=float(payload["step_seconds"]),
-                eval_seconds=float(payload["eval_seconds"]),
-                checkpoint_seconds=float(payload["checkpoint_seconds"]),
+                compile_seconds=_seconds(payload["compile_seconds"], "the recorded compile time"),
+                step_seconds=_seconds(payload["step_seconds"], "the recorded step time"),
+                eval_seconds=_seconds(payload["eval_seconds"], "the recorded evaluation overhead"),
+                checkpoint_seconds=_seconds(payload["checkpoint_seconds"], "the recorded checkpoint overhead"),
                 peak_bytes=_exact_count(payload["peak_bytes"], "the recorded per-device peak"),
                 capacity_bytes=_exact_count(payload["capacity_bytes"], "the recorded device capacity"),
                 reservation_failures=_exact_count(
@@ -1224,8 +1241,50 @@ class CellVerdict:
     numbers: dict
 
 
+# --- F10d: THE COERCION INVARIANT, and the closed set of exceptions to it ------------------------
+#
+# **Every number that crosses a payload, config or device boundary -- or that defines an identity, a
+# binding, a count or a piece of evidence -- is parsed by `_exact_count`, `_optional_bytes`,
+# `_positive_int` or `_seconds`, in BOTH directions (load and serialize).** Three review rounds found
+# the same truncation class at successively further sites (the byte counts, then the deserialization
+# boundary, then the cell IDENTITY / the BINDING device count / the projection cadences / the trial
+# count), so the rule is stated once, here, rather than re-derived per field.
+#
+# A bare `int()`/`float()` survives in exactly three situations, and an audit can enumerate them:
+#
+# 1. **Inside the parsers themselves** -- `_exact_count`'s `int(value)` and `_seconds`' `float(value)`,
+#    which are what "parse" means.
+# 2. **The one declared TEXT boundary**: `parse_excluded_cells` reads a config string of the form
+#    "arm:microbatch:k". `str.isdigit()` is its exactness guard (it admits no sign, point or
+#    exponent) and `FitCell.__post_init__` re-parses the result, so the number is checked twice.
+# 3. **Normalization or arithmetic AFTER a parser has proven the value** -- the maxima in
+#    `aggregate_trials`/`_worst`/`_unanimous` (every trial passed `_checked` at the top of that
+#    function) and the arithmetic in `project_wall_clock` (its measurement passed `cell_verdict` ->
+#    `_checked` on the line above).
+#
+# Anything else is a bug of the class this comment exists to close.
+
+
+def _seconds(value, what: str) -> float:
+    """A measured DURATION, parsed rather than coerced (F10d).
+
+    The counts got this discipline in F10b/F10c and the durations did not, which is the same
+    asymmetry one field along: ``float("3.5")`` and ``float(True)`` both parse, so a stored payload
+    could carry a duration written as text or as a flag and have it become a number that projects a
+    wall-clock. Range checking stays in :func:`_duration`; this is the type boundary.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"{what} is a measured duration, not a flag; got {value!r}")
+    if isinstance(value, (str, bytes, bytearray)):
+        raise ValueError(f"{what} is a number of seconds, not text; got {value!r}")
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError(f"{what} is a number of seconds; got {value!r} ({error})") from error
+
+
 def _duration(value, what: str, *, strictly_positive: bool = False) -> float:
-    number = float(value)
+    number = _seconds(value, what)
     if not math.isfinite(number):
         raise ValueError(f"{what} must be a finite number of seconds, got {value!r}: it was never measured")
     if number < 0.0 or (strictly_positive and number == 0.0):
@@ -1237,7 +1296,7 @@ def _duration(value, what: str, *, strictly_positive: bool = False) -> float:
     return number
 
 
-def _exact_count(value, what: str) -> int:
+def _exact_count(value, what: str, *, minimum: int | None = None) -> int:
     """A WHOLE number of bytes (or events), or a malformed record -- never a silent truncation.
 
     F10b, review MODERATE. This used to be a bare ``int(value)``, which rounds toward zero: a record
@@ -1259,20 +1318,31 @@ def _exact_count(value, what: str) -> int:
     admits the legitimate cases (an ``int`` subclass, a numpy integer, an integral float).
     ``str``/``bytes`` are rejected outright: ``int("9")`` parses, and a digit string is a record
     written by something that was not this probe.
+
+    **F10d: this is now THE parser for every count in the module, not only for bytes.** The review
+    found the same truncation class alive at four more sites -- a cell IDENTITY (``FitCell("rollout",
+    8.5, 2.5)`` published and loaded as cell 8/2), a BINDING field (a banked artifact carrying
+    ``device_count: 8.5`` loaded as 8 and adopted by an eight-device context), the projection inputs
+    (``_positive_int`` did its own float round trip), and ``trial_count`` (``1.9``, ``"1"`` and
+    ``True`` each accepted as one trial). ``minimum`` carries the field's own floor: identities,
+    device counts and trial counts are ``>= 1``; byte counts are ``>= 0`` and keep that check where
+    they are read.
     """
     if isinstance(value, bool):
-        raise ValueError(f"{what} is a byte count, not a flag; got {value!r}")
+        raise ValueError(f"{what} is a count, not a flag; got {value!r}")
     if isinstance(value, (str, bytes, bytearray)):
         raise ValueError(f"{what} is a number, not text; got {value!r}")
     try:
         count = int(value)
     except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError(f"{what} is a whole number of bytes; got {value!r} ({error})") from error
+        raise ValueError(f"{what} is a whole number; got {value!r} ({error})") from error
     if value != count:
         raise ValueError(
-            f"{what} is a WHOLE number of bytes; got {value!r}, and truncating it toward zero is how a "
+            f"{what} is a WHOLE number; got {value!r}, and truncating it toward zero is how a "
             f"record that does not fit acquires a number that does"
         )
+    if minimum is not None and count < minimum:
+        raise ValueError(f"{what} is at least {minimum}; got {value!r}")
     return count
 
 
@@ -1314,15 +1384,12 @@ def _checked_peak_evidence(measurement: CellMeasurement) -> None:
         )
     for name in ("analysis_bytes", "watermark_bytes", "watermark_before_bytes"):
         _optional_bytes(getattr(measurement, name))
-    analysis = measurement.analysis_bytes
-    if (
-        analysis is not None
-        and str(measurement.peak_source) in RUNTIME_PEAK_SOURCES
-        and int(measurement.peak_bytes) < int(analysis)
-    ):
+    analysis = _optional_bytes(measurement.analysis_bytes)
+    peak = _exact_count(measurement.peak_bytes, "the per-device peak")
+    if analysis is not None and str(measurement.peak_source) in RUNTIME_PEAK_SOURCES and peak < analysis:
         raise ValueError(
             f"this cell reports a runtime peak of {measurement.peak_bytes} bytes, below the "
-            f"{int(analysis)} bytes its own compiled memory analysis accounts for. A ceiling under the "
+            f"{analysis} bytes its own compiled memory analysis accounts for. A ceiling under the "
             f"program's own floor is not a ceiling, and no measurement this probe takes can produce one"
         )
 
@@ -1395,11 +1462,15 @@ def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
     The constant that stayed is :data:`HEADROOM_FRACTION`; the evidence it reads is what changed.
     """
     _checked(measurement)
-    capacity = int(measurement.capacity_bytes)
-    fraction = int(measurement.peak_bytes) / capacity
+    # Exact, not coerced (F10d) -- `_checked` has already proven these parse, and reading them the
+    # same way here keeps ONE definition of what a count is for the whole module.
+    capacity = _exact_count(measurement.capacity_bytes, "the device capacity", minimum=1)
+    peak = _exact_count(measurement.peak_bytes, "the per-device peak", minimum=1)
+    failures = _exact_count(measurement.reservation_failures, "reservation failures")
+    fraction = peak / capacity
     analysis = _optional_bytes(measurement.analysis_bytes)
     watermark = _optional_bytes(measurement.watermark_bytes)
-    bound = int(analysis) if analysis else None
+    bound = analysis if analysis else None  # a zero bound is not a bound
     reasons = []
     if bound is None:
         reasons.append("analysis_missing")
@@ -1411,24 +1482,24 @@ def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
         # `authorized_fraction` stays a float for reading; neither decides anything.
         if HEADROOM_DENOMINATOR * bound > HEADROOM_NUMERATOR * capacity:
             reasons.append("headroom")
-        if watermark is not None and int(watermark) > bound:
+        if watermark is not None and watermark > bound:
             # ONE fault -- the analysis is not an upper bound for this record -- and the watermark is
             # named as its cause whenever it explains it, because that is the cross-check the
             # contract is about. The `peak` branch is the residue: a reported peak above the bound
             # that the cell's own watermark does not account for.
             reasons.append("watermark_exceeds_analysis")
-        elif int(measurement.peak_bytes) > bound:
+        elif peak > bound:
             reasons.append("peak_exceeds_analysis")
     if str(measurement.peak_source) not in AUTHORIZING_PEAK_SOURCES:
         reasons.append("peak_source")
-    if int(measurement.reservation_failures) > 0:
+    if failures > 0:
         reasons.append("reservation_failures")
     return CellVerdict(
         fits=not reasons,
         reasons=tuple(reasons),
         numbers={
             **measurement.cell.as_payload(),
-            "peak_bytes": int(measurement.peak_bytes),
+            "peak_bytes": peak,
             "capacity_bytes": capacity,
             "peak_fraction": fraction,
             "headroom_fraction": HEADROOM_FRACTION,
@@ -1439,14 +1510,14 @@ def cell_verdict(measurement: CellMeasurement) -> CellVerdict:
             "authorized_bytes": bound,
             "authorized_fraction": None if bound is None else bound / capacity,
             "watermark_bytes": watermark,
-            "reservation_failures": int(measurement.reservation_failures),
+            "reservation_failures": failures,
             "peak_source": str(measurement.peak_source),
             "peak_attribution": str(measurement.peak_attribution),
             "analysis_bytes": analysis,
-            "compile_seconds": float(measurement.compile_seconds),
-            "step_seconds": float(measurement.step_seconds),
-            "eval_seconds": float(measurement.eval_seconds),
-            "checkpoint_seconds": float(measurement.checkpoint_seconds),
+            "compile_seconds": _seconds(measurement.compile_seconds, "the compile time"),
+            "step_seconds": _seconds(measurement.step_seconds, "the steady-state step time"),
+            "eval_seconds": _seconds(measurement.eval_seconds, "the evaluation overhead"),
+            "checkpoint_seconds": _seconds(measurement.checkpoint_seconds, "the checkpoint overhead"),
             "trials": 1,
         },
     )
@@ -1574,10 +1645,13 @@ def _weakest_attribution(trials: Sequence[CellMeasurement]) -> str:
 
 
 def _positive_int(value, what: str) -> int:
-    number = int(value)
-    if number != float(value) or number <= 0:
-        raise ValueError(f"{what} must be a positive whole number of steps, got {value!r}")
-    return number
+    """A positive whole number of steps -- parsed EXACTLY (F10d).
+
+    The old body compared ``int(value) != float(value)``, which is the float round trip F10c removed
+    from the byte counts and left here: the reviewer got ``Fraction(162129586585337857, 2)`` and the
+    ``Decimal`` equivalent through it as ``81064793292668928`` steps.
+    """
+    return _exact_count(value, what, minimum=1)
 
 
 def evaluation_count(max_train_steps: int, eval_every: int) -> int:
@@ -2029,7 +2103,9 @@ def load_authorization(path: str) -> dict:
             context=rebuilt,
             measurements=tuple(measurements),
             projection_inputs=tuple(
-                (key, int(inputs[key])) for key in ("max_train_steps", "eval_every", "checkpoint_every")
+                # F10d: the recorded cadences are parsed exactly, like every other stored number.
+                (key, _positive_int(inputs[key], f"the recorded {key}"))
+                for key in ("max_train_steps", "eval_every", "checkpoint_every")
             ),
             provenance=tuple((FitCell.from_payload(entry), str(entry["provenance"])) for entry in recorded_provenance),
             exclusions=tuple(
@@ -2184,7 +2260,7 @@ def derive_job_identity(config) -> str:
 
 def cell_artifact_name(cell: FitCell) -> str:
     """``rollout_m8_k2.json`` — the same ``<arm>_m<microbatch>_k<k>`` spelling the probe checkpoint uses."""
-    return f"{cell.arm}_m{int(cell.microbatch)}_k{int(cell.k_b)}.json"
+    return f"{cell.arm}_m{cell.microbatch}_k{cell.k_b}.json"
 
 
 def cell_publication_dir(authorization_path: str) -> str:
@@ -2248,7 +2324,7 @@ class CellArtifact:
             # operator reads in a refusal message, and a refusal that can name them without rebuilding
             # a context object is a refusal that still works when the context payload is unparseable.
             "code_sha": str(self.context.code_sha),
-            "device_count": int(self.context.device_count),
+            "device_count": _exact_count(self.context.device_count, "the device count", minimum=1),
             "recipe_fingerprint": str(self.context.recipe_fingerprint),
             "trial_count": len(self.trials),
             "trials": [trial.as_payload() for trial in self.trials],
@@ -2283,7 +2359,8 @@ class CellArtifact:
         trials = tuple(CellMeasurement.from_payload(entry) for entry in payload["trials"])
         if not trials:
             raise ValueError("a cell artifact records the trials it was measured over; this one records none")
-        if int(payload.get("trial_count", -1)) != len(trials):
+        # F10d: `1.9`, `"1"` and `True` each used to pass as one trial.
+        if _exact_count(payload.get("trial_count", -1), "the recorded trial count", minimum=1) != len(trials):
             raise ValueError(f"it claims {payload.get('trial_count')!r} trials and records {len(trials)}")
         for trial in trials:
             _checked(trial)
@@ -2517,9 +2594,9 @@ def _adoption_refusal(artifact: CellArtifact, *, cell: FitCell, context: ProbeCo
             f"{context.manifest_digest[:12]}/{context.device_kind}x{context.device_count}). Adoption is bound "
             f"to the RUNNING BYTES: the manifest, the model, the topology, the geometry and the recipe."
         )
-    if len(artifact.trials) != int(trials):
+    if len(artifact.trials) != _positive_int(trials, "the trials per cell"):
         return (
-            f"it records {len(artifact.trials)} trial(s) and this ladder runs {int(trials)}: a cell repeats "
+            f"it records {len(artifact.trials)} trial(s) and this ladder runs {trials}: a cell repeats "
             f"because one trial cannot show a cell that only fits when the neighbours are idle"
         )
     return ""
@@ -2622,7 +2699,7 @@ class _MissingPeak(ValueError):
 
     def __init__(self, message: str, capacity: int):
         super().__init__(message)
-        self.capacity = int(capacity)
+        self.capacity = _exact_count(capacity, "the device capacity behind a missing peak")
 
 
 def classify_peak(
@@ -2698,14 +2775,16 @@ def classify_peak(
     cell's own warm-up steps run between the two, and a window that opens after them can never be
     raised by the cell that opened it. That was the M1-6 defect, exactly.
     """
-    standing = int(watermark_before)
-    opened = standing if cell_watermark is None else int(cell_watermark)
+    # F10d: every number this function decides from is parsed exactly, at the seam callers reach.
+    standing = _exact_count(watermark_before, "the watermark at the open of this window")
+    opened = standing if cell_watermark is None else _exact_count(cell_watermark, "the cell's opening watermark")
+    capacity = _exact_count(capacity, "the device capacity")
     analysis = _optional_bytes(analysis_bytes) or None
 
     runtime: int | None = None
     attribution = PEAK_ATTRIBUTION_NONE
     if watermark is not None:
-        mark = int(watermark)
+        mark = _exact_count(watermark, "the runtime watermark")
         if reset:
             runtime, attribution = mark, PEAK_ATTRIBUTION_RESET
         elif mark > opened:
@@ -2732,12 +2811,12 @@ def classify_peak(
         # runtime reading is kept below for audit; it is not what this cell is judged on.
         attribution = PEAK_ATTRIBUTION_NONE
     return PeakEvidence(
-        peak_bytes=int(sources[name]),
-        capacity_bytes=int(capacity),
+        peak_bytes=sources[name],
+        capacity_bytes=capacity,
         peak_source=name,
         peak_attribution=attribution,
         analysis_bytes=analysis,
-        watermark_bytes=None if watermark is None else int(watermark),
+        watermark_bytes=None if watermark is None else mark,
         watermark_before_bytes=opened,
     )
 
@@ -2782,13 +2861,15 @@ class DeviceTelemetry:
             # the whole ladder over a statistic one backend does not export.
             raise _MissingPeak(
                 "the runtime's memory statistics do not report ['peak_bytes_in_use']; the peak cannot be read",
-                min(int(entry["bytes_limit"]) for _, entry in stats),
+                min(_exact_count(entry["bytes_limit"], "the backend's reported capacity") for _, entry in stats),
             )
         if missing:
             raise ValueError(f"the runtime's memory statistics do not report {missing}; the peak cannot be read")
+        # F10d: parsed exactly at the device boundary -- a backend that answers 9.9 has not
+        # reported a byte count, and rounding it would put an invented number into the evidence.
         return (
-            max(int(entry["peak_bytes_in_use"]) for _, entry in stats),
-            min(int(entry["bytes_limit"]) for _, entry in stats),
+            max(_exact_count(entry["peak_bytes_in_use"], "the backend's reported peak") for _, entry in stats),
+            min(_exact_count(entry["bytes_limit"], "the backend's reported capacity") for _, entry in stats),
         )
 
     def watermark_and_capacity(self) -> tuple[int | None, int]:
@@ -2800,8 +2881,8 @@ class DeviceTelemetry:
         try:
             peak, capacity = self.peak_and_capacity()
         except _MissingPeak as gap:
-            return None, int(gap.capacity)
-        return int(peak), int(capacity)
+            return None, gap.capacity
+        return peak, capacity
 
     def reset_peak(self) -> bool:
         """Ask the backend to clear its high-water mark. ``True`` when a facility exists and worked."""
@@ -2837,13 +2918,15 @@ class DeviceTelemetry:
         region (a reviewer's counterexample) gets.
         """
         reset = self.reset_peak()
-        peak, capacity = self.watermark_and_capacity()
-        standing = 0 if reset else int(peak or 0)
+        peak, capacity = self.watermark_and_capacity()  # exact at the device boundary (F10d)
+        standing = 0 if reset else (peak or 0)
         return {
             "reset": reset,
             "peak_before": standing,
-            "cell_watermark": standing if cell_watermark is None else int(cell_watermark),
-            "capacity": int(capacity),
+            "cell_watermark": (
+                standing if cell_watermark is None else _exact_count(cell_watermark, "the cell's opening watermark")
+            ),
+            "capacity": capacity,
         }
 
     def close_steady_state(self, before: Mapping) -> dict:
@@ -2854,7 +2937,7 @@ class DeviceTelemetry:
         into the number the cell is judged on.
         """
         watermark, capacity = self.watermark_and_capacity()
-        return {"watermark": watermark, "capacity": int(capacity)}
+        return {"watermark": watermark, "capacity": capacity}
 
     def steady_state_evidence(
         self, before: Mapping, after: Mapping, *, program_bytes: int | None = None
@@ -2862,9 +2945,9 @@ class DeviceTelemetry:
         """This cell's peak with its provenance — see :func:`classify_peak` for the rule and its proof."""
         return classify_peak(
             watermark=after.get("watermark"),
-            capacity=int(after.get("capacity", before.get("capacity", 0))),
+            capacity=after.get("capacity", before.get("capacity", 0)),
             reset=bool(before.get("reset")),
-            watermark_before=int(before.get("peak_before", 0)),
+            watermark_before=before.get("peak_before", 0),
             cell_watermark=before.get("cell_watermark"),
             analysis_bytes=program_bytes,
         )
@@ -2942,17 +3025,19 @@ def build_probe_program(config, cell: FitCell, *, model_source=None):
 
     source = model_source or ProductionModelSource()
     backbone = source.load(config)
-    num_steps = int(declared(config, "side_adapter_sampling_steps"))
-    program = build_training_program(config, backbone, arm=str(cell.arm), k_b=int(cell.k_b), num_steps=num_steps)
+    # F10d: every config number this program is BUILT from is parsed exactly -- a fractional value
+    # here would silently build a different program from the one the config says was measured.
+    num_steps = _positive_int(declared(config, "side_adapter_sampling_steps"), "side_adapter_sampling_steps")
+    program = build_training_program(config, backbone, arm=str(cell.arm), k_b=cell.k_b, num_steps=num_steps)
 
-    microbatch = int(cell.microbatch)
+    microbatch = cell.microbatch
     latents = (
-        int(declared(config, "latent_channels")),
-        int(declared(config, "latent_frames")),
-        int(declared(config, "latent_height")),
-        int(declared(config, "latent_width")),
+        _positive_int(declared(config, "latent_channels"), "latent_channels"),
+        _positive_int(declared(config, "latent_frames"), "latent_frames"),
+        _positive_int(declared(config, "latent_height"), "latent_height"),
+        _positive_int(declared(config, "latent_width"), "latent_width"),
     )
-    logical_batch = int(declared(config, "pos_logical_batch"))
+    logical_batch = _positive_int(declared(config, "pos_logical_batch"), "pos_logical_batch")
     # Built at the LOGICAL width and split by the production stream seam, exactly as a training step
     # does: the accumulation plan is part of what is being measured, and tiling a microbatch up would
     # have let the probe's own arithmetic decide the split instead of the seam's.
@@ -2960,17 +3045,22 @@ def build_probe_program(config, cell: FitCell, *, model_source=None):
         "z_video": jnp.zeros((logical_batch, *latents), jnp.float32),
         "z_i0": jnp.zeros((logical_batch, latents[0], 1, latents[2], latents[3]), jnp.float32),
         "actions": jnp.zeros(
-            (logical_batch, int(declared(config, "action_len")), int(declared(config, "action_dim"))), jnp.float32
+            (
+                logical_batch,
+                _positive_int(declared(config, "action_len"), "action_len"),
+                _positive_int(declared(config, "action_dim"), "action_dim"),
+            ),
+            jnp.float32,
         ),
     }
     _, micro_draws, micro_batches = draw_step_for_batch(
         batch,
-        seed=int(declared(config, "seed")),
+        seed=_exact_count(declared(config, "seed"), "seed"),  # a seed of 0 is legal; a seed of 0.5 is not
         global_step=1,
         logical_batch=logical_batch,
         microbatch=microbatch,
         num_steps=num_steps,
-        k_b=int(cell.k_b),
+        k_b=cell.k_b,
     )
 
     # THE SHARED DEV SCORER, timed as-is. The private one here jitted `loss_fn(...)[0]`, and that
@@ -3002,7 +3092,7 @@ def _draws_from(values):
 def _first_example(array, microbatch: int):
     """The batch-one slice of a per-example draw; a scalar or per-batch value is passed through."""
     shape = getattr(array, "shape")
-    return array[:1] if shape[:1] == (int(microbatch),) else array
+    return array[:1] if shape[:1] == (microbatch,) else array
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3256,9 +3346,16 @@ def _program_bytes(program: "ProbeProgram", params, opt_state) -> int | None:
     total = 0
     for field in ("argument_size_in_bytes", "temp_size_in_bytes", "output_size_in_bytes", "alias_size_in_bytes"):
         try:
-            total += int(getattr(analysis, field) or 0)
+            value = getattr(analysis, field)
         except AttributeError:
-            continue
+            continue  # a field this XLA build does not expose is not part of the sum
+        try:
+            # F10d: exact, like every other byte count -- and an analysis that answers with something
+            # that is not one is an UNUSABLE analysis, which is a missing source (the cell then has no
+            # bound and is refused), never a rounded one and never a dead ladder.
+            total += _exact_count(value or 0, f"the compiled analysis's {field}")
+        except ValueError:
+            return None
     return total or None
 
 
@@ -3306,7 +3403,7 @@ def _time_one_checkpoint(config, cell: FitCell, params, opt_state) -> float:
     manager = build_checkpoint_manager(destination, max_to_keep=1)
     state = RolloutTrainState(params=params, opt_state=opt_state, step=0)
     started = time.perf_counter()
-    save_checkpoint(manager, state, dev_metric=0.0, history=(), arm=str(cell.arm), k_b=int(cell.k_b))
+    save_checkpoint(manager, state, dev_metric=0.0, history=(), arm=str(cell.arm), k_b=cell.k_b)
     manager.wait_until_finished()
     elapsed = time.perf_counter() - started
     _remove_probe_checkpoint(destination, remote=is_remote(destination))
@@ -3366,7 +3463,7 @@ def run_fit_probe(
             f"keeps a cell above the headroom floor from refusing every cell measured after it.",
             flush=True,
         )
-    logical_batch = int(declared(config, "pos_logical_batch"))
+    logical_batch = _positive_int(declared(config, "pos_logical_batch"), "pos_logical_batch")
 
     # F6: DECLARED-unreachable cells are removed BEFORE anything is built. Not measured, not compiled,
     # not adopted -- the whole point is that compiling one of them killed the VM twice on the same
@@ -3378,7 +3475,7 @@ def run_fit_probe(
         print(f"[M1] EXCLUDED {cell.arm} microbatch={cell.microbatch} k={cell.k_b}: {why_excluded}", flush=True)
     survivors = tuple(cell for cell in requested if cell not in declared_out)
 
-    runnable = tuple(cell for cell in survivors if logical_batch % int(cell.microbatch) == 0)
+    runnable = tuple(cell for cell in survivors if logical_batch % cell.microbatch == 0)
     skipped = tuple((cell, SKIPPED_NON_DIVIDING) for cell in survivors if cell not in runnable)
     for cell, _ in skipped:
         print(
@@ -3405,7 +3502,8 @@ def run_fit_probe(
             f"{len(skipped)} with a microbatch not dividing pos_logical_batch={logical_batch}), so this probe "
             f"would publish a table that authorizes nothing; the ladder is {LADDER_MICROBATCH}"
         )
-    if int(trials) < 1:
+    trials = _positive_int(trials, "the trials per cell")
+    if trials < 1:
         raise ValueError(f"each cell needs at least one trial, got {trials!r}")
     # The destination is checked BEFORE the first cell is measured (F5). It used to be read after the
     # ladder, so a probe pointed nowhere spent the whole 3.5 hours to discover it -- and F5's per-cell
@@ -3427,7 +3525,7 @@ def run_fit_probe(
     provenance: dict[FitCell, str] = {}
     for cell in requested:
         adopted = adopt_published_cell(
-            cell, context=context, job_identity=job_identity, root=adoption_root, trials=int(trials)
+            cell, context=context, job_identity=job_identity, root=adoption_root, trials=trials
         )
         if adopted is not None:
             banked, source = adopted
@@ -3437,7 +3535,7 @@ def run_fit_probe(
             provenance[cell] = f"{ADOPTED_PREFIX}{source}"
             continue
         taken: list[CellMeasurement] = []
-        for trial in range(int(trials)):
+        for trial in range(trials):
             measurement = measurer(cell=cell, context=context, config=config)
             if not isinstance(measurement, CellMeasurement):
                 raise ValueError(
@@ -3466,9 +3564,9 @@ def run_fit_probe(
     evidence = build_evidence(
         context,
         measurements,
-        max_train_steps=int(declared(config, "max_train_steps")),
-        eval_every=int(declared(config, "eval_every")),
-        checkpoint_every=int(declared(config, "checkpoint_every")),
+        max_train_steps=_positive_int(declared(config, "max_train_steps"), "max_train_steps"),
+        eval_every=_positive_int(declared(config, "eval_every"), "eval_every"),
+        checkpoint_every=_positive_int(declared(config, "checkpoint_every"), "checkpoint_every"),
         provenance=provenance,
         exclusions=exclusions,
         skipped=skipped,

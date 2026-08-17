@@ -241,8 +241,10 @@ def test_a_cell_is_the_arm_the_microbatch_and_the_horizon():
     assert hash(cell) == hash(probe.FitCell("rollout", 32, 2))
     with pytest.raises(ValueError, match="unknown arm"):
         probe.FitCell(arm="corrective_ss", microbatch=32, k_b=2)
-    for bad in ({"microbatch": 0}, {"k_b": 0}, {"microbatch": -8}):
-        with pytest.raises(ValueError, match="positive microbatch and horizon"):
+    # F10d: the identity is parsed by the one exact-count parser the whole module uses, so a
+    # non-positive OR a non-integral microbatch/horizon is refused at construction.
+    for bad in ({"microbatch": 0}, {"k_b": 0}, {"microbatch": -8}, {"microbatch": 8.5}, {"k_b": "2"}):
+        with pytest.raises(ValueError, match="microbatch|horizon"):
             probe.FitCell(**{"arm": "rollout", "microbatch": 32, "k_b": 2, **bad})
 
 
@@ -390,8 +392,14 @@ def test_a_projection_cannot_be_built_from_costs_nobody_measured():
             probe.project_wall_clock(
                 _measurement(**override), max_train_steps=10_000, eval_every=1_000, checkpoint_every=1_000
             )
-    for bad in ({"max_train_steps": 0}, {"eval_every": -1}, {"checkpoint_every": 0}, {"eval_every": 2.5}):
-        with pytest.raises(ValueError, match="positive whole number"):
+    for bad in (
+        {"max_train_steps": 0},
+        {"eval_every": -1},
+        {"checkpoint_every": 0},
+        {"eval_every": 2.5},
+        {"max_train_steps": "10000"},  # F10d: a cadence written as text is not a cadence
+    ):
+        with pytest.raises(ValueError, match="(?i)whole number|at least 1|not text"):
             probe.project_wall_clock(
                 _measurement(), **{"max_train_steps": 10_000, "eval_every": 1_000, "checkpoint_every": 1_000, **bad}
             )

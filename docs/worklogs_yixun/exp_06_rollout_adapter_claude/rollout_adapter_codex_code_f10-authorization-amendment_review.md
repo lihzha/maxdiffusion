@@ -83,3 +83,38 @@ A v8 bump is **not required** under the stated facts. Refusal reasons are derive
 - Diff scope is seven declared files: production module, two tests, harness/README/log, and the prior review document. Binding, manifest, adoption-policy, trainer, and phase-bracketing code had no diff hunks.
 
 **Final verdict: REWORK**
+
+---
+
+# Verification pass of F10c (1e5dda9..39f164e) — same reviewer, 2026-08-17T~00:05Z
+
+codex
+1. **MODERATE — exact-count handling remains asymmetric and still truncates identity/evidence fields.**  
+   [pos_rollout_fit_probe.py:467](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:467), [pos_rollout_fit_probe.py:563](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:563), [pos_rollout_fit_probe.py:1576](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:1576), [pos_rollout_fit_probe.py:2286](/Users/yixunhu/Home/maxdiffusion-worktrees/claude-exp_06_rollout_adapter/src/maxdiffusion/pos_rollout_fit_probe.py:2286)
+
+   Executed counterexamples:
+
+   - `FitCell("rollout", 8.5, 2.5)` published successfully and loaded as cell `8/2`; `__post_init__` and `as_payload` still use bare `int()`.
+   - A digest-valid bank artifact with authoritative `context.device_count=8.5` loaded as `8` and was adopted by an eight-device context. `ProbeContext.from_payload` and `as_payload` still truncate a binding field.
+   - `_positive_int(Fraction(162129586585337857, 2), ...)` and the equivalent `Decimal` returned `81064793292668928`.
+   - `CellArtifact.from_payload` accepted `trial_count=1.9`, `"1"`, and `True` as one trial.
+
+   **Concrete fix:** use `_exact_count` plus positivity checks in `FitCell.__post_init__/as_payload`, `ProbeContext.from_payload/as_payload`, `_positive_int`, and `CellArtifact.from_payload`’s `trial_count`. Validate raw ladder/trial/projection inputs before any `int()` normalization.
+
+Residual rulings:
+
+- **Malformed-count residual (a)+(b): NOT-CLOSED.** The specifically requested boundary `Fraction`/`Decimal`, digit-string, bytes, bytearray, bool, and overflow cases now fail correctly. The digest-valid `peak_bytes=9.9`, `peak_bytes=True`, and `reservation_failures=0.9` artifacts also fail parsing and are remeasured. However, the remaining coercion paths above still alter cell identity, topology binding, or evidence.
+- **Retry-poisoning residual: CLOSED.** Attempt 2 quarantined the disagreement, remeasured, and published normally; attempt 3 adopted attempt 2’s clean bank without measurement. `_adoption_refusal` returned a refusal string for the poisoned artifact, and malformed cached inputs were caught without killing the ladder.
+
+No regressions found in the previously closed behavior: unconditional `watermark_missing`, unanimous aggregation, disagreement raises, exact headroom, watermark equality, standing watermark lifetime, v7 enforcement, binding/manifest policy, trainer gating, and bracketing all remain intact. The production diff has no unexpected trainer or policy hunks.
+
+4. **Publication ruling:** accept `publish_cell` raising. Analysis disagreement is an evidence invariant violation, not a storage condition. Early failure also avoids banking poison and potentially wasting the remainder of the ladder; skip-write-and-log is not required.
+
+5. **Test-surface ruling:** accepted. Adoption round-trip tests belong naturally in `test_pos_rollout_cell_publication.py`, where the fixtures and retry machinery already live, and it is within the declared fit-probe test surface.
+
+Verification:
+
+- Focused pytest: **290 passed**.
+- Battery: printed **98 REFUSED / 1 DECLARED / 4 SUCCEEDED**, with the four successes exactly the known launcher sandbox failures; effective result **102 REFUSED / 1 DECLARED / 0 SUCCEEDED**. All **16 controls passed**.
+
+**REWORK**

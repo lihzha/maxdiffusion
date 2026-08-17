@@ -1148,6 +1148,23 @@ def test_a_banked_cell_carrying_a_MALFORMED_count_is_not_adopted(tmp_path, capsy
         assert isinstance(recorded["peak_bytes"], int) and not isinstance(recorded["peak_bytes"], bool)
 
 
+def test_a_banked_cell_whose_BINDING_count_is_fractional_is_not_adopted(tmp_path, capsys):
+    """**F10d, review MODERATE.** A digest-valid artifact recording ``device_count: 8.5`` loaded as
+    ``8`` and was ADOPTED by an eight-device context: a topology nobody ran, binding to one that
+    did, through a truncation in the BINDING field itself. The count is parsed exactly on both sides
+    now, so the artifact does not load and the cell is measured instead."""
+    published = _publish_one(tmp_path)
+    _damage(published, lambda payload: payload["context"].update(device_count=8.5), resync=False)
+    with pytest.raises(ValueError):
+        probe.load_cell_artifact(published)
+
+    measurer, table = _resume(tmp_path)
+    assert len(measurer.calls) == 2, "a fractional device count is re-measured, never rounded into a match"
+    assert "not adopting" in capsys.readouterr().out
+    assert len(table["authorized_cells"]) == 1
+    assert table["context"]["device_count"] == 8
+
+
 def test_a_banked_cell_carrying_a_NEGATIVE_count_is_still_not_adopted(tmp_path):
     """The case F10b already refused, kept as a test because F10c rewrote the parser around it."""
     published = _publish_one(tmp_path)

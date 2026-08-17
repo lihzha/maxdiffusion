@@ -2854,20 +2854,30 @@ def _f5_edit(marker, mutate):
     removed. Otherwise every probe below would be refused by the content addressing rather than by
     the binding it exists to test -- the same "refused for the wrong reason" trap that made the
     `_Gfile` and the smuggling probe useless.
+
+    **F10d: the resync is computed from the PAYLOAD, not through ``ProbeContext``.** A forgery that
+    production's own parser cannot even read is a forgery this harness could not test — the
+    fractional-``device_count`` attack died inside `_f5_edit` with `THE PROBE DID NOT RUN` the first
+    time, because the resync went through `from_payload`, which now refuses it. A real forger has
+    the payload and the digest recipe (both public) and needs neither.
     """
     from maxdiffusion import pos_rollout_fit_probe as fp
+
+    def _digest(mapping):
+        return hashlib.sha256(json.dumps(mapping, sort_keys=True).encode("utf-8")).hexdigest()
 
     digest = pathlib.Path(marker).read_text().strip()
     content = pathlib.Path(fp._content_for_marker(marker, digest))
     payload = json.loads(content.read_text())["payload"]
     mutate(payload)
-    context = fp.ProbeContext.from_payload(payload["context"])
-    payload["context_digest"] = context.digest()
-    payload["code_sha"] = context.code_sha
-    payload["device_count"] = context.device_count
-    payload["recipe_fingerprint"] = context.recipe_fingerprint
+    recorded = payload["context"]
+    payload["context_digest"] = _digest(recorded)
+    payload["code_sha"] = recorded["code_sha"]
+    payload["device_count"] = recorded["device_count"]
+    payload["recipe_fingerprint"] = recorded["recipe_fingerprint"]
+    binding = _digest({key: recorded[key] for key in fp.ProbeContext.BINDING_FIELDS})
     for trial in payload["trials"]:
-        trial["context_digest"] = context.binding_digest()
+        trial["context_digest"] = binding
     forged = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     pathlib.Path(fp._content_for_marker(marker, forged)).write_text(
         json.dumps({"payload": payload, "sha256": forged}, sort_keys=True)
@@ -3607,6 +3617,101 @@ def attack_f10c_bank_a_malformed_count(tmp):
 
 
 # =================================================================================================
+# Round F10d — the SAME truncation class at the sites the F10c sweep had not reached: the cell
+# IDENTITY, the BINDING device count, the projection cadences, the trial count.
+# =================================================================================================
+
+
+def attack_f10d_truncate_an_identity_a_binding_and_a_count(tmp):
+    """Four numbers that are not byte counts, and every one of them used to round into a valid record.
+
+    Review MODERATE. F10b/F10c made the BYTES exact and stopped there, which left the same class
+    alive one field over: ``FitCell("rollout", 8.5, 2.5)`` published and loaded as cell 8/2 (an
+    identity a truncation invented, carrying the authorization of a cell nobody measured);
+    ``device_count: 8.5`` in a banked artifact loaded as 8 and matched an eight-device context on a
+    BINDING field; ``_positive_int`` took a fractional ``Fraction``/``Decimal`` through its own float
+    round trip; and ``trial_count`` accepted ``1.9``, ``"1"`` and ``True`` as one trial.
+    """
+    import decimal
+    import fractions
+
+    fp = _probe_env()
+    context = _ctx(fp)
+    survivors = []
+
+    for microbatch, k_b in ((8.5, 2), (8, 2.5), ("8", 2)):
+        try:
+            cell = fp.FitCell(arm="rollout", microbatch=microbatch, k_b=k_b)
+        except ValueError:
+            continue
+        survivors.append(f"FitCell({microbatch!r}, {k_b!r}) constructed as {cell.as_payload()}")
+    for microbatch in (8.5, "8"):
+        try:
+            loaded = fp.FitCell.from_payload({"arm": "rollout", "microbatch": microbatch, "k_b": 2})
+        except ValueError:
+            continue
+        survivors.append(f"a payload identity {microbatch!r} loaded as {loaded.microbatch}")
+
+    for value in (8.5, "8", True):
+        try:
+            rebuilt = fp.ProbeContext.from_payload({**context.as_payload(), "device_count": value})
+        except ValueError:
+            continue
+        if rebuilt.binding_digest() == context.binding_digest():
+            survivors.append(f"device_count={value!r} BOUND to an 8-device context")
+        else:
+            survivors.append(f"device_count={value!r} loaded as {rebuilt.device_count}")
+    try:
+        dataclasses.replace(context, device_count=8.5).as_payload()
+        survivors.append("a fractional device_count SERIALIZED into a clean payload")
+    except ValueError:
+        pass
+
+    for value in (fractions.Fraction(162129586585337857, 2), decimal.Decimal("81064793292668928.5"), "10000"):
+        try:
+            steps = fp.project_wall_clock(
+                _fit(fp, context), max_train_steps=value, eval_every=1_000, checkpoint_every=1_000
+            )["max_train_steps"]
+        except ValueError:
+            continue
+        survivors.append(f"a cadence of {value!r} projected as {steps} steps")
+
+    artifact = fp.CellArtifact(
+        cell=fp.FitCell("rollout", 32, 2), context=context, job_identity="j", trials=(_fit(fp, context),)
+    )
+    for value in (1.9, "1", True):
+        try:
+            fp.CellArtifact.from_payload({**artifact.as_payload(), "trial_count": value})
+        except ValueError:
+            continue
+        survivors.append(f"trial_count={value!r} accepted as one trial")
+
+    if survivors:
+        return f"SUCCEEDED: {'; '.join(survivors)}"
+    return "REFUSED: identity, binding, cadence and trial count are all parsed exactly, in both directions"
+
+
+def attack_f10d_bank_a_fractional_binding(tmp):
+    """The same truncation where it pays: a banked artifact recording ``device_count: 8.5``.
+
+    It loaded as ``8`` and was ADOPTED by an eight-device context — a topology nobody ran, matching
+    one that did, on the field adoption exists to compare.
+    """
+    fp = _probe_env()
+    published = _f5_publish(fp, tmp, "fracbinding")
+    _f5_edit(published, lambda payload: payload["context"].update(device_count=8.5))
+    try:
+        calls, table = _f5_resume(fp, tmp, "fracbinding")
+    except ValueError as error:
+        return f"SUCCEEDED: the retry DIED on the artifact rather than re-measuring it: {str(error)[:110]}"
+    if not calls:
+        return "SUCCEEDED: an artifact whose device count is fractional was adopted"
+    if table["context"]["device_count"] != 8:
+        return f"SUCCEEDED: the published context records {table['context']['device_count']!r} devices"
+    return f"REFUSED: the fractional binding was not adopted; the cell was re-measured ({len(calls)} trials)"
+
+
+# =================================================================================================
 # Round F8b — THE HONEST CONTROLS, executed by the battery itself (review F8b, MAJOR 2).
 #
 # Every one of these points production at the LEGITIMATE case and requires it to be ACCEPTED. They
@@ -3958,6 +4063,44 @@ def control_a_consistent_banked_cell_still_adopts(tmp):
     return "CONTROL-PASSED: a consistent banked cell is still adopted without measurement, and still authorizes"
 
 
+def control_the_ordinary_numbers_still_parse(tmp):
+    """F10d's control, and the one an exactness sweep most needs: **the honest values still work.**
+
+    Every number in this module is now parsed by one strict parser. A parser that is too strict
+    fails the same way a truncation does — silently, in production, at 3.5 hours in — and no attack
+    above would notice, because they all assert refusals. So: the deployed ladder builds, a cell
+    round-trips through its payload unchanged, an integral float is a whole number, the real
+    cadences project, and a well-formed artifact still loads and adopts.
+    """
+    fp = _probe_env()
+    context = _ctx(fp)
+    cells = fp.ladder()
+    if (
+        len(cells) != 16
+        or fp.cell_artifact_name(cells[0]) != f"{cells[0].arm}_m{cells[0].microbatch}_k{cells[0].k_b}.json"
+    ):
+        return f"CONTROL-REFUSED: the declared ladder no longer builds ({len(cells)} cells)"
+    if fp.FitCell("rollout", 8.0, 2.0) != fp.FitCell("rollout", 8, 2):
+        return "CONTROL-REFUSED: an integral float is no longer accepted as the whole number it is"
+
+    measurement = _fit(fp, context)
+    if fp.CellMeasurement.from_payload(measurement.as_payload()) != measurement:
+        return "CONTROL-REFUSED: an honest measurement no longer round-trips through its payload"
+    if fp.ProbeContext.from_payload(context.as_payload()).binding_digest() != context.binding_digest():
+        return "CONTROL-REFUSED: an honest context no longer round-trips to the same binding"
+    projected = fp.project_wall_clock(measurement, max_train_steps=10_000, eval_every=1_000, checkpoint_every=1_000)
+    if projected["max_train_steps"] != 10_000 or projected["total_hours"] <= 0:
+        return f"CONTROL-REFUSED: the real cadences no longer project ({projected.get('max_train_steps')!r})"
+
+    _f5_publish(fp, tmp, "parsecontrol")
+    calls, table = _f5_resume(fp, tmp, "parsecontrol")
+    if calls or not table["authorized_cells"]:
+        return f"CONTROL-REFUSED: a well-formed banked cell was re-measured ({len(calls)} trials)"
+    return (
+        "CONTROL-PASSED: the ladder, the payload round trip, the binding, the projection and adoption all still work"
+    )
+
+
 def control_exactly_ninety_percent_authorizes(tmp):
     """F10b's boundary on the other side: the headroom rule did not get stricter, only exact.
 
@@ -4107,5 +4250,8 @@ if __name__ == "__main__":
         _report("F10c-1 poison the bank forever", attack_f10c_poison_the_bank_forever, tmp)
         _report("F10c-2 bank a malformed count ", attack_f10c_bank_a_malformed_count, tmp)
         _control("  ctrl consistent bank adopts :", control_a_consistent_banked_cell_still_adopts, tmp)
+        _report("F10d-1 truncate id/binding/cnt", attack_f10d_truncate_an_identity_a_binding_and_a_count, tmp)
+        _report("F10d-2 bank a fractional bind ", attack_f10d_bank_a_fractional_binding, tmp)
+        _control("  ctrl ordinary numbers parse :", control_the_ordinary_numbers_still_parse, tmp)
     if not _summarize():
         raise SystemExit(1)

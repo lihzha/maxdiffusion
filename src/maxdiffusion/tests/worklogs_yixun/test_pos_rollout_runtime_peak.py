@@ -607,6 +607,105 @@ def test_a_recorded_payload_is_parsed_EXACTLY_rather_than_coerced():
     assert probe.CellMeasurement.from_payload(payload).as_payload() == payload
 
 
+# =================================================================================================
+# F10d — the SAME truncation class at the four sites the exactness sweep had not reached: the cell
+# IDENTITY, the BINDING device count, the projection cadences and the trial count.
+# =================================================================================================
+
+
+def test_a_fractional_CELL_IDENTITY_is_refused_at_construction_and_at_load():
+    """``FitCell("rollout", 8.5, 2.5)`` used to construct, serialize as ``8/2`` and load back as the
+    cell at microbatch 8 — an identity invented by a truncation, carrying the authorization of a
+    cell nobody measured. Parsed exactly in ``__post_init__`` now, so both doors close at once."""
+    for microbatch, k_b in ((8.5, 2), (8, 2.5), ("8", 2), (8, True), (0, 2), (8, 0)):
+        with pytest.raises(ValueError):
+            probe.FitCell(arm="rollout", microbatch=microbatch, k_b=k_b)
+        with pytest.raises(ValueError):
+            probe.FitCell.from_payload({"arm": "rollout", "microbatch": microbatch, "k_b": k_b})
+    # ...and the identity is NORMALIZED, so a legitimate integral float is one cell, not two.
+    cell = probe.FitCell(arm="rollout", microbatch=8.0, k_b=2.0)
+    assert (cell.microbatch, cell.k_b) == (8, 2) and cell == probe.FitCell("rollout", 8, 2)
+    assert cell.as_payload() == {"arm": "rollout", "microbatch": 8, "k_b": 2}
+    assert probe.cell_artifact_name(cell) == "rollout_m8_k2.json"
+
+
+def test_a_fractional_DEVICE_COUNT_cannot_bind_or_serialize():
+    """The binding field, both directions. A digest-valid artifact recording ``device_count: 8.5``
+    loaded as 8 and was ADOPTED by an eight-device context — a topology nobody ran, matching one
+    that did. ``as_payload`` is the other half: a malformed in-memory value must not be able to
+    serialize into a clean payload (and the binding digest is computed from that payload)."""
+    context = _context()
+    payload = context.as_payload()
+    for value in (8.5, "8", True, 0):
+        with pytest.raises(ValueError):
+            probe.ProbeContext.from_payload({**payload, "device_count": value})
+        with pytest.raises(ValueError):
+            dataclasses.replace(context, device_count=value).as_payload()
+        with pytest.raises(ValueError):
+            dataclasses.replace(context, device_count=value).binding_digest()
+
+
+def test_a_fractional_TRIAL_COUNT_is_refused(tmp_path):
+    """``1.9``, ``"1"`` and ``True`` each passed as one trial, so an artifact could claim a trial
+    count it does not have while the aggregation rules read the trials themselves."""
+    context = _context()
+    artifact = probe.CellArtifact(
+        cell=probe.FitCell("rollout", 32, 2), context=context, job_identity="j", trials=(_measurement(context),)
+    )
+    payload = artifact.as_payload()
+    assert probe.CellArtifact.from_payload(payload).trials, "the honest artifact still loads"
+    for value in (1.9, "1", True, 0, -1):
+        with pytest.raises(ValueError):
+            probe.CellArtifact.from_payload({**payload, "trial_count": value})
+
+
+def test_the_projection_cadences_are_parsed_exactly():
+    """``_positive_int`` did its own ``int(value) != float(value)`` round trip, and the reviewer put
+    ``Fraction(162129586585337857, 2)`` and the ``Decimal`` equivalent through it as
+    ``81064793292668928`` steps. It is the module's one count parser now."""
+    import decimal
+    import fractions
+
+    for value in (
+        fractions.Fraction(162129586585337857, 2),
+        decimal.Decimal("81064793292668928.5"),
+        "10000",
+        True,
+        0,
+        -1,
+        2.5,
+    ):
+        with pytest.raises(ValueError):
+            probe.project_wall_clock(_measurement(), max_train_steps=value, eval_every=1_000, checkpoint_every=1_000)
+    # The legitimate spellings still project.
+    for value in (10_000, 10_000.0, fractions.Fraction(10_000, 1), decimal.Decimal(10_000)):
+        assert (
+            probe.project_wall_clock(_measurement(), max_train_steps=value, eval_every=1_000, checkpoint_every=1_000)[
+                "max_train_steps"
+            ]
+            == 10_000
+        )
+
+
+def test_a_malformed_in_memory_value_cannot_SERIALIZE_into_a_clean_payload():
+    """The symmetry the sweep is really about: every parser runs on the way OUT as well as in.
+
+    Otherwise a record that could never be loaded could still be WRITTEN — banked, digest-signed and
+    read back as the rounded number it never was.
+    """
+    honest = _measurement()
+    for field, value in (
+        ("peak_bytes", 20.5 * _GIB + 0.5),
+        ("capacity_bytes", True),
+        ("reservation_failures", 0.9),
+        ("analysis_bytes", 9.9),
+        ("step_seconds", "3.5"),
+    ):
+        with pytest.raises(ValueError):
+            dataclasses.replace(honest, **{field: value}).as_payload()
+    assert probe.CellMeasurement.from_payload(honest.as_payload()) == honest
+
+
 def test_a_reported_peak_above_the_bound_that_no_watermark_explains_is_refused_too():
     """The residue of the same fault. ``classify_peak`` reports ``max(runtime, analysis)``, so a
     peak above the analysis always has a watermark behind it -- unless the record was assembled
