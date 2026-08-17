@@ -280,3 +280,10 @@ the F10 edits moved the deployed manifest and the M1-9 bank is correctly non-ado
 the amended rule: **10/12 authorized** (one_step mb=8/16, rollout mb=16/32/64, both k),
 rollout mb=8 refused on true headroom (96.6%), 4 cells declared-excluded (issue #18).
 Awaiting Yixun's launch approval per announcement 02.
+
+### M1-10 SUBMITTED (2026-08-17T01:37Z, by Yixun via `!` after package approval)
+
+**Job id:** `20260817-013752-c700b0fd-exp06-m1h-fitprobe-yixun` (v6e-8, submit_m1h.sh at RULED=f872a42,
+guards passed). Full re-measure, ~2.5–3.5 h + queue weather. Expected: 10/12 authorized, rollout mb=8
+headroom-refused, 4 declared-excluded. On SUCCEEDED: read the newest att root's fit_authorization.json
+(protocol v7), verify against expectation, then M2 proposal.
