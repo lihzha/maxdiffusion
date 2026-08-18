@@ -580,3 +580,64 @@ collided with "gs://" URLs (third shell-quoting incident this experiment; rule r
 loops must never colon-split, and every submission's env block is now spelled explicitly). All 7
 failed fast and were relaunched individually: {'cinst2': '20260808-181438-e25ac804-exp03-c-inst2-yixun', 'cssim3': '20260808-181559-cded0c2e-exp03-c-ssim3-yixun', 'lam25inst2': '20260808-181648-6db3ea6b-exp03-lam25-inst2-yixun', 'lam75inst2': '20260808-181757-fe412acf-exp03-lam75-inst2-yixun', 'lam25ssim2': '20260808-181840-e6213b6f-exp03-lam25-ssim2-yixun', 'lam75ssim2': '20260808-181946-d2944540-exp03-lam75-ssim2-yixun', 'aextssim2': '20260808-182023-0f183bc0-exp03-aext-ssim2-yixun'}. A-ext instrument (solo-launched, correct)
 LANDED: 12,500 anchor 0.1186258 (must equal 0.1186258 — VALID), 15,000 0.1164789, 17,500 0.1153891.
+
+## Job 26 — POST-CLOSURE FOLLOW-ON (Yixun 2026-08-16): C @ LR 5e-5, 20k from init — launched 2026-08-16T20:46Z
+
+**Yixun's direct request** (post-closure follow-on, motivated by the exp_02 VAE-ceiling/plateau
+discussion): objective **C (combined, lambda=0.5)** from init at **LR 5e-5**, **20,000 steps**,
+GBS 256, train100 (1,629 windows / 100 slots), W&B on. Approved in-conversation; submitted by
+Yixun via `!` (session TPU submissions classifier-blocked).
+
+```
+tpu create v6 -n 64 --name exp03-c-lr5e5-20k-yixun ... -- bash bash_scripts/train_wan_exp03.sh
+  RUN_NAME=wan-exp03-c-lr5e5-20k-20260816
+  EXP03_OBJECTIVE=combined EXP03_LAMBDA=0.5 EXP03_K_A=2 EXP03_K_B=2
+  EXP03_P_SS_MAX=0.5 EXP03_P_SS_RAMP_STEPS=500 EXP03_RAMP_ORIGIN=0 EXP03_GRAD_ACCUMULATION=2
+  LEARNING_RATE=5e-5 WARMUP_STEPS=250 MAX_TRAIN_STEPS=20000
+  CHECKPOINT_STEPS=[250,1000,2500,5000,7500,10000,12500,15000,17500,20000]
+  DATA_DIR=gs://v6_east1d/datasets/exp02_overfit100/train100 EXPECTED_WINDOWS=1629 NUM_TEXT_SLOTS=100
+  WANDB_PROJECT=maxdiffusion-wan-overfit100 COMMIT=005d188 (tip; last code commit af29d5a, guard-verified)
+```
+
+- **Job id:** `20260816-204616-dae49225-exp03-c-lr5e5-20k-yixun` (v6e-64). Spec env verified in-bucket post-submit.
+- **Cost estimate:** 0.299 steps/s measured (Job 18 fit smoke; combined + N=2 accumulation) → **~18.6 h** compute; Orbax resume from listed checkpoints on preemption.
+- **Deliverables (post-training, ~3 hand-offs):** instrument job over all 10 checkpoints (val-loss curve; fixed-RNG one-step loss on the same 1,629 windows — no held-out set exists in this design); canonical-100 SSIM x 10 checkpoints (SSIM-vs-steps); full-set 1,629 metrics @20k -> rank -> videos for best/75th/median/25th/worst; train-loss curve from W&B. Figures local.
+- **Note:** this is a post-closure follow-on run under exp_03's certified code (af29d5a), NOT a reopening of exp_03's adjudicated gates; comparator context = exp_02's 20k trajectory (canonical 0.9536 @20k via lr1e4 escalation path).
+
+### Job 26 FAILED (2026-08-16T21:14Z) — keyless wandb.init killed the pod; fix + Job 26b prepared
+
+Attempt 1 died 17 min in: the process-0 worker (worker 8) reached `wandb.init` and raised
+`wandb.errors.UsageError: No API key configured` — the v6-64 worker image provisions NO
+WANDB_API_KEY and our submission forwarded none (only WANDB_PROJECT). Process 0 died; the other 15
+hosts timed out at the shutdown barrier (exit 134, "1/16 reached"). NOT the historical barrier-134
+infra pattern — an application failure with a clean root cause. No training step ran, no checkpoint
+written, W&B shows nothing anywhere (Yixun asked; this is the answer).
+
+**Two fixes:** (1) `83d3302` — forward-key guard in `train_wan_exp03.sh` (forwarded WANDB_API_KEY
+survives worker-secrets sourcing; exp_02 cc6e3a1 pattern). (2) Job 26b submit script sources
+Yixun's local secrets and passes `--env WANDB_API_KEY`, so the run lands under HIS entity
+(the new-launcher behavior). Guards: src pinned unchanged since af29d5a; bash_scripts pinned at
+83d3302. All training parameters identical to Job 26. Awaiting Yixun's `!` resubmission.
+
+### Job 26b SUBMITTED (2026-08-17T01:52Z, by Yixun via `!`)
+
+**Job id:** `20260817-015206-5e16ed42-exp03-c-lr5e5-20k-yixun` (v6e-64). Identical training params to
+Job 26; launcher fix 83d3302 aboard; Yixun's WANDB_API_KEY forwarded (run lands under his entity in
+`maxdiffusion-wan-overfit100`). COMMIT=6f76d16. ~18.6 h to 20k.
+**Disclosed defect in the submit script (Planner's):** the script's `set -x` after sourcing secrets
+xtrace-printed the forwarded WANDB_API_KEY into the submitting terminal (issue-#12 class). The key
+also lives in the job spec on GCS (lab-standard for forwarded secrets). Rotation is Yixun's call;
+future submit scripts must not re-enable xtrace around secret-bearing commands.
+
+### Job 26b FAILED after 8 attempts; Job 26c resubmitted with flax pin (2026-08-18T02:51Z)
+
+26b: attempt 1 trained 02:03→14:24Z (~13k steps; checkpoints through 10000 valid — the 12500 write
+was cut by the preemption and correctly discarded by Orbax atomicity); attempts 2–7 = infra
+preemption storm (SUSPENDING/SUSPENDED ×4, TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE ×2, QR disappeared);
+attempt 8 = APPLICATION_ERROR: fresh venv pulled the just-released **flax 0.12.8**, whose
+`flax.nnx.variablelib` needs `jax.experimental.hijax.MutableHiType` (absent in the stable-stack jax)
+→ import crash, worker 3 exit 1, non-retryable (**issue #27: unpinned flax**).
+**Job 26c:** `20260818-025145-05227854-exp03-c-lr5e5-20k-yixun` — identical envs to 26b (key
+forwarded, no xtrace this time), setup-cmd appends `.venv/bin/python -m pip install flax==0.12.6`.
+Same RUN_NAME ⇒ Orbax resumes from 10000; remaining 10k steps ≈ 9 h. W&B: new run in the same
+project/entity, curve continues from step 10000.
