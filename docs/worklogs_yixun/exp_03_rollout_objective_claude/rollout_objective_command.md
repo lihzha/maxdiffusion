@@ -651,3 +651,13 @@ overnight; removes/renames `jax.experimental.hijax.MutableHiType`). The flax==0.
 `jax.core.Effect`) and Job 26c + both M2 arms all died in preflight/import. Correct fix, verified
 from the Aug-17 final-install logs: co-pin `jax[tpu]==0.11.0 flax==0.12.8` (libtpu 0.0.41 rides the
 extra) AFTER all setup phases. Job 26d + M2 pair #3 resubmitted with that pin.
+
+### Jobs 26c/26d FAILED pre-training (issue #27 drifts); Job 26e = quartet pin (2026-08-18T13:24Z)
+
+26c (025145) died on flax-0.12.6-vs-jax-0.11.1 (`jax.core.Effect`); 26d (044811) died at TPU backend
+init: the `jax[tpu]==0.11.0` pin's extra re-resolved libtpu to the just-released 0.0.44.1, which
+refuses our AllGather continuation-fusion LIBTPU_INIT_ARGS flag on v6e/ghostlite. Training progress
+safe at ckpt 10000 throughout (both died before restore). **Job 26e:**
+`20260818-132443-ee431695-exp03-c-lr5e5-20k-yixun` — quartet pin `jax==0.11.0 jaxlib==0.11.0
+libtpu==0.0.41 flax==0.12.8` (the Aug-17 stack 26b trained 12 h on), same envs/key forwarding,
+resumes from 10000, ~9 h to 20k.
