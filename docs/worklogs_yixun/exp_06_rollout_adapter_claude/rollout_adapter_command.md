@@ -317,3 +317,19 @@ and pos_logical_batch/train_data_dir are authorization-bound ⇒ M2 runs the AUT
 (GBS 256, full train stream). Continuation rule unchanged. Pair rule: either arm preempted ⇒ both restart.
 Watch: pin visible in setup logs; assert_cell_authorized passes (first production test of the F7b
 binding gate); finite losses; step times ≈ M1-10's cell numbers.
+
+### Issue #27 in full: three env drifts, three failed batches, quartet pin (2026-08-18T13:24Z)
+
+Batches 2 (02:51Z) and 3 (04:47Z) of the M2 pair both died pre-training on supply-chain drift, each
+with a DIFFERENT root cause, each proven from final-install log lines:
+- Aug-17 working stack (M1-10, 26b's 12 h): jax 0.11.0 / jaxlib 0.11.0 / libtpu 0.0.41 / flax 0.12.8.
+- Overnight jax 0.11.1 broke flax 0.12.8 (`hijax.MutableHiType` removed) → 26b att-8.
+- Planner pin #1 (flax==0.12.6 only) inverted the mismatch (`jax.core.Effect`) → batch-2 trio died.
+- Planner pin #2 (jax[tpu]==0.11.0 + flax==0.12.8) restored jax but the `[tpu]` extra re-resolved
+  libtpu to the just-released **0.0.44.1**, which REFUSES our `LIBTPU_INIT_ARGS` AllGather
+  continuation-fusion flag on the v6e ("ghostlite") platform at backend init → batch-3 trio died.
+**Batch 4 (this one): full quartet pin** `pip install jax==0.11.0 jaxlib==0.11.0 libtpu==0.0.41
+flax==0.12.8` (no extras, nothing left to a resolver) — byte-matches the Aug-17 stack.
+- M2 R-B: `20260818-132349-d81db93f-exp06-m2-rb-yixun`; M2 C0: `20260818-132417-bfdffa77-exp06-m2-c0-yixun`.
+Lesson (standing): TPU-stack pins must close over the QUARTET jax/jaxlib/libtpu/flax; an extra or
+`-f` index re-resolution is a hole. Long-term: lock the quartet in setup.sh (unified-launcher lane).
