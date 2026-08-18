@@ -194,3 +194,111 @@ same adoption root, same exclusion list; the COMMIT labels differ only by docs c
 binding is the running bytes, so both would adopt each other's banked cells. **This session cancelled its
 own later duplicate**; M1-9 is the canonical run. Cross-session lesson: with one experiment lane reachable
 from two sessions, check `gsutil ls gs://v6_east1d/tpu-job-queue/jobs/ | grep <name>` before submitting.
+
+### M1-9 outcome (2026-08-16T20:23Z) — job SUCCEEDED, ladder fully measured, **AUTHORIZATION EMPTY (all cells REFUSED on `peak_source`)**
+
+Authoritative root: `gs://v6_east1d/datasets/droid_wan_pos_rollout/m1/att-0816-172718` —
+`fit_authorization.json` sha256 `79253ea5…3fe826`, protocol `exp06.fit_authorization.v6`, exit 0.
+One spot preemption (17:23Z) absorbed by the F5 cell bank: attempt 2 adopted `one_step m8 k2/k4`
+from attempt 1's root (`att-0816-164423`) and reproduced `one_step m16 k2` bit-identically
+(10,754,255,744 B; 3.109 s vs 3.123 s). Aug-12/13 banked cells correctly refused (`fit_cell.v1` ≠ `v2`).
+10 cells measured this attempt + 2 adopted + 4 EXCLUDED (issue #18), 0 skipped.
+
+**Measured ladder** (peak = `analysis_bytes`; capacity 33,550,233,600 B; 2 trials each, exact agreement):
+
+| arm | mb | k | peak (B / GiB / %cap) | step s | note |
+|---|---|---|---|---|---|
+| one_step | 8 | 2/4 | 15,991,929,696 / 14.89 / 47.7% | 4.88 / 4.90–5.05 | |
+| one_step | 16 | 2/4 | 10,754,255,744 / 10.02 / 32.1% | 3.11 / 3.12 | |
+| rollout | 32 | 2/4 | 12,932,769,696 · 12,941,453,376 / 12.04–12.05 / 38.6% | 14.22 / 28.33 | k=4 ≈ 2× time, ≈ flat memory |
+| rollout | 16 | 2/4 | 18,417,237,024 · 18,421,529,760 / 17.15–17.16 / 54.9% | 15.64 / 31.13 | |
+| rollout | 64 | 2/4 | 19,389,143,680 · 19,406,838,368 / 18.06–18.07 / 57.8% | 11.09 / 22.10 | |
+| rollout | 8 | 2/4 | 32,405,364,416 · 32,408,018,592 / 30.18 / **96.6%** | 25.35 / 50.47 | REFUSED also on `headroom` (>90% floor) — as predicted |
+| one_step | ≥32 | 2/4 | — | — | 4 × EXCLUDED (issue #18) |
+
+**Why zero authorizations:** every measurement carries `peak_source: "compiled memory analysis"`,
+`peak_attribution: "none"`, and a runtime watermark (4.23→4.87 GiB across the ladder) that plainly does
+not see the step's scratch memory — the allocation-watermark instrument cannot observe XLA's
+preallocated arena on TPU, so no runtime-sourced peak ever materialized and the record fell back to the
+compile-time analysis. The authorization gate then refused all 12 measured cells on `peak_source`
+(the m8 rollout pair additionally on genuine `headroom`), exactly per the fail-closed contract
+("analysis floors refuse, never authorize" — the M1-6 lesson). **The floor worked; the F9 runtime-peak
+instrument did not produce runtime evidence on hardware.** M2 cannot be authorized from this run.
+
+**Triage: real instrumentation gap, not infra.** Next step belongs to the owning session: an F10-class
+fix that sources a true runtime peak (per-device memory stats read inside the step bracket, not an
+allocation watermark), then a resubmit — the bank will adopt all 12 measured cells' timings, so only
+re-measurement of peaks under the new instrument is at stake. Recorded by the exp_02 session, which
+monitored this job.
+
+### M1-9 adjudication escalated (owning session, 2026-08-16T~21:40Z) — PLAN-AMENDMENT DECISION → Yixun
+
+The exp_02 session's outcome entry above is adopted as the measured record. Owning-session diagnosis
+goes one step further than "instrument gap": the authorization design is **unsatisfiable in the
+common case** — three individually-reviewed rules (peak = max(watermark, analysis); peak_source
+names the origin of the max; the floor authorizes only runtime-sourced peaks) jointly imply
+authorization can occur ONLY when the compile analysis UNDERestimates true usage. On hardware the
+PJRT watermark (4.2–4.9 GiB) never sees XLA's temp arena while analysis (10–30 GiB) is an upper
+bound, so analysis wins the max everywhere and every cell refuses by construction. CPU fakes were
+built with watermark > analysis, so no test could see it; coder + 3 Codex passes missed the joint
+implication. Evidence consistent with analysis-as-upper-bound: rollout m8 (analysis 30.18 GiB,
+96.6% cap) ran with reservation_failures=0 at watermark 4.87 GiB.
+
+Because plan v2.8 §4-P1 predeclared *runtime* evidence as the authorization requirement, changing
+that requirement is a plan amendment — **Yixun's call (announcement 03), not a fix round**. Options
+delivered: **(A, recommended)** authorize on compiled-memory-analysis as conservative upper bound
+(headroom errs safe; watermark recorded + cross-check watermark ≤ analysis, violation = refuse);
+under A the banked table authorizes 10/16 cells (both arms at mb=16 included — M2 unblocked) and
+refuses rollout mb=8 on genuine headroom (96.6% > 90%); F10 = classify/floor change + tests + one
+Codex pass + M1-10 resubmit adopting all 12 banked cells (~cheap, re-derivation only).
+**(B)** investigate libtpu-level metrics that see the temp arena (unknown cost/feasibility on
+jax 0.10.2). **(C)** A now + B as background hardening. Awaiting Yixun.
+
+### F10 SERIES COMPLETE + APPROVED (2026-08-17T~02:20Z) — the plan-v2.9 authorization amendment is implemented; M1-10 package to Yixun
+
+Six implementation rounds (F10 `4e264dc` → F10b `1e5dda9` → F10c `39f164e` → F10d `9830264` →
+F10e `623107a` → F10f `f872a42`) against six review passes (initial REWORK + four verification
+REWORKs + final **APPROVE, findings NONE**), all by codex gpt-5.6-sol xhigh; full trail with
+appended verdicts in `rollout_adapter_codex_code_f10-authorization-amendment_review.md`.
+
+**What the amendment now is, as built:** authorization bound = compiled memory analysis
+(≤ 90% capacity in EXACT integer arithmetic, 10·a ≤ 9·c); runtime watermark recorded and
+cross-checked (watermark > analysis, or missing watermark, or missing/partial/unparseable
+analysis ⇒ refuse); per-trial refusal survival + unanimous analysis across trials (disagreement
+raises at publication; a poisoned banked artifact is quarantined at adoption and re-measured —
+proven self-healing); exact-count parsing of every payload/identity/binding/evidence number in
+both directions, with a 20-site AST-verified survivor enumeration written into the module;
+protocol v6→v7 (fit_cell.v2 unchanged). Suite 2308 → **2345 passed / 0 failed**; battery 91 →
+**106 probes (105 REFUSED / 1 DECLARED F5-8 / 0 SUCCEEDED), 18/18 honest controls, exit 0**.
+Four review-found production defects beyond the amendment itself were fixed on the way
+(missing-watermark bypass, trial-max masking, coercion truncations, partial-analysis
+under-bound) — the reviewer executed a live counterexample for every one.
+
+**M1-10:** `submit_m1h.sh` ready at RULED=`f872a42`; full re-measure (~2.5–3.5 h v6e-8) because
+the F10 edits moved the deployed manifest and the M1-9 bank is correctly non-adoptable
+(adoption discipline held exactly as designed). Expected from M1-9's numbers re-derived under
+the amended rule: **10/12 authorized** (one_step mb=8/16, rollout mb=16/32/64, both k),
+rollout mb=8 refused on true headroom (96.6%), 4 cells declared-excluded (issue #18).
+Awaiting Yixun's launch approval per announcement 02.
+
+### M1-10 SUBMITTED (2026-08-17T01:37Z, by Yixun via `!` after package approval)
+
+**Job id:** `20260817-013752-c700b0fd-exp06-m1h-fitprobe-yixun` (v6e-8, submit_m1h.sh at RULED=f872a42,
+guards passed). Full re-measure, ~2.5–3.5 h + queue weather. Expected: 10/12 authorized, rollout mb=8
+headroom-refused, 4 declared-excluded. On SUCCEEDED: read the newest att root's fit_authorization.json
+(protocol v7), verify against expectation, then M2 proposal.
+
+### M1-10 SUCCEEDED — M1 PHASE COMPLETE (2026-08-17T~05:20Z)
+
+Single attempt, ~3.3 h, exit 0. Authoritative root `gs://v6_east1d/datasets/droid_wan_pos_rollout/m1/att-0817-015756`;
+`fit_authorization.json` sha256 `ed6262a1…539a25`, protocol **exp06.fit_authorization.v7**. Table verified
+EXACTLY as predicted from M1-9's numbers re-derived under plan v2.9: **10 authorized** (one_step mb=8/16,
+rollout mb=16/32/64, both k), **2 refused** (rollout mb=8 k=2/4, reasons `['headroom']` only — no
+peak_source refusals remain), **4 declared-excluded** (#18), **0 watermark cross-check firings**, all 12
+measurements analysis-sourced with watermark fields recorded. Every re-measured value byte-identical to
+M1-9 (e.g. rollout m16 18,417,237,024 B; one_step m16 step 3.113 s). Old banks refused adoption for the
+right reasons in the log (manifest_digest differ; fit_cell v1≠v2). The F10 amendment did on hardware
+precisely what it was ruled to do. **M1 (v6e-8) is COMPLETE; M2 is unblocked pending Yixun's approval;
+M1′ (v6e-64 topology re-run) remains required before M3 per plan v2.7.**
+
+Step-time basis for M2 costing (GBS-256 cells): rollout mb=16 k=2 = 15.634 s/step; one_step mb=16 = 3.113 s/step.

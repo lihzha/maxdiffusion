@@ -46,3 +46,23 @@ Planner reading (recorded BEFORE acting on it):
 - **Acceptance criteria (predeclared; the reviewer's caveat list verbatim where quoted):** (1) worker reports the pinned COMMIT; (2) the probe publishes a digest-verified authorization under the attempt root with measured/authorized/refused cells DISJOINT and every cell carrying `peak_source` ∈ {runtime-reset, runtime-raised} — *"compiled-analysis floors and refused-allocation capacity may refuse, never authorize"*; (3) authorization covers ONLY measured (arm, microbatch, k) cells; k=4 exploratory; epsilon data-sharded per the recorded ruling — M1 authorizes that explicit choice; (4) projections carry measured eval/checkpoint units (no defaults exist to fabricate them); (5) ANY outcome is acceptance — including every cell refusing (that is a measurement); a crash before publication is triaged per SOP (infra ⇒ auto-resubmit unchanged; real bug ⇒ fix cycle). **First-minutes watch item:** `load_backbone`'s real path (5B weights + T5) has never executed — the one deliberately untestable seam.
 - **Runbook:** after the job, verify/remove any leftover `<checkpoint_dir>/_m1_probe/**` (best-effort cleanup; the sweep deliberately does NOT live in the probe). Monitoring: ScheduleWakeup polls of the queue's status.json; reauth = ALARM. The `_command.md` M1-1 entry is written at actual launch.
 - **What M1's result gates:** M2 (same topology) launches on M1's authorization of its cells; M1′ (v6e-64, ~1 h) precedes M3 per plan v2.7; a preempted M2/M3 pair is non-quotable per v2.8.
+
+## Query 9 (2026-08-16) — M1-9 all-refused table: plan-amendment decision → Yixun chose OPTION A
+
+Context: M1-9 (job `20260816-163233-09339cf7`) measured the full ladder and authorized zero cells —
+the three-rule joint implication (peak = max(watermark, analysis); source names the max's origin;
+floor authorizes only runtime-sourced peaks) makes authorization possible only when the compile
+analysis underestimates, while the TPU PJRT watermark cannot see XLA's temp arena. Options put to
+Yixun: (A) authorize on compiled memory analysis as conservative upper bound, watermark retained as
+cross-check, watermark>analysis refused as inconsistent; (B) investigate libtpu-level metrics;
+(C) A + B background.
+
+**Yixun (verbatim):** "I choose Option A. Amend the M1 authorization contract to use compiled
+memory analysis as the conservative authorization bound, retain the runtime watermark as a
+cross-check, and refuse any cell where the runtime watermark exceeds the analysis value. Proceed
+with the F10 code/test/review round, then bring me the exact M1-10 launch package before
+submission."
+
+Actions: plan v2.8 → v2.9 (§4-P1 evidence contract amended; header changelog); F10 round
+dispatched (classify/floor change + tests + battery + one Codex pass); M1-10 launch package goes to
+Yixun BEFORE submission per the standing launch gate.

@@ -1,0 +1,271 @@
+A-B1(a) module issue token   :: REFUSED: there is no _ISSUE_TOKEN module attribute to hand back
+A-B1(b) public digest override:: REFUSED (no override to pass): load_dev_cohort() got an unexpected keyword argument 'expected_sha256'
+A-B2   unrestricted callback :: REFUSED: score_dev_cohort() takes 2 positional arguments but 3 positional arguments (and 3 keyword-only arguments) were given
+[pos-rollout] reopened a TERMINAL checkpoint at step 4: the DEV metric stayed above 2.0x its running best for 3 consecutive evals while the train metric kept falling; retaining step 1. No training step will be taken; the selected checkpoint is step 1.
+B-1    terminal resume       :: REFUSED: no step, no iterator (steps_run=0 events=[])
+[pos-rollout] repaired the selection artifact from the restored state: step 2 (dev_rollout_loss=0.5) was saved to the resume tree but never to the sibling.
+B-2    selection crash window:: REFUSED: reconciled (history_best=2 shipped_selection=2)
+T5a-1  restore falls back     :: REFUSED: there is no selection artifact under /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpwrd3q5a5/run: the loo
+T5a-2  widen/miss the anchor  :: REFUSED: tolerance override refused (reproduce_anchor() got an unexpected keyword argument 't); hand-written record refused (the anchor is reproduced from a Measurement, never from )
+  ctrl anchor reproduces      :: CONTROL-PASSED: the recorded samples, means and checkpoint reproduce the anchor
+T5a-3  TEST into the anchor   :: REFUSED: these anchor samples are TEST-64 examples: ['ep61399_v0_s00000']. TEST is confirmation only (plan §3d); the an
+  ctrl clean summary accepted :: CONTROL-PASSED: the same summary without a TEST name is accepted (2 samples)
+T5a-4  re-derive the benchmark:: REFUSED (mean stayed 0.25): /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/bench.json was already publis
+  ctrl identical refreeze     :: CONTROL-PASSED: an identical re-freeze is adopted at digest c7e78fcc0c77
+T5a-5  forge a DEV cohort     :: REFUSED: freeze_benchmark_row() got an unexpected keyword argument 'cohort'
+T5b-1  lower the primary bar  :: REFUSED: no margin argument exists (primary_gate() got an unexpected keyword argument 'm); +0.04 at CI [0.04, 0.04] (CI-low clean) still failed on ['mean_delta']
+  ctrl +0.06 passes the gate  :: CONTROL-PASSED: +0.06 passes (mean_delta=0.06, CI-low > 0)
+T5b-2  score TEST first       :: REFUSED: the gate's own failing certificate -> proceeding to TEST is exactly what the DEV gate decides; a digest-consistent forged pass -> it records passed=True but its own numbers decide False (coverage=True, mean_d
+  ctrl real cert opens TEST   :: CONTROL-PASSED: a passing DEV certificate opens TEST and both gates confirm
+T5b-3  forge the derangement  :: REFUSED (fingerprint re-derived, so this is not tamper detection): the derangement has a fixed point at ['ep12399_v0_s00000']: those examples get
+  ctrl honest derangement     :: CONTROL-PASSED: the cohort's own derangement builds and gates (delta=0.06)
+T5b-4  swap arm and control   :: REFUSED: primary_gate() takes 0 positional arguments but 3 were given
+T5b-5  drop C0's battery      :: REFUSED: control_tables must carry matched-C0 under ['true', 'wrong', 'zero'] actions, got []: plan §3e runs the FULL b
+  ctrl full battery publishes :: CONTROL-PASSED: the complete arm + matched-C0 battery publishes with full coverage
+T7-1   run an unmeasured cell :: REFUSED: M1 did not authorize rollout at microbatch=32 k=4: that cell was never measured. M1 authorizes only the cells 
+T7-2   forge an authorization :: REFUSED: a training run needs the authorization the fit probe published; a mapping that lists cells is not evidence tha
+T7-3   edit an authorization  :: REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/t7c.json: the recorded digest 'b9faa0b78b52c8e97f
+T7-4   run a cell that missed :: REFUSED: M1 did not authorize rollout at microbatch=64 k=2: it measured that cell and refused it (['headroom']). Choose
+T7-5   project the unmeasured :: REFUSED: every cadence is a required argument; there is no overhead argument to supply; a misfit cell cannot be projected
+P1-1   echoed-identity decoder:: REFUSED: DevBatchReader takes a cohort and nothing else; score_dev_cohort has no batch source parameter
+P1-2   NaN poisons selection  :: REFUSED: the DEV metric at step 1000 is nan, which is not finite: a non-finite metric cannot be compared, so it would s
+P1-3   gs:// written locally  :: REFUSED: pathlib would give 'gs:/bucket/run/report.json'; storage layer treats it as remote=True
+P3-1   arms share checkpoints :: REFUSED: rollout -> m3/rollout/train/attempts/att-X/checkpoints vs one_step -> m3/one_step/train/attempts/att-X/checkpoints
+P3-2   divergent second arm   :: REFUSED: arm 'one_step' asks to join run /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/p3_lock.json with a DIFFERENT recipe:
+P3-3   confirm w/o certificate:: REFUSED: FATAL: phase 'confirm' requires POS_ANCHOR_CERTIFICATE, and it is empty.
+P3-4   flatten attempt scoping:: REFUSED: train=derived, eval=derived
+P3-5   adopt incomplete/foreign:: REFUSED: selection logic chose only att-mine (step 1000); the 9000-step foreign-BUILD and other-arm trees and a foreign context were all skipped
+P3-6   another program's auth :: REFUSED: this authorization measured a different program: ['device_count', 'device_kind', 'model_revision'] differ (measured on manifest fa
+P3-7   one arm authorizes other:: REFUSED: M1 did not authorize rollout at microbatch=32 k=2: that cell was never measured. M1 authorizes only the cells it measured (plan §4
+P3-8   contradictory duplicates:: REFUSED at aggregation: analysis_disagreement: FitCell(arm='rollout', microbatch=32, k_b=2)'s trials report [21474836480, 33294586478]
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/cells; adoption root (none -- every cell will be measured); run identity ''
+[M1] context 2c2cdd6d7f751c24 on v6ex1 @ 4e264dc063a9
+[M1] one_step  microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=8   k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=16  k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=16  k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=32  k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=32  k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=64  k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=64  k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=32  k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=32  k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=16  k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=16  k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=64  k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=64  k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] rollout   microbatch=8   k=4  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 16 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection one_step m=8 k=2: 11.77h at 62.5% of capacity
+[M1] projection one_step m=8 k=4: 11.77h at 62.5% of capacity
+[M1] projection one_step m=16 k=2: 11.77h at 62.5% of capacity
+[M1] projection one_step m=16 k=4: 11.77h at 62.5% of capacity
+[M1] projection one_step m=32 k=2: 11.77h at 62.5% of capacity
+[M1] projection one_step m=32 k=4: 11.77h at 62.5% of capacity
+[M1] projection one_step m=64 k=2: 11.77h at 62.5% of capacity
+[M1] projection one_step m=64 k=4: 11.77h at 62.5% of capacity
+[M1] projection rollout m=32 k=2: 11.77h at 62.5% of capacity
+[M1] projection rollout m=32 k=4: 11.77h at 62.5% of capacity
+[M1] projection rollout m=16 k=2: 11.77h at 62.5% of capacity
+[M1] projection rollout m=16 k=4: 11.77h at 62.5% of capacity
+[M1] projection rollout m=64 k=2: 11.77h at 62.5% of capacity
+[M1] projection rollout m=64 k=4: 11.77h at 62.5% of capacity
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] projection rollout m=8 k=4: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/p3_m1.json sha256=5d8f534220d5a03670712240621e3c2a4beb02d4765f4f90e93cee5d6f150a12
+P3-9   M1 cannot be run        :: REFUSED (M1 runs): launcher probe mode=yes, ladder walked 16 cells, published 16 authorized cells
+G3-1   anchor: foreign names   :: REFUSED: the anchor is the recorded samples ['ep10099_v0_s00000', 'ep10099_v0_s00004', 'ep10099_v0_s00008', 'ep10099_v0
+G3-2   anchor: wrong order     :: REFUSED: the anchor samples are scored in the order the val directory yielded them ['ep10099_v0_s00000', 'ep10099_v0_s0
+G3-3   anchor: foreign ckpt    :: REFUSED: the anchor is the historical run 'wan-pre_context-v6e64-full-gbs512-fresh-20260629-034110'; this measurement w
+G3-4   certify a short rollout :: REFUSED: these samples executed horizons [1]; the deployed grid is 25 steps. The horizon is taken from the rollouts tha
+G3-5   forge the marker        :: REFUSED: gs://attack/forged_certificate.json is not a exp06.gates.v1 artifact: its protocol is None. A payload that mer
+G3-6   certificate w/o a gate  :: REFUSED: dev_certificate computes its own gate; it takes ['path', 'rollout', 'control', 'cohort']
+G3-7   TEST-seeded derangement :: REFUSED: this derangement is 'test64''s, and it is being used for 'dev64': the assignment is derived independently per 
+G3-8   byte-identical donors   :: REFUSED: no legal wrong-action assignment exists for 'ep12399_v0_s00000': every remaining donor is itself or carries by
+G3-9   donor-keyed wrong noise :: REFUSED: 'ep12399_v0_s00000' was scored on different draws in the true and wrong conditions: §3e's whole construction i
+G3-10  report on bad coverage  :: REFUSED: the failing verdict keeps its provenance and reports no deltas
+G3-11  C0 without its zero row :: REFUSED: control_tables must carry matched-C0 under ['true', 'wrong', 'zero'] actions, got ['true', 'wrong']: plan §3e 
+G3-12  TEST: primary gate only :: REFUSED: the TEST door runs both gates and demands an independent TEST derangement
+G3-13  the evaluator cannot run:: REFUSED: all four phases are implemented and dispatched
+G3-14  skip the anchor         :: REFUSED (confirm): there is no anchor certificate at gs://attack/run/anchor_certificate.json: plan §3c runs t
+G4-1   a plan with no consumer :: REFUSED: score_condition_table consumes the plan and enforces the receiver-keyed draw
+F1-1   load w/o re-decision  : REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f1_redecide.json: re-deciding this artifact from its own recorded mea
+F1-2   fingerprint blindness : REFUSED: every graph/HBM-bearing key moves the fingerprint
+F1-3   projection miscounts  : REFUSED: projected=2 production=2; an independent checkpoint cadence is refused
+F1-4   two models are equal  : REFUSED: an unresolvable model fails closed; two local models get different content manifests
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/cells; adoption root (none -- every cell will be measured); run identity ''
+[M1] entering rollout microbatch=8 k=2: building and compiling
+F1-5   entrypoint cannot run : REFUSED: the measurement path is real -- the real path ran and refused it (ValueError: this backend reports no memory statistics for ['cpu:0']: M1's wh)
+F1-6   real parser never runs: REFUSED (it runs): 1 passed, 133 deselected in 17.56s
+F3a-1  NaN latent MSE certifies:: REFUSED: sample 0 ('ep10099_v0_s00000')'s latent_mse is nan, which is not finite: a non-finite metric cannot be compare
+F3a-2  inf pixel MSE certifies :: REFUSED: sample 0 ('ep10099_v0_s00000')'s pixel_mse is inf, which is not finite: a non-finite metric cannot be compared
+F3a-3  all-ones grid accepted  :: REFUSED: rollout_prediction() got an unexpected keyword argument 'velocity_fn'
+F3a-4  foreign-shift grid      :: REFUSED: this grid is 2a7f671332da32c2, and the deployed grid is 40af72e74c726c8d: it has the right shape and the right
+  ctrl deployed grid accepted :: CONTROL-PASSED: the deployed grid passes its own check (40af72e74c726c8d)
+F3a-5  float32 under bf16 cfg  :: REFUSED: the bound backend casts latents, actions and context to bf16 before it draws the noise
+  ctrl dtype follows config   :: CONTROL-PASSED: the cast follows the config -- a float32 configuration measures in float32
+F1b-1  wrong adapter type   : REFUSED: the config declares pre_context and the fingerprint separates the two (True)
+F1b-2  microbatch as update : REFUSED: the timed unit accumulates all 4 microbatches; the eval unit is batch-1
+  ctrl accumulation tracks cfg:: CONTROL-PASSED: the accumulation plan tracks the config (16/2 -> 8 microbatches, 8 draws)
+F1b-3  inherited peak       : REFUSED: no per-cell steady-state peak could be obtained: the backend offers no way to reset the high-water mark, this cell's window did no
+F1b-4  'boom' is not OOM    : REFUSED: only the genuine refusal classifies ({'boom in program build': False, 'No room left on device': False, 'genuine RESOURCE_EXHAUSTED': True})
+F1b-5  swap the weights     : REFUSED: the identity moved with the bytes
+F1b-6  retype a duration    : REFUSED: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f1b_retype.json: re-deciding this artifact from i
+F3a-6  loader: undeclared key  :: REFUSED: every config key the loader reads is declared (undeclared reads would raise: True)
+F3a-7  loader: skips grid check:: REFUSED: the loader builds from the scheduler and binds the result to the deployed grid
+W1-1   authorize on a floor : REFUSED: ('watermark_exceeds_analysis',) -- a mark above the claimed bound falsifies the bound
+W1-2   reshuffle a snapshot : REFUSED: length-framed records separate the two trees
+W1-3   hand-rebuild adapter : REFUSED: M1 enters build_adapter_stack (1x) and the adapter it measures follows the config (['float32'] vs ['bfloat16', 'float32'])
+  ctrl adapter follows dtype  :: CONTROL-PASSED: a bfloat16 configuration produces a bfloat16 adapter (['bfloat16', 'float32'])
+W2-1   trainer cannot train  : REFUSED: start_training loads, builds and runs the loop -- no boundary is left in it
+W2-2   bypass the factories  : REFUSED: both callers enter one finalizer, which enters the three shared factories
+W2-3   publish a foreign tree: REFUSED: checkpoint_dir '/var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/somewhere/else/chec
+W2-4   select on train stream: REFUSED: the metric is the instrument's cohort mean, over the instrument's own draws
+W2-5   gate after the load   : REFUSED: every configuration gate precedes the pipeline load
+W2b-1  M2 at the YAML batch  : REFUSED: derived in the launcher, and re-checked on the worker -- the input pipeline loads 8 examples per step but pos_logical_batch is 
+W3-1   unsharded M1 program : REFUSED: the executed placement contract holds and M1 enters the shared finalizer
+W3-2   zero null context     : REFUSED: the context is the loader's and the grid is the scheduler's, for both callers
+W3-3   two loaders, two progs: REFUSED: one loader reaches the settled seams and both callers enter it
+W4-1   foreign batch contract : REFUSED: the contract is the deployed loader's, and a disagreeing config does not start
+W4-2   time a pruned scorer   : REFUSED: M1 times the shared scorer, aux included
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/commit/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/commit/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/commit/m1/exp06-f5/fit_probe/attempts/att-2/cells; adoption root /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/commit; run identity 'exp06-f5'
+[M1] label drift on rollout microbatch=8 k=2: measured under code_sha 000000000000, running 4e264dc063a9, but the deployed manifest fa70cbe7cb4b is identical -- same bytes, different commit label. Adopting.
+[M1] adopting rollout microbatch=8 k=2 from /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/commit/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest (2 trials, peak 21474836480 bytes)
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [adopted from /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/commit/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest] peak 21474836480 (compiled memory analysis, none)
+[M1] 0 cell(s) measured this attempt, 1 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/commit/m1/exp06-f5/fit_probe/attempts/att-2/fit_authorization.json sha256=73d8a868483380ba1b065c71227a493c60895954c2272c58d20fc99b448a4bcd
+F5-1   lose bank to docs commit: REFUSED: identical bytes under a different commit label were adopted, with the drift logged
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/topology/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/topology/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/topology/m1/exp06-f5/fit_probe/attempts/att-2/cells; adoption root /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/topology; run identity 'exp06-f5'
+[M1] not adopting /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/topology/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest: it was measured under a different program -- ['device_count'] differ (measured on manifest fa70cbe7cb4b/v6ex64, running fa70cbe7cb4b/v6ex8). Adoption is bound to the RUNNING BYTES: the manifest, the model, the topology, the geometry and the recipe.
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/topology/m1/exp06-f5/fit_probe/attempts/att-2/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+F5-2   adopt another topology: REFUSED: re-measured (2 trials) -- device_count is inside the context digest
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/foreign/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/foreign/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/foreign/m1/exp06-f5/fit_probe/attempts/att-2/cells; adoption root /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/foreign; run identity 'exp06-f5'
+[M1] not adopting /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/foreign/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest: it was published by job/run 'somebody-elses-run' and this job is 'exp06-f5': another run's cells sitting under a shared root are not this run's evidence
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/foreign/m1/exp06-f5/fit_probe/attempts/att-2/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+F5-3   adopt another job     : REFUSED: re-measured (2 trials) -- every banked cell names the run that measured it
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/sidecar/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/sidecar/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/sidecar/m1/exp06-f5/fit_probe/attempts/att-2/cells; adoption root /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/sidecar; run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/sidecar/m1/exp06-f5/fit_probe/attempts/att-2/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/truncated/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/truncated/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/truncated/m1/exp06-f5/fit_probe/attempts/att-2/cells; adoption root /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/truncated; run identity 'exp06-f5'
+[M1] not adopting /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/truncated/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest: JSONDecodeError: Unterminated string starting at: line 1 column 1184 (char 1183)
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/truncated/m1/exp06-f5/fit_probe/attempts/att-2/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+F5-4   adopt a half-write    : REFUSED: ['no-sidecar re-measured', 'truncated re-measured'] -- the sidecar is the commit marker and the digest covers the content
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/fabricate/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/fabricate/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/fabricate/m1/exp06-f5/fit_probe/attempts/att-2/cells; adoption root /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/fabricate; run identity 'exp06-f5'
+[M1] not adopting /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/fabricate/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest: it was measured under a different program -- ['manifest_digest'] differ (measured on manifest 000000000000/v6ex8, running fa70cbe7cb4b/v6ex8). Adoption is bound to the RUNNING BYTES: the manifest, the model, the topology, the geometry and the recipe.
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/fabricate/m1/exp06-f5/fit_probe/attempts/att-2/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+F5-5   forge w/ FOREIGN manifest: REFUSED: re-measured (2 trials) -- the artifact's bytes are not the running bytes
+[M1] the requested cell order is not the declared LADDER_ORDER and was re-ordered: ["FitCell(arm='rollout', microbatch=8, k_b=2)", "FitCell(arm='rollout', microbatch=16, k_b=2)", "FitCell(arm='one_step', microbatch=8, k_b=2)"] -> ["FitCell(arm='one_step', microbatch=8, k_b=2)", "FitCell(arm='rollout', microbatch=16, k_b=2)", "FitCell(arm='rollout', microbatch=8, k_b=2)"]. The order is what keeps a cell above the headroom floor from refusing every cell measured after it.
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/killed/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+F5-6   killed ladder banks 0 : REFUSED: both finished cells were banked, digest-verified, before the cell that died
+F5-7   tear the pair (2 writers): REFUSED: content objects are immutable and the marker commits one whole object -- no torn pair exists
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/inboundary/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/inboundary/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=86b0e6ca2ed43998c7b9d72472bdb9ff5bbfe439810bec07f1eaf5a5223fefa2
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/inboundary/m1/exp06-f5/fit_probe/attempts/att-2/cells; adoption root /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/inboundary; run identity 'exp06-f5'
+[M1] adopting rollout microbatch=8 k=2 from /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/inboundary/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest (2 trials, peak 1 bytes)
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [adopted from /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/inboundary/m1/exp06-f5/fit_probe/attempts/att-1/cells/rollout_m8_k2.json.digest] peak 1 (compiled memory analysis, none)
+[M1] 0 cell(s) measured this attempt, 1 adopted from prior attempts, 0 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 0.0% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/inboundary/m1/exp06-f5/fit_probe/attempts/att-2/fit_authorization.json sha256=756a846b360f07fab3bc20dfba0073ce8959cd28e8c1f881abaf38398593178b
+F5-8   forge w/ CURRENT manifest: DECLARED: an authorized bucket writer who can READ one artifact fabricated a cell (peaks [1]) and it was adopted without measurement. Accepted residual: integrity- and program-bound, NOT authenticated; the anchor is the bucket ACL. Escalated to Yixun (KMS/workload-identity signing).
+[M1] the requested cell order is not the declared LADDER_ORDER and was re-ordered: ["FitCell(arm='rollout', microbatch=8, k_b=2)", "FitCell(arm='one_step', microbatch=32, k_b=2)"] -> ["FitCell(arm='one_step', microbatch=32, k_b=2)", "FitCell(arm='rollout', microbatch=8, k_b=2)"]. The order is what keeps a cell above the headroom floor from refusing every cell measured after it.
+[M1] EXCLUDED one_step microbatch=32 k=2: bad_smem_address: deterministic XLA codegen fault (issue #18)
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/excluded/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=32  k=2  EXCLUDED  [declared]
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 1 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/excluded/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=6fe3ce878df85b3e4e4033ba70106f0dc58a4d44447884ae6caf24a654de9f35
+F6-1   quote an excluded cell: REFUSED: M1 did not measure one_step at microbatch=32 k=2: this run DECLARED that cell EXCLUDED and never built it -- 'bad_smem_a
+[M1] the requested cell order is not the declared LADDER_ORDER and was re-ordered: ["FitCell(arm='rollout', microbatch=8, k_b=2)", "FitCell(arm='one_step', microbatch=32, k_b=2)"] -> ["FitCell(arm='one_step', microbatch=32, k_b=2)", "FitCell(arm='rollout', microbatch=8, k_b=2)"]. The order is what keeps a cell above the headroom floor from refusing every cell measured after it.
+[M1] EXCLUDED one_step microbatch=32 k=2: bad_smem_address: deterministic XLA codegen fault (issue #18)
+[M1] banking cells in /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/doctored/m1/exp06-f5/fit_probe/attempts/att-1/cells; adoption root (none -- every cell will be measured); run identity 'exp06-f5'
+[M1] context f68909def71b5d1b on v6ex8 @ 4e264dc063a9
+[M1] rollout   microbatch=8   k=2  AUTHORIZED  [measured] peak 21474836480 (compiled memory analysis, none)
+[M1] one_step  microbatch=32  k=2  EXCLUDED  [declared]
+[M1] 1 cell(s) measured this attempt, 0 adopted from prior attempts, 1 declared EXCLUDED, 0 skipped
+[M1] projection rollout m=8 k=2: 11.77h at 62.5% of capacity
+[M1] published /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/doctored/m1/exp06-f5/fit_probe/attempts/att-1/fit_authorization.json sha256=6fe3ce878df85b3e4e4033ba70106f0dc58a4d44447884ae6caf24a654de9f35
+F6-2   doctor two statuses: REFUSED at load: /var/folders/0x/4czpv7y529994k3j7tlyfpcc0000gn/T/tmpw9kll4u6/f5/doctored/m1/exp06-f5/fit_probe/attempts/att-1/fit_author
+[M2] label drift: this authorization was measured under code_sha 4e264dc063a9 and this job runs 5631a3600000, but the deployed manifest fa70cbe7cb4b, the model, the topology, the geometry and the recipe are identical -- same program, different commit label. Proceeding.
+F7-1   block launch on a label: REFUSED: identical bytes under a different commit label were authorized, with the drift logged
+F7-2   authorize another build: REFUSED: this authorization measured a different program: ['manifest_digest'] differ (measured on manifest fa70cbe7cb4b//var/fold
+F10-1  mark above the bound   : REFUSED: ['watermark_exceeds_analysis']; the gate says "M1 did not authorize rollout at microbatch=32 k=2: it measured that cell and refused it (['watermark_exceeds_a"
+  ctrl mark AT the bound      :: CONTROL-PASSED: watermark == analysis authorizes; only a mark ABOVE the bound refuses
+F10-2  no bound at all        : REFUSED: ['analysis_missing']; the gate says "M1 did not authorize rollout at microbatch=32 k=2: it measured that cell and refused it (['analysis_missing'])"
+F10-3  peak above a quiet bound: REFUSED: ['peak_exceeds_analysis']; the gate says "M1 did not authorize rollout at microbatch=32 k=2: it measured that cell and refused it (['peak_exceeds_analys"
+  ctrl analysis-bounded cell  :: CONTROL-PASSED: an analysis-bounded cell (62.5% of capacity, watermark below the bound) is authorized and gates a launch
+F10-4  read a v6 table as v7  : REFUSED: loader, training gate and republication all refuse a table decided under another rule
+F10b-1 no mark at all         : REFUSED: ['watermark_missing']; the gate says "M1 did not authorize rollout at microbatch=32 k=2: it measured that cell and refused it (['watermark_missing']"
+F10b-2 friendly trial cancels : REFUSED: all 4 trial-local contradictions survived aggregation and refused the cell
+  ctrl two agreeing trials    :: CONTROL-PASSED: two agreeing trials aggregate to one authorized cell, worst mark kept
+F10b-3 two bounds, one cell   : REFUSED at aggregation: analysis_disagreement: FitCell(arm='rollout', microbatch=32, k_b=2)'s trials report [10737418240, 21474836480] bytes of 
+F10b-4 fractional byte counts : REFUSED: a fractional or boolean byte count is a malformed record, not a small measurement
+F10b-5 round the boundary down: REFUSED: ['headroom'] -- the boundary is decided in exact integers
+  ctrl exactly 90% authorizes :: CONTROL-PASSED: a bound at exactly 90.0% of capacity authorizes; one byte above refuses
+
+SUMMARY: 101 probes -- 100 REFUSED, 1 DECLARED (accepted residual, see the harness README), 0 SUCCEEDED, 0 UNPARSED
+SUMMARY: 15 honest controls -- 15 CONTROL-PASSED, 0 CONTROL-REFUSED, 0 UNPARSED. A control asserts production still ACCEPTS the legitimate case, so its probe's REFUSED means something.
