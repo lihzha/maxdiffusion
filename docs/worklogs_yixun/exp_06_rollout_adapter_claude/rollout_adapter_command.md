@@ -302,3 +302,18 @@ precisely what it was ruled to do. **M1 (v6e-8) is COMPLETE; M2 is unblocked pen
 M1′ (v6e-64 topology re-run) remains required before M3 per plan v2.7.**
 
 Step-time basis for M2 costing (GBS-256 cells): rollout mb=16 k=2 = 15.634 s/step; one_step mb=16 = 3.113 s/step.
+
+### M2 PAIR SUBMITTED (2026-08-18T02:51Z, Yixun) — after a flax-drift replace
+
+First submission (024447/024457) was deleted PRE-RUN: flax 0.12.8 released unpinned between Aug 17
+and Aug 18 and fresh venvs crash at import (`jax.experimental.hijax.MutableHiType` missing — proven
+by exp_03 Job 26b attempt 8). Resubmitted with `flax==0.12.6` pinned in the setup-cmd (matches the
+venv M1-10 actually measured under; no reviewed-code change; issue #27).
+- **M2 R-B:** `20260818-025132-5caec9a8-exp06-m2-rb-yixun` (rollout, mb=16, k=2, 2k steps, ~8.7 h)
+- **M2 C0:** `20260818-025138-f26ddecb-exp06-m2-c0-yixun` (one_step, mb=16, k=2, 2k steps, ~1.7 h)
+Both v6e-8, GBS 256, seed 0, eval/ckpt every 1,000, POS_FIT_AUTHORIZATION = att-0817-015756 table.
+**Recipe deviation (Yixun-acknowledged by submission):** plan §4-P2's "32 examples" was never wired
+and pos_logical_batch/train_data_dir are authorization-bound ⇒ M2 runs the AUTHORIZED recipe
+(GBS 256, full train stream). Continuation rule unchanged. Pair rule: either arm preempted ⇒ both restart.
+Watch: pin visible in setup logs; assert_cell_authorized passes (first production test of the F7b
+binding gate); finite losses; step times ≈ M1-10's cell numbers.
