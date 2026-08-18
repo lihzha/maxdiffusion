@@ -333,3 +333,17 @@ flax==0.12.8` (no extras, nothing left to a resolver) — byte-matches the Aug-1
 - M2 R-B: `20260818-132349-d81db93f-exp06-m2-rb-yixun`; M2 C0: `20260818-132417-bfdffa77-exp06-m2-c0-yixun`.
 Lesson (standing): TPU-stack pins must close over the QUARTET jax/jaxlib/libtpu/flax; an extra or
 `-f` index re-resolution is a hole. Long-term: lock the quartet in setup.sh (unified-launcher lane).
+
+### RETRACTION (2026-08-18T19:05Z): the R-B "hang" was a Planner monitoring artifact
+
+For 5 hours the Planner read attempt-1/worker-0.log (frozen at 13:41 — that attempt died ~13:41 and
+the queue silently started attempt 2 at 13:54) and inferred a hang from its silence, escalating to a
+hang-determination window. REALITY: attempt 2 trained on schedule the whole time and saved its
+step-1000 checkpoint at 18:27:25Z (att-20260818T135027Z), within minutes of the 15.6 s/step
+prediction. No hang existed; no action was taken on the false alarm (the predeclared
+evidence-before-action window did its job). **Standing monitoring rule (issue #14 variant): a log
+that stops moving while status.json says RUNNING means you may be reading a DEAD attempt — list
+logs/attempt-*/ and match against current_qr_name BEFORE inferring anything from silence.**
+C0 meanwhile burns attempts (9 by 19:00Z, all infra-preempted before completing; pair integrity is
+structurally safe — train mode adopts only COMPLETE publications, so every attempt restarts at 0 and
+no mid-run resume can taint the pair). R-B ETA 2k ~22:40Z if att-2 survives.
