@@ -641,3 +641,13 @@ attempt 8 = APPLICATION_ERROR: fresh venv pulled the just-released **flax 0.12.8
 forwarded, no xtrace this time), setup-cmd appends `.venv/bin/python -m pip install flax==0.12.6`.
 Same RUN_NAME ⇒ Orbax resumes from 10000; remaining 10k steps ≈ 9 h. W&B: new run in the same
 project/entity, curve continues from step 10000.
+
+### CORRECTION (append-only, 2026-08-18T~03:50Z): issue #27's true direction + all three 02:51Z jobs failed
+
+The 26b-attempt-8 diagnosis above mis-attributed the drift: flax was 0.12.8 in BOTH the working
+Aug-17 venvs and the crashing attempt 8 — what changed was **jax 0.11.0 → 0.11.1** (released
+overnight; removes/renames `jax.experimental.hijax.MutableHiType`). The flax==0.12.6-only pin in the
+02:51Z resubmissions therefore produced the OPPOSITE mismatch (flax 0.12.6 needs the removed
+`jax.core.Effect`) and Job 26c + both M2 arms all died in preflight/import. Correct fix, verified
+from the Aug-17 final-install logs: co-pin `jax[tpu]==0.11.0 flax==0.12.8` (libtpu 0.0.41 rides the
+extra) AFTER all setup phases. Job 26d + M2 pair #3 resubmitted with that pin.
