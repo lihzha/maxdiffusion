@@ -628,3 +628,16 @@ Job 26; launcher fix 83d3302 aboard; Yixun's WANDB_API_KEY forwarded (run lands 
 xtrace-printed the forwarded WANDB_API_KEY into the submitting terminal (issue-#12 class). The key
 also lives in the job spec on GCS (lab-standard for forwarded secrets). Rotation is Yixun's call;
 future submit scripts must not re-enable xtrace around secret-bearing commands.
+
+### Job 26b FAILED after 8 attempts; Job 26c resubmitted with flax pin (2026-08-18T02:51Z)
+
+26b: attempt 1 trained 02:03→14:24Z (~13k steps; checkpoints through 10000 valid — the 12500 write
+was cut by the preemption and correctly discarded by Orbax atomicity); attempts 2–7 = infra
+preemption storm (SUSPENDING/SUSPENDED ×4, TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE ×2, QR disappeared);
+attempt 8 = APPLICATION_ERROR: fresh venv pulled the just-released **flax 0.12.8**, whose
+`flax.nnx.variablelib` needs `jax.experimental.hijax.MutableHiType` (absent in the stable-stack jax)
+→ import crash, worker 3 exit 1, non-retryable (**issue #27: unpinned flax**).
+**Job 26c:** `20260818-025145-05227854-exp03-c-lr5e5-20k-yixun` — identical envs to 26b (key
+forwarded, no xtrace this time), setup-cmd appends `.venv/bin/python -m pip install flax==0.12.6`.
+Same RUN_NAME ⇒ Orbax resumes from 10000; remaining 10k steps ≈ 9 h. W&B: new run in the same
+project/entity, curve continues from step 10000.
