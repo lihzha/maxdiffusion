@@ -672,3 +672,16 @@ C-recipe run is COMPLETE: combined objective (λ=0.5, k=2/2, N=2 accumulation), 
 (instrument all-10; canonical-100 SSIM ×10; full-set 1,629 @20k) then the 5 ranked videos + figures.
 
 ### M2 pair resubmit #2 (2026-08-19T18:51Z, Yixun): rb `20260819-185052-01f6c619`, c0 `20260819-185126-5e6296c4` — same approved spec + quartet pin + **--max-attempts 50** (Yixun-directed after both prior jobs capped at 20 in the storm).
+
+### Jobs 27–38: C@5e-5 20k EVAL PIPELINE — 12 jobs submitted by Yixun 2026-08-19T19:42–47Z
+
+All exit-0 submissions, quartet pin + RULED guards (src af29d5a / bash_scripts 83d3302), v6e-8
+worker0-only, OUTPUT_DIR=wan-ti2v-exp03:
+- instrument (all 10 ckpts → validation_loss/): `20260819-194233-d6e9be3a-exp03-c20k-inst-yixun`
+- canonical-100 SSIM (s3_intermediate, canonical, seed 0, correct) ×10:
+  250 `194306-a018f286` · 1000 `194334-b3fb0818` · 2500 `194403-8aea90af` · 5000 `194431-80edaae9`
+  · 7500 `194459-369d8032` · 10000 `194528-6e8110ef` · 12500 `194600-f23d0cac` · 15000 `194629-4fe88480`
+  · 17500 `194658-d9702d32` · 20000 `194727-088f7577`
+- full-set 1,629 @20000 (s3_full_set): `20260819-194756-9489eac3-exp03-c20k-fullset-yixun`
+Deliverables when landed: val-loss + SSIM curves (vs exp_02 lr1e5c/lr1e4 trajectories), full-set
+ranking → best/75th/median/25th/worst videos (separate pass), figures local.
