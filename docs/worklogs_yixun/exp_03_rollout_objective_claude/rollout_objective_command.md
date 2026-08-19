@@ -661,3 +661,14 @@ safe at ckpt 10000 throughout (both died before restore). **Job 26e:**
 `20260818-132443-ee431695-exp03-c-lr5e5-20k-yixun` — quartet pin `jax==0.11.0 jaxlib==0.11.0
 libtpu==0.0.41 flax==0.12.8` (the Aug-17 stack 26b trained 12 h on), same envs/key forwarding,
 resumes from 10000, ~9 h to 20k.
+
+### Job 26e SUCCEEDED (2026-08-19T~18:30Z) — C @ LR 5e-5 trained to 20,000 steps
+
+16 attempts through the Aug-18/19 zone-wide preemption storm; the 2,500-step checkpoint ladder made
+every segment bankable. All 10 checkpoints on GCS (250..20000 complete). W&B (Yixun's entity):
+runs/xx55oks6 (+ the earlier segments' runs zhibzmcb from 26b). Training phase of the Yixun-requested
+C-recipe run is COMPLETE: combined objective (λ=0.5, k=2/2, N=2 accumulation), LR 5e-5 constant after
+250-step warmup, GBS 256, train100 (1,629 windows), seed 0, from init. Next: the 12-job eval pipeline
+(instrument all-10; canonical-100 SSIM ×10; full-set 1,629 @20k) then the 5 ranked videos + figures.
+
+### M2 pair resubmit #2 (2026-08-19T18:51Z, Yixun): rb `20260819-185052-01f6c619`, c0 `20260819-185126-5e6296c4` — same approved spec + quartet pin + **--max-attempts 50** (Yixun-directed after both prior jobs capped at 20 in the storm).
