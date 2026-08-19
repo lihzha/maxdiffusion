@@ -2,9 +2,18 @@
 
 Open issues, recurring failures, and standing workarounds. Each entry: symptom, infra-vs-bug classification, workaround/fix, status. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`.
 
-Last updated: 2026-08-17 ~05:40Z (post-M1-completion refresh)
+Last updated: 2026-08-19 ~21:00Z (issue #27/#28 added; M2 cap history in tracker)
 
 ## OPEN / STANDING
+
+### 27. TPU python-stack supply-chain drift: pins must close over the QUARTET jax/jaxlib/libtpu/flax (infra, standing rule)
+- **Symptom (2026-08-17→18, three distinct failures in 28 h):** the Aug-17 stack (jax 0.11.0 / jaxlib 0.11.0 / libtpu 0.0.41 / flax 0.12.8) worked (M1-10; 26b trained 12 h). Overnight **jax 0.11.1** broke flax 0.12.8 (`hijax.MutableHiType` removed) → 26b att-8 died. Pin #1 (`flax==0.12.6` alone) inverted the mismatch (flax 0.12.6 needs the removed `jax.core.Effect`) → 3 jobs died. Pin #2 (`jax[tpu]==0.11.0`) restored jax but the `[tpu]` extra re-resolved **libtpu to 0.0.44.1**, which REFUSES our `LIBTPU_INIT_ARGS` AllGather continuation-fusion flag on v6e/"ghostlite" at backend init → 3 more jobs died.
+- **Fix (proven Aug 18, batch 4):** append to every setup-cmd: `.venv/bin/python -m pip install jax==0.11.0 jaxlib==0.11.0 libtpu==0.0.41 flax==0.12.8` — all four named, no extras, nothing left to a resolver.
+- **Rule:** any TPU-stack pin that names fewer than the quartet is a hole. Long-term: lock the quartet in setup.sh (unified-launcher lane, Lihan).
+
+### 28. Stale-attempt log artifact: frozen log + RUNNING status ⇒ you may be reading a DEAD attempt (monitoring rule, standing)
+- **Incident (2026-08-18):** M2 R-B's attempt-1 log froze at 13:41 (that attempt died; the queue silently started attempt 2 at 13:54). The Planner read the frozen log for 5 h and escalated a hang determination; attempt 2 had trained on schedule the whole time (step-1000 ckpt 18:27Z). No action was taken on the false alarm (evidence-before-action held). Second variant: `gsutil ls logs/ | tail -1` sorts LEXICOGRAPHICALLY (attempt-9 > attempt-15) — sort numerically.
+- **Rule:** before inferring anything from log silence: list `logs/attempt-*/`, sort NUMERICALLY, read the newest; cross-check `current_qr_name`/`provisioned_at` in status.json.
 
 ### 24. OpenAI codex cyber-classifier false-positives on adversarially-phrased review prompts (infra, standing workaround)
 - **Symptom (2026-08-17):** a `codex exec` review invocation died with "This content was flagged for possible cybersecurity risk" — the prompt reviewed OUR OWN authorization module but used offensive phrasing ("re-execute exploits", "forge records", "wedge every retry").

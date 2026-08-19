@@ -2,7 +2,17 @@
 
 Cross-experiment status index — one section per experiment/run, newest first. Updated at every handoff / wrap-up / pre-compact per the handoff protocol in `CLAUDE.md`. Per-experiment detail lives in `exp_<NN>_<name>_claude/` folders per `experiment_SOP.md`; this file is the at-a-glance map.
 
-Last updated: 2026-08-17 ~05:40Z (post-M1-completion refresh; the 2026-08-17 addendum below supersedes the 2026-08-15 addendum where they overlap)
+Last updated: 2026-08-19 ~21:00Z (eval-fleet checkpoint; the 2026-08-19 addendum is current)
+
+> **2026-08-19 ADDENDUM (current).**
+>
+> **exp_03 C@5e-5 20k (Yixun-requested): TRAINING COMPLETE, EVAL FLEET QUEUED.** Job 26e (`20260818-132443`) SUCCEEDED 2026-08-19T~18:30Z — 20,000 steps, all 10 checkpoints (250..20000) under `gs://v6_east1d/checkpoints/maxdiffusion/wan-ti2v-exp03/wan-exp03-c-lr5e5-20k-20260816/`; survived the Aug-18/19 zone-wide preemption storm in 16 attempts via the 2,500-step checkpoint ladder + issue-#27 quartet pin. W&B (Yixun entity): runs zhibzmcb (segment 1, 0→10k) + xx55oks6 (segment 2, 10k→13k) + later segments. **12-job eval fleet submitted 19:42-47Z** (Jobs 27-38 in the exp_03 command doc): instrument all-10 (`194233-d6e9be3a`), canonical-100 SSIM ×10 (`194306..194727`), full-set 1,629 @20k (`194756-9489eac3`) — all PROVISIONING at 21:00Z (scheduler alive, v6-8 pool draining slowly post-storm). Then: 5 ranked videos (best/75th/median/25th/worst, captions `<SSIM>_<prompt>_<episode>`) + figures (SSIM-vs-steps; train/val-loss-vs-steps).
+>
+> **exp_06 M2 (approved, third submission): PROVISIONING.** Both 20-attempt-capped pairs died to the storm without one arm completing (R-B needs ~9.1 h single-attempt survival — fresh 0→2000 per attempt by pair design; C0 ~2.2 h). Resubmit #2 at **--max-attempts 50** (Yixun-directed): rb `20260819-185052-01f6c619`, c0 `20260819-185126-5e6296c4`. On completion: continuation rule (R-B loss@2k ≤ 70% of step-200 running mean AND 4-example fixed-draw paired ΔSSIM(R-B−C0) > 0) → Yixun adjudicates. M1 COMPLETE (v7 table, 10/12 authorized, `att-0817-015756`); M1′ (v6e-64) required before M3; KMS-vs-ACL still open before M3.
+>
+> **New standing rules this period:** issue #27 (quartet pin jax/jaxlib/libtpu/flax — three drift modes in 28 h, all evidenced), issue #28 (stale-attempt log artifact + numeric attempt sort). The R-B "hang" of Aug 18 was RETRACTED as a monitoring artifact (ledger f67f52c).
+
+
 
 > **2026-08-17 ADDENDUM (AUTHORITATIVE for exp_06 M1 + the exp_03 post-closure run).**
 >
