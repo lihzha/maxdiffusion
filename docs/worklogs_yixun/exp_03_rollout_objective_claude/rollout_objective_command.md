@@ -718,3 +718,14 @@ Ranked picks for the video pass: worst ep30738_v0_s00056 (0.8201, the sole <0.90
 episode-mate ep30738_v0_s00180 is p25 at 0.9625), p25 ep30738_v0_s00180, median ep37274_v0_s00004
 (0.9700), p75 ep40738_v0_s00024 (0.9767), best ep28817_v0_s00040 (0.9865). Video job script ready
 (isolated validation_videos root; 5 explicit windows; WRITE_VIDEOS=True).
+
+### Video pass v2 = Option A (Yixun choice): canonical-100 with WRITE_VIDEOS — submitted 2026-08-20T16:01Z
+
+First video attempt (5 explicit windows, `20260820-144759`) was refused by the D11 role validation —
+every role requires whole-cohort coverage; the 5 full-set-ranked picks are all non-canonical. Options
+A (canonical-100 render, exp_02 Job 54 precedent) / B (render all 1,629) put to Yixun; **he chose A**.
+**Job:** `20260820-160141-7514f336-exp03-c20k-videos-yixun` — role s3_intermediate, EVAL_WINDOWS=canonical,
+WRITE_VIDEOS=True, isolated validation_videos/ root, quartet pin, ~2.5-3 h. Delivery = canonical-ranked
+five @20k: worst 0.9140 ep34212_v0_s00000 · p25 0.9614 ep39091_v0_s00028 · median 0.9703
+ep22800_v0_s00008 · p75 0.9752 ep53956_v0_s00028 · best 0.9838 ep22546_v0_s00020. Full-set-ranked
+numbers (incl. sole <0.90 window ep30738_v0_s00056 at 0.8201) stay in the ledger as data.
