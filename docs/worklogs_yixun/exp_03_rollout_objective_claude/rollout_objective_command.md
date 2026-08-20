@@ -706,3 +706,15 @@ TRAIN_COMMIT fa1a97c stamped; artifacts validation_loss/val_loss.{csv,json} + pe
 Same instrument as exp_02's D2 ⇒ directly comparable: exp_02 lr1e-5 was 0.14598@2500 / 0.1079@10k —
 C@5e-5 sits ~4× lower at both (0.0808 / 0.0271). The 1000→2500 flat/bump coincides with the p_ss
 ramp-in, mirroring the SSIM dip. Plateau after 12.5k (~0.024), matching SSIM's plateau.
+
+### FULL-SET @20k SUCCEEDED (2026-08-20T~08:00Z, att-5 via staged-rows resume) — HEADLINE RESULT
+
+**All 1,629 windows, C@5e-5 @20000, seed 0, correct context:** mean SSIM **0.9687**, median 0.9700,
+min 0.8201, max 0.9865; **≥0.90: 1,628/1,629 = 99.94%**; ≥0.95: 1,545 (94.8%). For reference:
+exp_02's D11 memorization criterion (90% of windows ≥ 0.90) measured **14.1%** at its 10k verdict —
+this recipe crosses that bar with one window to spare. (Cross-recipe caveat: different objective
+(C blend), LR (5e-5 vs 1e-5), and 20k vs 10k steps — attribution among those is not isolated here.)
+Ranked picks for the video pass: worst ep30738_v0_s00056 (0.8201, the sole <0.90 window; its
+episode-mate ep30738_v0_s00180 is p25 at 0.9625), p25 ep30738_v0_s00180, median ep37274_v0_s00004
+(0.9700), p75 ep40738_v0_s00024 (0.9767), best ep28817_v0_s00040 (0.9865). Video job script ready
+(isolated validation_videos root; 5 explicit windows; WRITE_VIDEOS=True).
