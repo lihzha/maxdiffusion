@@ -697,3 +697,12 @@ the p_ss ramp-in; monotone climb after; plateau slope +0.003/5k after 12.5k.
 **Resubmits:** instrument `20260820-004529-137e6102` (missing TRAIN_COMMIT on first submit — now
 fa1a97c stamped); full-set `20260820-011814-2b38fc8b` (EVAL_WINDOWS=full → all, exp_02 Job 28
 precedent). Both Planner env errors, seconds of TPU time lost each.
+
+### Instrument SUCCEEDED (2026-08-20T~02:15Z) — val-loss curve complete (fixed-RNG one-step, 1,629 windows, seed 0)
+
+250→0.16546, 1000→0.07949, 2500→0.08081, 5000→0.03501, 7500→0.02983, 10000→0.02705,
+12500→0.02507, 15000→0.02527, 17500→0.02360, 20000→**0.02370** (stderr ~0.001 throughout;
+TRAIN_COMMIT fa1a97c stamped; artifacts validation_loss/val_loss.{csv,json} + per-window).
+Same instrument as exp_02's D2 ⇒ directly comparable: exp_02 lr1e-5 was 0.14598@2500 / 0.1079@10k —
+C@5e-5 sits ~4× lower at both (0.0808 / 0.0271). The 1000→2500 flat/bump coincides with the p_ss
+ramp-in, mirroring the SSIM dip. Plateau after 12.5k (~0.024), matching SSIM's plateau.
