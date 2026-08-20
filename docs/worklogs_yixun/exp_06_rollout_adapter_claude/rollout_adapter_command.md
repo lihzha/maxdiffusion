@@ -347,3 +347,30 @@ logs/attempt-*/ and match against current_qr_name BEFORE inferring anything from
 C0 meanwhile burns attempts (9 by 19:00Z, all infra-preempted before completing; pair integrity is
 structurally safe — train mode adopts only COMPLETE publications, so every attempt restarts at 0 and
 no mid-run resume can taint the pair). R-B ETA 2k ~22:40Z if att-2 survives.
+
+### M2 COMPLETE (2026-08-20T~19:00Z) — both arms trained; CONTINUATION RULE: clause 2 FAILS → Yixun adjudication
+
+**Pair integrity CLEAN:** each arm trained 0→2000 inside ONE attempt. R-B's att-6 (att-20260820T063919Z)
+in fact survived 8.8 h, finished 2000 and PUBLISHED before its VM died post-publication; att-11 adopted
+the COMPLETE publication per design and re-stamped (final root att-20260820T174632Z, step 2000,
+binding-verified). C0 = att-20260820T063912Z. No mid-run resume anywhere.
+
+**Recorded eval histories (EvalRecord = step / dev_rollout_loss / train-window-mean):**
+- R-B:  1000 → dev 2.6840, train 3.7903 · 2000 → dev 2.6859, train 2.5519. Selection: step 1000 (earliest best).
+- C0:   1000 → dev 2.4582, train 4.2387 · 2000 → dev 2.2530, train 2.2683. Selection: step 2000.
+
+**Continuation rule (plan v2.9 §4-P2) against these measurements:**
+- Clause 1 — "R-B train loss at 2k ≤ 70% of its step-200 running mean": the deployed loop records
+  window means only at the 1,000-step cadence; no step-200 mean exists in any artifact (wording/
+  implementation gap, flagged). Most conservative available proxy: the steps-1–1000 window mean
+  (3.7903, which UNDERSTATES any true step-200 mean since loss falls). 2.5519/3.7903 = **67.3% ≤ 70%
+  ⇒ PASSES** (and would pass a fortiori under the true baseline).
+- Clause 2 — "4-example fixed-draw paired Δ(R-B − C0) > 0 in mean" (plan text says ΔSSIM; the
+  implemented §3d estimand is the fixed-draw DEV rollout loss, lower=better; sign translation
+  unambiguous): at 2000, R-B dev 2.6859 vs C0 2.2530 ⇒ R-B WORSE by 0.4329; at 1000 R-B also worse
+  (2.6840 vs 2.4582). **Δ < 0 at both cadence points ⇒ FAILS.**
+- **Rule verdict: FAIL ("Fail ⇒ stop and reopen with Yixun").** Substantive reading (fact, not
+  adjudication): R-B's train loss falls but its DEV estimand is FLAT (2.6840→2.6859) while C0 —
+  optimizing one-step — IMPROVES the same k=2 rollout-loss estimand (2.4582→2.2530) and beats R-B
+  at both points. At probe scale, the short-horizon rollout objective shows no learnability
+  advantage on the exact quantity it optimizes. Decision (continue / stop / modify) is Yixun's.
