@@ -685,3 +685,15 @@ worker0-only, OUTPUT_DIR=wan-ti2v-exp03:
 - full-set 1,629 @20000 (s3_full_set): `20260819-194756-9489eac3-exp03-c20k-fullset-yixun`
 Deliverables when landed: val-loss + SSIM curves (vs exp_02 lr1e5c/lr1e4 trajectories), full-set
 ranking → best/75th/median/25th/worst videos (separate pass), figures local.
+
+### EVAL FLEET RESULTS (2026-08-20T00:50Z): SSIM x10 COMPLETE — headline numbers; 2 resubmits
+
+**Canonical-100 SSIM (seed 0, correct), C@5e-5:** 250→0.7966, 1000→0.9043, 2500→0.8876,
+5000→0.9539, 7500→0.9551, 10000→0.9598, 12500→0.9638, 15000→0.9648, 17500→0.9641, **20000→0.9667**.
+All 10 passes SUCCEEDED, 100/100 windows each, artifacts under validation/step_*_s3_intermediate/.
+Read: (1) C@5e-5 @5k ALREADY MATCHES exp_02's best-ever 20k (lr1e4 escalation, 0.9536) — 4× step
+efficiency; (2) final 0.9667 = +0.0131 over that best; (3) the 2500 dip (0.904→0.888) coincides with
+the p_ss ramp-in; monotone climb after; plateau slope +0.003/5k after 12.5k.
+**Resubmits:** instrument `20260820-004529-137e6102` (missing TRAIN_COMMIT on first submit — now
+fa1a97c stamped); full-set `20260820-011814-2b38fc8b` (EVAL_WINDOWS=full → all, exp_02 Job 28
+precedent). Both Planner env errors, seconds of TPU time lost each.
