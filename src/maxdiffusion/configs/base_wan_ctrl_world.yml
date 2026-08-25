@@ -185,16 +185,36 @@ wan_action_encoder_hidden_dim: 1024
 # not compatible across values.
 action_tokens_per_latent_frame: 4
 
-# How action tokens reach the transformer:
+# How the action reaches the transformer:
 #   'cross_attn' (default) — action tokens are the sole cross-attention K/V
 #                             sequence (frame-locked via action_tokens_per_latent_frame).
 #   'adaln'                — cross-attention gets zeroed (no-op) tokens instead;
 #                             action tokens are projected per latent frame and
 #                             summed into the per-token timestep embedding that
 #                             drives AdaLN modulation.
-# NOTE: changing this is not checkpoint-compatible — 'adaln' trains an extra
-# action_adaln_proj module that 'cross_attn' checkpoints don't have.
+#   'skeleton'             — the 7-dim vector actions are NOT used. Conditioning is
+#                             a rendered 2D-kinematic-skeleton video, VAE-encoded
+#                             into latents token-for-token aligned with the video
+#                             latents, patch-embedded by their own conv and ADDED
+#                             onto the video tokens. This is the OSCAR recipe.
+#                             Requires a dataset with skeleton_cam* features (e.g.
+#                             droid_wan_skeletal_192_320); the action encoder is
+#                             not built, so action_dim / wan_action_encoder_hidden_dim
+#                             / action_tokens_per_latent_frame stop mattering except
+#                             for the zero cross-attn placeholder's sequence length.
+# NOTE: changing this is not checkpoint-compatible — each mode trains a different
+# set of extra modules ('adaln' has action_adaln_proj, 'skeleton' has
+# skeleton_embed and no action_encoder at all).
 action_cond_mode: 'cross_attn'
+
+# ── Skeleton conditioning (action_cond_mode: 'skeleton') ───────────────────────
+# Fixed scale on the skeleton tokens before they are added to the video tokens:
+#     h = patch_embedding(video) + alpha * skeleton_embed(skeleton)
+# The conv is zero-init, so step 0 is exactly the no-skeleton baseline whatever
+# alpha is; alpha's real job is scaling the gradient into that kernel, capping
+# how fast the skeleton path ramps up out of zero. 0.1 is OSCAR's value
+# (additional_embed_alpha), where it was paired with a xavier init instead.
+skeleton_embed_alpha: 0.1
 
 # Windowing in latent space. Each latent frame corresponds to 4 raw frames.
 # num_predicted_latents = number of future (predicted) latent frames;

@@ -669,6 +669,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       cond_tokens_per_frame: int = 1,
       frame_positions: Optional[tuple] = None,
       action_hidden_states: Optional[jax.Array] = None,
+      skeleton_hidden_states: Optional[jax.Array] = None,
       return_attn_diag: bool = False,
   ) -> Union[jax.Array, Tuple[jax.Array, jax.Array], Dict[str, jax.Array]]:
     hidden_states = nn.with_logical_constraint(hidden_states, ("batch", None, None, None, None))
@@ -684,6 +685,14 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
     with self.conditional_named_scope("patch_embedding"):
       hidden_states = self.patch_embedding(hidden_states)
       hidden_states = jax.lax.collapse(hidden_states, 1, -1)
+      if skeleton_hidden_states is not None:
+        # OSCAR-style control injection: skeleton-video latents, patch-embedded
+        # by a *separate* conv living outside this model (see
+        # NNXWanSkeletonPatchEmbed) and already scaled by its alpha, are added
+        # onto the video tokens. Kept out of the noisy latent itself so the
+        # flow-matching target stays recoverable from the input. The caller owns
+        # the conv, the alpha and the CFG mask; this is only the add.
+        hidden_states = hidden_states + skeleton_hidden_states.astype(hidden_states.dtype)
     per_token_t = timestep.ndim == 2  # [B, seq_len] for TI2V
     if action_hidden_states is not None and not per_token_t:
       raise NotImplementedError(

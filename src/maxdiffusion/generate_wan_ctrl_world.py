@@ -33,14 +33,22 @@ from flax import nnx
 from flax.linen import partitioning as nn_partitioning
 
 from maxdiffusion import max_logging, max_utils, pyconfig
-from maxdiffusion.models.wan.action_encoder_wan import NNXWanActionEncoder, NNXWanActionAdaLNProjector
+from maxdiffusion.models.wan.action_encoder_wan import (
+    NNXWanActionEncoder,
+    NNXWanActionAdaLNProjector,
+    NNXWanSkeletonPatchEmbed,
+)
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers.scheduling_flow_match_flax import FlaxFlowMatchScheduler
 from maxdiffusion.trainers.wan_ctrl_world_trainer import (
+    VALID_ACTION_COND_MODES,
     WanCtrlWorldModel,
     _build_per_token_timestep,
     _dtype,
+    _encode_skeleton,
+    _frame_level_cond,
     _group_actions,
+    _placeholder_action_tokens,
     _route_action_conditioning,
 )
 
@@ -64,12 +72,19 @@ def _denoise_step(
     scheduler_state,
     cond_tokens_per_frame: int = 1,
     action_cond_mode: str = "cross_attn",
+    skeleton_tokens: jnp.ndarray | None = None,
 ):
     """One Euler flow-matching step with optional classifier-free guidance.
 
     When guidance_scale > 1, runs a single double-batched forward pass with
     [uncond | cond] stacked along the batch axis, then blends:
         pred = uncond + guidance_scale * (cond - uncond)
+
+    ``skeleton_tokens`` is the already-patch-embedded, already-alpha-scaled
+    skeleton bias for ``skeleton`` mode (``None`` in the action modes, which jit
+    traces as an absent pytree so those modes are untouched). The uncond half of
+    the guided batch gets zeros there, which is exactly the "skip the add" state
+    training's CFG mask produces.
 
     Returns the updated latents (clean history re-attached).
     """
@@ -98,13 +113,18 @@ def _denoise_step(
         action_hidden_states_2x = (
             jnp.concatenate([adaln_uncond, adaln_cond], axis=0) if adaln_cond is not None else None
         )
+        skeleton_2x = (
+            jnp.concatenate([jnp.zeros_like(skeleton_tokens), skeleton_tokens], axis=0)
+            if skeleton_tokens is not None else None
+        )
         pred_2x = model.transformer(
             hidden_states=latents_2x,
             timestep=t_2d,
             encoder_hidden_states=tokens_2x,
             action_hidden_states=action_hidden_states_2x,
+            skeleton_hidden_states=skeleton_2x,
             deterministic=True,
-            frame_level_cond=True,
+            frame_level_cond=_frame_level_cond(action_cond_mode),
             cond_tokens_per_frame=cond_tokens_per_frame,
             frame_positions=pos_2x,
         )
@@ -118,8 +138,9 @@ def _denoise_step(
             timestep=timestep_2d,
             encoder_hidden_states=enc_tokens,
             action_hidden_states=action_hidden_states,
+            skeleton_hidden_states=skeleton_tokens,
             deterministic=True,
-            frame_level_cond=True,
+            frame_level_cond=_frame_level_cond(action_cond_mode),
             cond_tokens_per_frame=cond_tokens_per_frame,
             frame_positions=frame_positions,
         )
@@ -147,6 +168,22 @@ def _encode_actions(
     return model.action_encoder(actions_grouped, None) # (B, F_lat, 4096)
 
 
+def _encode_skeleton_tokens(
+    params: nnx.State,
+    graphdef: nnx.GraphDef,
+    rest_of_state: nnx.State,
+    skeleton: jnp.ndarray,
+) -> jnp.ndarray:
+    """Patch-embed skeleton latents into the video-token bias (skeleton mode).
+
+    ``(B, C, F_lat, H_lat, W_lat)`` → ``(B, seq_len, inner_dim)``, alpha applied.
+    No CFG mask here: the uncond branch is formed inside ``_denoise_step``, which
+    zeroes this tensor for the uncond half of the double batch.
+    """
+    model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
+    return _encode_skeleton(model.skeleton_embed, skeleton, None, 0.0, skeleton.dtype)
+
+
 # ── Full denoising loop ───────────────────────────────────────────────────────
 
 
@@ -170,6 +207,9 @@ def run_ar_denoising(
     guidance_scale: float = 1.0,
     cond_tokens_per_frame: int = 1,
     action_cond_mode: str = "cross_attn",
+    all_skeleton: jnp.ndarray | None = None,
+    p_encode_skeleton=None,
+    wan_text_dim: int = 4096,
 ) -> jnp.ndarray:
     """Auto-regressive denoising: generate ar_num_chunks * ar_chunk_size future frames.
 
@@ -186,8 +226,20 @@ def run_ar_denoising(
     frames (the last n_hist previously generated frames) keep the positions they
     were generated at, keeping RoPE consistent with training.
 
+    In ``skeleton`` mode ``all_actions`` carries no information (the encoder does
+    not exist) and ``all_skeleton`` — ``(B, C, n_hist + ar_num_chunks *
+    ar_chunk_size, H, W)`` skeleton latents for the whole window — is the
+    conditioning instead. It is sliced per chunk on the *frame* axis with the same
+    ``[pos_start, pos_start + window_F_lat)`` window as ``all_frame_positions``,
+    since skeleton latents are per-latent-frame just like the RoPE positions.
+
     Returns predicted future latents: (B, C, ar_num_chunks * ar_chunk_size, H, W).
     """
+    if action_cond_mode == "skeleton" and (all_skeleton is None or p_encode_skeleton is None):
+        raise ValueError(
+            "action_cond_mode='skeleton' needs all_skeleton and p_encode_skeleton; "
+            "without them the rollout would run entirely unconditioned."
+        )
     window_F_lat = n_hist + ar_chunk_size
     current_hist = initial_hist
     generated_chunks = []
@@ -205,7 +257,19 @@ def run_ar_denoising(
         pos_start = chunk_i * ar_chunk_size
         positions_chunk = all_frame_positions[:, pos_start:pos_start + window_F_lat]
 
-        action_tokens = p_encode(params, actions=actions_chunk, F_lat=window_F_lat)
+        if action_cond_mode == "skeleton":
+            # No action encoder in this mode — the zero placeholder just fills the
+            # cross-attention K/V slot. The real conditioning is the skeleton
+            # window, sliced on the frame axis exactly like positions_chunk.
+            action_tokens = _placeholder_action_tokens(
+                all_actions.shape[0], window_F_lat, cond_tokens_per_frame,
+                wan_text_dim, dtype,
+            )
+            skeleton_chunk = all_skeleton[:, :, pos_start:pos_start + window_F_lat]
+            skeleton_tokens = p_encode_skeleton(params, skeleton=skeleton_chunk)
+        else:
+            action_tokens = p_encode(params, actions=actions_chunk, F_lat=window_F_lat)
+            skeleton_tokens = None
 
         rng, step_rng = jax.random.split(rng)
         gen_chunk = run_denoising(
@@ -216,6 +280,7 @@ def run_ar_denoising(
             guidance_scale=guidance_scale,
             cond_tokens_per_frame=cond_tokens_per_frame,
             action_cond_mode=action_cond_mode,
+            skeleton_tokens=skeleton_tokens,
         )  # (B, C, ar_chunk_size, H, W)
 
         generated_chunks.append(gen_chunk)
@@ -320,6 +385,7 @@ def run_denoising(
     guidance_scale: float = 1.0,
     cond_tokens_per_frame: int = 1,
     action_cond_mode: str = "cross_attn",
+    skeleton_tokens: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """Denoise future latent frames from random noise, conditioned on history + actions.
 
@@ -329,8 +395,10 @@ def run_denoising(
     start).
 
     When guidance_scale > 1, uses classifier-free guidance: the model runs with
-    zeroed action tokens (unconditioned) and real action tokens (conditioned) in
-    a single double-batched forward pass per step, then blends the predictions.
+    the conditioning zeroed (unconditioned) and present (conditioned) in a single
+    double-batched forward pass per step, then blends the predictions. In
+    ``skeleton`` mode the conditioning being dropped is ``skeleton_tokens``; the
+    action tokens are the zero placeholder in both halves.
 
     Returns the denoised future latents: (B, C, n_fut, H, W).
     """
@@ -369,6 +437,7 @@ def run_denoising(
               uncond_action_tokens=uncond_action_tokens,
               frame_positions=frame_positions,
               scheduler_state=sched_state,
+              skeleton_tokens=skeleton_tokens,
           )
           if step_i == 0 or step_i == len(timesteps_np) - 1 or (step_i + 1) % 10 == 0:
               max_logging.log(
@@ -507,7 +576,15 @@ def run(argv: Sequence[str]) -> None:
     # ── Build combined model (same architecture as training) ──────────────────
     action_tokens_per_frame = int(getattr(config, "action_tokens_per_latent_frame", 1))
     action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
-    action_encoder = NNXWanActionEncoder(
+    if action_cond_mode not in VALID_ACTION_COND_MODES:
+        raise ValueError(
+            f"action_cond_mode={action_cond_mode!r} is not one of {VALID_ACTION_COND_MODES}."
+        )
+    skeleton_mode = action_cond_mode == "skeleton"
+    # The module set must match what the training run checkpointed exactly, or the
+    # orbax restore below hits a structure mismatch — skeleton-mode checkpoints
+    # have skeleton_embed and no action_encoder at all.
+    action_encoder = None if skeleton_mode else NNXWanActionEncoder(
         rngs=nnx.Rngs(jax.random.key(config.seed)),
         action_dim=config.action_dim,
         num_actions=4,
@@ -517,6 +594,20 @@ def run(argv: Sequence[str]) -> None:
         dtype=weights_dtype,
         weights_dtype=weights_dtype,
     )
+    skeleton_embed = None
+    if skeleton_mode:
+        skeleton_embed = NNXWanSkeletonPatchEmbed(
+            rngs=nnx.Rngs(jax.random.key(config.seed + 2)),
+            in_channels=pipeline.transformer.config.in_channels,
+            inner_dim=(
+                pipeline.transformer.config.num_attention_heads
+                * pipeline.transformer.config.attention_head_dim
+            ),
+            patch_size=tuple(pipeline.transformer.config.patch_size),
+            alpha=float(getattr(config, "skeleton_embed_alpha", 0.1)),
+            dtype=weights_dtype,
+            weights_dtype=weights_dtype,
+        )
     action_adaln_proj = None
     if action_cond_mode == "adaln":
         # inner_dim must come from the loaded transformer's own registered
@@ -534,7 +625,9 @@ def run(argv: Sequence[str]) -> None:
         )
 
     with pipeline.mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-        combined = WanCtrlWorldModel(pipeline.transformer, action_encoder, action_adaln_proj)
+        combined = WanCtrlWorldModel(
+            pipeline.transformer, action_encoder, action_adaln_proj, skeleton_embed
+        )
         graphdef, params, rest_of_state = nnx.split(combined, nnx.Param, ...)
 
     # ── Restore checkpoint ────────────────────────────────────────────────────
@@ -597,6 +690,7 @@ def run(argv: Sequence[str]) -> None:
         seed=config.seed,
         shuffle=False,
         shard_for_training=False,
+        load_skeleton=skeleton_mode,
         first_window_only=autoregressive,
         pad_short_episodes=pad_short and autoregressive,
         min_latent_frames=int(max_utils.config_get(config, "eval_min_latent_frames", 0)),
@@ -608,8 +702,8 @@ def run(argv: Sequence[str]) -> None:
             f"out to the {max_latent_frames}-frame window"
         )
 
-    # ── Precompile action encoding ─────────────────────────────────────────────
-    p_encode = jax.jit(
+    # ── Precompile conditioning encoders ──────────────────────────────────────
+    p_encode = None if skeleton_mode else jax.jit(
         functools.partial(
             _encode_actions,
             graphdef=graphdef,
@@ -617,6 +711,13 @@ def run(argv: Sequence[str]) -> None:
         ),
         static_argnames=["F_lat"],
     )
+    p_encode_skeleton = jax.jit(
+        functools.partial(
+            _encode_skeleton_tokens,
+            graphdef=graphdef,
+            rest_of_state=rest_of_state,
+        ),
+    ) if skeleton_mode else None
 
     # ── Inference loop ────────────────────────────────────────────────────────
     output_dir = os.path.join(config.output_dir, "inference_videos")
@@ -632,6 +733,10 @@ def run(argv: Sequence[str]) -> None:
         # Temporal RoPE indices for every latent frame in the window — same
         # tensor training feeds the transformer (see wan_ctrl_world_trainer).
         frame_positions = jnp.array(batch["frame_positions"]).astype(jnp.int32)  # (1, W)
+        # Skeleton latents for the whole window, same layout as `latent`.
+        skeleton = (
+            jnp.array(batch["skeleton"]).astype(weights_dtype) if skeleton_mode else None
+        )
 
         _, _, F_lat, _, _ = latent.shape
         clean_hist = latent[:, :, :n_hist, :, :]                        # (1, C, n_hist, H, Wl)
@@ -653,13 +758,24 @@ def run(argv: Sequence[str]) -> None:
                 guidance_scale=guidance_scale,
                 cond_tokens_per_frame=action_tokens_per_frame,
                 action_cond_mode=action_cond_mode,
+                all_skeleton=skeleton,
+                p_encode_skeleton=p_encode_skeleton,
+                wan_text_dim=config.wan_text_dim,
             )
         else:
-            # Encode actions (constant across denoising steps).
-            action_tokens = p_encode(
-                params, actions=actions,
-                F_lat=F_lat,
-            )  # (1, F_lat*K, 4096)
+            # Encode the conditioning once — constant across denoising steps.
+            if skeleton_mode:
+                action_tokens = _placeholder_action_tokens(
+                    latent.shape[0], F_lat, action_tokens_per_frame,
+                    config.wan_text_dim, weights_dtype,
+                )
+                skeleton_tokens = p_encode_skeleton(params, skeleton=skeleton)
+            else:
+                action_tokens = p_encode(
+                    params, actions=actions,
+                    F_lat=F_lat,
+                )  # (1, F_lat*K, 4096)
+                skeleton_tokens = None
 
             pred_future = run_denoising(
                 graphdef, params, rest_of_state,
@@ -671,6 +787,7 @@ def run(argv: Sequence[str]) -> None:
                 guidance_scale=guidance_scale,
                 cond_tokens_per_frame=action_tokens_per_frame,
                 action_cond_mode=action_cond_mode,
+                skeleton_tokens=skeleton_tokens,
             )
 
         rollout_s = time.perf_counter() - t_vid

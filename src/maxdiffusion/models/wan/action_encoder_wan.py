@@ -1,7 +1,18 @@
-"""Action encoder for action-conditioned WAN video generation.
+"""Action conditioning modules for action-conditioned WAN video generation.
 
-Per-latent-frame 3-layer SiLU MLP encoding the 4 raw-frame actions that
-correspond to one latent frame into the WAN cross-attention space.
+One module per ``action_cond_mode`` route:
+
+* ``NNXWanActionEncoder`` (``cross_attn``, ``adaln``) — per-latent-frame 3-layer
+  SiLU MLP encoding the 4 raw-frame 7-dim actions into the WAN
+  cross-attention space.
+* ``NNXWanActionAdaLNProjector`` (``adaln``) — projects those action tokens into
+  the transformer's per-token AdaLN conditioning space.
+* ``NNXWanSkeletonPatchEmbed`` (``skeleton``) — patch-embeds VAE latents of a
+  rendered 2D-kinematic-skeleton video and adds them to the video tokens. This
+  route does not use the vector actions at all, so ``NNXWanActionEncoder`` is
+  not built in that mode.
+
+The action-encoder docs below apply to the first two modes.
 
 ``tokens_per_frame`` controls the granularity:
 
@@ -197,3 +208,108 @@ class NNXWanActionAdaLNProjector(nnx.Module):
         B, F, K, D = action_tokens_grouped.shape
         x = action_tokens_grouped.reshape(B, F, K * D).astype(self.dtype)
         return self.proj(x)
+
+
+class NNXWanSkeletonPatchEmbed(nnx.Module):
+    """Patch-embeds 2D-kinematic-skeleton latents into the WAN transformer's
+    token space, so they can be *added* to the video tokens (OSCAR-style).
+
+    The skeleton conditioning signal is a rendered 2D skeleton video pushed
+    through the *same* WAN VAE as the RGB video, so its latents are
+    token-for-token aligned with the video latents — identical
+    ``(C, F_lat, H_lat, W_lat)`` shape, identical 3-camera H-concat, identical
+    normalisation. That alignment is what makes an additive injection
+    well-defined at all.
+
+    This mirrors OSCAR's ``addition_patch_embedding`` (see
+    ``worldsim/_src/networks/wan2pt1_i2v_concat.py``): a second patch-embedding
+    convolution, *separate* from the transformer's pretrained
+    ``patch_embedding``, whose output is added to the patchified video tokens
+    scaled by ``alpha``::
+
+        h = patch_embedding(video_latents) + alpha * skel_patch_embed(skel_latents)
+
+    Why a separate conv rather than adding the raw latents: the video latents
+    are the thing the model has to denoise, so contaminating those channels
+    would make the regression target unrecoverable from the input. Injecting in
+    token space leaves the noisy latent intact and gives the skeleton its own
+    learned read-out.
+
+    Why this lives outside ``WanModel``: ``create_sharded_logical_transformer``
+    materialises the transformer's params by *replacing* the ``nnx.eval_shape``
+    pytree with whatever ``load_wan_transformer`` found in the pretrained
+    safetensors. A submodule added inside ``WanModel`` has no counterpart there,
+    so its params would survive as unmaterialised ``ShapeDtypeStruct`` leaves.
+    Keeping it in the ``WanCtrlWorldModel`` wrapper — next to
+    ``action_encoder`` / ``action_adaln_proj``, which exist for the same reason
+    — means it is built with real weights and checkpointed with the rest of the
+    combined params. ``WanModel.__call__`` only takes the finished tokens, via
+    its ``skeleton_hidden_states`` argument, exactly as it already takes
+    ``action_hidden_states``.
+
+    Args:
+        rngs:          NNX Rngs for parameter initialisation.
+        in_channels:   Latent channels of the skeleton video (48 for WAN 2.2's VAE).
+        inner_dim:     Transformer width — ``num_attention_heads * attention_head_dim``.
+                       Must come from the *loaded* transformer's registered config,
+                       not the top-level yaml (those fields are stale for this pipeline).
+        patch_size:    The transformer's ``(p_t, p_h, p_w)`` patch size, so the token
+                       grid matches ``patch_embedding``'s exactly.
+        alpha:         Fixed scale on the injected tokens. Also scales the gradient
+                       into this kernel, so it caps how fast the skeleton path ramps
+                       up out of the zero init.
+        dtype:         Activation dtype.
+        weights_dtype: Parameter storage dtype.
+        precision:     Matmul precision, threaded through to the conv.
+    """
+
+    def __init__(
+        self,
+        rngs: nnx.Rngs,
+        in_channels: int,
+        inner_dim: int,
+        patch_size: tuple[int, int, int] = (1, 2, 2),
+        alpha: float = 0.1,
+        dtype: jnp.dtype = jnp.bfloat16,
+        weights_dtype: jnp.dtype = jnp.bfloat16,
+        precision: jax.lax.Precision = None,
+    ):
+        self.dtype = dtype
+        self.alpha = float(alpha)
+        self.patch_size = tuple(patch_size)
+        self.proj = nnx.Conv(
+            in_channels,
+            inner_dim,
+            rngs=rngs,
+            kernel_size=self.patch_size,
+            strides=self.patch_size,
+            dtype=dtype,
+            param_dtype=weights_dtype,
+            precision=precision,
+            # Zero-init, so a freshly built model is *exactly* the no-skeleton
+            # baseline at step 0 and training starts from the pretrained
+            # operating point — the same reason NNXWanActionEncoder.linear_3 is
+            # zero-init. Unlike NNXWanActionAdaLNProjector (see its docstring)
+            # there is no deadlock risk here: the skeleton latents are nonzero
+            # *data*, not another zero-init module's output, so
+            # d(loss)/d(kernel) = d(loss)/d(token) * skel_latent is nonzero on
+            # the very first step. OSCAR xavier-inits this conv and relies on
+            # alpha=0.1 alone to stay near the pretrained point; zero-init makes
+            # that exact instead of approximate.
+            kernel_init=nnx.with_partitioning(
+                nnx.initializers.zeros,
+                (None, None, None, None, "conv_out"),
+            ),
+        )
+
+    def __call__(self, skeleton_latents: jax.Array) -> jax.Array:
+        """``(B, C, F_lat, H_lat, W_lat)`` skeleton latents → ``(B, seq_len, inner_dim)``.
+
+        Layout matches ``WanModel.__call__``'s own patch-embedding path
+        (channels-last transpose → conv → collapse), so the result can be added
+        straight onto the video tokens.
+        """
+        x = jnp.transpose(skeleton_latents, (0, 2, 3, 4, 1)).astype(self.dtype)
+        x = self.proj(x)                          # (B, F, H/p_h, W/p_w, inner_dim)
+        x = jax.lax.collapse(x, 1, -1)            # (B, seq_len, inner_dim)
+        return self.alpha * x

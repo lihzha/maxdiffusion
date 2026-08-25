@@ -11,6 +11,21 @@ Each TFRecord example stores one full episode in pre-encoded form:
     episode_id:  int64
     traj_len:    int64                              — F_lat (number of latent frames)
 
+Skeleton-conditioned datasets (``load_skeleton=True``) carry three more
+features with exactly the same shape and dtype as their ``latent_cam*``
+counterparts:
+
+    skeleton_cam0/1/2: (F_lat, C, H_lat, W_lat) float16
+
+These are the VAE latents of a rendered 2D-kinematic-skeleton video — robot
+proprioception turned into an image via URDF forward kinematics and camera
+projection — encoded with the *same* WAN VAE as the RGB video. Because the
+shapes and the 3-camera H-concat match token for token, they can be injected
+additively in the transformer's token space (see ``NNXWanSkeletonPatchEmbed``).
+Only datasets built with the skeleton pass have them, so the feature spec is
+selected by the flag rather than always requested: ``FixedLenFeature`` on a
+missing key fails at parse time for every record.
+
 Each trajectory yields one window per pass: frame_now is sampled uniformly from
 valid positions. History frames are picked with a random stride going backwards
 from frame_now (ctrl-world style); future frames are contiguous from frame_now.
@@ -23,6 +38,8 @@ Each yielded batch contains:
     latent:      (B, C, W, H_lat*3, W_lat)  float32
     action:      (B, 4*W, 7)                float32  in [-1, 1]
     text_embeds: (B, 512, 4096)             float32
+and, with ``load_skeleton=True``:
+    skeleton:    (B, C, W, H_lat*3, W_lat)  float32  — same window, same layout
 """
 
 from __future__ import annotations
@@ -47,6 +64,16 @@ _FEATURE_DESCRIPTION = {
     "episode_id":  tf.io.FixedLenFeature([], tf.int64),
     "traj_len":    tf.io.FixedLenFeature([], tf.int64),
 }
+
+# Only present in datasets built with the skeleton-rendering pass.
+_SKELETON_FEATURE_DESCRIPTION = {
+    "skeleton_cam0": tf.io.FixedLenFeature([], tf.string),
+    "skeleton_cam1": tf.io.FixedLenFeature([], tf.string),
+    "skeleton_cam2": tf.io.FixedLenFeature([], tf.string),
+}
+
+_CAM_KEYS = ("cam0", "cam1", "cam2")
+_SKEL_KEYS = ("skel0", "skel1", "skel2")
 
 
 def _configure_tf() -> None:
@@ -99,6 +126,12 @@ class WanCtrlWorldDroidDataset:
         shuffle:            Whether to shuffle.
         shuffle_buffer:     Trajectory-level shuffle buffer size.
         shard_for_training: Shard files across JAX processes.
+        load_skeleton:      Also read the ``skeleton_cam*`` features and emit a
+                            ``skeleton`` tensor alongside ``latent``, windowed
+                            identically. Required by
+                            ``action_cond_mode='skeleton'``; only valid on a
+                            dataset built with the skeleton pass (e.g.
+                            ``droid_wan_skeletal_192_320``).
         pad_short_episodes: Keep episodes shorter than ``max_latent_frames``
                             instead of filtering them out, padding the window by
                             repeating the last real action and latent frame while
@@ -133,6 +166,7 @@ class WanCtrlWorldDroidDataset:
         shuffle: bool = True,
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
+        load_skeleton: bool = False,
         first_window_only: bool = False,
         pad_short_episodes: bool = False,
         min_latent_frames: int = 0,
@@ -151,6 +185,10 @@ class WanCtrlWorldDroidDataset:
 
         self._is_train = split == "train"
         self._emit_n_real_frames = pad_short_episodes
+        self._load_skeleton = load_skeleton
+        self._feature_description = dict(_FEATURE_DESCRIPTION)
+        if load_skeleton:
+            self._feature_description.update(_SKELETON_FEATURE_DESCRIPTION)
         self.n_hist = n_hist
         self.n_fut = max_latent_frames - n_hist
         self.max_latent_frames = max_latent_frames
@@ -222,15 +260,19 @@ class WanCtrlWorldDroidDataset:
     # ── Trajectory parser ──────────────────────────────────────────────────────
 
     def _parse(self, serialised: tf.Tensor) -> dict:
-        f = tf.io.parse_single_example(serialised, _FEATURE_DESCRIPTION)
+        f = tf.io.parse_single_example(serialised, self._feature_description)
 
-        cam0 = tf.io.parse_tensor(f["latent_cam0"], out_type=tf.float16)
-        cam1 = tf.io.parse_tensor(f["latent_cam1"], out_type=tf.float16)
-        cam2 = tf.io.parse_tensor(f["latent_cam2"], out_type=tf.float16)
-        # Each cam: (F_lat, C, H_lat, W_lat) time-first
-        cam0.set_shape([None, None, None, None])
-        cam1.set_shape([None, None, None, None])
-        cam2.set_shape([None, None, None, None])
+        def _cams(prefix: str) -> list:
+            """Parse the three per-camera latent tensors under ``prefix``."""
+            out = []
+            for i in range(3):
+                cam = tf.io.parse_tensor(f[f"{prefix}_cam{i}"], out_type=tf.float16)
+                # (F_lat, C, H_lat, W_lat) time-first
+                cam.set_shape([None, None, None, None])
+                out.append(cam)
+            return out
+
+        cam0, cam1, cam2 = _cams("latent")
 
         action = tf.io.parse_tensor(f["action"], out_type=tf.float32)
         # (4*F_lat, 7) raw unnormalised — 4 consecutive raw frames per latent frame
@@ -243,7 +285,7 @@ class WanCtrlWorldDroidDataset:
 
         traj_len = tf.cast(f["traj_len"], tf.int32)
 
-        return {
+        out = {
             "cam0":       cam0,
             "cam1":       cam1,
             "cam2":       cam2,
@@ -252,6 +294,10 @@ class WanCtrlWorldDroidDataset:
             "traj_len":   traj_len,
             "episode_id": f["episode_id"],
         }
+        if self._load_skeleton:
+            for key, cam in zip(_SKEL_KEYS, _cams("skeleton")):
+                out[key] = cam
+        return out
 
     # ── Trajectory → windows ───────────────────────────────────────────────────
 
@@ -304,14 +350,22 @@ class WanCtrlWorldDroidDataset:
         # that does fit, raw_id <= T-1 already and this is identical to rgb_id.
         pos_id = tf.maximum(raw_id, 0)
 
-        # Gather latents: (W, C, H_lat, W_lat) per camera.
-        cam0_w = tf.cast(tf.gather(traj["cam0"], rgb_id, axis=0), tf.float32)
-        cam1_w = tf.cast(tf.gather(traj["cam1"], rgb_id, axis=0), tf.float32)
-        cam2_w = tf.cast(tf.gather(traj["cam2"], rgb_id, axis=0), tf.float32)
+        def _window_cams(keys) -> tf.Tensor:
+            """Gather the window from three per-camera latent stacks and lay them
+            out the way the transformer wants: concat the cameras along H, then
+            move channels first — (C, W, H_lat*3, W_lat)."""
+            per_cam = [
+                tf.cast(tf.gather(traj[k], rgb_id, axis=0), tf.float32)  # (W, C, H_lat, W_lat)
+                for k in keys
+            ]
+            stacked = tf.concat(per_cam, axis=-2)                       # (W, C, H_lat*3, W_lat)
+            return tf.transpose(stacked, [1, 0, 2, 3])
 
-        # Concat cameras along H: (W, C, H_lat*3, W_lat), then channel-first: (C, W, H_lat*3, W_lat).
-        latent = tf.concat([cam0_w, cam1_w, cam2_w], axis=-2)
-        latent = tf.transpose(latent, [1, 0, 2, 3])
+        latent = _window_cams(_CAM_KEYS)
+        # Skeleton latents share the episode's frame indexing exactly (same VAE,
+        # same F_lat), so the identical gather keeps them frame-aligned with the
+        # video window — including the clamped repeats at either end.
+        skeleton = _window_cams(_SKEL_KEYS) if self._load_skeleton else None
 
         # Normalise to [-1, 1], then insert 3 zero-padded slots after action[0]:
         #   [a[0], 0, 0, 0, a[1], ..., a[T-1]]  — shape (T_raw+3, action_dim)
@@ -333,6 +387,8 @@ class WanCtrlWorldDroidDataset:
 
         # Set static shapes for downstream tracing.
         latent.set_shape([None, W, None, None])
+        if skeleton is not None:
+            skeleton.set_shape([None, W, None, None])
         action.set_shape([4 * W, self.action_dim])
         rgb_id.set_shape([W])
         pos_id.set_shape([W])
@@ -346,6 +402,8 @@ class WanCtrlWorldDroidDataset:
             # through the batch so grad-spike steps can be attributed to episodes.
             "episode_id":      tf.cast(traj["episode_id"], tf.int32),
         }
+        if skeleton is not None:
+            out["skeleton"] = skeleton
         if self._emit_n_real_frames:
             # Window frames backed by real episode data; the remaining W - n_real
             # are repeat-the-last-action padding, so consumers can tell where
