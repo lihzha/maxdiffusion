@@ -132,16 +132,35 @@ if [[ "$MODE" == "stable" || ! -v MODE ]]; then
   # Stable mode
   if [[ $DEVICE == "tpu" ]]; then
     echo "Installing stable jax, jaxlib for tpu"
+    # NEVER pin libtpu independently of jax here. jax's `tpu` extra already
+    # hard-pins the exact libtpu it was built against (jax 0.10.1 -> 0.0.41.*,
+    # 0.11.0 -> 0.0.44.*, 0.11.1 -> 0.0.46.*) and Pallas refuses to lower
+    # against anything older than that pin. A standalone `uv pip install
+    # 'libtpu==0.0.41'` used to follow these lines (added 2026-06-08, correct
+    # for the then-current jax 0.10.1); by 2026-08-25 it was silently
+    # DOWNGRADING a jax 0.11.1 install onto a 3-month-old libtpu and every
+    # flash-attention train step died with "Pallas TPU requires a recent libtpu
+    # version (at least 0.0.44)". To move libtpu, bump JAX_VERSION.
+    #
+    # --upgrade-package libtpu/jax/jaxlib is required because the core
+    # requirements install above runs with --resolution=lowest-direct, which
+    # satisfies `jax>=0.9.0` / `libtpu>=0.0.34` at their floors; without these
+    # flags uv considers `jax[tpu]>0.4` already satisfied by that stale jax and
+    # pulls the libtpu pin that matches IT, not the current release.
+    UPGRADE_PKGS=(--upgrade-package libtpu --upgrade-package jax --upgrade-package jaxlib)
     if [[ -n "$JAX_VERSION" ]]; then
       echo "Installing stable jax, jaxlib, libtpu version ${JAX_VERSION}"
-      uv pip install "jax[tpu]==${JAX_VERSION}" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+      uv pip install "${UPGRADE_PKGS[@]}" "jax[tpu]==${JAX_VERSION}" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
     else
       echo "Installing stable jax, jaxlib, libtpu for tpu"
-      uv pip install 'jax[tpu]>0.4' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+      uv pip install "${UPGRADE_PKGS[@]}" 'jax[tpu]>0.4' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
     fi
-    # jax[tpu] from the Google releases index bundles an older libtpu; Pallas
-    # requires libtpu built within the last month, so pin to the latest release.
-    uv pip install 'libtpu==0.0.41'
+    # Print the resolved pair so a mismatch is visible in the setup log rather
+    # than 20 minutes into a run, when the first flash-attention step tries to
+    # lower a Pallas kernel. Deliberately does NOT touch the backend: on a
+    # 32-host slice, initialising the TPU here would take the device lock
+    # before training starts.
+    python3 -c "import importlib.metadata as m; print('resolved: jax', m.version('jax'), '/ jaxlib', m.version('jaxlib'), '/ libtpu', m.version('libtpu'))"
   elif [[ $DEVICE == "gpu" ]]; then
       echo "Installing stable jax, jaxlib for NVIDIA gpu"
     if [[ -n "$JAX_VERSION" ]]; then
