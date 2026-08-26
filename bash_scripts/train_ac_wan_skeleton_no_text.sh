@@ -125,7 +125,7 @@ python src/maxdiffusion/train_wan.py \
     learning_rate_schedule_type=cosine \
     learning_rate_end_ratio=0.0 \
     max_train_steps=100100 \
-    checkpoint_every=1000 \
+    checkpoint_every=500 \
     checkpoint_keep_period=10000 \
     eval_every=1000 \
     height=192 \
