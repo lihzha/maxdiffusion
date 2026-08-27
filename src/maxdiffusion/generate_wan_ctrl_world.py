@@ -37,6 +37,7 @@ from maxdiffusion.models.wan.action_encoder_wan import (
     NNXWanActionEncoder,
     NNXWanActionAdaLNProjector,
     NNXWanSkeletonPatchEmbed,
+    NNXWanSkeletonAdaLNEmbed,
 )
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers.scheduling_flow_match_flax import FlaxFlowMatchScheduler
@@ -48,8 +49,11 @@ from maxdiffusion.trainers.wan_ctrl_world_trainer import (
     _encode_skeleton,
     _frame_level_cond,
     _group_actions,
+    _is_skeleton_mode,
     _placeholder_action_tokens,
     _route_action_conditioning,
+    _skeleton_bias,
+    _skeleton_module,
 )
 
 
@@ -80,10 +84,13 @@ def _denoise_step(
     [uncond | cond] stacked along the batch axis, then blends:
         pred = uncond + guidance_scale * (cond - uncond)
 
-    ``skeleton_tokens`` is the already-patch-embedded, already-alpha-scaled
-    skeleton bias for ``skeleton`` mode (``None`` in the action modes, which jit
-    traces as an absent pytree so those modes are untouched). The uncond half of
-    the guided batch gets zeros there, which is exactly the "skip the add" state
+    ``skeleton_tokens`` is the already-patch-embedded conditioning tensor for the
+    skeleton modes, and ``None`` in the action modes (which jit traces as an
+    absent pytree, so those modes are untouched). ``skeleton`` sends it to the
+    video-token bias via ``_skeleton_bias``; ``skeleton_adaln`` sends it through
+    ``_route_action_conditioning`` into ``action_hidden_states``, the same AdaLN
+    slot the vector-action ``adaln`` mode uses. The uncond half of the guided
+    batch gets zeros either way, which is exactly the "skip the injection" state
     training's CFG mask produces.
 
     Returns the updated latents (clean history re-attached).
@@ -93,19 +100,25 @@ def _denoise_step(
     t_batch = jnp.broadcast_to(timestep, (b,))
     timestep_2d = _build_per_token_timestep(t_batch, F_lat, H_lat, W_lat, n_hist)
 
-    def _route(tokens):
+    def _route(tokens, skel):
         # text_tokens=None: this script is action-only. run_wan_ctrl_world_inference
         # refuses to start on a use_task_instructions=True config rather than
         # silently evaluating a text-trained checkpoint without its instruction.
         return _route_action_conditioning(
             tokens, model.action_adaln_proj, action_cond_mode,
             cond_tokens_per_frame, H_lat, W_lat, text_tokens=None,
+            skeleton_tokens=skel,
         )
 
     if guidance_scale > 1.0:
-        # Double-batch: [uncond, cond] in a single forward pass.
-        enc_uncond, adaln_uncond = _route(uncond_action_tokens)
-        enc_cond, adaln_cond = _route(action_tokens)
+        # Double-batch: [uncond, cond] in a single forward pass. The uncond half
+        # drops the skeleton (zeros, not None) so that in skeleton_adaln mode —
+        # where the skeleton IS the AdaLN conditioning — both halves produce a
+        # tensor of the same shape to stack, and zeros there leave temb untouched,
+        # which is the same no-conditioning state training's CFG mask produces.
+        skel_uncond = jnp.zeros_like(skeleton_tokens) if skeleton_tokens is not None else None
+        enc_uncond, adaln_uncond = _route(uncond_action_tokens, skel_uncond)
+        enc_cond, adaln_cond = _route(action_tokens, skeleton_tokens)
         latents_2x = jnp.concatenate([latents, latents], axis=0)
         tokens_2x  = jnp.concatenate([enc_uncond, enc_cond], axis=0)
         t_2d       = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
@@ -114,7 +127,7 @@ def _denoise_step(
             jnp.concatenate([adaln_uncond, adaln_cond], axis=0) if adaln_cond is not None else None
         )
         skeleton_2x = (
-            jnp.concatenate([jnp.zeros_like(skeleton_tokens), skeleton_tokens], axis=0)
+            jnp.concatenate([skel_uncond, skeleton_tokens], axis=0)
             if skeleton_tokens is not None else None
         )
         pred_2x = model.transformer(
@@ -122,7 +135,7 @@ def _denoise_step(
             timestep=t_2d,
             encoder_hidden_states=tokens_2x,
             action_hidden_states=action_hidden_states_2x,
-            skeleton_hidden_states=skeleton_2x,
+            skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_2x),
             deterministic=True,
             frame_level_cond=_frame_level_cond(action_cond_mode),
             cond_tokens_per_frame=cond_tokens_per_frame,
@@ -132,13 +145,13 @@ def _denoise_step(
         pred_cond   = pred_2x[b:]
         model_pred  = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
     else:
-        enc_tokens, action_hidden_states = _route(action_tokens)
+        enc_tokens, action_hidden_states = _route(action_tokens, skeleton_tokens)
         model_pred = model.transformer(
             hidden_states=latents,
             timestep=timestep_2d,
             encoder_hidden_states=enc_tokens,
             action_hidden_states=action_hidden_states,
-            skeleton_hidden_states=skeleton_tokens,
+            skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
             deterministic=True,
             frame_level_cond=_frame_level_cond(action_cond_mode),
             cond_tokens_per_frame=cond_tokens_per_frame,
@@ -173,15 +186,23 @@ def _encode_skeleton_tokens(
     graphdef: nnx.GraphDef,
     rest_of_state: nnx.State,
     skeleton: jnp.ndarray,
+    action_cond_mode: str = "skeleton",
 ) -> jnp.ndarray:
-    """Patch-embed skeleton latents into the video-token bias (skeleton mode).
+    """Patch-embed skeleton latents into this mode's conditioning tensor.
 
-    ``(B, C, F_lat, H_lat, W_lat)`` → ``(B, seq_len, inner_dim)``, alpha applied.
+    ``(B, C, F_lat, H_lat, W_lat)`` → ``(B, seq_len, inner_dim)`` in both skeleton
+    modes; they differ only in whether alpha is applied (``skeleton``) and in
+    where ``_denoise_step`` injects the result — the video-token bias for
+    ``skeleton``, the shared AdaLN slot for ``skeleton_adaln``. Shapes are
+    identical, so the rest of the rollout is mode-agnostic.
+
     No CFG mask here: the uncond branch is formed inside ``_denoise_step``, which
     zeroes this tensor for the uncond half of the double batch.
     """
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
-    return _encode_skeleton(model.skeleton_embed, skeleton, None, 0.0, skeleton.dtype)
+    return _encode_skeleton(
+        _skeleton_module(model, action_cond_mode), skeleton, None, 0.0, skeleton.dtype
+    )
 
 
 # ── Full denoising loop ───────────────────────────────────────────────────────
@@ -235,10 +256,11 @@ def run_ar_denoising(
 
     Returns predicted future latents: (B, C, ar_num_chunks * ar_chunk_size, H, W).
     """
-    if action_cond_mode == "skeleton" and (all_skeleton is None or p_encode_skeleton is None):
+    if _is_skeleton_mode(action_cond_mode) and (all_skeleton is None or p_encode_skeleton is None):
         raise ValueError(
-            "action_cond_mode='skeleton' needs all_skeleton and p_encode_skeleton; "
-            "without them the rollout would run entirely unconditioned."
+            f"action_cond_mode={action_cond_mode!r} needs all_skeleton and "
+            "p_encode_skeleton; without them the rollout would run entirely "
+            "unconditioned."
         )
     window_F_lat = n_hist + ar_chunk_size
     current_hist = initial_hist
@@ -257,9 +279,9 @@ def run_ar_denoising(
         pos_start = chunk_i * ar_chunk_size
         positions_chunk = all_frame_positions[:, pos_start:pos_start + window_F_lat]
 
-        if action_cond_mode == "skeleton":
-            # No action encoder in this mode — the zero placeholder just fills the
-            # cross-attention K/V slot. The real conditioning is the skeleton
+        if _is_skeleton_mode(action_cond_mode):
+            # No action encoder in these modes — the zero placeholder just fills
+            # the cross-attention K/V slot. The real conditioning is the skeleton
             # window, sliced on the frame axis exactly like positions_chunk.
             action_tokens = _placeholder_action_tokens(
                 all_actions.shape[0], window_F_lat, cond_tokens_per_frame,
@@ -580,10 +602,11 @@ def run(argv: Sequence[str]) -> None:
         raise ValueError(
             f"action_cond_mode={action_cond_mode!r} is not one of {VALID_ACTION_COND_MODES}."
         )
-    skeleton_mode = action_cond_mode == "skeleton"
+    skeleton_mode = _is_skeleton_mode(action_cond_mode)
     # The module set must match what the training run checkpointed exactly, or the
     # orbax restore below hits a structure mismatch — skeleton-mode checkpoints
-    # have skeleton_embed and no action_encoder at all.
+    # have exactly one skeleton module (skeleton_embed for `skeleton`,
+    # skeleton_adaln_embed for `skeleton_adaln`) and no action_encoder at all.
     action_encoder = None if skeleton_mode else NNXWanActionEncoder(
         rngs=nnx.Rngs(jax.random.key(config.seed)),
         action_dim=config.action_dim,
@@ -594,17 +617,32 @@ def run(argv: Sequence[str]) -> None:
         dtype=weights_dtype,
         weights_dtype=weights_dtype,
     )
+    _skel_inner_dim = (
+        pipeline.transformer.config.num_attention_heads
+        * pipeline.transformer.config.attention_head_dim
+    )
     skeleton_embed = None
-    if skeleton_mode:
+    if action_cond_mode == "skeleton":
         skeleton_embed = NNXWanSkeletonPatchEmbed(
             rngs=nnx.Rngs(jax.random.key(config.seed + 2)),
             in_channels=pipeline.transformer.config.in_channels,
-            inner_dim=(
-                pipeline.transformer.config.num_attention_heads
-                * pipeline.transformer.config.attention_head_dim
-            ),
+            inner_dim=_skel_inner_dim,
             patch_size=tuple(pipeline.transformer.config.patch_size),
             alpha=float(getattr(config, "skeleton_embed_alpha", 0.1)),
+            dtype=weights_dtype,
+            weights_dtype=weights_dtype,
+        )
+    skeleton_adaln_embed = None
+    if action_cond_mode == "skeleton_adaln":
+        # Seed + 3, matching WanCtrlWorldTrainer._build_skeleton_adaln_embed. The
+        # kernel is zero-init so the seed does not affect the built weights, but
+        # keeping it identical means an untrained module here is bit-identical to
+        # an untrained module there.
+        skeleton_adaln_embed = NNXWanSkeletonAdaLNEmbed(
+            rngs=nnx.Rngs(jax.random.key(config.seed + 3)),
+            in_channels=pipeline.transformer.config.in_channels,
+            inner_dim=_skel_inner_dim,
+            patch_size=tuple(pipeline.transformer.config.patch_size),
             dtype=weights_dtype,
             weights_dtype=weights_dtype,
         )
@@ -626,7 +664,8 @@ def run(argv: Sequence[str]) -> None:
 
     with pipeline.mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
         combined = WanCtrlWorldModel(
-            pipeline.transformer, action_encoder, action_adaln_proj, skeleton_embed
+            pipeline.transformer, action_encoder, action_adaln_proj,
+            skeleton_embed, skeleton_adaln_embed,
         )
         graphdef, params, rest_of_state = nnx.split(combined, nnx.Param, ...)
 
@@ -716,6 +755,7 @@ def run(argv: Sequence[str]) -> None:
             _encode_skeleton_tokens,
             graphdef=graphdef,
             rest_of_state=rest_of_state,
+            action_cond_mode=action_cond_mode,
         ),
     ) if skeleton_mode else None
 

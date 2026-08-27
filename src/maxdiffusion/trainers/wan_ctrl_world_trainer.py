@@ -55,9 +55,31 @@ transformer:
   features, e.g. ``droid_wan_skeletal_192_320``; ``NNXWanActionEncoder`` is
   not built in this mode, so no dead action-encoder weights land in the
   checkpoint.
+* ``"skeleton_adaln"``: the same skeleton latents as ``"skeleton"``, but
+  patch-embedded (``NNXWanSkeletonAdaLNEmbed``) into per-token AdaLN conditioning
+  instead of a video-token bias. The additive route injects once, after the patch
+  embedding, and leaves the residual stream to carry the signal through the
+  remaining blocks; this one re-modulates every block. It uses the *same*
+  transformer argument as ``"adaln"`` (``action_hidden_states``, summed into the
+  per-token time embedding), so "adaln" names one site regardless of
+  representation and a cross-representation comparison is not confounded by the
+  wiring. No projection or spatial repeat is needed — those exist in the vector
+  route only because a 7-dim action has no spatial extent — since the
+  transformer's per-token AdaLN, built for TI2V's per-token timesteps, is already
+  spatially varying and the skeleton grid lines up with it token for token.
+  Carries no ``skeleton_embed_alpha``.
 
-The three modes are mutually exclusive and none of their checkpoints are
-compatible with each other.
+These two axes are independent in principle — an action *representation* (vector
+actions or rendered-skeleton latents) crossed with a conditioning *site*
+(cross-attention K/V, AdaLN modulation, additive in video-token space) — and the
+four modes above are four of those six cells. The two not yet implemented are
+skeleton-into-cross-attention (needs a positional or camera embedding on the
+K/V, since attention over an unordered key set discards the token-for-token
+alignment the other skeleton routes get for free) and vector-actions-as-additive
+(needs a broadcast from a 7-dim vector to the latent grid).
+
+The modes are mutually exclusive and none of their checkpoints are compatible
+with each other.
 
 Checkpointing
 -------------
@@ -89,6 +111,7 @@ from maxdiffusion.models.wan.action_encoder_wan import (
     NNXWanActionEncoder,
     NNXWanActionAdaLNProjector,
     NNXWanSkeletonPatchEmbed,
+    NNXWanSkeletonAdaLNEmbed,
 )
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers import FlaxFlowMatchScheduler
@@ -123,6 +146,11 @@ class WanCtrlWorldModel(nnx.Module):
     * ``"adaln"``      — ``action_encoder`` + ``action_adaln_proj``.
     * ``"skeleton"``   — ``skeleton_embed`` only; the vector actions are unused,
       so ``action_encoder`` is ``None`` too.
+    * ``"skeleton_adaln"`` — ``skeleton_adaln_embed`` only, likewise with no
+      ``action_encoder``. Same conditioning signal as ``"skeleton"``, injected as
+      per-token AdaLN conditioning instead of a video-token bias. The two modules
+      have the same shape but are separate attributes, so their param-tree paths
+      differ and the checkpoints are not interchangeable.
 
     Every submodule other than the transformer lives here rather than inside
     ``WanModel`` because ``create_sharded_logical_transformer`` materialises the
@@ -137,11 +165,15 @@ class WanCtrlWorldModel(nnx.Module):
         action_encoder: NNXWanActionEncoder | None = None,
         action_adaln_proj: NNXWanActionAdaLNProjector | None = None,
         skeleton_embed: NNXWanSkeletonPatchEmbed | None = None,
+        skeleton_adaln_embed: NNXWanSkeletonAdaLNEmbed | None = None,
     ):
         self.transformer = transformer
         self.action_encoder = action_encoder if action_encoder is not None else nnx.data(None)
         self.action_adaln_proj = action_adaln_proj if action_adaln_proj is not None else nnx.data(None)
         self.skeleton_embed = skeleton_embed if skeleton_embed is not None else nnx.data(None)
+        self.skeleton_adaln_embed = (
+            skeleton_adaln_embed if skeleton_adaln_embed is not None else nnx.data(None)
+        )
 
 
 # ── TrainState ────────────────────────────────────────────────────────────────
@@ -213,10 +245,11 @@ def _text_routes(
     """
     if not use_task_instructions or text_embeds is None:
         return None, None
-    if action_cond_mode in ("adaln", "skeleton"):
-        # Both modes leave cross-attention free (adaln moves the action to the
-        # timestep embedding; skeleton moves it to the video tokens), so the
-        # instruction can be the full T5 sequence rather than a pooled bias.
+    if action_cond_mode in ("adaln", "skeleton", "skeleton_adaln"):
+        # All three leave cross-attention free (adaln moves the action to the
+        # timestep embedding; skeleton moves it to the video tokens;
+        # skeleton_adaln to the AdaLN site), so the instruction can be the full
+        # T5 sequence rather than a pooled bias.
         return None, text_embeds
     return _pool_text_tokens(text_embeds), None
 
@@ -276,14 +309,18 @@ def _encode_skeleton(
     drop_prob: float,
     dtype: jnp.dtype,
 ) -> jnp.ndarray | None:
-    """Patch-embed skeleton latents into a token bias for the video tokens.
+    """Patch-embed skeleton latents into this mode's conditioning tensor.
 
-    ``(B, C, F_lat, H_lat, W_lat)`` → ``(B, seq_len, inner_dim)``, already scaled
-    by the module's alpha, ready to hand to ``WanModel``'s
-    ``skeleton_hidden_states``. Returns ``None`` when the mode is off, which is
-    also the transformer's "skip the add" signal.
+    Shared by both skeleton routes; ``skeleton_embed`` is whichever module
+    ``_skeleton_module`` selected. Either way ``(B, C, F_lat, H_lat, W_lat)``
+    becomes ``(B, seq_len, inner_dim)`` — the two modules differ only in whether
+    the result is alpha-scaled (``skeleton``) or not (``skeleton_adaln``), and in
+    where it is injected: ``_skeleton_bias`` sends ``skeleton``'s to the
+    video-token bias, ``_route_action_conditioning`` sends ``skeleton_adaln``'s
+    to the AdaLN slot. Returns ``None`` when the mode is off, which is also the
+    transformer's "skip the injection" signal.
 
-    CFG dropout zeroes the *token contribution* — i.e. skips the add — for a
+    CFG dropout zeroes the *token contribution* — i.e. skips the injection — for a
     ``drop_prob`` fraction of samples, which is the true no-conditioning state.
     Zeroing the skeleton *latents* instead would not be: an empty (all-black)
     skeleton frame encodes to a perfectly ordinary nonzero latent, so a
@@ -300,6 +337,41 @@ def _encode_skeleton(
     return tokens
 
 
+def _is_skeleton_mode(action_cond_mode: str) -> bool:
+    """Whether the conditioning is the rendered-skeleton video rather than the
+    vector actions. True for both skeleton routes, which differ only in where
+    the encoded skeleton is injected, not in what the dataset must carry or in
+    whether an action encoder exists."""
+    return action_cond_mode in ("skeleton", "skeleton_adaln")
+
+
+def _skeleton_module(model, action_cond_mode: str):
+    """The live skeleton encoder for this mode, or None in the action modes.
+
+    ``skeleton`` and ``skeleton_adaln`` build *different* modules (different
+    output widths, different injection sites) and only ever one at a time, so a
+    checkpoint from one mode cannot be restored into the other.
+    """
+    if action_cond_mode == "skeleton":
+        return model.skeleton_embed
+    if action_cond_mode == "skeleton_adaln":
+        return model.skeleton_adaln_embed
+    return None
+
+
+def _skeleton_bias(action_cond_mode: str, skeleton_tokens):
+    """The additive video-token bias, i.e. ``WanModel``'s ``skeleton_hidden_states``.
+
+    Only ``skeleton`` uses that site. ``skeleton_adaln`` encodes the *same*
+    tensor but routes it through ``_route_action_conditioning`` into
+    ``action_hidden_states`` — the AdaLN site the vector-action ``adaln`` route
+    already uses — so it must not also be added to the video tokens. Returns
+    ``None`` for every other mode, which jit traces as an absent pytree so those
+    modes are untouched.
+    """
+    return skeleton_tokens if action_cond_mode == "skeleton" else None
+
+
 def _route_action_conditioning(
     action_tokens: jnp.ndarray,
     action_adaln_proj: NNXWanActionAdaLNProjector | None,
@@ -308,8 +380,9 @@ def _route_action_conditioning(
     H_lat: int,
     W_lat: int,
     text_tokens: jnp.ndarray | None = None,
+    skeleton_tokens: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray | None]:
-    """Route encoded action tokens to cross-attention or AdaLN conditioning.
+    """Route encoded conditioning to cross-attention or AdaLN.
 
     ``"cross_attn"`` (default): action tokens pass through unchanged as the
     transformer's cross-attention K/V; no AdaLN conditioning is added.
@@ -318,11 +391,20 @@ def _route_action_conditioning(
     per-token timestep embedding they get summed into. Cross-attention is then
     free, so it carries ``text_tokens`` when task instructions are enabled, and
     all-zero tokens otherwise (a no-op — the same state used for CFG-uncond).
-    ``"skeleton"``: nothing to route. The conditioning is the skeleton token
-    bias (see ``_encode_skeleton``), which reaches the transformer by its own
-    argument, so ``action_tokens`` here is only the zero placeholder from
-    ``_placeholder_action_tokens``. Cross-attention is handled exactly as in
-    ``adaln``: the instruction when enabled, all-zero tokens otherwise.
+    ``"skeleton"``: nothing to route into AdaLN. The conditioning is the encoded
+    skeleton, which reaches the transformer by its own ``skeleton_hidden_states``
+    argument (see ``_skeleton_bias``), so ``action_tokens`` here is only the zero
+    placeholder from ``_placeholder_action_tokens``.
+
+    ``"skeleton_adaln"``: ``skeleton_tokens`` becomes the AdaLN conditioning
+    directly — no projection and no spatial repeat, because a skeleton's token
+    grid is already per-token and already ``inner_dim`` wide. This returns it in
+    the same slot ``adaln`` returns its projected action vectors, so both
+    representations reach AdaLN through one transformer argument and "adaln"
+    names one site rather than two.
+
+    Both skeleton modes handle cross-attention exactly as ``adaln`` does: the
+    instruction when enabled, all-zero tokens otherwise.
 
     ``text_tokens`` is ignored in cross-attention mode: there the instruction
     has already been folded into ``action_tokens`` as a pooled bias, because
@@ -331,10 +413,18 @@ def _route_action_conditioning(
     Returns ``(encoder_hidden_states, action_hidden_states)`` — the second
     element is ``None`` in cross-attention mode.
     """
-    if action_cond_mode == "skeleton":
-        if text_tokens is not None:
-            return text_tokens.astype(action_tokens.dtype), None
-        return jnp.zeros_like(action_tokens), None
+    if action_cond_mode in ("skeleton", "skeleton_adaln"):
+        enc = (
+            text_tokens.astype(action_tokens.dtype) if text_tokens is not None
+            else jnp.zeros_like(action_tokens)
+        )
+        # skeleton_adaln shares the AdaLN slot with the vector-action `adaln`
+        # route; `skeleton` leaves it empty and takes the video-token bias
+        # instead. `skeleton_tokens` is None on the CFG-uncond branch, which is
+        # exactly the no-conditioning state (temb left untouched).
+        if action_cond_mode == "skeleton_adaln":
+            return enc, skeleton_tokens
+        return enc, None
     if action_cond_mode == "adaln":
         b, fk, d = action_tokens.shape
         f_lat = fk // tokens_per_frame_k
@@ -535,16 +625,17 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
         cfg_rng, do_rng = jax.random.split(d_rng)
 
-        if action_cond_mode == "skeleton":
-            # No action encoder in this mode; the conditioning is the skeleton
-            # video, patch-embedded and added to the video tokens inside the
-            # transformer. CFG drops the SKELETON here, which is what the
+        if _is_skeleton_mode(action_cond_mode):
+            # No action encoder in these modes; the conditioning is the skeleton
+            # video, patch-embedded and injected inside the transformer (into the
+            # video tokens for `skeleton`, into the shared AdaLN slot for
+            # `skeleton_adaln`). CFG drops the SKELETON here, which is what the
             # rollout's uncond branch also drops.
             action_tokens = _placeholder_action_tokens(
                 b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
             )
-            skeleton_hidden_states = _encode_skeleton(
-                model.skeleton_embed,
+            skeleton_tokens = _encode_skeleton(
+                _skeleton_module(model, action_cond_mode),
                 micro_data["skeleton"][:bsz],
                 cfg_rng,
                 config.ctrl_cfg_drop_prob,
@@ -553,12 +644,13 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         else:
             action_tokens = model.action_encoder(actions_grouped, None)  # (B, F_lat*K, 4096)
             action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
-            skeleton_hidden_states = None
+            skeleton_tokens = None
         action_tokens = _add_text_bias(action_tokens, text_bias)  # after dropout — never dropped
 
         enc_tokens, action_hidden_states = _route_action_conditioning(
             action_tokens, model.action_adaln_proj, action_cond_mode,
             cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
+            skeleton_tokens=skeleton_tokens,
         )
 
         want_attn_diag = bool(getattr(config, "log_attn_activation_stats", False))
@@ -567,7 +659,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             timestep=timestep_2d,           # (B, seq_len) → per-token AdaLN
             encoder_hidden_states=enc_tokens,
             action_hidden_states=action_hidden_states,
-            skeleton_hidden_states=skeleton_hidden_states,
+            skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
             deterministic=False,
             rngs=nnx.Rngs(dropout=do_rng),
             # Per-frame cross-attn locking only applies when action tokens flow
@@ -724,7 +816,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
 # ── Trainer ───────────────────────────────────────────────────────────────────
 
 
-VALID_ACTION_COND_MODES = ("cross_attn", "adaln", "skeleton")
+VALID_ACTION_COND_MODES = ("cross_attn", "adaln", "skeleton", "skeleton_adaln")
 
 
 class WanCtrlWorldTrainer:
@@ -768,7 +860,7 @@ class WanCtrlWorldTrainer:
             seed=seed if seed is not None else config.seed,
             shuffle=is_training,
             shard_for_training=jax.process_count() > 1,
-            load_skeleton=getattr(config, "action_cond_mode", "cross_attn") == "skeleton",
+            load_skeleton=_is_skeleton_mode(getattr(config, "action_cond_mode", "cross_attn")),
             # Eval windows are anchored at the episode start (history = frame 0
             # repeated), matching a deployment-style cold-start rollout.
             first_window_only=not is_training,
@@ -787,13 +879,13 @@ class WanCtrlWorldTrainer:
         return pipeline
 
     def _build_action_encoder(self) -> NNXWanActionEncoder | None:
-        """The vector-action encoder, or None in ``skeleton`` mode.
+        """The vector-action encoder, or None in the skeleton modes.
 
-        Skeleton mode conditions on the rendered-skeleton video instead, so an
+        Those modes condition on the rendered-skeleton video instead, so an
         encoder here would receive zero gradient forever — dead weights in the
         checkpoint and dead optimizer moments in HBM.
         """
-        if getattr(self.config, "action_cond_mode", "cross_attn") == "skeleton":
+        if _is_skeleton_mode(getattr(self.config, "action_cond_mode", "cross_attn")):
             return None
         return NNXWanActionEncoder(
             rngs=nnx.Rngs(jax.random.key(self.config.seed)),
@@ -852,6 +944,31 @@ class WanCtrlWorldTrainer:
             inner_dim=inner_dim,
             patch_size=tuple(transformer_config.patch_size),
             alpha=float(getattr(self.config, "skeleton_embed_alpha", 0.1)),
+            dtype=_dtype(self.config.activations_dtype),
+            weights_dtype=_dtype(self.config.weights_dtype),
+        )
+
+    def _build_skeleton_adaln_embed(self, transformer_config) -> NNXWanSkeletonAdaLNEmbed | None:
+        """Only built when action_cond_mode == "skeleton_adaln"; None otherwise.
+
+        Same reason as ``_build_skeleton_embed`` for reading ``inner_dim``,
+        ``patch_size`` and ``in_channels`` off the *loaded* transformer config
+        rather than the yaml: those top-level fields are stale for WAN 2.2
+        TI2V-5B. ``patch_size`` has to match exactly or the modulation token grid
+        would not line up with the video token grid it modulates.
+
+        Takes no ``skeleton_embed_alpha`` — see ``NNXWanSkeletonAdaLNEmbed``'s
+        docstring for why this route drops it. Setting that flag has no effect in
+        this mode, which is why the startup banner says so explicitly.
+        """
+        if getattr(self.config, "action_cond_mode", "cross_attn") != "skeleton_adaln":
+            return None
+        inner_dim = transformer_config.num_attention_heads * transformer_config.attention_head_dim
+        return NNXWanSkeletonAdaLNEmbed(
+            rngs=nnx.Rngs(jax.random.key(self.config.seed + 3)),
+            in_channels=transformer_config.in_channels,
+            inner_dim=inner_dim,
+            patch_size=tuple(transformer_config.patch_size),
             dtype=_dtype(self.config.activations_dtype),
             weights_dtype=_dtype(self.config.weights_dtype),
         )
@@ -964,7 +1081,7 @@ class WanCtrlWorldTrainer:
         # Must mirror the dataset's key set exactly — jit's in_shardings is a
         # pytree prefix match, so a key the batch carries but this dict omits
         # (or vice versa) is a trace-time structure mismatch, not a warning.
-        if getattr(self.config, "action_cond_mode", "cross_attn") == "skeleton":
+        if _is_skeleton_mode(getattr(self.config, "action_cond_mode", "cross_attn")):
             shardings["skeleton"] = pspec
         return shardings
 
@@ -992,8 +1109,10 @@ class WanCtrlWorldTrainer:
         action_encoder = self._build_action_encoder()
         action_adaln_proj = self._build_action_adaln_proj(pipeline.transformer.config)
         skeleton_embed = self._build_skeleton_embed(pipeline.transformer.config)
+        skeleton_adaln_embed = self._build_skeleton_adaln_embed(pipeline.transformer.config)
         combined = WanCtrlWorldModel(
-            pipeline.transformer, action_encoder, action_adaln_proj, skeleton_embed
+            pipeline.transformer, action_encoder, action_adaln_proj,
+            skeleton_embed, skeleton_adaln_embed,
         )
 
         # 3. Split combined model into (graphdef, params, rest_of_state)
@@ -1070,6 +1189,14 @@ class WanCtrlWorldTrainer:
                     f"{float(getattr(config, 'skeleton_embed_alpha', 0.1))}) and added "
                     f"to the video tokens; vector actions unused"
                 )
+            elif _acm == "skeleton_adaln":
+                max_logging.log(
+                    "  Action conditioning: skeleton_adaln — VAE latents of the "
+                    "rendered 2D skeleton video, patch-embedded (no alpha; "
+                    "zero-init) and summed into the per-token timestep embedding, "
+                    "the same AdaLN site the vector-action 'adaln' mode uses, so it "
+                    "re-modulates every block; vector actions unused"
+                )
             else:
                 max_logging.log(f"  Action conditioning: {_acm} — 7-dim vector actions")
             if max_utils.config_get(config, "use_task_instructions", False):
@@ -1081,7 +1208,7 @@ class WanCtrlWorldTrainer:
                 max_logging.log(
                     f"  Task instructions: ON — T5 text is {_route}; not CFG-dropped"
                 )
-            elif _acm == "skeleton":
+            elif _is_skeleton_mode(_acm):
                 max_logging.log(
                     "  Task instructions: OFF — the rendered skeleton video is the "
                     "ONLY conditioning signal (cross-attention gets zero tokens)"
@@ -1488,21 +1615,23 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     )
     cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
     # No CFG dropout on the eval path, so this is just the plain conditional.
-    if action_cond_mode == "skeleton":
+    if _is_skeleton_mode(action_cond_mode):
         action_tokens = _placeholder_action_tokens(
             b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
         )
-        skeleton_hidden_states = _encode_skeleton(
-            model.skeleton_embed, data["skeleton"][:bsz], None, 0.0, weights_dtype
+        skeleton_tokens = _encode_skeleton(
+            _skeleton_module(model, action_cond_mode),
+            data["skeleton"][:bsz], None, 0.0, weights_dtype,
         )
     else:
         action_tokens = model.action_encoder(actions_grouped, None)  # (B, F_lat*K, 4096)
-        skeleton_hidden_states = None
+        skeleton_tokens = None
     action_tokens = _add_text_bias(action_tokens, text_bias)
 
     enc_tokens, action_hidden_states = _route_action_conditioning(
         action_tokens, model.action_adaln_proj, action_cond_mode,
         cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
+        skeleton_tokens=skeleton_tokens,
     )
 
     model_pred = model.transformer(
@@ -1510,7 +1639,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
         timestep=timestep_2d,
         encoder_hidden_states=enc_tokens,
         action_hidden_states=action_hidden_states,
-        skeleton_hidden_states=skeleton_hidden_states,
+        skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
         deterministic=True,
         frame_level_cond=_frame_level_cond(action_cond_mode),
         cond_tokens_per_frame=cond_tokens_per_frame,
@@ -1556,12 +1685,13 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
     action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
     cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
 
-    if action_cond_mode == "skeleton":
+    if _is_skeleton_mode(action_cond_mode):
         action_tokens = _placeholder_action_tokens(
             b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
         )
         skel_tokens = _encode_skeleton(
-            model.skeleton_embed, data["skeleton"][:bsz], None, 0.0, weights_dtype
+            _skeleton_module(model, action_cond_mode),
+            data["skeleton"][:bsz], None, 0.0, weights_dtype,
         )
     else:
         action_tokens = model.action_encoder(actions_grouped, None)
@@ -1596,13 +1726,14 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
             enc_tokens, action_hidden_states = _route_action_conditioning(
                 tokens, model.action_adaln_proj, action_cond_mode,
                 cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
+                skeleton_tokens=skel,
             )
             return model.transformer(
                 hidden_states=roll_input,
                 timestep=ts_2d,
                 encoder_hidden_states=enc_tokens,
                 action_hidden_states=action_hidden_states,
-                skeleton_hidden_states=skel,
+                skeleton_hidden_states=_skeleton_bias(action_cond_mode, skel),
                 deterministic=True,
                 frame_level_cond=_frame_level_cond(action_cond_mode),
                 cond_tokens_per_frame=cond_tokens_per_frame,
@@ -1620,7 +1751,7 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
             # zeros_like alone would also blank the pooled text baked into them,
             # guiding on action+text and putting the uncond branch out of
             # distribution.
-            if action_cond_mode == "skeleton":
+            if _is_skeleton_mode(action_cond_mode):
                 v_uncond = _velocity(action_tokens, None)
             else:
                 v_uncond = _velocity(

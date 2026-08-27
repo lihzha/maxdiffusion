@@ -11,6 +11,17 @@ One module per ``action_cond_mode`` route:
   rendered 2D-kinematic-skeleton video and adds them to the video tokens. This
   route does not use the vector actions at all, so ``NNXWanActionEncoder`` is
   not built in that mode.
+* ``NNXWanSkeletonAdaLNEmbed`` (``skeleton_adaln``) — same skeleton latents,
+  patch-embedded into per-token AdaLN conditioning instead of a video-token bias,
+  so the signal re-modulates every block rather than being injected once. Shares
+  ``WanModel``'s ``action_hidden_states`` argument with the vector-action
+  ``adaln`` route, so "adaln" means one site regardless of representation. Also
+  does not use the vector actions.
+
+The two axes these modules span are independent: an action *representation*
+(vector actions vs. rendered-skeleton latents) and a *conditioning site*
+(cross-attention K/V, AdaLN modulation, or additive in video-token space).
+``action_cond_mode`` currently names four of the six combinations.
 
 The action-encoder docs below apply to the first two modes.
 
@@ -313,3 +324,141 @@ class NNXWanSkeletonPatchEmbed(nnx.Module):
         x = self.proj(x)                          # (B, F, H/p_h, W/p_w, inner_dim)
         x = jax.lax.collapse(x, 1, -1)            # (B, seq_len, inner_dim)
         return self.alpha * x
+
+
+class NNXWanSkeletonAdaLNEmbed(nnx.Module):
+    """Patch-embeds 2D-kinematic-skeleton latents into AdaLN conditioning.
+
+    Same conditioning signal as ``NNXWanSkeletonPatchEmbed``, injected at a
+    different site. That module adds the skeleton to the video tokens once,
+    right after the patch embedding, and relies on the residual stream to carry
+    it through the remaining blocks. This one hands it to ``WanModel``'s
+    ``action_hidden_states``, which sums it into the per-token time embedding
+    before the shared ``time_proj`` MLP expands that into the 6-way modulation
+    vector — so it re-modulates the activations in *every* block.
+
+    That is deliberately the **same site the vector-action ``adaln`` route uses**
+    (``NNXWanActionAdaLNProjector`` → ``action_hidden_states``), and the reason
+    is comparability rather than mechanism. The two axes here are meant to be
+    independent — an action *representation* (vector actions vs. rendered-skeleton
+    latents) crossed with a conditioning *site* — so "adaln" has to mean one
+    thing in both cells or a cross-representation comparison confounds the
+    representation with the wiring. Sharing ``action_hidden_states`` makes that
+    structural: there is no second AdaLN path to drift out of sync.
+
+    What the skeleton does *not* need, which the action route does: a projection
+    down to one vector per latent frame, and the ``jnp.repeat`` across that
+    frame's spatial patches. Those exist because a 7-dim EEF vector has no
+    spatial extent. A skeleton's token grid is already per-token and already
+    ``inner_dim`` wide, and it lines up with the modulation grid token for token
+    exactly as it lines up with the video token grid in the additive route — the
+    transformer's per-token AdaLN (built for WAN 2.2 TI2V's per-token timesteps)
+    is spatially varying to begin with. So spatial and camera alignment stay
+    structural, and no positional or camera embedding is involved.
+
+    Cross-attention also stays free, so the full T5 instruction sequence can be
+    the cross-attention context (see ``_route_action_conditioning``) rather than
+    a pooled bias.
+
+    The cost of this site is real, but it is *shared* with the vector-action
+    ``adaln`` route rather than specific to the skeleton: summing into ``temb``
+    puts the control signal in the same representation the model reads as "how
+    noisy is this token", and reaches all six modulation components including
+    scale and gate, which act multiplicatively in every block. That applies
+    identically to both representations, and ``train_ac_wan_adaln.sh`` already
+    trains at this site — the best evidence available that it is tolerable.
+
+    Only the *shape* of the perturbation differs, and not obviously for the
+    worse. The per-token timestep varies across frames but is constant across the
+    patches within one, so the action route's per-frame-repeated vector lands in
+    the same subspace a timestep change occupies — maximally confusable with
+    "this frame is at a different noise level". A skeleton's spatially varying
+    offset is a signature the timestep can never produce, so it is linearly
+    separable from the time signal, at the cost of being out-of-distribution for
+    ``time_proj``'s pretrained kernel. Two different risks, not a ranking.
+
+    Watch the per-token modulation statistics either way. If this destabilises,
+    the escape hatch is a separate projection into modulation space
+    (post-``time_proj``, shift slots only) — at the price of the two routes no
+    longer sharing a site, and so of "adaln" naming two things again.
+
+    Note this route has no scale factor, matching the vector ``adaln`` route,
+    which has none either (``NNXWanActionAdaLNProjector`` applies no alpha and
+    neither does ``_route_action_conditioning``'s adaln branch).
+
+    There is deliberately no ``alpha``. ``NNXWanSkeletonPatchEmbed`` carries one
+    inherited from OSCAR, which xavier-inits its conv and needs a small fixed
+    scale to stay near the pretrained operating point; with a zero-init kernel
+    that scale is redundant for its stated purpose (the injection is *exactly*
+    zero at step 0 either way) and all it still does is throttle this path's
+    effective learning rate by ``alpha**2`` — a hyperparameter in disguise. The
+    zero init below gives the exact no-op on its own, and the learning rate is
+    left to be the learning rate.
+
+    Args:
+        rngs:          NNX Rngs for parameter initialisation.
+        in_channels:   Latent channels of the skeleton video (48 for WAN 2.2's VAE).
+        inner_dim:     Transformer width — ``num_attention_heads * attention_head_dim``.
+                       Must come from the *loaded* transformer's registered config,
+                       not the top-level yaml (those fields are stale for this pipeline).
+        patch_size:    The transformer's ``(p_t, p_h, p_w)`` patch size, so the token
+                       grid matches ``patch_embedding``'s exactly.
+        dtype:         Activation dtype.
+        weights_dtype: Parameter storage dtype.
+        precision:     Matmul precision, threaded through to the conv.
+    """
+
+    def __init__(
+        self,
+        rngs: nnx.Rngs,
+        in_channels: int,
+        inner_dim: int,
+        patch_size: tuple[int, int, int] = (1, 2, 2),
+        dtype: jnp.dtype = jnp.bfloat16,
+        weights_dtype: jnp.dtype = jnp.bfloat16,
+        precision: jax.lax.Precision = None,
+    ):
+        self.dtype = dtype
+        self.inner_dim = int(inner_dim)
+        self.patch_size = tuple(patch_size)
+        # One conv straight from the patch to inner_dim, deliberately matching
+        # NNXWanSkeletonPatchEmbed's single-linear-map structure rather than the
+        # 3-layer MLP the vector-action encoder needs. A patch is only
+        # in_channels * prod(patch_size) = 192 dims here, so a wider or deeper
+        # head adds capacity but no information — and keeping the two skeleton
+        # routes structurally identical means an additive-vs-adaln comparison
+        # varies the injection site alone, not the adapter.
+        self.proj = nnx.Conv(
+            in_channels,
+            self.inner_dim,
+            rngs=rngs,
+            kernel_size=self.patch_size,
+            strides=self.patch_size,
+            dtype=dtype,
+            param_dtype=weights_dtype,
+            precision=precision,
+            # Zero-init: a freshly built model is *exactly* the no-skeleton
+            # baseline at step 0, so training starts from the pretrained
+            # operating point. No deadlock risk (cf. NNXWanActionAdaLNProjector,
+            # where a zero-init encoder feeding a zero-init projector starves
+            # both of gradient): this is the only module on the route and its
+            # input is nonzero *data*, so d(loss)/d(kernel) is nonzero on the
+            # very first step.
+            kernel_init=nnx.with_partitioning(
+                nnx.initializers.zeros,
+                (None, None, None, None, "conv_out"),
+            ),
+        )
+
+    def __call__(self, skeleton_latents: jax.Array) -> jax.Array:
+        """``(B, C, F_lat, H_lat, W_lat)`` skeleton latents → ``(B, seq_len, inner_dim)``.
+
+        Layout matches ``WanModel.__call__``'s own patch-embedding path
+        (channels-last transpose → conv → collapse), so ``seq_len`` and its token
+        ordering are identical to the video tokens' — which is what lets the
+        result be summed into the per-token time embedding with no regridding,
+        and why this route needs no spatial repeat.
+        """
+        x = jnp.transpose(skeleton_latents, (0, 2, 3, 4, 1)).astype(self.dtype)
+        x = self.proj(x)                          # (B, F, H/p_h, W/p_w, inner_dim)
+        return jax.lax.collapse(x, 1, -1)         # (B, seq_len, inner_dim)
