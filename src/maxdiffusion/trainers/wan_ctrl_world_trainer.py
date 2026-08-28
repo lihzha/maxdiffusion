@@ -1223,7 +1223,6 @@ class WanCtrlWorldTrainer:
                 project=config.wandb_project,
                 entity=getattr(config, "wandb_entity", None) or None,
                 name=config.run_name or None,
-                settings=wandb.Settings(start_method="thread"),
             )
         wandb_run = self._wandb_run
 

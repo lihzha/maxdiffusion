@@ -404,7 +404,6 @@ class BaseWanTrainer(abc.ABC):
                 project=self.config.wandb_project,
                 entity=getattr(self.config, "wandb_entity", None) or None,
                 name=self.config.run_name or None,
-                settings=wandb.Settings(start_method="thread"),
             )
 
         num_model_parameters = max_utils.calculate_num_params_from_pytree(state.params)
