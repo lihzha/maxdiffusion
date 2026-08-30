@@ -462,3 +462,123 @@ class NNXWanSkeletonAdaLNEmbed(nnx.Module):
         x = jnp.transpose(skeleton_latents, (0, 2, 3, 4, 1)).astype(self.dtype)
         x = self.proj(x)                          # (B, F, H/p_h, W/p_w, inner_dim)
         return jax.lax.collapse(x, 1, -1)         # (B, seq_len, inner_dim)
+
+
+class NNXWanSkeletonCrossAttnEmbed(nnx.Module):
+    """Patch-embeds 2D-kinematic-skeleton latents into the cross-attention K/V.
+
+    Third skeleton route, completing the representation x site grid: the same
+    rendered-skeleton latents ``NNXWanSkeletonPatchEmbed`` (additive, video-token
+    space) and ``NNXWanSkeletonAdaLNEmbed`` (AdaLN, ``temb``) consume, injected
+    instead at the site the vector-action ``cross_attn`` route uses.
+
+    Output width is ``wan_text_dim`` (4096), NOT ``inner_dim``, because
+    ``WanModel.__call__`` pushes ``encoder_hidden_states`` through the pretrained
+    ``condition_embedder.text_embedder`` before the blocks see it. Emitting 4096
+    means the skeleton reaches cross-attention through the exact path the action
+    tokens do, so "cross_attn" names one site across both representations and a
+    cross-representation comparison is not confounded by the wiring — the same
+    argument ``NNXWanSkeletonAdaLNEmbed`` makes for sharing ``action_hidden_states``
+    with the vector ``adaln`` route.
+
+    Alignment
+    ---------
+    Unlike the other two routes, this one does NOT get token-for-token alignment
+    for free: softmax over keys is permutation-invariant, so nothing in a bare
+    key says which grid cell it came from. Two mechanisms restore it, and both
+    live outside this module:
+
+    * Temporal, structural: the caller sets ``frame_level_cond=True`` with
+      ``cond_tokens_per_frame = (H_lat//p_h) * (W_lat//p_w)``, so
+      ``WanTransformerBlock`` folds F into the batch and latent frame k's video
+      tokens attend only to latent frame k's skeleton tokens. Same machinery the
+      vector ``cross_attn`` route uses, with the per-frame key count raised from
+      a handful of action tokens to a full spatial grid.
+    * Spatial, structural: ``cross_attn_rope=True`` makes the block hand
+      ``attn2`` the same 3D rotary embedding ``attn1`` already uses, sliced to
+      this frame. Q and K then carry identical phases at identical grid
+      positions, so the logit is maximised on the diagonal with no parameters
+      and no learned lookup. The shared temporal phase cancels in the relative
+      rotation, leaving a purely spatial offset.
+
+    So this module is deliberately just the patch embedding — structurally the
+    same single conv as its two siblings, differing only in output width. Keeping
+    the adapter identical across all three means a site comparison varies the
+    site alone.
+
+    Step 0
+    ------
+    Zero-init kernel, as in both siblings. The tokens are then exactly zero,
+    which is precisely the all-zero cross-attention context ``adaln``,
+    ``skeleton`` and ``skeleton_adaln`` already feed (and the CFG-uncond state),
+    so a freshly built model reproduces that baseline exactly rather than being
+    knocked off it by random conditioning.
+
+    Note the gradient sequencing this creates, which is benign but not instant.
+    With every key identical (all zero) the softmax is uniform AND every value is
+    the same vector, so ``d(loss)/d(query)`` and ``d(loss)/d(key)`` are exactly
+    zero on step 0 — the K=1 degeneracy's milder cousin, arising here from
+    identical keys rather than a single key. This conv still gets gradient
+    immediately, through ``to_v``'s normally-initialised kernel, so the tokens
+    become distinct after one update and ``to_q``/``to_k`` receive gradient from
+    step 2 onward. That is a one-step delay, not the permanent starvation
+    ``NNXWanActionAdaLNProjector`` guards against, because nothing here is
+    zero-init downstream of another zero-init module.
+
+    Args:
+        rngs:          NNX Rngs for parameter initialisation.
+        in_channels:   Latent channels of the skeleton video (48 for WAN 2.2's VAE).
+        wan_text_dim:  Cross-attention context width the transformer expects
+                       *before* ``text_embedder`` (4096), matching what
+                       ``NNXWanActionEncoder`` emits.
+        patch_size:    The transformer's ``(p_t, p_h, p_w)`` patch size, so the
+                       skeleton token grid matches ``patch_embedding``'s exactly.
+                       Required for the frame-locked reshape and for RoPE to line
+                       Q and K up cell for cell.
+        dtype:         Activation dtype.
+        weights_dtype: Parameter storage dtype.
+        precision:     Matmul precision, threaded through to the conv.
+    """
+
+    def __init__(
+        self,
+        rngs: nnx.Rngs,
+        in_channels: int,
+        wan_text_dim: int,
+        patch_size: tuple[int, int, int] = (1, 2, 2),
+        dtype: jnp.dtype = jnp.bfloat16,
+        weights_dtype: jnp.dtype = jnp.bfloat16,
+        precision: jax.lax.Precision = None,
+    ):
+        self.dtype = dtype
+        self.wan_text_dim = int(wan_text_dim)
+        self.patch_size = tuple(patch_size)
+        self.proj = nnx.Conv(
+            in_channels,
+            self.wan_text_dim,
+            rngs=rngs,
+            kernel_size=self.patch_size,
+            strides=self.patch_size,
+            dtype=dtype,
+            param_dtype=weights_dtype,
+            precision=precision,
+            # Zero-init — see the class docstring. No deadlock: the input is
+            # nonzero *data*, and the only zero-init module on this route is
+            # this one.
+            kernel_init=nnx.with_partitioning(
+                nnx.initializers.zeros,
+                (None, None, None, None, "conv_out"),
+            ),
+        )
+
+    def __call__(self, skeleton_latents: jax.Array) -> jax.Array:
+        """``(B, C, F_lat, H_lat, W_lat)`` skeleton latents → ``(B, seq_len, wan_text_dim)``.
+
+        Same channels-last transpose → conv → collapse as both siblings, so the
+        token ordering is frame-major and identical to the video tokens'. That
+        ordering is what makes the caller's ``(B*F_lat, tokens_per_frame, D)``
+        reshape line the two grids up frame for frame and cell for cell.
+        """
+        x = jnp.transpose(skeleton_latents, (0, 2, 3, 4, 1)).astype(self.dtype)
+        x = self.proj(x)                          # (B, F, H/p_h, W/p_w, wan_text_dim)
+        return jax.lax.collapse(x, 1, -1)         # (B, seq_len, wan_text_dim)

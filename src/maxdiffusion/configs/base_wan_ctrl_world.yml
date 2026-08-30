@@ -224,19 +224,51 @@ action_tokens_per_latent_frame: 4
 #                             constant is confusable with a timestep change, a spatial
 #                             skeleton offset is separable but off-distribution for
 #                             time_proj. Watch the modulation stats either way.
+#   'skeleton_cross_attn'  — the same skeleton latents once more, patch-embedded
+#                             into the CROSS-ATTENTION K/V, the site the vector
+#                             'cross_attn' mode uses. The other two skeleton routes
+#                             are elementwise, so they get token-for-token alignment
+#                             for free; attention does not (softmax over keys is
+#                             permutation-invariant), so alignment is restored
+#                             structurally by two things, neither of which adds a
+#                             parameter:
+#                               * frame locking — cond_tokens_per_frame is set to the
+#                                 spatial patch count (H_lat//2)*(W_lat//2), so latent
+#                                 frame k's video tokens attend ONLY to latent frame
+#                                 k's skeleton tokens;
+#                               * cross-attention RoPE — attn2 gets the same 3D rotary
+#                                 embedding attn1 already uses, sliced to this frame,
+#                                 so Q and K carry identical phases at identical grid
+#                                 cells and the logit peaks on the diagonal. The
+#                                 shared temporal phase cancels in the relative
+#                                 rotation, leaving a purely spatial offset.
+#                             Same dataset requirement as 'skeleton'. Ignores
+#                             skeleton_embed_alpha (like 'skeleton_adaln').
+#                             Because the K/V is frame-locked there is no room for a
+#                             second sequence, so with use_task_instructions=True the
+#                             instruction is POOLED onto the skeleton tokens, exactly
+#                             as 'cross_attn' pools it onto the action tokens.
+#                             What this site buys over the elementwise routes: the
+#                             query chooses what to read, so a mis-registered skeleton
+#                             (camera calibration or URDF drift) can be compensated
+#                             rather than baked in as a fixed wrong offset. What it
+#                             costs: ~8% of a self-attention per block, and the
+#                             pretrained to_q/to_k were trained on T5 text, so a
+#                             spatial key grid is off-distribution for them.
 # The two axes here are independent in principle: an action REPRESENTATION (vector
 # actions or rendered-skeleton latents) crossed with a conditioning SITE (cross-
-# attention K/V, AdaLN modulation, additive in video-token space). The four modes
-# above are four of those six cells; skeleton-into-cross-attention and vector-
-# actions-as-additive are not implemented.
+# attention K/V, AdaLN modulation, additive in video-token space). The five modes
+# above are five of those six cells; vector-actions-as-additive is not implemented.
 # NOTE: changing this is not checkpoint-compatible — each mode trains a different
 # set of extra modules ('adaln' has action_adaln_proj, 'skeleton' has
-# skeleton_embed, 'skeleton_adaln' has skeleton_adaln_embed, and both skeleton
+# skeleton_embed, 'skeleton_adaln' has skeleton_adaln_embed,
+# 'skeleton_cross_attn' has skeleton_cross_attn_embed, and all three skeleton
 # modes have no action_encoder at all).
 action_cond_mode: 'cross_attn'
 
 # ── Skeleton conditioning (action_cond_mode: 'skeleton') ───────────────────────
-# Applies to 'skeleton' ONLY. 'skeleton_adaln' deliberately has no alpha: with a
+# Applies to 'skeleton' ONLY. 'skeleton_adaln' and 'skeleton_cross_attn'
+# deliberately have no alpha: with a
 # zero-init kernel the injection is exactly zero at step 0 either way, so all
 # alpha still does is throttle that path's effective learning rate by alpha**2 —
 # a hyperparameter in disguise. Setting this under 'skeleton_adaln' has no effect.

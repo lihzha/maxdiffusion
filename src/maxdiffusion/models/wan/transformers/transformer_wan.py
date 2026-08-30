@@ -400,6 +400,7 @@ class WanTransformerBlock(nnx.Module):
       frame_level_cond: bool = False,
       cond_tokens_per_frame: int = 1,
       return_attn_diag: bool = False,
+      cross_attn_rope: bool = False,
   ):
     with self.conditional_named_scope("transformer_block"):
       # Support both global [B, 6, dim] and per-token [B, seq_len, 6, dim] temb.
@@ -465,9 +466,31 @@ class WanTransformerBlock(nnx.Module):
             F = encoder_hidden_states.shape[1] // K
             hs_r = norm_hidden_states.reshape(B * F, L // F, D)
             enc_r = encoder_hidden_states.reshape(B * F, K, D)
+            # Optional RoPE on the cross-attention Q/K (skeleton_cross_attn).
+            # Only meaningful when the K/V is a spatial grid congruent with the
+            # queries — i.e. K == L // F, one skeleton token per video token —
+            # so the same rotary phases apply to both and the logit peaks on the
+            # diagonal. The vector-action route leaves this off: its handful of
+            # action tokens per frame sit on no grid, so there is no position to
+            # encode. Slicing rotary_emb per frame gives Q and K the *same*
+            # temporal phase, which therefore cancels in the relative rotation
+            # and leaves a purely spatial offset.
+            cross_rope = None
+            if cross_attn_rope and rotary_emb is not None:
+              Sp = L // F
+              # rotary_emb is (1 or B, 1, L, rope_dim); broadcast the shared case
+              # up to B so the frame-major reshape below is well defined.
+              rope_bcast = jnp.broadcast_to(
+                  rotary_emb, (B, 1, L, rotary_emb.shape[-1])
+              )
+              # (B, 1, F*Sp, r) -> (B*F, 1, Sp, r). Row-major order already
+              # interleaves as (b, f, sp), matching hs_r/enc_r's frame-major
+              # reshape, so this is a pure view of the same token ordering.
+              cross_rope = rope_bcast.reshape(B * F, 1, Sp, rotary_emb.shape[-1])
             attn_output = self.attn2(
                 hidden_states=hs_r,
                 encoder_hidden_states=enc_r,
+                rotary_emb=cross_rope,
                 deterministic=deterministic,
                 rngs=rngs,
             )
@@ -667,6 +690,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
       return_residual: bool = False,
       frame_level_cond: bool = False,
       cond_tokens_per_frame: int = 1,
+      cross_attn_rope: bool = False,
       frame_positions: Optional[tuple] = None,
       action_hidden_states: Optional[jax.Array] = None,
       skeleton_hidden_states: Optional[jax.Array] = None,
@@ -789,6 +813,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
               frame_level_cond=frame_level_cond,
               cond_tokens_per_frame=cond_tokens_per_frame,
               return_attn_diag=return_attn_diag,
+              cross_attn_rope=cross_attn_rope,
           )
           hidden_states, diag = out if return_attn_diag else (out, None)
           new_carry = (hidden_states, rngs_carry)
@@ -820,6 +845,7 @@ class WanModel(nnx.Module, FlaxModelMixin, ConfigMixin):
                 frame_level_cond=frame_level_cond,
                 cond_tokens_per_frame=cond_tokens_per_frame,
                 return_attn_diag=return_attn_diag,
+                cross_attn_rope=cross_attn_rope,
             )
 
           rematted_layer_forward = self.gradient_checkpoint.apply(

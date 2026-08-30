@@ -69,14 +69,26 @@ transformer:
   spatially varying and the skeleton grid lines up with it token for token.
   Carries no ``skeleton_embed_alpha``.
 
+* ``"skeleton_cross_attn"``: the same skeleton latents again, patch-embedded
+  (``NNXWanSkeletonCrossAttnEmbed``) into the cross-attention K/V — the site the
+  vector-action ``"cross_attn"`` mode uses. Unlike the other two skeleton routes
+  this one does not get token-for-token alignment for free, because softmax over
+  keys is permutation-invariant, so two mechanisms restore it structurally:
+  ``frame_level_cond=True`` with ``cond_tokens_per_frame`` set to the spatial
+  patch count locks latent frame k's video tokens to latent frame k's skeleton
+  tokens, and ``cross_attn_rope=True`` gives ``attn2`` the same 3D RoPE
+  ``attn1`` already uses, sliced per frame, so Q and K carry identical phases at
+  identical grid cells and the logit peaks on the diagonal. No positional
+  parameters are learned. Because the K/V is frame-locked there is no room for a
+  second sequence, so the instruction is pooled onto the skeleton tokens exactly
+  as ``"cross_attn"`` pools it onto the action tokens.
+
 These two axes are independent in principle — an action *representation* (vector
 actions or rendered-skeleton latents) crossed with a conditioning *site*
 (cross-attention K/V, AdaLN modulation, additive in video-token space) — and the
-four modes above are four of those six cells. The two not yet implemented are
-skeleton-into-cross-attention (needs a positional or camera embedding on the
-K/V, since attention over an unordered key set discards the token-for-token
-alignment the other skeleton routes get for free) and vector-actions-as-additive
-(needs a broadcast from a 7-dim vector to the latent grid).
+five modes above are five of those six cells. The one not implemented is
+vector-actions-as-additive (needs a broadcast from a 7-dim vector to the latent
+grid).
 
 The modes are mutually exclusive and none of their checkpoints are compatible
 with each other.
@@ -112,6 +124,7 @@ from maxdiffusion.models.wan.action_encoder_wan import (
     NNXWanActionAdaLNProjector,
     NNXWanSkeletonPatchEmbed,
     NNXWanSkeletonAdaLNEmbed,
+    NNXWanSkeletonCrossAttnEmbed,
 )
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers import FlaxFlowMatchScheduler
@@ -151,6 +164,12 @@ class WanCtrlWorldModel(nnx.Module):
       per-token AdaLN conditioning instead of a video-token bias. The two modules
       have the same shape but are separate attributes, so their param-tree paths
       differ and the checkpoints are not interchangeable.
+    * ``"skeleton_cross_attn"`` — ``skeleton_cross_attn_embed`` only, again with
+      no ``action_encoder``. Same conditioning signal once more, injected at the
+      cross-attention K/V site the vector-action ``"cross_attn"`` mode uses. This
+      module's output width is ``wan_text_dim`` rather than ``inner_dim`` (it
+      passes through the transformer's pretrained ``text_embedder``), so its
+      shape differs from the other two skeleton modules as well as its path.
 
     Every submodule other than the transformer lives here rather than inside
     ``WanModel`` because ``create_sharded_logical_transformer`` materialises the
@@ -166,6 +185,7 @@ class WanCtrlWorldModel(nnx.Module):
         action_adaln_proj: NNXWanActionAdaLNProjector | None = None,
         skeleton_embed: NNXWanSkeletonPatchEmbed | None = None,
         skeleton_adaln_embed: NNXWanSkeletonAdaLNEmbed | None = None,
+        skeleton_cross_attn_embed: NNXWanSkeletonCrossAttnEmbed | None = None,
     ):
         self.transformer = transformer
         self.action_encoder = action_encoder if action_encoder is not None else nnx.data(None)
@@ -173,6 +193,9 @@ class WanCtrlWorldModel(nnx.Module):
         self.skeleton_embed = skeleton_embed if skeleton_embed is not None else nnx.data(None)
         self.skeleton_adaln_embed = (
             skeleton_adaln_embed if skeleton_adaln_embed is not None else nnx.data(None)
+        )
+        self.skeleton_cross_attn_embed = (
+            skeleton_cross_attn_embed if skeleton_cross_attn_embed is not None else nnx.data(None)
         )
 
 
@@ -250,6 +273,11 @@ def _text_routes(
         # timestep embedding; skeleton moves it to the video tokens;
         # skeleton_adaln to the AdaLN site), so the instruction can be the full
         # T5 sequence rather than a pooled bias.
+        #
+        # skeleton_cross_attn is deliberately NOT in this list: it occupies
+        # cross-attention with the skeleton grid and locks it per frame, so like
+        # the vector `cross_attn` route it has no room for a second K/V sequence
+        # and falls through to the pooled bias below.
         return None, text_embeds
     return _pool_text_tokens(text_embeds), None
 
@@ -274,13 +302,50 @@ def _add_text_bias(action_tokens: jnp.ndarray, text_bias: jnp.ndarray | None) ->
 def _frame_level_cond(action_cond_mode: str) -> bool:
     """Whether cross-attention should be locked per latent frame.
 
-    Only ``cross_attn`` puts a per-frame action sequence in the K/V, so only it
-    wants the ``(B*F_lat, K, D)`` reshape. ``adaln`` and ``skeleton`` leave
-    cross-attention carrying a single shared sequence (the instruction, or
-    all-zero tokens), where the reshape is a pure waste — a B*F_lat batch
-    expansion over identical K/V.
+    Two modes put a per-frame sequence in the K/V and so want the
+    ``(B*F_lat, K, D)`` reshape: ``cross_attn`` (a handful of action tokens per
+    frame) and ``skeleton_cross_attn`` (a full spatial grid per frame).
+    ``adaln``, ``skeleton`` and ``skeleton_adaln`` leave cross-attention carrying
+    a single shared sequence (the instruction, or all-zero tokens), where the
+    reshape is a pure waste — a B*F_lat batch expansion over identical K/V.
     """
-    return action_cond_mode == "cross_attn"
+    return action_cond_mode in ("cross_attn", "skeleton_cross_attn")
+
+
+def _xattn_tokens_per_frame(
+    action_cond_mode: str,
+    action_tokens_per_frame: int,
+    H_lat: int,
+    W_lat: int,
+    patch_hw: int = 2,
+) -> int:
+    """Cross-attention K/V tokens per latent frame, i.e. the transformer's
+    ``cond_tokens_per_frame``.
+
+    Distinct from ``action_tokens_per_latent_frame``, which stays the *action*
+    grouping (how many tokens ``NNXWanActionEncoder`` emits per frame, and how
+    ``_route_action_conditioning``'s adaln branch regroups them). In
+    ``skeleton_cross_attn`` the K/V is the skeleton's spatial grid instead, one
+    token per video token, so the per-frame count is the spatial patch count —
+    which is also exactly what makes the frame-locked reshape congruent and lets
+    cross-attention RoPE line Q and K up cell for cell.
+    """
+    if action_cond_mode == "skeleton_cross_attn":
+        return (H_lat // patch_hw) * (W_lat // patch_hw)
+    return action_tokens_per_frame
+
+
+def _cross_attn_rope(action_cond_mode: str) -> bool:
+    """Whether ``attn2`` should apply the transformer's 3D RoPE to its Q/K.
+
+    Only ``skeleton_cross_attn``. It is the one mode whose cross-attention K/V
+    is a spatial grid congruent with the queries, so position is both meaningful
+    and shared — RoPE then peaks the logit on the diagonal for free. The vector
+    ``cross_attn`` route's action tokens sit on no grid (and are fewer than the
+    queries), so there is no position to encode and the rope array would not even
+    be shape-compatible.
+    """
+    return action_cond_mode == "skeleton_cross_attn"
 
 
 def _placeholder_action_tokens(
@@ -342,7 +407,7 @@ def _is_skeleton_mode(action_cond_mode: str) -> bool:
     vector actions. True for both skeleton routes, which differ only in where
     the encoded skeleton is injected, not in what the dataset must carry or in
     whether an action encoder exists."""
-    return action_cond_mode in ("skeleton", "skeleton_adaln")
+    return action_cond_mode in ("skeleton", "skeleton_adaln", "skeleton_cross_attn")
 
 
 def _skeleton_module(model, action_cond_mode: str):
@@ -356,6 +421,8 @@ def _skeleton_module(model, action_cond_mode: str):
         return model.skeleton_embed
     if action_cond_mode == "skeleton_adaln":
         return model.skeleton_adaln_embed
+    if action_cond_mode == "skeleton_cross_attn":
+        return model.skeleton_cross_attn_embed
     return None
 
 
@@ -381,6 +448,7 @@ def _route_action_conditioning(
     W_lat: int,
     text_tokens: jnp.ndarray | None = None,
     skeleton_tokens: jnp.ndarray | None = None,
+    text_bias: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray | None]:
     """Route encoded conditioning to cross-attention or AdaLN.
 
@@ -403,8 +471,16 @@ def _route_action_conditioning(
     representations reach AdaLN through one transformer argument and "adaln"
     names one site rather than two.
 
-    Both skeleton modes handle cross-attention exactly as ``adaln`` does: the
-    instruction when enabled, all-zero tokens otherwise.
+    ``"skeleton_cross_attn"``: the encoded skeleton *is* the cross-attention
+    K/V, replacing the zero placeholder entirely. Nothing goes to AdaLN and
+    nothing goes to the video-token bias. The caller pairs this with
+    ``frame_level_cond=True``, ``cond_tokens_per_frame`` = the spatial patch
+    count (see ``_xattn_tokens_per_frame``) and ``cross_attn_rope=True``, which
+    together make latent frame k's video tokens attend to latent frame k's
+    skeleton tokens with matching rotary phases.
+
+    ``skeleton`` and ``skeleton_adaln`` handle cross-attention exactly as
+    ``adaln`` does: the instruction when enabled, all-zero tokens otherwise.
 
     ``text_tokens`` is ignored in cross-attention mode: there the instruction
     has already been folded into ``action_tokens`` as a pooled bias, because
@@ -413,6 +489,35 @@ def _route_action_conditioning(
     Returns ``(encoder_hidden_states, action_hidden_states)`` — the second
     element is ``None`` in cross-attention mode.
     """
+    if action_cond_mode == "skeleton_cross_attn":
+        # Cross-attention is occupied by the skeleton, and it is frame-locked, so
+        # a shared 512-token T5 sequence cannot be concatenated into the
+        # (B*F_lat, K, D) layout — the same constraint the vector `cross_attn`
+        # route faces. `_text_routes` therefore hands this mode a POOLED bias,
+        # broadcast here onto every skeleton token exactly as `_add_text_bias`
+        # does for action tokens. Added after `_encode_skeleton`'s CFG mask so
+        # the instruction is never dropped and cancels out of the CFG delta.
+        #
+        # No zero-placeholder fallback here, unlike the other skeleton modes.
+        # Theirs is shape-compatible because cross-attention still carries the
+        # action-shaped (B, F_lat*K, D) sequence; this mode's K/V is the skeleton
+        # grid, (B, F_lat*Sp, D), and the caller has already told the transformer
+        # cond_tokens_per_frame=Sp. Falling back to the placeholder would make
+        # the block's `F = encoder.shape[1] // K` reshape silently wrong, so fail
+        # loudly instead. Reaching this means the module was not built or the
+        # batch carried no "skeleton" — a misconfiguration, not a CFG branch (the
+        # uncond branch passes zeros of the correct shape, not None).
+        if skeleton_tokens is None:
+            raise ValueError(
+                "action_cond_mode='skeleton_cross_attn' requires encoded skeleton "
+                "tokens as the cross-attention K/V, but got None. Check that "
+                "skeleton_cross_attn_embed was built and that the dataset carries "
+                "the 'skeleton' feature (load_skeleton=True)."
+            )
+        enc = skeleton_tokens
+        if text_bias is not None:
+            enc = enc + text_bias[:, None, :].astype(enc.dtype)
+        return enc, None
     if action_cond_mode in ("skeleton", "skeleton_adaln"):
         enc = (
             text_tokens.astype(action_tokens.dtype) if text_tokens is not None
@@ -623,6 +728,11 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             action_cond_mode,
         )
         cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
+        # The cross-attention K/V count differs from the action grouping in
+        # skeleton_cross_attn, where the K/V is the skeleton's spatial grid.
+        xattn_tokens_per_frame = _xattn_tokens_per_frame(
+            action_cond_mode, cond_tokens_per_frame, H_lat, W_lat
+        )
         cfg_rng, do_rng = jax.random.split(d_rng)
 
         if _is_skeleton_mode(action_cond_mode):
@@ -650,7 +760,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         enc_tokens, action_hidden_states = _route_action_conditioning(
             action_tokens, model.action_adaln_proj, action_cond_mode,
             cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
-            skeleton_tokens=skeleton_tokens,
+            skeleton_tokens=skeleton_tokens, text_bias=text_bias,
         )
 
         want_attn_diag = bool(getattr(config, "log_attn_activation_stats", False))
@@ -668,7 +778,8 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             # instruction (or zeros), so the per-frame reshape is a wasted no-op
             # (B*F_lat batch expansion over a shared K/V) — disable it.
             frame_level_cond=_frame_level_cond(action_cond_mode),
-            cond_tokens_per_frame=cond_tokens_per_frame,
+            cond_tokens_per_frame=xattn_tokens_per_frame,
+            cross_attn_rope=_cross_attn_rope(action_cond_mode),
             frame_positions=frame_positions,
             return_attn_diag=want_attn_diag,
         )
@@ -816,7 +927,13 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
 # ── Trainer ───────────────────────────────────────────────────────────────────
 
 
-VALID_ACTION_COND_MODES = ("cross_attn", "adaln", "skeleton", "skeleton_adaln")
+VALID_ACTION_COND_MODES = (
+    "cross_attn",
+    "adaln",
+    "skeleton",
+    "skeleton_adaln",
+    "skeleton_cross_attn",
+)
 
 
 class WanCtrlWorldTrainer:
@@ -973,6 +1090,35 @@ class WanCtrlWorldTrainer:
             weights_dtype=_dtype(self.config.weights_dtype),
         )
 
+    def _build_skeleton_cross_attn_embed(
+        self, transformer_config
+    ) -> NNXWanSkeletonCrossAttnEmbed | None:
+        """Only built when action_cond_mode == "skeleton_cross_attn"; None otherwise.
+
+        ``patch_size`` and ``in_channels`` come off the *loaded* transformer
+        config for the same reason as the other two skeleton builders (the yaml
+        fields are stale for WAN 2.2 TI2V-5B). ``patch_size`` matters more here
+        than anywhere else: it fixes the skeleton token grid, and the frame-locked
+        cross-attention reshape plus its RoPE both assume that grid is congruent
+        with the video token grid cell for cell.
+
+        Note this one takes ``wan_text_dim``, not ``inner_dim``. Cross-attention
+        context enters ``WanModel`` *before* ``condition_embedder.text_embedder``
+        projects 4096 -> inner_dim, so emitting 4096 routes the skeleton through
+        the identical path the action tokens take. Takes no
+        ``skeleton_embed_alpha``, matching ``skeleton_adaln``.
+        """
+        if getattr(self.config, "action_cond_mode", "cross_attn") != "skeleton_cross_attn":
+            return None
+        return NNXWanSkeletonCrossAttnEmbed(
+            rngs=nnx.Rngs(jax.random.key(self.config.seed + 4)),
+            in_channels=transformer_config.in_channels,
+            wan_text_dim=self.config.wan_text_dim,
+            patch_size=tuple(transformer_config.patch_size),
+            dtype=_dtype(self.config.activations_dtype),
+            weights_dtype=_dtype(self.config.weights_dtype),
+        )
+
     # ── Checkpointing ─────────────────────────────────────────────────────────
 
     def _build_checkpoint_manager(self, ckpt_dir: str) -> ocp.CheckpointManager:
@@ -1110,9 +1256,10 @@ class WanCtrlWorldTrainer:
         action_adaln_proj = self._build_action_adaln_proj(pipeline.transformer.config)
         skeleton_embed = self._build_skeleton_embed(pipeline.transformer.config)
         skeleton_adaln_embed = self._build_skeleton_adaln_embed(pipeline.transformer.config)
+        skeleton_xattn_embed = self._build_skeleton_cross_attn_embed(pipeline.transformer.config)
         combined = WanCtrlWorldModel(
             pipeline.transformer, action_encoder, action_adaln_proj,
-            skeleton_embed, skeleton_adaln_embed,
+            skeleton_embed, skeleton_adaln_embed, skeleton_xattn_embed,
         )
 
         # 3. Split combined model into (graphdef, params, rest_of_state)
@@ -1197,16 +1344,36 @@ class WanCtrlWorldTrainer:
                     "the same AdaLN site the vector-action 'adaln' mode uses, so it "
                     "re-modulates every block; vector actions unused"
                 )
+            elif _acm == "skeleton_cross_attn":
+                max_logging.log(
+                    "  Action conditioning: skeleton_cross_attn — VAE latents of the "
+                    "rendered 2D skeleton video, patch-embedded (no alpha; zero-init) "
+                    "into the cross-attention K/V, the same site the vector-action "
+                    "'cross_attn' mode uses; frame-locked (one skeleton token per "
+                    "video token, per latent frame) with 3D RoPE on the cross-attn "
+                    "Q/K so the grids line up cell for cell; vector actions unused"
+                )
             else:
                 max_logging.log(f"  Action conditioning: {_acm} — 7-dim vector actions")
             if max_utils.config_get(config, "use_task_instructions", False):
                 # cross_attn is the only mode that pools; adaln and skeleton both
                 # leave cross-attention free for the full T5 sequence (see
                 # _text_routes).
-                _route = ("pooled into the action tokens" if _acm == "cross_attn"
-                          else "the cross-attention context")
+                if _acm == "cross_attn":
+                    _route = "pooled into the action tokens"
+                elif _acm == "skeleton_cross_attn":
+                    # Same constraint as cross_attn: the K/V is frame-locked, so
+                    # a shared T5 sequence does not fit the (B*F, K, D) layout.
+                    _route = "pooled into the skeleton tokens"
+                else:
+                    _route = "the cross-attention context"
                 max_logging.log(
                     f"  Task instructions: ON — T5 text is {_route}; not CFG-dropped"
+                )
+            elif _acm == "skeleton_cross_attn":
+                max_logging.log(
+                    "  Task instructions: OFF — the rendered skeleton video is the "
+                    "ONLY conditioning signal (and it *is* the cross-attention K/V)"
                 )
             elif _is_skeleton_mode(_acm):
                 max_logging.log(
@@ -1613,6 +1780,9 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
         action_cond_mode,
     )
     cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
+    xattn_tokens_per_frame = _xattn_tokens_per_frame(
+        action_cond_mode, cond_tokens_per_frame, H_lat, W_lat
+    )
     # No CFG dropout on the eval path, so this is just the plain conditional.
     if _is_skeleton_mode(action_cond_mode):
         action_tokens = _placeholder_action_tokens(
@@ -1630,7 +1800,7 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
     enc_tokens, action_hidden_states = _route_action_conditioning(
         action_tokens, model.action_adaln_proj, action_cond_mode,
         cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
-        skeleton_tokens=skeleton_tokens,
+        skeleton_tokens=skeleton_tokens, text_bias=text_bias,
     )
 
     model_pred = model.transformer(
@@ -1641,7 +1811,8 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
         skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
         deterministic=True,
         frame_level_cond=_frame_level_cond(action_cond_mode),
-        cond_tokens_per_frame=cond_tokens_per_frame,
+        cond_tokens_per_frame=xattn_tokens_per_frame,
+        cross_attn_rope=_cross_attn_rope(action_cond_mode),
         frame_positions=frame_positions,
     )
 
@@ -1683,6 +1854,9 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
     )
     action_cond_mode = getattr(config, "action_cond_mode", "cross_attn")
     cond_tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
+    xattn_tokens_per_frame = _xattn_tokens_per_frame(
+        action_cond_mode, cond_tokens_per_frame, H_lat, W_lat
+    )
 
     if _is_skeleton_mode(action_cond_mode):
         action_tokens = _placeholder_action_tokens(
@@ -1725,7 +1899,7 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
             enc_tokens, action_hidden_states = _route_action_conditioning(
                 tokens, model.action_adaln_proj, action_cond_mode,
                 cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
-                skeleton_tokens=skel,
+                skeleton_tokens=skel, text_bias=text_bias,
             )
             return model.transformer(
                 hidden_states=roll_input,
@@ -1735,7 +1909,8 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
                 skeleton_hidden_states=_skeleton_bias(action_cond_mode, skel),
                 deterministic=True,
                 frame_level_cond=_frame_level_cond(action_cond_mode),
-                cond_tokens_per_frame=cond_tokens_per_frame,
+                cond_tokens_per_frame=xattn_tokens_per_frame,
+                cross_attn_rope=_cross_attn_rope(action_cond_mode),
                 frame_positions=frame_positions,
             )
 

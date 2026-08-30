@@ -38,6 +38,7 @@ from maxdiffusion.models.wan.action_encoder_wan import (
     NNXWanActionAdaLNProjector,
     NNXWanSkeletonPatchEmbed,
     NNXWanSkeletonAdaLNEmbed,
+    NNXWanSkeletonCrossAttnEmbed,
 )
 from maxdiffusion.pipelines.wan.wan_pipeline_ti2v_2p2 import WanPipelineTI2V_2_2
 from maxdiffusion.schedulers.scheduling_flow_match_flax import FlaxFlowMatchScheduler
@@ -50,6 +51,8 @@ from maxdiffusion.trainers.wan_ctrl_world_trainer import (
     _frame_level_cond,
     _group_actions,
     _is_skeleton_mode,
+    _xattn_tokens_per_frame,
+    _cross_attn_rope,
     _placeholder_action_tokens,
     _route_action_conditioning,
     _skeleton_bias,
@@ -87,7 +90,10 @@ def _denoise_step(
     ``skeleton_tokens`` is the already-patch-embedded conditioning tensor for the
     skeleton modes, and ``None`` in the action modes (which jit traces as an
     absent pytree, so those modes are untouched). ``skeleton`` sends it to the
-    video-token bias via ``_skeleton_bias``; ``skeleton_adaln`` sends it through
+    video-token bias via ``_skeleton_bias``; ``skeleton_cross_attn`` sends it
+    through ``_route_action_conditioning`` into the cross-attention K/V (paired
+    with frame locking and cross-attention RoPE, both derived from the mode);
+    ``skeleton_adaln`` sends it through
     ``_route_action_conditioning`` into ``action_hidden_states``, the same AdaLN
     slot the vector-action ``adaln`` mode uses. The uncond half of the guided
     batch gets zeros either way, which is exactly the "skip the injection" state
@@ -99,6 +105,13 @@ def _denoise_step(
     b, _, F_lat, H_lat, W_lat = latents.shape
     t_batch = jnp.broadcast_to(timestep, (b,))
     timestep_2d = _build_per_token_timestep(t_batch, F_lat, H_lat, W_lat, n_hist)
+
+    # Cross-attention K/V count per frame; equals cond_tokens_per_frame in every
+    # mode except skeleton_cross_attn, where the K/V is the skeleton's spatial
+    # grid rather than the action grouping.
+    xattn_tpf = _xattn_tokens_per_frame(
+        action_cond_mode, cond_tokens_per_frame, H_lat, W_lat
+    )
 
     def _route(tokens, skel):
         # text_tokens=None: this script is action-only. run_wan_ctrl_world_inference
@@ -138,7 +151,8 @@ def _denoise_step(
             skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_2x),
             deterministic=True,
             frame_level_cond=_frame_level_cond(action_cond_mode),
-            cond_tokens_per_frame=cond_tokens_per_frame,
+            cond_tokens_per_frame=xattn_tpf,
+            cross_attn_rope=_cross_attn_rope(action_cond_mode),
             frame_positions=pos_2x,
         )
         pred_uncond = pred_2x[:b]
@@ -154,7 +168,8 @@ def _denoise_step(
             skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
             deterministic=True,
             frame_level_cond=_frame_level_cond(action_cond_mode),
-            cond_tokens_per_frame=cond_tokens_per_frame,
+            cond_tokens_per_frame=xattn_tpf,
+            cross_attn_rope=_cross_attn_rope(action_cond_mode),
             frame_positions=frame_positions,
         )
 
@@ -190,8 +205,11 @@ def _encode_skeleton_tokens(
 ) -> jnp.ndarray:
     """Patch-embed skeleton latents into this mode's conditioning tensor.
 
-    ``(B, C, F_lat, H_lat, W_lat)`` → ``(B, seq_len, inner_dim)`` in both skeleton
-    modes; they differ only in whether alpha is applied (``skeleton``) and in
+    ``(B, C, F_lat, H_lat, W_lat)`` → ``(B, seq_len, D)`` in all three skeleton
+    modes, where D is ``inner_dim`` for ``skeleton``/``skeleton_adaln`` and
+    ``wan_text_dim`` for ``skeleton_cross_attn`` (its output feeds the
+    transformer's ``text_embedder``); they otherwise differ only in whether alpha
+    is applied (``skeleton``) and in
     where ``_denoise_step`` injects the result — the video-token bias for
     ``skeleton``, the shared AdaLN slot for ``skeleton_adaln``. Shapes are
     identical, so the rest of the rollout is mode-agnostic.
@@ -646,6 +664,19 @@ def run(argv: Sequence[str]) -> None:
             dtype=weights_dtype,
             weights_dtype=weights_dtype,
         )
+    skeleton_xattn_embed = None
+    if action_cond_mode == "skeleton_cross_attn":
+        # Seed + 4, matching WanCtrlWorldTrainer._build_skeleton_cross_attn_embed.
+        # Emits wan_text_dim (not inner_dim): cross-attention context enters
+        # WanModel before condition_embedder.text_embedder projects it down.
+        skeleton_xattn_embed = NNXWanSkeletonCrossAttnEmbed(
+            rngs=nnx.Rngs(jax.random.key(config.seed + 4)),
+            in_channels=pipeline.transformer.config.in_channels,
+            wan_text_dim=config.wan_text_dim,
+            patch_size=tuple(pipeline.transformer.config.patch_size),
+            dtype=weights_dtype,
+            weights_dtype=weights_dtype,
+        )
     action_adaln_proj = None
     if action_cond_mode == "adaln":
         # inner_dim must come from the loaded transformer's own registered
@@ -665,7 +696,7 @@ def run(argv: Sequence[str]) -> None:
     with pipeline.mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
         combined = WanCtrlWorldModel(
             pipeline.transformer, action_encoder, action_adaln_proj,
-            skeleton_embed, skeleton_adaln_embed,
+            skeleton_embed, skeleton_adaln_embed, skeleton_xattn_embed,
         )
         graphdef, params, rest_of_state = nnx.split(combined, nnx.Param, ...)
 
