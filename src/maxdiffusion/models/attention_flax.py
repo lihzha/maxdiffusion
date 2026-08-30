@@ -40,6 +40,12 @@ Mesh = common_types.Mesh
 DType = common_types.DType
 BlockSizes = common_types.BlockSizes
 
+# TPU vector-lane count. Every splash-attention KV block size must be a multiple
+# of it — the kernel asserts `bkv_compute % NUM_LANES == 0` — so _select_flash_block_sizes
+# rounds its derived blocks to it. Sourced from the vendored kernel rather than
+# hardcoded so the two cannot drift apart.
+NUM_LANES = tokamax_splash_attention_kernel.NUM_LANES
+
 
 AxisNames = common_types.AxisNames
 BATCH = common_types.BATCH
@@ -248,17 +254,46 @@ def _select_flash_block_sizes(
       return _coerce_tokamax_block_sizes(flash_block_sizes)
     return flash_block_sizes
 
-  block_size_q = flash_block_sizes.block_q if flash_block_sizes else q_max_block_size
+  def _fit(seq_len: int, cap: int) -> int:
+    """Largest lane-aligned block that still covers ``seq_len``, capped.
+
+    The splash kernel asserts ``bkv_compute % NUM_LANES == 0`` and
+    ``bkv % bkv_compute == 0``, so a block size must be a multiple of 128 — but
+    the obvious ``min(cap, seq_len)`` returns the raw sequence length whenever it
+    is the smaller of the two, which is only lane-aligned by luck. That is a live
+    crash, not a theoretical one: a 180-token frame-locked cross-attention (a
+    18x10 patch grid, i.e. skeleton_cross_attn at 192x320 with 3 cameras) gave
+    ``bkv_compute=180`` and the kernel refused to build. The same held for any
+    short K/V, e.g. the 4-token-per-frame vector action route whenever
+    flash_min_seq_length is low enough to route it here.
+
+    Rounding UP rather than down is what keeps the whole sequence inside one
+    block, and costs nothing extra: _pad_data_for_flash pads the sequence to a
+    multiple of the block size anyway, so 180 -> one 256 block either way. The
+    floor of NUM_LANES keeps a very short K/V (4 tokens) legal.
+    """
+    return max(NUM_LANES, min(cap, ((seq_len + NUM_LANES - 1) // NUM_LANES) * NUM_LANES))
+
+  kv_block = _fit(key_seq_len, kv_max_block_size)
+  kv_block_q = _fit(query_seq_len, kv_max_block_size)
+  # Also cap the query block by the (lane-aligned) query length. Unbounded it
+  # pads a 180-token query out to a full 1024, ~5.7x of wasted compute on every
+  # one of the B*F_lat frame-locked cross-attentions. No effect on self-attention,
+  # where the sequence is longer than q_max_block_size and the min is inert.
+  block_size_q = min(
+      flash_block_sizes.block_q if flash_block_sizes else q_max_block_size,
+      _fit(query_seq_len, q_max_block_size),
+  )
   use_tokamax = attention_kernel in ["tokamax_flash", "tokamax_ring"]
   return splash_attention_kernel.BlockSizes(
       block_q=block_size_q,
-      block_kv_compute=min(kv_max_block_size, key_seq_len),
-      block_kv=min(kv_max_block_size, key_seq_len),
+      block_kv_compute=kv_block,
+      block_kv=kv_block,
       block_q_dkv=block_size_q,
-      block_kv_dkv=min(kv_max_block_size, key_seq_len),
-      block_kv_dkv_compute=min(kv_max_block_size, query_seq_len),
+      block_kv_dkv=kv_block,
+      block_kv_dkv_compute=kv_block_q,
       block_q_dq=None if use_tokamax else block_size_q,
-      block_kv_dq=None if use_tokamax else min(kv_max_block_size, query_seq_len),
+      block_kv_dq=None if use_tokamax else kv_block_q,
       use_fused_bwd_kernel=True if use_tokamax else False,
   )
 
