@@ -534,6 +534,28 @@ action_stats_only: False
 setup_only: False
 max_frames: -1
 rgb_skip: 3  # temporal downsampling: keep every Nth frame/action (15Hz DROID -> 5Hz); 1 = no skip
+
+# ── Skeleton conditioning (wan2.2_skeleton_data_preprocessing.py) ────────────
+# Actions -> 2D kinematic-skeleton frames, rendered with OSCAR's reference code
+# and VAE-encoded alongside the RGB frames. See droid_skeleton.py.
+skeleton_render_module: '/n/fs/cat10301/projects/oscar-public/demo/render_skeleton.py'
+skeleton_urdf_path: '/n/fs/cat10301/projects/oscar-public/demo/assets/panda_robotiq.urdf'
+# True: draw at the video's native resolution, then INTER_AREA-resize to
+# height x width — the same spatial downsampling the RGB frames get (thin links
+# become soft sub-pixel traces). False: project straight onto a height x width
+# canvas (crisper but aliased). Intrinsics scale with the canvas either way, so
+# the skeleton lands on the same pixels.
+skeleton_render_native: True
+skeleton_draw_gripper: True   # EE axes + the two Robotiq fingers
+# DROID reports gripper *closedness* (0 = open); the renderer wants openness.
+skeleton_gripper_invert: True
+# Nominal ZED left-camera pinhole at 1280x720 (raw DROID stores no intrinsics;
+# these are the values in OSCAR's own demo sample). Rescaled per axis to the
+# canvas actually drawn on.
+skeleton_fx: 530.0
+skeleton_fy: 530.0
+skeleton_cx: 640.0
+skeleton_cy: 360.0
 enable_eval_timesteps: False
 timesteps_list: []
 num_eval_samples: 0
