@@ -46,6 +46,11 @@ from safetensors.torch import load_file as load_torch_safetensors
 
 from maxdiffusion import max_logging, max_utils
 from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
+from maxdiffusion.models.svd.skeleton_encoder_flax import (
+    FlaxSkeletonPatchEmbed,
+    FlaxSkeletonAdaLNProjector,
+    FlaxSkeletonCrossAttnEmbed,
+)
 from maxdiffusion.models.svd.action_encoder_flax import (
     FlaxActionAdaLNProjector,
     FlaxActionEncoder,
@@ -53,6 +58,8 @@ from maxdiffusion.models.svd.action_encoder_flax import (
 from maxdiffusion.models.svd.ctrl_world_flax import (
     CtrlWorldTrainConfig,
     action_world_train_step,
+    _is_skeleton_mode,
+    _skeleton_apply_key,
 )
 from maxdiffusion.models.svd.video_unet_flax import FlaxVideoUNet
 
@@ -78,8 +85,27 @@ def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
         his_cond_zero=config.ctrl_his_cond_zero,
         action_cond_mode=max_utils.config_get(config, "action_cond_mode", "cross_attn"),
         time_embed_dim=_unet_time_embed_dim(config),
+        # conv_in's output width — the additive skeleton route must match it.
+        # Same source as time_embed_dim so the two can never disagree.
+        model_channels=_unet_model_channels(config),
+        skeleton_embed_alpha=float(
+            max_utils.config_get(config, "skeleton_embed_alpha", 0.1)
+        ),
+        skeleton_cross_attn_stride=int(
+            max_utils.config_get(config, "skeleton_cross_attn_stride", 4)
+        ),
         use_task_instructions=max_utils.config_get(config, "use_task_instructions", True),
     )
+
+
+def _unet_model_channels(config) -> int:
+    """``block_out_channels[0]`` (320 for base SVD) — conv_in's output width.
+
+    Read only by the additive skeleton route, whose embedded output is added onto
+    conv_in's result and so has to be exactly this wide.
+    """
+    boc = max_utils.config_get(config, "block_out_channels", None)
+    return boc[0] if boc else 320
 
 
 def _unet_time_embed_dim(config) -> int:
@@ -90,6 +116,15 @@ def _unet_time_embed_dim(config) -> int:
     """
     boc = max_utils.config_get(config, "block_out_channels", None)
     return (boc[0] if boc else 320) * 4
+
+
+VALID_ACTION_COND_MODES = (
+    "cross_attn",
+    "adaln",
+    "skeleton",
+    "skeleton_adaln",
+    "skeleton_cross_attn",
+)
 
 
 def _load_action_encoder_params(path: str, dtype) -> Dict[str, Any]:
@@ -291,6 +326,19 @@ class CtrlWorldTrainer:
 
     def __init__(self, config):
         self.config = config
+        mode = getattr(config, "action_cond_mode", "cross_attn")
+        if mode not in VALID_ACTION_COND_MODES:
+            raise ValueError(
+                f"action_cond_mode={mode!r} is not one of {VALID_ACTION_COND_MODES}."
+            )
+        if _is_skeleton_mode(mode) and int(
+            max_utils.config_get(config, "wandb_video_every", 0)
+        ) > 0:
+            max_logging.log(
+                f"[ctrl_world] WARNING: action_cond_mode={mode} — the in-training "
+                "W&B video preview is skipped (FlaxCtrlWorldPipeline has no skeleton "
+                "route yet). Training and eval loss are unaffected."
+            )
         self.dtype = _dtype_from_str(config.activations_dtype)
         self.weights_dtype = _dtype_from_str(config.weights_dtype)
         self.train_cfg = _build_ctrl_world_train_config(config)
@@ -384,27 +432,101 @@ class CtrlWorldTrainer:
             )
         unet_params = _rebox_like(abstract_unet_params, unet_params)
 
-        action_encoder = FlaxActionEncoder(
-            action_dim=self.config.action_dim,
-            hidden_size=self.config.hidden_size,
-            text_embed_dim=self.config.text_embed_dim,
-            dtype=self.dtype,
-            weights_dtype=self.weights_dtype,
-        )
-        if self.config.action_encoder_init_path:
+        mode = self.train_cfg.action_cond_mode
+        skeleton_mode = _is_skeleton_mode(mode)
+
+        # No action encoder in the skeleton modes: the conditioning is the
+        # rendered skeleton video, so an encoder here would receive zero gradient
+        # forever — dead weights in the checkpoint and dead optimizer moments in
+        # HBM. Mirrors WanCtrlWorldTrainer._build_action_encoder.
+        action_encoder, ae_params = None, None
+        if skeleton_mode:
+            if self.config.action_encoder_init_path:
+                raise ValueError(
+                    f"action_cond_mode={mode!r} builds no action encoder, so "
+                    "action_encoder_init_path cannot apply. Drop it, or switch to "
+                    "a vector-action mode."
+                )
+            max_logging.log(
+                f"[ctrl_world] action_cond_mode={mode}: no action encoder "
+                "(conditioning is the rendered skeleton video; vector actions unused)"
+            )
+        else:
+            action_encoder = FlaxActionEncoder(
+                action_dim=self.config.action_dim,
+                hidden_size=self.config.hidden_size,
+                text_embed_dim=self.config.text_embed_dim,
+                dtype=self.dtype,
+                weights_dtype=self.weights_dtype,
+            )
+        if action_encoder is not None and self.config.action_encoder_init_path:
             max_logging.log(
                 f"[ctrl_world] loading action encoder from {self.config.action_encoder_init_path}"
             )
             ae_params = _load_action_encoder_params(
                 self.config.action_encoder_init_path, self.weights_dtype
             )
-        else:
+        elif action_encoder is not None:
             max_logging.log("[ctrl_world] initialising action encoder from scratch")
             ae_params = action_encoder.init_weights(
                 jax.random.PRNGKey(self.config.seed), batch=1, num_frames=1
             )
 
-        adaln = self.train_cfg.action_cond_mode == "adaln"
+        # Exactly one optional conditioning module is ever live. Collect it in a
+        # dict keyed by its PARAM NAME so every downstream consumer (params tree,
+        # apply_fns, checkpoint) is a single loop rather than a tuple that grows
+        # by two entries per mode.
+        cond_extras: Dict[str, Any] = {}
+
+        if skeleton_mode:
+            key = _skeleton_apply_key(mode)
+            if mode == "skeleton":
+                skel_mod = FlaxSkeletonPatchEmbed(
+                    model_channels=self.train_cfg.model_channels,
+                    alpha=self.train_cfg.skeleton_embed_alpha,
+                    dtype=self.dtype,
+                    weights_dtype=self.weights_dtype,
+                )
+                max_logging.log(
+                    f"[ctrl_world] action_cond_mode=skeleton: skeleton latents are "
+                    f"patch-embedded (alpha={self.train_cfg.skeleton_embed_alpha}) and "
+                    f"ADDED onto conv_in's output (width {self.train_cfg.model_channels}); "
+                    "cross-attention carries the text embedding only"
+                )
+            elif mode == "skeleton_adaln":
+                skel_mod = FlaxSkeletonAdaLNProjector(
+                    time_embed_dim=self.train_cfg.time_embed_dim,
+                    dtype=self.dtype,
+                    weights_dtype=self.weights_dtype,
+                )
+                max_logging.log(
+                    "[ctrl_world] action_cond_mode=skeleton_adaln: skeleton latents are "
+                    f"POOLED to one vector per frame and summed into t_emb (width "
+                    f"{self.train_cfg.time_embed_dim}). NOTE this site has no spatial "
+                    "axis in SVD, so the pooling discards the skeleton's spatial "
+                    "structure — expected to be the weakest of the three skeleton routes"
+                )
+            else:
+                skel_mod = FlaxSkeletonCrossAttnEmbed(
+                    hidden_size=self.config.hidden_size,
+                    stride=self.train_cfg.skeleton_cross_attn_stride,
+                    latent_height=self.config.latent_height_per_cam * self.config.num_views,
+                    latent_width=self.config.width // 8,
+                    dtype=self.dtype,
+                    weights_dtype=self.weights_dtype,
+                )
+                max_logging.log(
+                    f"[ctrl_world] action_cond_mode=skeleton_cross_attn: skeleton latents "
+                    f"become {skel_mod.num_tokens} spatial K/V tokens per frame "
+                    f"(stride {self.train_cfg.skeleton_cross_attn_stride}) with a learned "
+                    "positional embedding standing in for the rotary embeddings SVD lacks"
+                )
+            cond_extras[key] = (
+                skel_mod,
+                skel_mod.init_weights(jax.random.PRNGKey(self.config.seed + 2)),
+            )
+
+        adaln = mode == "adaln"
         adaln_proj, adaln_params = None, None
         if adaln:
             if self.config.action_encoder_init_path:
@@ -426,6 +548,7 @@ class CtrlWorldTrainer:
                 jax.random.PRNGKey(self.config.seed + 1), batch=1, num_frames=1,
                 hidden_size=self.config.hidden_size,
             )
+            cond_extras["action_adaln_proj"] = (adaln_proj, adaln_params)
             max_logging.log(
                 "[ctrl_world] action_cond_mode=adaln: action tokens are summed into "
                 f"t_emb (width {self.train_cfg.time_embed_dim}); cross-attention "
@@ -433,8 +556,16 @@ class CtrlWorldTrainer:
             )
 
         if self.train_cfg.use_task_instructions:
-            route = ("the cross-attention context" if adaln
-                     else "tiled into the action tokens")
+            if mode == "skeleton_cross_attn":
+                # SVD's context is inherently per-(sample, frame), so unlike the
+                # WAN arm — which must POOL the instruction onto the action
+                # tokens because its K/V is frame-locked by reshape — the full
+                # text token simply rides alongside the skeleton grid.
+                route = "one extra cross-attention key alongside the skeleton grid"
+            elif adaln or skeleton_mode:
+                route = "the cross-attention context"
+            else:
+                route = "tiled into the action tokens"
             max_logging.log(
                 f"[ctrl_world] task instructions: ON — CLIP text is {route}; "
                 "not CFG-dropped"
@@ -444,7 +575,7 @@ class CtrlWorldTrainer:
                 "[ctrl_world] task instructions: OFF — action-only conditioning"
             )
 
-        return unet, unet_params, action_encoder, ae_params, adaln_proj, adaln_params
+        return unet, unet_params, action_encoder, ae_params, cond_extras
 
     def _build_optimizer(self, num_steps: int):
         schedule_steps = (
@@ -464,7 +595,7 @@ class CtrlWorldTrainer:
     # ── Sharding-aware state construction ──────────────────────────────────────
 
     def _build_sharded_state(self, mesh, unet, unet_params, action_encoder, ae_params, tx,
-                             adaln_params=None):
+                             cond_extras=None):
         """Build a TrainState whose leaves are FSDP-sharded across the mesh.
 
         Path:
@@ -483,9 +614,13 @@ class CtrlWorldTrainer:
 
         # Step 1 — boxed state. Note that we feed unet_params unmodified;
         # tx.init's tree_map preserves the LogicallyPartitioned wrappers.
-        params = {"unet": unet_params, "action_encoder": ae_params}
-        if adaln_params is not None:
-            params["action_adaln_proj"] = adaln_params
+        params = {"unet": unet_params}
+        # action_encoder is absent in the skeleton modes (no vector actions), so
+        # it is only added when it exists — a None leaf would break tx.init.
+        if ae_params is not None:
+            params["action_encoder"] = ae_params
+        for name, (_mod, mod_params) in (cond_extras or {}).items():
+            params[name] = mod_params
         with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
             state = train_state.TrainState.create(
                 apply_fn=lambda *a, **k: None, params=params, tx=tx
@@ -570,23 +705,28 @@ class CtrlWorldTrainer:
     def start_training(self):
         config = self.config
         mesh = self._build_mesh()
-        unet, unet_params, action_encoder, ae_params, adaln_proj, adaln_params = (
+        unet, unet_params, action_encoder, ae_params, cond_extras = (
             self._load_modules(mesh)
         )
 
-        apply_fns = {"unet": unet.apply, "action_encoder": action_encoder.apply}
-        if adaln_proj is not None:
-            apply_fns["action_adaln_proj"] = adaln_proj.apply
+        apply_fns = {"unet": unet.apply}
+        if action_encoder is not None:
+            apply_fns["action_encoder"] = action_encoder.apply
+        for name, (mod, _p) in cond_extras.items():
+            apply_fns[name] = mod.apply
         # Kept for the W&B video rollout, which needs the module objects (not just
         # their apply_fns) to build an inference pipeline.
-        self._video_modules = (unet, action_encoder, adaln_proj)
+        self._video_modules = (
+            unet, action_encoder, cond_extras.get("action_adaln_proj", (None, None))[0]
+        )
+        self._cond_extra_names = tuple(cond_extras)
         tx, lr_schedule = self._build_optimizer(config.max_train_steps)
 
         state, state_shardings = self._build_sharded_state(
             mesh, unet, unet_params, action_encoder, ae_params, tx,
-            adaln_params=adaln_params,
+            cond_extras=cond_extras,
         )
-        del unet_params, ae_params, adaln_params  # freed inside state
+        del unet_params, ae_params, cond_extras  # freed inside state
 
         if jax.process_index() == 0:
             num_params = sum(int(np.prod(p.shape)) for p in jax.tree_util.tree_leaves(state.params))
@@ -600,6 +740,11 @@ class CtrlWorldTrainer:
             "action":      batch_pspec,
             "text_embeds": batch_pspec,
         }
+        # Must mirror the dataset's key set exactly — jit's in_shardings is a
+        # pytree prefix match, so a key the batch carries but this dict omits
+        # (or vice versa) is a trace-time structure mismatch, not a warning.
+        if _is_skeleton_mode(self.train_cfg.action_cond_mode):
+            data_shardings["skeleton"] = batch_pspec
 
         train_step_fn = self._build_train_step(apply_fns, state_shardings, data_shardings)
         eval_step_fn = self._build_eval_step(apply_fns, state_shardings, data_shardings)
@@ -734,9 +879,13 @@ class CtrlWorldTrainer:
 
             # Gated on the config, not on wandb_run: the rollout and VAE decode
             # are collective, so every host must enter. Only process 0 logs.
+            # FlaxCtrlWorldPipeline has no skeleton route yet, so the in-training
+            # video preview is unavailable in those modes. Gated here rather than
+            # left to fail inside the rollout, and reported once at startup.
             if (
                 int(max_utils.config_get(config, "wandb_video_every", 0)) > 0
                 and getattr(config, "wandb_project", "")
+                and not _is_skeleton_mode(self.train_cfg.action_cond_mode)
                 and (step + 1) % int(config.wandb_video_every) == 0
             ):
                 rng, video_rng = jax.random.split(rng)

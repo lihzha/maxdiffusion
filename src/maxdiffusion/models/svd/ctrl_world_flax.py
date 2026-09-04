@@ -86,11 +86,38 @@ class CtrlWorldTrainConfig:
     #                            per-frame cross-attention path is dropped and
     #                            cross-attention carries the (per-sample) text
     #                            embedding on its own.
-    # Not checkpoint-compatible across modes: 'adaln' adds an action_adaln_proj
-    # parameter subtree and changes what cross-attention receives.
+    #   'skeleton'             — the 7-dim vector actions are NOT used. A rendered
+    #                            2D-kinematic-skeleton video, VAE-encoded by the
+    #                            SAME VAE as the RGB video, is embedded by a
+    #                            separate conv and ADDED onto conv_in's output.
+    #   'skeleton_adaln'       — the same skeleton latents pooled to one vector per
+    #                            frame and summed into t_emb, the site the vector
+    #                            'adaln' route uses. NOTE this site is spatially
+    #                            blind in SVD (t_emb is (B*T, time_embed_dim),
+    #                            with no spatial axis), so the pooling discards
+    #                            exactly what makes a skeleton richer than a
+    #                            7-dim action. Unavoidable, and unlike WAN, whose
+    #                            per-token AdaLN preserved the grid.
+    #   'skeleton_cross_attn'  — the same skeleton latents as a per-frame spatial
+    #                            K/V grid for the SPATIAL cross-attention, with a
+    #                            learned positional embedding standing in for the
+    #                            rotary embeddings SVD does not have.
+    # Not checkpoint-compatible across modes: each adds a different parameter
+    # subtree ('adaln' -> action_adaln_proj, the three skeleton modes -> one
+    # skeleton_* module each and NO action_encoder at all).
     action_cond_mode: str = "cross_attn"
-    # UNet timestep-embedding width; only read in 'adaln' mode (block_out_channels[0]*4).
+    # UNet timestep-embedding width; read in 'adaln' and 'skeleton_adaln' modes
+    # (block_out_channels[0]*4).
     time_embed_dim: int = 1280
+    # conv_in's output width (block_out_channels[0]); read in 'skeleton' mode,
+    # which must match it to be added onto conv_in's output.
+    model_channels: int = 320
+    # Fixed scale on the additive skeleton bias; 'skeleton' only, as in the WAN
+    # arm and OSCAR. The other two skeleton routes deliberately have none.
+    skeleton_embed_alpha: float = 0.1
+    # Spatial downsample of the skeleton K/V grid; 'skeleton_cross_attn' only.
+    # 4 -> 180 keys per frame at 72x40, matching the WAN route's per-frame count.
+    skeleton_cross_attn_stride: int = 4
 
     # Whether the DROID task instruction (the pre-computed CLIP text embedding)
     # is fed to the model at all. False makes the run action-only, which is what
@@ -106,6 +133,61 @@ class CtrlWorldTrainConfig:
     #                  has moved to the timestep embedding. Not CFG-dropped.
     # Costs no parameters either way, so it is safe to flip between runs.
     use_task_instructions: bool = True
+
+
+def _is_skeleton_mode(action_cond_mode: str) -> bool:
+    """Whether the conditioning is the rendered-skeleton video rather than the
+    vector actions. True for all three skeleton routes, which agree on what the
+    dataset must carry and on there being no action encoder, and differ only in
+    where the encoded skeleton is injected."""
+    return action_cond_mode in ("skeleton", "skeleton_adaln", "skeleton_cross_attn")
+
+
+def _skeleton_apply_key(action_cond_mode: str) -> str | None:
+    """The ``apply_fns``/``params`` key of the live skeleton module for this mode.
+
+    Each mode builds a DIFFERENT module (different output shape, different
+    injection site) and only ever one at a time, so a checkpoint from one cannot
+    be restored into another.
+    """
+    return {
+        "skeleton":            "skeleton_embed",
+        "skeleton_adaln":      "skeleton_adaln_proj",
+        "skeleton_cross_attn": "skeleton_cross_attn_embed",
+    }.get(action_cond_mode)
+
+
+def _encode_skeleton(
+    apply_fns: Dict[str, Any],
+    params: Dict[str, Any],
+    action_cond_mode: str,
+    skeleton: jnp.ndarray | None,
+    cfg_rng: jax.Array | None,
+    drop_prob: float,
+) -> jnp.ndarray | None:
+    """Embed skeleton latents into this mode's conditioning tensor.
+
+    ``(B, T, 4, H, W)`` -> whatever the mode's site wants:
+    ``(B*T, H, W, model_channels)`` for ``skeleton``, ``(B*T, time_embed_dim)``
+    for ``skeleton_adaln``, ``(B*T, S, hidden_size)`` for
+    ``skeleton_cross_attn``. Returns ``None`` outside the skeleton modes, which
+    jit traces as an absent pytree so those modes are untouched.
+
+    CFG dropout zeroes the *token contribution* — i.e. skips the injection — for
+    a ``drop_prob`` fraction of samples, which is the true no-conditioning state.
+    Zeroing the skeleton *latents* instead would not be: an empty (all-black)
+    skeleton frame encodes to a perfectly ordinary nonzero latent, so a zero
+    latent is off-manifold input rather than an absent condition. Pass
+    ``cfg_rng=None`` (eval, and the cond branch of a guided rollout) to skip it.
+    """
+    key = _skeleton_apply_key(action_cond_mode)
+    if key is None or skeleton is None:
+        return None
+    tokens = apply_fns[key]({"params": params[key]}, skeleton)
+    if cfg_rng is not None and drop_prob > 0.0:
+        keep = jax.random.uniform(cfg_rng, (tokens.shape[0],) + (1,) * (tokens.ndim - 1)) >= drop_prob
+        tokens = tokens * keep.astype(tokens.dtype)
+    return tokens
 
 
 def _build_concat_stream(
@@ -236,8 +318,54 @@ def action_world_train_step(
     condition_latent = condition_latent / vae_scaling_factor
 
     # 2. Per-frame action embedding, routed by action_cond_mode.
+    skeleton_mode = _is_skeleton_mode(cfg.action_cond_mode)
     adaln = cfg.action_cond_mode == "adaln"
-    if adaln:
+    skeleton_hidden_states = None
+    if skeleton_mode:
+        # No action encoder in these modes — the conditioning is the rendered
+        # skeleton video, and the vector actions are unused. CFG drops the
+        # SKELETON here, which is what a guided rollout's uncond branch drops too.
+        skel_tokens = _encode_skeleton(
+            apply_fns, params, cfg.action_cond_mode,
+            batch.get("skeleton", None), rng_action_drop, cfg.cfg_drop_prob,
+        )
+        if skel_tokens is None:
+            raise ValueError(
+                f"action_cond_mode={cfg.action_cond_mode!r} needs batch['skeleton']; "
+                "the dataset must be built with load_skeleton=True on a dataset "
+                "carrying skeleton_cam0/1/2."
+            )
+        # Text, when enabled, is tiled to the cross-attention width exactly as
+        # the vector routes tile it.
+        if text_embeds is not None and cfg.text_embed_dim is not None:
+            text_ctx = tile_text_to_hidden(
+                text_embeds, cfg.hidden_size, cfg.text_embed_dim
+            )                                                    # (B, 1, hidden)
+        else:
+            text_ctx = jnp.zeros((b, 1, cfg.hidden_size), dtype=skel_tokens.dtype)
+        text_ctx = jnp.repeat(text_ctx.astype(skel_tokens.dtype), t_total, axis=0)
+
+        if cfg.action_cond_mode == "skeleton_cross_attn":
+            # The skeleton IS the cross-attention K/V. Unlike WAN — whose
+            # frame-locked (B*F, K, D) reshape leaves no room for a second
+            # sequence, forcing the instruction to be POOLED onto the action
+            # tokens — SVD's context is inherently per-(sample, frame) already,
+            # so the full text token simply rides alongside the grid as one extra
+            # key. Prepended, and never CFG-dropped, so it is identical in both
+            # guidance branches and cancels out of the delta.
+            encoder_hidden_states = jnp.concatenate([text_ctx, skel_tokens], axis=1)
+            action_hidden_states = None
+        else:
+            # 'skeleton' and 'skeleton_adaln' leave cross-attention free, so it
+            # carries the instruction on its own (or zeros), exactly as 'adaln'
+            # does.
+            encoder_hidden_states = text_ctx
+            if cfg.action_cond_mode == "skeleton_adaln":
+                action_hidden_states = skel_tokens        # (B*T, time_embed_dim)
+            else:
+                action_hidden_states = None
+                skeleton_hidden_states = skel_tokens      # (B*T, H, W, model_ch)
+    elif adaln:
         # Action-only encoder output: text is NOT folded in here, it goes to
         # cross-attention on its own below. Feeding text into both routes would
         # double-count it.
@@ -335,10 +463,12 @@ def action_world_train_step(
         added_cond_kwargs={"adm_vector": adm_vec},
         image_only_indicator=image_only_indicator,
         num_frames=t_total,
-        # adaln already flattened its (per-sample text) context to (B*T, S, C),
-        # so the per-frame reshape must be off; cross_attn mode still needs it.
-        frame_level_cond=not adaln,
+        # adaln and all three skeleton modes hand cross-attention a context that
+        # is ALREADY flattened to (B*T, S, C), so the per-frame reshape must be
+        # off; only the vector cross_attn route still needs it.
+        frame_level_cond=not (adaln or skeleton_mode),
         action_hidden_states=action_hidden_states,
+        skeleton_hidden_states=skeleton_hidden_states,
     ).sample  # (B*F, 4, H, W)
     v_pred = v_pred.reshape((b, t_total) + v_pred.shape[1:])
 

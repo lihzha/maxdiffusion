@@ -164,13 +164,32 @@ class FlaxSpatialVideoTransformer(nn.Module):
   ) -> jnp.ndarray:
     """From (B*T, S, C_ctx) pick frame-0 per batch then repeat over H*W.
 
-    Result shape ``(B*H*W, S, C_ctx)``. Matches sgm's
+    Result shape ``(B*H*W, 1 or S, C_ctx)``. Matches sgm's
     ``time_context_first_timestep = context[::timesteps]; repeat(..., n=h*w)``.
+
+    The frame-0 slice is inherited from sgm/diffusers, where the context is a
+    single pooled CLIP image embedding identical across frames, so slicing was a
+    no-op. It stays faithful here, but note what it means once the context is
+    per-frame (Ctrl-World's action tokens, or a skeleton grid): the temporal
+    blocks see only latent frame 0's conditioning, whatever the other frames
+    carry.
+
+    Multi-token contexts are mean-pooled to a single key first. That matters for
+    ``action_cond_mode='skeleton_cross_attn'``, whose context is a 180-token
+    spatial grid: without pooling, every temporal block would attend
+    ``(B*H*W, T)`` queries over 180 keys drawn from ONE frame's grid — at the
+    shallowest stage that is millions of extra pairs per sample to read a
+    spatially-scrambled snapshot of frame 0, which is cost without information.
+    Pooling keeps the temporal branch at exactly the single key it has always
+    had, so the skeleton grid is spent where it is aligned with the queries: the
+    spatial blocks.
     """
     bt, s, c_ctx = context.shape
     batch = bt // num_frames
     context = context.reshape(batch, num_frames, s, c_ctx)
     context_first = context[:, 0]  # (B, S, C_ctx)
+    if s > 1:
+      context_first = jnp.mean(context_first, axis=1, keepdims=True)  # (B, 1, C_ctx)
     # Repeat each row H*W times: [b0,b0,..,b0, b1,b1,..,b1, ...]
     return jnp.repeat(context_first, h * w, axis=0)
 

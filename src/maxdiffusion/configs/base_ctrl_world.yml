@@ -271,7 +271,73 @@ ctrl_his_cond_zero: False
 # Adds an action_adaln_proj parameter subtree, so checkpoints are NOT compatible
 # across modes. Rejected together with action_encoder_init_path: those upstream
 # weights were trained for the cross-attention route.
+#   'skeleton'             — the 7-dim vector actions are NOT used at all.
+#                             Conditioning is a rendered 2D-kinematic-skeleton
+#                             video, encoded by the SAME VAE as the RGB video so
+#                             the two latent grids are element-for-element
+#                             aligned, embedded by a separate zero-init conv and
+#                             ADDED onto conv_in's output. SVD has no patch
+#                             embedding, so conv_in's output is the analogue of
+#                             WAN's patchified tokens: the earliest point that is
+#                             in feature space rather than latent space. Scaled by
+#                             skeleton_embed_alpha. No action encoder is built.
+#   'skeleton_adaln'       — the same skeleton latents pooled to ONE vector per
+#                             frame and summed into t_emb, the site the vector
+#                             'adaln' route uses, so "adaln" names one site
+#                             regardless of representation.
+#                             IMPORTANT ASYMMETRY vs the WAN arm: SVD's t_emb is
+#                             (B*T, time_embed_dim) with no spatial axis, so the
+#                             skeleton grid MUST be collapsed here. That discards
+#                             exactly what makes a skeleton richer than a 7-dim
+#                             action, which makes this the weakest of the three
+#                             skeleton routes a priori. WAN's per-token AdaLN had
+#                             a spatial grid to land in and needed no pooling, so
+#                             a WAN-vs-SVD skeleton_adaln comparison is NOT
+#                             apples to apples. It is still the cell that
+#                             isolates "does the site matter" against the vector
+#                             adaln run, holding the site fixed.
+#   'skeleton_cross_attn'  — the same skeleton latents as a per-frame spatial K/V
+#                             grid for the SPATIAL cross-attention
+#                             (skeleton_cross_attn_stride=4 -> 180 keys/frame at
+#                             72x40, matching the WAN route's per-frame count).
+#                             Frame locking is free: SVD's context is already
+#                             (B*T, S, C), so frame k can only see frame k's keys,
+#                             where WAN needed an explicit reshape.
+#                             Alignment is a LEARNED positional embedding on the
+#                             keys, not RoPE: SVD has no rotary embeddings
+#                             anywhere, so the WAN route's parameter-free
+#                             alignment has nothing to reuse. Note the queries are
+#                             a different grid size at each of the three
+#                             cross-attention stages while these keys are one
+#                             fixed grid, so at two of the three the model must
+#                             learn a resampling rather than an identity.
+#                             With use_task_instructions=True the full text token
+#                             rides alongside the grid as one extra key — SVD does
+#                             not need WAN's pooled-bias workaround, because its
+#                             context is inherently per-frame.
+# All three skeleton modes require a dataset carrying skeleton_cam0/1/2 beside
+# latent_cam0/1/2, encoded with the SVD VAE (NOT the WAN one — different channel
+# count and downsample). None builds an action_encoder, so action_dim and
+# action_encoder_init_path stop applying.
+# The in-training W&B video preview is skipped in the skeleton modes
+# (FlaxCtrlWorldPipeline has no skeleton route yet); training and eval are
+# unaffected.
 action_cond_mode: 'cross_attn'
+
+# Additive skeleton route only ('skeleton'). Fixed scale on the bias added onto
+# conv_in's output. The conv is zero-init so step 0 is exactly the no-skeleton
+# baseline whatever alpha is; alpha's real job is scaling the gradient into that
+# kernel, capping how fast the skeleton path ramps up out of zero. 0.1 matches
+# OSCAR's additional_embed_alpha and the WAN arm. Ignored by the other two
+# skeleton routes, which deliberately have no alpha.
+skeleton_embed_alpha: 0.1
+
+# Cross-attention skeleton route only ('skeleton_cross_attn'). Spatial downsample
+# of the skeleton key grid: 4 -> (72/4)*(40/4) = 180 keys per frame. Raising it
+# cuts cross-attention cost quadratically in the key count; 2 gives 720
+# keys/frame, which at the shallowest stage is roughly a quarter of a
+# self-attention. Must divide the latent height and width.
+skeleton_cross_attn_stride: 4
 
 # Whether the DROID task instruction (the pre-computed CLIP text embedding in
 # the batch) reaches the model at all. False makes the run action-only.

@@ -406,6 +406,7 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
       cross_attention_kwargs: Optional[Union[Dict, FrozenDict]] = None,
       frame_level_cond: bool = False,
       action_hidden_states: Optional[jnp.ndarray] = None,
+      skeleton_hidden_states: Optional[jnp.ndarray] = None,
   ) -> Union[FlaxVideoUNetOutput, Tuple]:
     # 1. time
     if not isinstance(timesteps, jnp.ndarray):
@@ -460,6 +461,24 @@ class FlaxVideoUNet(nn.Module, FlaxModelMixin, ConfigMixin):
     # 3. conv_in (NCHW -> NHWC)
     sample = jnp.transpose(sample, (0, 2, 3, 1))
     sample = self.conv_in(sample)
+
+    # 3b. Additive skeleton conditioning (action_cond_mode='skeleton'). The
+    # rendered-skeleton latents, embedded by a *separate* conv living outside
+    # this model (see FlaxSkeletonPatchEmbed) and already alpha-scaled, are added
+    # onto conv_in's output. SVD has no patch embedding, so this is the analogue
+    # of WAN's "add onto the patchified video tokens": the earliest point in the
+    # network that is in feature space rather than latent space, injected once,
+    # with the residual stream carrying it the rest of the way. Kept out of the
+    # noisy latent's own channels so the regression target stays recoverable from
+    # the input. The caller owns the conv, the alpha and the CFG mask.
+    if skeleton_hidden_states is not None:
+      if skeleton_hidden_states.shape != sample.shape:
+        raise ValueError(
+            "FlaxVideoUNet: skeleton_hidden_states must match conv_in's output "
+            f"{sample.shape} (B*T, H, W, model_channels), got "
+            f"{skeleton_hidden_states.shape}"
+        )
+      sample = sample + skeleton_hidden_states.astype(sample.dtype)
 
     # 4. down
     down_block_res_samples = (sample,)

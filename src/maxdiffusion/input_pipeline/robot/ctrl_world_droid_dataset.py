@@ -41,6 +41,18 @@ _FEATURE_DESCRIPTION = {
     "success":        tf.io.FixedLenFeature([], tf.int64),
 }
 
+# Only present in datasets built with the skeleton-rendering pass (e.g.
+# gs://v6_east1d/datasets/droid_ctrl_world_skeleton). Kept out of the base spec
+# so a non-skeletal dataset still parses — tf.io.parse_single_example raises on a
+# declared-but-absent FixedLenFeature, so the spec is assembled per-instance from
+# load_skeleton. Mirrors the WAN dataset's _SKEL_FEATURES.
+_SKEL_FEATURES = {
+    "skeleton_cam0": tf.io.FixedLenFeature([], tf.string),
+    "skeleton_cam1": tf.io.FixedLenFeature([], tf.string),
+    "skeleton_cam2": tf.io.FixedLenFeature([], tf.string),
+}
+_SKEL_KEYS = ("skeleton_cam0", "skeleton_cam1", "skeleton_cam2")
+
 
 def _configure_tf_for_jax() -> None:
     tf.config.set_visible_devices([], "GPU")
@@ -116,9 +128,19 @@ class CtrlWorldDroidLatentDataset:
         shuffle: bool = True,
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
+        load_skeleton: bool = False,
     ):
         _configure_tf_for_jax()
         tf.random.set_seed(seed)
+
+        # Rendered-skeleton latents, read only when a skeleton action_cond_mode
+        # is active. They must come from the SAME VAE as the RGB latents, or the
+        # additive and adaln routes are not well defined — see
+        # models/svd/skeleton_encoder_flax.
+        self._load_skeleton = load_skeleton
+        self._feature_description = dict(_FEATURE_DESCRIPTION)
+        if load_skeleton:
+            self._feature_description.update(_SKEL_FEATURES)
 
         self.num_history = num_history
         self.num_frames = num_frames
@@ -180,12 +202,20 @@ class CtrlWorldDroidLatentDataset:
     # ── Trajectory parser ──────────────────────────────────────────────────────
 
     def _parse(self, example: tf.Tensor) -> dict:
-        f = tf.io.parse_single_example(example, _FEATURE_DESCRIPTION)
+        f = tf.io.parse_single_example(example, self._feature_description)
         cam0 = tf.io.parse_tensor(f["latent_cam0"], out_type=tf.float16)
         cam1 = tf.io.parse_tensor(f["latent_cam1"], out_type=tf.float16)
         cam2 = tf.io.parse_tensor(f["latent_cam2"], out_type=tf.float16)
         # (T_5hz, 4, H_per_cam, W) → stacked vertically along the H axis.
         latent_stacked = tf.cast(tf.concat([cam0, cam1, cam2], axis=-2), tf.float32)
+
+        skeleton_stacked = None
+        if self._load_skeleton:
+            # Same dtype, same 3-camera H-concat and same VAE as the RGB
+            # latents, so the two grids are element-for-element aligned. That
+            # alignment is what makes the additive route well defined at all.
+            skel = [tf.io.parse_tensor(f[k], out_type=tf.float16) for k in _SKEL_KEYS]
+            skeleton_stacked = tf.cast(tf.concat(skel, axis=-2), tf.float32)
 
         cart = tf.io.parse_tensor(f["cartesian"], out_type=tf.float32)
         grip = tf.io.parse_tensor(f["gripper"], out_type=tf.float32)
@@ -194,7 +224,7 @@ class CtrlWorldDroidLatentDataset:
         text_embed = tf.io.parse_tensor(f["text_embed"], out_type=tf.float32)
         text_embed = tf.reshape(text_embed, [self.text_embed_dim])
 
-        return {
+        out = {
             "latent_stacked": latent_stacked,
             "state":          state,
             "text_embed":     text_embed,
@@ -202,6 +232,9 @@ class CtrlWorldDroidLatentDataset:
             "traj_len_15hz":  f["traj_len_15hz"],
             "episode_id":     f["episode_id"],
         }
+        if skeleton_stacked is not None:
+            out["skeleton_stacked"] = skeleton_stacked
+        return out
 
     # ── Trajectory → windows ───────────────────────────────────────────────────
 
@@ -275,11 +308,19 @@ class CtrlWorldDroidLatentDataset:
         latent.set_shape([T_static, None, None, None])
         action.set_shape([T_static, self.action_dim])
 
-        return {
+        out = {
             "latent":      latent,
             "action":      action,
             "text_embeds": traj["text_embed"],
         }
+        if self._load_skeleton:
+            # Gathered with the SAME rgb_id as the video latents — including the
+            # strided/clipped history indices — so the skeleton window lines up
+            # frame for frame with the latent window it conditions.
+            skeleton = tf.gather(traj["skeleton_stacked"], rgb_id, axis=0)
+            skeleton.set_shape([T_static, None, None, None])
+            out["skeleton"] = skeleton
+        return out
 
     # ── Iterator protocol ──────────────────────────────────────────────────────
 
@@ -330,8 +371,16 @@ class CtrlWorldDroidRolloutDataset(CtrlWorldDroidLatentDataset):
         down_sample: int = 3,
         batch_size: int = 1,
         min_traj_len_5hz: int = 2,
+        load_skeleton: bool = False,
     ):
         _configure_tf_for_jax()
+
+        # This class defines its own __init__ rather than calling the base one,
+        # so the skeleton feature spec has to be assembled here too.
+        self._load_skeleton = load_skeleton
+        self._feature_description = dict(_FEATURE_DESCRIPTION)
+        if load_skeleton:
+            self._feature_description.update(_SKEL_FEATURES)
 
         if window_frames <= 0:
             raise ValueError("window_frames must be > 0")
@@ -392,9 +441,17 @@ class CtrlWorldDroidRolloutDataset(CtrlWorldDroidLatentDataset):
         latent.set_shape([W, None, None, None])
         action.set_shape([W, self.action_dim])
 
-        return {
+        out = {
             "latent":        latent,
             "action":        action,
             "text_embeds":   traj["text_embed"],
             "n_real_frames": tf.minimum(T5, W),
         }
+        if self._load_skeleton:
+            # Same clamped gather as the latents, so a short episode's skeleton
+            # is padded by repeating its last frame exactly as the video is, and
+            # trimming to n_real_frames drops both together.
+            skeleton = tf.gather(traj["skeleton_stacked"], rgb_id, axis=0)
+            skeleton.set_shape([W, None, None, None])
+            out["skeleton"] = skeleton
+        return out
