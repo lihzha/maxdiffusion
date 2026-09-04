@@ -549,6 +549,14 @@ skeleton_render_native: True
 skeleton_draw_gripper: True   # EE axes + the two Robotiq fingers
 # DROID reports gripper *closedness* (0 = open); the renderer wants openness.
 skeleton_gripper_invert: True
+
+# Optional JSON {camera_serial: [x,y,z,rx,ry,rz]} replacing the camera extrinsics the
+# h5 reports, for captures whose recorded calibration is a placeholder rather than a
+# measurement (the Ctrl-World OOD benchmark ships one shared 6-vector for both
+# exterior ZEDs). Serials absent from the file keep the h5 value, so the wrist — whose
+# per-frame extrinsics are genuine — is left alone. Empty = use the h5 unchanged,
+# which is correct for DROID.
+skeleton_extrinsics_path: ''
 # Nominal ZED left-camera pinhole at 1280x720 (raw DROID stores no intrinsics;
 # these are the values in OSCAR's own demo sample). Rescaled per axis to the
 # canvas actually drawn on.

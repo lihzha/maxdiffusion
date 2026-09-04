@@ -475,6 +475,35 @@ max_episodes: -1
 rgb_skip: 3
 # Cap on kept (post-skip) latent frames per episode; -1 = whole episode.
 max_frames: -1
+
+# ── Skeleton conditioning (droid_to_ctrl_world_tfrecords.py) ──────────────────
+# Off by default: turning it on adds skeleton_cam0/1/2 latents alongside
+# latent_cam0/1/2, rendered from the robot's joint angles with OSCAR's reference
+# code and encoded with the SAME SVD VAE, so a skeleton latent is the exact
+# counterpart of its RGB latent. Doubles the VAE work per episode and roughly
+# doubles the bytes per record. Existing readers parse a fixed feature dict and
+# ignore the extra keys, so these shards stay backward compatible.
+ctrl_world_skeleton: False
+skeleton_render_module: '/n/fs/cat10301/projects/oscar-public/demo/render_skeleton.py'
+skeleton_urdf_path: '/n/fs/cat10301/projects/oscar-public/demo/assets/panda_robotiq.urdf'
+# Draw at the video's native size then INTER_AREA-resize, matching what
+# load_video_frames does to the RGB frames so the two land on the same pixels.
+skeleton_render_native: True
+skeleton_draw_gripper: True   # EE axes + the two Robotiq fingers
+# Raw DROID reports gripper *closedness*; the renderer wants openness.
+skeleton_gripper_invert: True
+# Nominal ZED pinhole at 1280x720 (OSCAR's demo value); rescaled per axis.
+skeleton_fx: 530.0
+skeleton_fy: 530.0
+skeleton_cx: 640.0
+skeleton_cy: 360.0
+# Optional JSON {camera_serial: [x,y,z,rx,ry,rz]} replacing the extrinsics the h5
+# reports, for captures whose recorded calibration is a placeholder. Serials absent
+# from the file keep the h5 value. Empty = use the h5, correct for DROID.
+skeleton_extrinsics_path: ''
+# Episodes to re-render + re-encode in verify_skeleton_shards.py. Each one costs a
+# full render and 3 VAE encodes, so a handful is the point — this is a spot check.
+verify_episodes: 3
 prefetch_workers: 8
 # Frames per VAE encode call. One compiled shape; higher = less dispatch overhead.
 # Data-affecting: the posterior noise draw is keyed per padded chunk, so changing
