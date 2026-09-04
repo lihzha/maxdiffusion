@@ -71,6 +71,15 @@ from maxdiffusion.models.svd.action_encoder_flax import (
     FlaxActionAdaLNProjector,
     FlaxActionEncoder,
 )
+from maxdiffusion.models.svd.ctrl_world_flax import (
+    _is_skeleton_mode,
+    _skeleton_apply_key,
+)
+from maxdiffusion.models.svd.skeleton_encoder_flax import (
+    FlaxSkeletonAdaLNProjector,
+    FlaxSkeletonCrossAttnEmbed,
+    FlaxSkeletonPatchEmbed,
+)
 from maxdiffusion.models.svd.video_autoencoder_flax import FlaxSVDAutoencoderKL
 from maxdiffusion.models.svd.video_unet_flax import FlaxVideoUNet
 from maxdiffusion.pipelines.svd.pipeline_flax_ctrl_world import FlaxCtrlWorldPipeline
@@ -186,11 +195,13 @@ def _restore_params(ckpt_dir: str, step, template: dict):
     if wanted != on_disk:
         raise KeyError(
             f"checkpoint {ckpt_dir} step {target} holds params {sorted(on_disk)} but "
-            f"this config asks for {sorted(wanted)}. 'action_adaln_proj' is present "
-            "only in checkpoints trained with action_cond_mode=adaln, so pass the "
-            "mode the checkpoint was trained with (or point checkpoint_dir at the "
-            "matching run) — running adaln weights through cross_attn, or the "
-            "reverse, would silently drop the action signal."
+            f"this config asks for {sorted(wanted)}. Every action_cond_mode writes a "
+            "different subtree — cross_attn: action_encoder; adaln: + "
+            "action_adaln_proj; skeleton / skeleton_adaln / skeleton_cross_attn: "
+            "skeleton_embed / skeleton_adaln_proj / skeleton_cross_attn_embed and NO "
+            "action_encoder at all — so pass the mode the checkpoint was trained with "
+            "(or point checkpoint_dir at the matching run). Running one route's "
+            "weights through another would silently drop the conditioning signal."
         )
     restored = mgr.restore(
         target, args=ocp.args.Composite(params=ocp.args.StandardRestore(template))
@@ -199,11 +210,17 @@ def _restore_params(ckpt_dir: str, step, template: dict):
 
 
 def _load_modules(config, mesh, dtype, weights_dtype):
-    """UNet + VAE + action encoder (+ adaln projector), architecture from config.
+    """UNet + VAE + the conditioning modules this ``action_cond_mode`` trained.
 
     The UNet is built exactly as ``CtrlWorldTrainer._load_modules`` builds it, so
     the restored params tree lines up leaf for leaf. The VAE is never trained, so
     it always comes from ``pretrained_model_name_or_path``.
+
+    Returns ``(unet, unet_params, vae, vae_params, action_encoder, ae_params,
+    cond_extras)``, where ``cond_extras`` maps each extra params key to its
+    ``(module, params)`` pair — the same shape the trainer uses, so the restore
+    template is just ``{"unet": ..., **cond_extras}`` (plus ``action_encoder``
+    outside the skeleton modes, which have no vector-action encoder at all).
     """
     with mesh:
         max_logging.log(
@@ -243,17 +260,59 @@ def _load_modules(config, mesh, dtype, weights_dtype):
             use_safetensors=True,
         )
 
-    action_encoder = FlaxActionEncoder(
-        action_dim=config.action_dim,
-        hidden_size=config.hidden_size,
-        text_embed_dim=config.text_embed_dim,
-        dtype=dtype,
-        weights_dtype=weights_dtype,
-    )
-    # Structure only — every value is overwritten by the checkpoint below.
-    ae_params = action_encoder.init_weights(
-        jax.random.PRNGKey(config.seed), batch=1, num_frames=1
-    )
+    skeleton_mode = _is_skeleton_mode(config.action_cond_mode)
+
+    # No action encoder in the skeleton modes — the conditioning is the rendered
+    # skeleton video and the vector actions are unused, so the trained checkpoint
+    # carries no action_encoder subtree to restore into one. Must mirror
+    # CtrlWorldTrainer._load_modules, which gates it off the same way.
+    action_encoder, ae_params = None, None
+    if not skeleton_mode:
+        action_encoder = FlaxActionEncoder(
+            action_dim=config.action_dim,
+            hidden_size=config.hidden_size,
+            text_embed_dim=config.text_embed_dim,
+            dtype=dtype,
+            weights_dtype=weights_dtype,
+        )
+        # Structure only — every value is overwritten by the checkpoint below.
+        ae_params = action_encoder.init_weights(
+            jax.random.PRNGKey(config.seed), batch=1, num_frames=1
+        )
+
+    cond_extras = {}
+    if skeleton_mode:
+        mode = config.action_cond_mode
+        if mode == "skeleton":
+            skel_mod = FlaxSkeletonPatchEmbed(
+                model_channels=unet.block_out_channels[0],
+                alpha=float(max_utils.config_get(config, "skeleton_embed_alpha", 0.1)),
+                dtype=dtype,
+                weights_dtype=weights_dtype,
+            )
+        elif mode == "skeleton_adaln":
+            skel_mod = FlaxSkeletonAdaLNProjector(
+                time_embed_dim=unet.block_out_channels[0] * 4,
+                dtype=dtype,
+                weights_dtype=weights_dtype,
+            )
+        else:
+            skel_mod = FlaxSkeletonCrossAttnEmbed(
+                hidden_size=config.hidden_size,
+                stride=int(
+                    max_utils.config_get(config, "skeleton_cross_attn_stride", 4)
+                ),
+                latent_height=config.latent_height_per_cam * config.num_views,
+                latent_width=config.width // 8,
+                dtype=dtype,
+                weights_dtype=weights_dtype,
+            )
+        # seed+2 matches the trainer, though every value is overwritten below —
+        # only the tree structure has to line up.
+        cond_extras[_skeleton_apply_key(mode)] = (
+            skel_mod,
+            skel_mod.init_weights(jax.random.PRNGKey(config.seed + 2)),
+        )
 
     adaln = config.action_cond_mode == "adaln"
     if adaln:
@@ -271,22 +330,24 @@ def _load_modules(config, mesh, dtype, weights_dtype):
                 flat_l[k] = jnp.zeros(spec.shape, weights_dtype)
         unet_params = unflatten_dict(flat_l)
 
-    adaln_proj, adaln_params = None, None
     if adaln:
         adaln_proj = FlaxActionAdaLNProjector(
             time_embed_dim=unet.block_out_channels[0] * 4,
             dtype=dtype,
             weights_dtype=weights_dtype,
         )
-        adaln_params = adaln_proj.init_weights(
-            jax.random.PRNGKey(config.seed + 1),
-            batch=1,
-            num_frames=1,
-            hidden_size=action_encoder.hidden_size,
+        cond_extras["action_adaln_proj"] = (
+            adaln_proj,
+            adaln_proj.init_weights(
+                jax.random.PRNGKey(config.seed + 1),
+                batch=1,
+                num_frames=1,
+                hidden_size=action_encoder.hidden_size,
+            ),
         )
 
     return (unet, unet_params, vae, vae_params, action_encoder, ae_params,
-            adaln_proj, adaln_params)
+            cond_extras)
 
 
 def _save_comparison_video(gt_frames, pred_frames, path: str, fps: int) -> None:
@@ -393,14 +454,18 @@ def run(argv: Sequence[str]) -> None:
     mesh = _build_mesh(config)
     t_load = time.perf_counter()
     (unet, unet_params, vae, vae_params, action_encoder, ae_params,
-     adaln_proj, adaln_params) = _load_modules(config, mesh, dtype, weights_dtype)
+     cond_extras) = _load_modules(config, mesh, dtype, weights_dtype)
 
     # ── Restore trained weights ───────────────────────────────────────────────
     adaln = config.action_cond_mode == "adaln"
+    skeleton_mode = _is_skeleton_mode(config.action_cond_mode)
+    skel_key = _skeleton_apply_key(config.action_cond_mode)
     ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, "checkpoints")
-    template = {"unet": unet_params, "action_encoder": ae_params}
-    if adaln:
-        template["action_adaln_proj"] = adaln_params
+    template = {"unet": unet_params}
+    if not skeleton_mode:
+        template["action_encoder"] = ae_params
+    for name, (_mod, mod_params) in cond_extras.items():
+        template[name] = mod_params
     restored, restored_step = _restore_params(
         ckpt_dir, max_utils.config_get(config, "checkpoint_step", -1), template
     )
@@ -421,7 +486,13 @@ def run(argv: Sequence[str]) -> None:
         vae=vae,
         unet=unet,
         action_encoder=action_encoder,
-        action_adaln_proj=adaln_proj,
+        action_adaln_proj=cond_extras.get("action_adaln_proj", (None, None))[0],
+        skeleton_module=cond_extras.get(skel_key, (None, None))[0] if skel_key else None,
+        skeleton_params_key=skel_key,
+        # The skeleton modes have no action encoder, so the pipeline cannot read
+        # the cross-attention / text widths off it — hand them over explicitly.
+        cross_attn_dim=config.hidden_size,
+        text_embed_dim=config.text_embed_dim,
         scheduler=scheduler,
         image_encoder=None,
         feature_extractor=None,
@@ -440,8 +511,9 @@ def run(argv: Sequence[str]) -> None:
         {
             "unet": restored["unet"],
             "vae": vae_params,
-            "action_encoder": restored["action_encoder"],
-            **({"action_adaln_proj": restored["action_adaln_proj"]} if adaln else {}),
+            # Every key the template asked for came back; forwarding by key keeps
+            # this in step with _load_modules instead of restating the routes.
+            **{k: restored[k] for k in restored if k != "unet"},
         },
     )
     max_logging.log(
@@ -461,6 +533,9 @@ def run(argv: Sequence[str]) -> None:
         down_sample=config.ctrl_world_down_sample,
         batch_size=1,
         min_traj_len_5hz=int(max_utils.config_get(config, "eval_min_latent_frames", 2)),
+        # The skeleton modes condition on the rendered-skeleton video, so the
+        # records must carry skeleton_cam0/1/2 and the loader must read them.
+        load_skeleton=skeleton_mode,
     )
 
     max_logging.log(
@@ -490,6 +565,14 @@ def run(argv: Sequence[str]) -> None:
         gt_latents = jnp.asarray(batch["latent"][0], dtype=weights_dtype)   # (horizon, 4, H, W)
         actions = jnp.asarray(batch["action"][0], dtype=weights_dtype)      # (horizon, 7)
         n_real = int(np.asarray(batch["n_real_frames"]).reshape(-1)[0])
+        # (horizon, 4, H, W) — the rendered-skeleton latents for this episode,
+        # indexed by absolute latent frame exactly like `actions`. Conditioning
+        # only: it is never denoised and never written out.
+        skeleton_ep = (
+            jnp.asarray(batch["skeleton"][0], dtype=weights_dtype)
+            if skeleton_mode
+            else None
+        )
         # use_task_instructions=False must reproduce the action-only training
         # setup, so drop the instruction here rather than inside the pipeline.
         text_embeds = (
@@ -524,6 +607,19 @@ def run(argv: Sequence[str]) -> None:
             action_window = jnp.concatenate(
                 [actions[jnp.asarray(hist_ids)], actions[jnp.asarray(fut_ids)]], axis=0
             )[None]                                            # (1, num_history+num_frames, 7)
+            # Same history/future gather as the actions, so the skeleton frames
+            # line up slot for slot with the latents the UNet sees.
+            skeleton_window = (
+                jnp.concatenate(
+                    [
+                        skeleton_ep[jnp.asarray(hist_ids)],
+                        skeleton_ep[jnp.asarray(fut_ids)],
+                    ],
+                    axis=0,
+                )[None]                            # (1, num_history+num_frames, 4, H, W)
+                if skeleton_mode
+                else None
+            )
 
             # Conditioning image = the current observation, i.e. the newest frame
             # in the buffer. Matches training, where the concat stream is built
@@ -546,6 +642,7 @@ def run(argv: Sequence[str]) -> None:
                     image_latent=image_latent,
                     history=history,
                     text_embeds=text_embeds,
+                    skeleton=skeleton_window,
                     num_frames=num_frames,
                     num_history=num_history,
                     num_inference_steps=num_inference_steps,

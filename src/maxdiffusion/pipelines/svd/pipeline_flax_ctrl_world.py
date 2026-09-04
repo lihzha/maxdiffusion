@@ -73,6 +73,10 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         action_encoder: Any,
         scheduler: FlaxEDMEulerScheduler,
         action_adaln_proj: Any = None,
+        skeleton_module: Any = None,
+        skeleton_params_key: Optional[str] = None,
+        cross_attn_dim: Optional[int] = None,
+        text_embed_dim: Optional[int] = None,
         image_encoder: Any = None,
         feature_extractor: Any = None,
         dtype: jnp.dtype = jnp.float32,
@@ -95,6 +99,25 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         # Non-None only for action_cond_mode='adaln' checkpoints, which carry an
         # extra "action_adaln_proj" params subtree.
         self.action_adaln_proj = action_adaln_proj
+        # Non-None only in the three skeleton modes, which drop the action
+        # encoder entirely: whichever of FlaxSkeletonPatchEmbed /
+        # FlaxSkeletonAdaLNProjector / FlaxSkeletonCrossAttnEmbed the run was
+        # trained with, plus the params key it lives under (the value
+        # ``ctrl_world_flax._skeleton_apply_key`` returns for the mode).
+        self.skeleton_module = skeleton_module
+        self.skeleton_params_key = skeleton_params_key
+        # Cross-attention width and text-embedding width. Normally read straight
+        # off the action encoder, but the skeleton modes have none, so the caller
+        # passes them in; keeping them on the instance means the conditioning
+        # code below never has to branch on which route supplied them.
+        self.cross_attn_dim = (
+            action_encoder.hidden_size if action_encoder is not None else cross_attn_dim
+        )
+        self.text_embed_dim = (
+            action_encoder.text_embed_dim
+            if action_encoder is not None
+            else text_embed_dim
+        )
         # jitted samplers keyed by their static signature; see _get_sampler.
         self._sampler_cache: dict = {}
 
@@ -166,6 +189,7 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         concat_stream_all,
         action_hidden_all,
         action_hidden_states_all,
+        skeleton_hidden_states_all,
         adm_vec_all,
         sigmas,
         *,
@@ -174,6 +198,7 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         t_future: int,
         do_cfg: bool,
         adaln: bool,
+        skeleton_mode: bool,
         frame_level_cond: bool,
         num_inference_steps: int,
         min_guidance_scale: float,
@@ -237,8 +262,14 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
                 added_cond_kwargs={"adm_vector": adm_vec_all},
                 image_only_indicator=image_only_indicator,
                 num_frames=t_total,
-                frame_level_cond=(False if adaln else frame_level_cond),
+                # adaln and all three skeleton routes hand cross-attention a
+                # context that is already flattened to (B*T, S, C); mirrors
+                # action_world_train_step's ``not (adaln or skeleton_mode)``.
+                frame_level_cond=(
+                    False if (adaln or skeleton_mode) else frame_level_cond
+                ),
                 action_hidden_states=action_hidden_states_all,
+                skeleton_hidden_states=skeleton_hidden_states_all,
             ).sample  # (b_all*T, 4, H, W)
             v_pred = v_pred.reshape((b_all, t_total) + v_pred.shape[1:])
 
@@ -303,6 +334,7 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         image_latent: Optional[jnp.ndarray] = None,
         history: Optional[jnp.ndarray] = None,
         text_embeds: Optional[jnp.ndarray] = None,
+        skeleton: Optional[jnp.ndarray] = None,
         num_frames: int = 5,
         num_history: int = 6,
         height: int = 192 * 3,
@@ -328,7 +360,10 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
 
         ``action`` has shape ``(B, num_history + num_frames, action_dim)``;
         it is fed through ``self.action_encoder`` to produce the per-frame
-        cross-attention context.
+        cross-attention context. In the three ``skeleton*`` modes ``action`` is
+        ignored entirely and ``skeleton`` — the VAE-encoded rendered-skeleton
+        video, shape ``(B, num_history + num_frames, 4, H/8, W/8)`` — is the
+        conditioning signal instead.
 
         ``history``, when provided, has shape
         ``(B, num_history, 4, H/8, W/8)`` and is prepended on the frame
@@ -345,14 +380,78 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         t_total = t_future + t_history
 
         adaln = action_cond_mode == "adaln"
+        skeleton_mode = action_cond_mode in (
+            "skeleton",
+            "skeleton_adaln",
+            "skeleton_cross_attn",
+        )
         if adaln and self.action_adaln_proj is None:
             raise ValueError(
                 "action_cond_mode='adaln' needs the pipeline to be constructed with "
                 "action_adaln_proj=<FlaxActionAdaLNProjector>."
             )
+        if skeleton_mode and self.skeleton_module is None:
+            raise ValueError(
+                f"action_cond_mode={action_cond_mode!r} needs the pipeline to be "
+                "constructed with skeleton_module=<the module this mode trained> "
+                "and skeleton_params_key=<its params key>."
+            )
+        # Set by the skeleton routes only; the vector routes leave conv_in alone.
+        skeleton_hidden_states_all = None
         # 1. Action conditioning. Mirrors action_world_train_step exactly — any
         #    divergence here silently degrades generation rather than erroring.
-        if adaln:
+        if skeleton_mode:
+            if skeleton is None:
+                raise ValueError(
+                    f"action_cond_mode={action_cond_mode!r} needs skeleton=<(B, T, 4, "
+                    "H, W) encoded skeleton latents>; build the dataset with "
+                    "load_skeleton=True."
+                )
+            b = skeleton.shape[0]
+            skel_tokens = self.skeleton_module.apply(
+                {"params": params[self.skeleton_params_key]}, skeleton
+            )  # (B*T, ...) — shape depends on the route's injection site
+            # Text, when enabled, is tiled to the cross-attention width exactly
+            # as the vector routes tile it, and pre-flattened to (B*T, 1, C)
+            # because the UNet is called with frame_level_cond=False.
+            if text_embeds is not None and self.text_embed_dim is not None:
+                text_ctx = tile_text_to_hidden(
+                    text_embeds, self.cross_attn_dim, self.text_embed_dim
+                )  # (B, 1, C)
+            else:
+                text_ctx = jnp.zeros(
+                    (b, 1, self.cross_attn_dim), dtype=skel_tokens.dtype
+                )
+            text_ctx = jnp.repeat(text_ctx.astype(skel_tokens.dtype), t_total, axis=0)
+            if do_cfg:
+                # Uncond = the skeleton injection SKIPPED, i.e. a zero token
+                # contribution — which is exactly what training's CFG dropout
+                # produces (it multiplies the embedded tokens by 0, it does not
+                # zero the skeleton latents; an all-black skeleton frame encodes
+                # to an ordinary nonzero latent, so zeroing the latent would be
+                # off-manifold input rather than an absent condition).
+                skel_all = jnp.concatenate(
+                    [jnp.zeros_like(skel_tokens), skel_tokens], axis=0
+                )
+                # Text rides on both branches and so cancels out of the guidance
+                # delta, matching training where it is never dropped.
+                text_all = jnp.concatenate([text_ctx, text_ctx], axis=0)
+            else:
+                skel_all, text_all = skel_tokens, text_ctx
+            action_hidden_states_all = None
+            if action_cond_mode == "skeleton_cross_attn":
+                # The skeleton IS the K/V grid; the instruction rides alongside
+                # it as one extra prepended key.
+                action_hidden_all = jnp.concatenate([text_all, skel_all], axis=1)
+            else:
+                # 'skeleton' and 'skeleton_adaln' leave cross-attention free, so
+                # it carries the instruction on its own (or zeros).
+                action_hidden_all = text_all
+                if action_cond_mode == "skeleton_adaln":
+                    action_hidden_states_all = skel_all   # (b_all*T, time_embed_dim)
+                else:
+                    skeleton_hidden_states_all = skel_all  # (b_all*T, H, W, model_ch)
+        elif adaln:
             # Action route carries no text (text goes to cross-attention below),
             # matching training.
             action_hidden = self.action_encoder.apply(
@@ -492,6 +591,7 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
             t_future=t_future,
             do_cfg=do_cfg,
             adaln=adaln,
+            skeleton_mode=skeleton_mode,
             frame_level_cond=frame_level_cond,
             num_inference_steps=num_inference_steps,
             min_guidance_scale=float(min_guidance_scale),
@@ -504,6 +604,7 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
             concat_stream_all,
             action_hidden_all,
             action_hidden_states_all,
+            skeleton_hidden_states_all,
             adm_vec_all,
             scheduler_state.sigmas,
         )

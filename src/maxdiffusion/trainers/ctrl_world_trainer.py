@@ -331,14 +331,6 @@ class CtrlWorldTrainer:
             raise ValueError(
                 f"action_cond_mode={mode!r} is not one of {VALID_ACTION_COND_MODES}."
             )
-        if _is_skeleton_mode(mode) and int(
-            max_utils.config_get(config, "wandb_video_every", 0)
-        ) > 0:
-            max_logging.log(
-                f"[ctrl_world] WARNING: action_cond_mode={mode} — the in-training "
-                "W&B video preview is skipped (FlaxCtrlWorldPipeline has no skeleton "
-                "route yet). Training and eval loss are unaffected."
-            )
         self.dtype = _dtype_from_str(config.activations_dtype)
         self.weights_dtype = _dtype_from_str(config.weights_dtype)
         self.train_cfg = _build_ctrl_world_train_config(config)
@@ -716,8 +708,13 @@ class CtrlWorldTrainer:
             apply_fns[name] = mod.apply
         # Kept for the W&B video rollout, which needs the module objects (not just
         # their apply_fns) to build an inference pipeline.
+        skel_key = _skeleton_apply_key(self.train_cfg.action_cond_mode)
         self._video_modules = (
-            unet, action_encoder, cond_extras.get("action_adaln_proj", (None, None))[0]
+            unet,
+            action_encoder,
+            cond_extras.get("action_adaln_proj", (None, None))[0],
+            cond_extras.get(skel_key, (None, None))[0] if skel_key else None,
+            skel_key,
         )
         self._cond_extra_names = tuple(cond_extras)
         tx, lr_schedule = self._build_optimizer(config.max_train_steps)
@@ -879,13 +876,9 @@ class CtrlWorldTrainer:
 
             # Gated on the config, not on wandb_run: the rollout and VAE decode
             # are collective, so every host must enter. Only process 0 logs.
-            # FlaxCtrlWorldPipeline has no skeleton route yet, so the in-training
-            # video preview is unavailable in those modes. Gated here rather than
-            # left to fail inside the rollout, and reported once at startup.
             if (
                 int(max_utils.config_get(config, "wandb_video_every", 0)) > 0
                 and getattr(config, "wandb_project", "")
-                and not _is_skeleton_mode(self.train_cfg.action_cond_mode)
                 and (step + 1) % int(config.wandb_video_every) == 0
             ):
                 rng, video_rng = jax.random.split(rng)
@@ -980,12 +973,18 @@ class CtrlWorldTrainer:
                 use_safetensors=True,
             )
         sched = config.diffusion_scheduler_config
-        unet, action_encoder, adaln_proj = self._video_modules
+        unet, action_encoder, adaln_proj, skel_mod, skel_key = self._video_modules
         self._video_pipeline = FlaxCtrlWorldPipeline(
             vae=vae,
             unet=unet,
             action_encoder=action_encoder,
             action_adaln_proj=adaln_proj,
+            skeleton_module=skel_mod,
+            skeleton_params_key=skel_key,
+            # No action encoder in the skeleton modes, so the pipeline cannot
+            # read the cross-attention / text widths off it.
+            cross_attn_dim=config.hidden_size,
+            text_embed_dim=config.text_embed_dim,
             scheduler=FlaxEDMEulerScheduler(
                 sigma_min=sched["sigma_min"],
                 sigma_max=sched["sigma_max"],
@@ -1076,13 +1075,16 @@ class CtrlWorldTrainer:
             if config.text_embed_dim else None
         )
 
-        params = {
-            "unet": state.params["unet"],
-            "action_encoder": state.params["action_encoder"],
-            "vae": self._video_vae_params,
-        }
-        if "action_adaln_proj" in state.params:
-            params["action_adaln_proj"] = state.params["action_adaln_proj"]
+        # Forward every trained subtree by key: which ones exist depends on
+        # action_cond_mode (the skeleton modes have no action_encoder at all).
+        params = {k: v for k, v in state.params.items()}
+        params["vae"] = self._video_vae_params
+
+        skeleton = (
+            batch["skeleton"][:n].astype(self.weights_dtype)
+            if _is_skeleton_mode(config.action_cond_mode)
+            else None
+        )
 
         t_start = datetime.datetime.now()
         guidance = float(max_utils.config_get(config, "wandb_video_guidance_scale", 1.0))
@@ -1096,6 +1098,7 @@ class CtrlWorldTrainer:
                 image_latent=latent[:, t_hist],
                 history=latent[:, :t_hist],
                 text_embeds=text_embeds,
+                skeleton=skeleton,
                 num_frames=config.num_frames,
                 num_history=t_hist,
                 num_inference_steps=int(

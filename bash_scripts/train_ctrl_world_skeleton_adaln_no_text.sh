@@ -1,23 +1,28 @@
-# Launch action-conditioned SVD (Ctrl-World) training on TPU with AdaLN action
-# conditioning (action_cond_mode=adaln): action tokens are projected per frame
-# and summed into the UNet's timestep embedding, the per-frame cross-attention
-# route is dropped, and cross-attention carries the text embedding on its own.
-# For the original per-frame cross-attention conditioning use
-# bash_scripts/train_ctrl_world.sh.
+# Launch action-conditioned SVD (Ctrl-World) training on TPU with ADALN
+# skeleton conditioning (action_cond_mode=skeleton_adaln). The 7-dim vector
+# actions are NOT used at all: the conditioning signal is a rendered
+# 2D-kinematic-skeleton video, VAE-encoded to latents offline and shipped in the
+# TFRecords as skeleton_cam0/1/2. Those latents are downsampled by two stride-2
+# convs, globally mean-pooled to ONE vector per frame, and summed into the
+# UNet's timestep embedding (width block_out_channels[0]*4 = 1280) through a
+# zero-init Dense. Cross-attention is left free and carries the text embedding
+# on its own (zeros here, since this is the no-text arm).
 #
-# action_cond_mode=adaln ALSO switches every spatial and temporal resnet from
-# the default additive time-embedding injection (``norm2(h + shift)``, whose
-# shift GroupNorm largely normalises away) to AdaGN
-# (``norm2(h) * (1 + scale) + shift``). That is deliberate: t_emb is the action
-# pathway in this mode, and AdaGN is the UNet analogue of the multiplicative
-# AdaLN modulation the WAN arm uses, so the two arms are comparable. It costs
-# +51.6M params (one zero-init Dense per resnet, +3.4%) and ~0.6 GB of extra
-# fp32 AdamW state. cross_attn mode is unaffected and stays bit-identical to
-# pretrained SVD.
+# EXPECTED TO BE THE WEAKEST of the three skeleton routes, by construction:
+# SVD's t_emb site is per-(sample, frame) and has no spatial axis, so the
+# pooling throws away exactly the spatial structure that makes a skeleton
+# richer than a 7-dim action vector. It is included because it is the direct
+# analogue of the WAN arm's `skeleton_adaln` mode, and the gap between it and
+# `skeleton_cross_attn` is the measurement of interest.
 #
-# NOT checkpoint-compatible with adaln runs from before AdaGN landed: the tree
-# gains 88 adagn_scale_proj leaves, so an old checkpoint fails the orbax restore.
-# Start a fresh RUN_TAG (section 3b).
+# AdaGN is NOT enabled in this mode — that is specific to action_cond_mode=adaln
+# (the VECTOR-action AdaLN route). Here t_emb is still injected additively, so
+# the UNet stays structurally identical to pretrained SVD apart from the one
+# added skeleton_adaln_proj subtree.
+#
+# NOT checkpoint-compatible with any other action_cond_mode: this tree carries a
+# `skeleton_adaln_proj` subtree and NO `action_encoder` at all. Start a fresh
+# RUN_TAG (section 3b).
 #
 # Pre-requisites (one-time):
 #   1. Pre-encoded data uploaded to gs://<bucket>/ctrl_world_droid/{train,val}/
@@ -199,7 +204,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     checkpoint_max_to_keep=3 \
     reshuffle_data_on_restart=True \
     wandb_project='svd-ac-skeleton-adaln-no-text' \
-    wandb_video_every=0 \
+    wandb_video_every=2000 \
     use_task_instructions=False 
 
 # --- 7. Unmount ---

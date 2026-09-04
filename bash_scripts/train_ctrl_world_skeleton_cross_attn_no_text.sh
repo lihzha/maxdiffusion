@@ -1,23 +1,33 @@
-# Launch action-conditioned SVD (Ctrl-World) training on TPU with AdaLN action
-# conditioning (action_cond_mode=adaln): action tokens are projected per frame
-# and summed into the UNet's timestep embedding, the per-frame cross-attention
-# route is dropped, and cross-attention carries the text embedding on its own.
-# For the original per-frame cross-attention conditioning use
-# bash_scripts/train_ctrl_world.sh.
+# Launch action-conditioned SVD (Ctrl-World) training on TPU with CROSS-ATTENTION
+# skeleton conditioning (action_cond_mode=skeleton_cross_attn). The 7-dim vector
+# actions are NOT used at all: the conditioning signal is a rendered
+# 2D-kinematic-skeleton video, VAE-encoded to latents offline and shipped in the
+# TFRecords as skeleton_cam0/1/2. Those latents become a per-frame SPATIAL K/V
+# grid for the spatial cross-attention — strided by skeleton_cross_attn_stride
+# (4 -> 180 keys per frame at 72x40, matching the WAN route's per-frame count) —
+# so every query pixel can attend to whichever skeleton keypoint is near it.
+# The text embedding rides alongside the grid as one extra prepended key (zeros
+# here, since this is the no-text arm) and is never CFG-dropped, so it cancels
+# out of the guidance delta.
 #
-# action_cond_mode=adaln ALSO switches every spatial and temporal resnet from
-# the default additive time-embedding injection (``norm2(h + shift)``, whose
-# shift GroupNorm largely normalises away) to AdaGN
-# (``norm2(h) * (1 + scale) + shift``). That is deliberate: t_emb is the action
-# pathway in this mode, and AdaGN is the UNet analogue of the multiplicative
-# AdaLN modulation the WAN arm uses, so the two arms are comparable. It costs
-# +51.6M params (one zero-init Dense per resnet, +3.4%) and ~0.6 GB of extra
-# fp32 AdamW state. cross_attn mode is unaffected and stays bit-identical to
-# pretrained SVD.
+# This is the SVD counterpart of the WAN arm's `skeleton_cross_attn` mode
+# (bash_scripts/train_ac_wan_skeleton_cross_attn_no_text.sh). Two
+# architecture-forced divergences:
+#   * SVD has no RoPE, so query/key spatial alignment comes from a LEARNED
+#     zero-init positional embedding on the keys rather than from a relative
+#     rotation.
+#   * SVD's cross-attention context is already per-(sample, frame), so the text
+#     token fits as a real extra key. WAN's frame-locked (B*F, K, D) reshape
+#     leaves no room for one, which is why the WAN route has to POOL the
+#     instruction onto the skeleton tokens instead.
 #
-# NOT checkpoint-compatible with adaln runs from before AdaGN landed: the tree
-# gains 88 adagn_scale_proj leaves, so an old checkpoint fails the orbax restore.
-# Start a fresh RUN_TAG (section 3b).
+# AdaGN is NOT enabled in this mode (it is specific to action_cond_mode=adaln),
+# so the UNet stays structurally identical to pretrained SVD apart from the one
+# added skeleton_cross_attn_embed subtree.
+#
+# NOT checkpoint-compatible with any other action_cond_mode: this tree carries a
+# `skeleton_cross_attn_embed` subtree and NO `action_encoder` at all. Start a
+# fresh RUN_TAG (section 3b).
 #
 # Pre-requisites (one-time):
 #   1. Pre-encoded data uploaded to gs://<bucket>/ctrl_world_droid/{train,val}/
@@ -206,7 +216,7 @@ python src/maxdiffusion/train_ctrl_world.py \
     checkpoint_max_to_keep=3 \
     reshuffle_data_on_restart=True \
     wandb_project='svd-ac-skeleton-cross-attn-no-text' \
-    wandb_video_every=0 \
+    wandb_video_every=2000 \
     use_task_instructions=False 
 
 # --- 7. Unmount ---

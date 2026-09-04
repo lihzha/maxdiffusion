@@ -319,9 +319,10 @@ ctrl_his_cond_zero: False
 # latent_cam0/1/2, encoded with the SVD VAE (NOT the WAN one — different channel
 # count and downsample). None builds an action_encoder, so action_dim and
 # action_encoder_init_path stop applying.
-# The in-training W&B video preview is skipped in the skeleton modes
-# (FlaxCtrlWorldPipeline has no skeleton route yet); training and eval are
-# unaffected.
+# All three are supported end to end: training, the in-training W&B video
+# preview, and generate_ctrl_world.py rollout inference. The eval/inference
+# dataset must carry the skeleton features too — the skeleton IS the
+# conditioning signal at inference time, it is not generated.
 action_cond_mode: 'cross_attn'
 
 # Additive skeleton route only ('skeleton'). Fixed scale on the bias added onto
