@@ -394,6 +394,29 @@ class SvdTest(unittest.TestCase):
     # Unset -> the ordinary block, bit for bit.
     np.testing.assert_array_equal(np.asarray(plain), np.asarray(empty_kwargs))
 
+  def test_temporal_context_is_view_locked(self):
+    from maxdiffusion.models.svd.video_attention_flax import FlaxSpatialVideoTransformer
+
+    b, t, v, h, w = 2, 3, 3, 6, 2
+    ctx = jax.random.normal(jax.random.key(0), (b * t, v * 2, 4))
+    module = FlaxSpatialVideoTransformer(in_channels=8, n_heads=1, d_head=8, context_dim=4)
+    out = module.apply({}, ctx, t, h, w, v, method=FlaxSpatialVideoTransformer._build_time_context)
+    # Each view's (h // v) * w positions get the mean of that view's frame-0 keys only.
+    frame0 = np.asarray(ctx).reshape(b, t, v, 2, 4)[:, 0].mean(axis=2)
+    expect = np.repeat(frame0.reshape(b * v, 1, 4), (h // v) * w, axis=0)
+    np.testing.assert_allclose(np.asarray(out), expect, atol=1e-6)
+
+  def test_batch_cast_keeps_pose_geometry_float32(self):
+    from maxdiffusion.trainers.ctrl_world_trainer import _cast_batch
+
+    batch = {k: jnp.ones((1, 2), jnp.float32) for k in ("latent", "cam_pose", "ee_cartesian")}
+    batch["n"] = jnp.ones((1,), jnp.int32)
+    cast = _cast_batch(batch, jnp.bfloat16)
+    self.assertEqual(cast["latent"].dtype, jnp.bfloat16)
+    self.assertEqual(cast["cam_pose"].dtype, jnp.float32)
+    self.assertEqual(cast["ee_cartesian"].dtype, jnp.float32)
+    self.assertEqual(cast["n"].dtype, jnp.int32)
+
   def test_train_step_all_cam_modes(self):
     from maxdiffusion.models.svd.camera_action_encoder_flax import build_cam_action_modules
     from maxdiffusion.models.svd.ctrl_world_flax import CtrlWorldTrainConfig, action_world_train_step

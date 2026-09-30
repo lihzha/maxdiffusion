@@ -192,6 +192,23 @@ def _unbox_tree(tree):
 _F32_PARAM_KEYWORDS = ("norm", "time_embedding", "add_embedding")
 
 
+# Batch leaves the cam_action modes re-anchor geometrically inside the step. They
+# stay float32 whatever weights_dtype is: bf16 rounds roll near +-pi by ~0.008
+# rad and a 1 m position by ~2 mm, the scale of one frame's motion, and the
+# rollout script already keeps them float32.
+_FLOAT32_BATCH_KEYS = ("cam_pose", "ee_cartesian")
+
+
+def _cast_batch(batch, dtype):
+    """Cast a batch's float leaves to ``dtype``, except the pose geometry."""
+    return {
+        k: v if k in _FLOAT32_BATCH_KEYS else jax.tree_util.tree_map(
+            lambda x: x.astype(dtype) if x.dtype.kind == "f" else x, v
+        )
+        for k, v in batch.items()
+    }
+
+
 def _cast_weight(path, x, dtype):
     """Cast one loaded weight to ``dtype``, excluding precision-sensitive leaves."""
     if not (hasattr(x, "dtype") and jnp.issubdtype(x.dtype, jnp.floating)):
@@ -713,9 +730,7 @@ class CtrlWorldTrainer:
         grad_fn = jax.value_and_grad(loss_fn)
 
         def step_fn(state, batch, rng):
-            batch = jax.tree_util.tree_map(
-                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, batch
-            )
+            batch = _cast_batch(batch, weights_dtype)
             loss, grads = grad_fn(state.params, batch, rng)
             grad_norm = jnp.sqrt(sum(jnp.sum(g.astype(jnp.float32) ** 2)
                                      for g in jax.tree_util.tree_leaves(grads)))
@@ -736,9 +751,7 @@ class CtrlWorldTrainer:
         weights_dtype = self.weights_dtype
 
         def eval_loss(params, batch, rng):
-            batch = jax.tree_util.tree_map(
-                lambda x: x.astype(weights_dtype) if x.dtype.kind == "f" else x, batch
-            )
+            batch = _cast_batch(batch, weights_dtype)
             return action_world_train_step(
                 rng=rng, params=params, apply_fns=apply_fns, batch=batch,
                 cfg=cfg, vae_scaling_factor=vae_scaling_factor, train=False,
@@ -1141,9 +1154,11 @@ class CtrlWorldTrainer:
         t_hist = config.num_history
         latent = batch["latent"][:n].astype(self.weights_dtype)
         action = batch["action"][:n].astype(self.weights_dtype)
+        # Gated on use_task_instructions exactly as the train step gates it: a
+        # no-text run must be previewed on the zero text context it trained on.
         text_embeds = (
             batch["text_embeds"][:n].astype(self.weights_dtype)
-            if config.text_embed_dim else None
+            if config.text_embed_dim and self.train_cfg.use_task_instructions else None
         )
 
         # Forward every trained subtree by key: which ones exist depends on

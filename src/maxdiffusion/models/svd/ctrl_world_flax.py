@@ -178,6 +178,10 @@ def _skeleton_apply_key(action_cond_mode: str) -> str | None:
     }.get(action_cond_mode)
 
 
+# Total spatial downsampling of SVD's UNet (3 stride-2 stages to the mid block).
+_UNET_DOWNSAMPLE = 8
+
+
 def _is_cam_action_mode(action_cond_mode: str) -> bool:
     """Whether the conditioning is the camera-frame action (all three sites)."""
     return action_cond_mode in ("cam_action", "cam_action_adaln", "cam_action_cross_attn")
@@ -250,6 +254,17 @@ def route_cam_actions(
       by ``alpha`` and broadcast over that view's rows.
     """
     b, t, v, c = cam_hidden.shape
+    h, w = latent_hw
+    if h % v:
+        raise ValueError(f"latent height {h} does not split into {v} camera views")
+    if action_cond_mode == "cam_action_cross_attn" and h % (v * _UNET_DOWNSAMPLE):
+        # The view lock reshapes rows at every cross-attention level, down to the
+        # mid block at H/8; a level whose rows do not split into whole views
+        # would mix cameras without any shape error.
+        raise ValueError(
+            f"cam_action_cross_attn needs each camera's latent height ({h // v}) "
+            f"divisible by {_UNET_DOWNSAMPLE}"
+        )
     if action_cond_mode == "cam_action_cross_attn":
         text = jnp.broadcast_to(
             text_ctx.astype(cam_hidden.dtype)[:, None, None], (b, t, v, 1, c)
@@ -268,9 +283,6 @@ def route_cam_actions(
             "encoder_hidden_states": text_flat,
             "action_hidden_states": temb.reshape(b * t, -1),
         }
-    h, w = latent_hw
-    if h % v:
-        raise ValueError(f"latent height {h} does not split into {v} camera views")
     bias = alpha * apply_fns["cam_action_add_proj"](
         {"params": params["cam_action_add_proj"]}, cam_hidden
     )                                                                      # (B, T, V, model_ch)

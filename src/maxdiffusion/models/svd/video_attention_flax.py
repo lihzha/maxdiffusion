@@ -160,7 +160,7 @@ class FlaxSpatialVideoTransformer(nn.Module):
     self.dropout_layer = nn.Dropout(rate=self.dropout)
 
   def _build_time_context(
-      self, context: jnp.ndarray, num_frames: int, h: int, w: int
+      self, context: jnp.ndarray, num_frames: int, h: int, w: int, views: int = 1
   ) -> jnp.ndarray:
     """From (B*T, S, C_ctx) pick frame-0 per batch then repeat over H*W.
 
@@ -183,11 +183,23 @@ class FlaxSpatialVideoTransformer(nn.Module):
     Pooling keeps the temporal branch at exactly the single key it has always
     had, so the skeleton grid is spent where it is aligned with the queries: the
     spatial blocks.
+
+    ``views > 1`` (``cam_action_cross_attn``) pools per view instead: the context
+    is view-major and view v owns a contiguous run of ``(h // views) * w``
+    positions, so each view's positions get only their own camera's keys. That is
+    the temporal counterpart of the spatial blocks' view lock; one pool over all
+    views would hand every camera the other cameras' actions.
     """
     bt, s, c_ctx = context.shape
     batch = bt // num_frames
     context = context.reshape(batch, num_frames, s, c_ctx)
     context_first = context[:, 0]  # (B, S, C_ctx)
+    if views > 1:
+      if h % views or s % views:
+        raise ValueError(f"cross_attn_views={views} must divide h={h} and the context length {s}")
+      per_view = context_first.reshape(batch, views, s // views, c_ctx).mean(axis=2)  # (B, V, C)
+      # Rows ordered (b, v), each repeated over that view's (h // views) * w positions.
+      return jnp.repeat(per_view.reshape(batch * views, 1, c_ctx), (h // views) * w, axis=0)
     if s > 1:
       context_first = jnp.mean(context_first, axis=1, keepdims=True)  # (B, 1, C_ctx)
     # Repeat each row H*W times: [b0,b0,..,b0, b1,b1,..,b1, ...]
@@ -224,7 +236,10 @@ class FlaxSpatialVideoTransformer(nn.Module):
 
     # spatial_context: (B*T, S, C_ctx) — one CLIP token per frame.
     spatial_context = context
-    time_context = self._build_time_context(context, num_frames, h, w)
+    time_context = self._build_time_context(
+        context, num_frames, h, w,
+        views=int((cross_attention_kwargs or {}).get("cross_attn_views", 1)),
+    )
 
     # (B*T,) frame indices → (B*T, C) learned pos embed
     frame_idx = self._frame_indices(batch, num_frames)
