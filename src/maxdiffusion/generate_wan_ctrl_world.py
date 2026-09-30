@@ -33,6 +33,7 @@ from flax import nnx
 from flax.linen import partitioning as nn_partitioning
 
 from maxdiffusion import max_logging, max_utils, pyconfig
+from maxdiffusion.input_pipeline.robot.camera_frame_actions import load_cam_action_stats
 from maxdiffusion.models.wan.action_encoder_wan import (
     NNXWanActionEncoder,
     NNXWanActionAdaLNProjector,
@@ -45,12 +46,17 @@ from maxdiffusion.schedulers.scheduling_flow_match_flax import FlaxFlowMatchSche
 from maxdiffusion.trainers.wan_ctrl_world_trainer import (
     VALID_ACTION_COND_MODES,
     WanCtrlWorldModel,
+    _build_cam_action_modules,
     _build_per_token_timestep,
+    _cam_action_alpha,
+    _cam_action_tokens,
     _dtype,
     _encode_skeleton,
     _frame_level_cond,
     _group_actions,
+    _is_cam_action_mode,
     _is_skeleton_mode,
+    _route_cam_action_conditioning,
     _xattn_tokens_per_frame,
     _cross_attn_rope,
     _placeholder_action_tokens,
@@ -80,6 +86,7 @@ def _denoise_step(
     cond_tokens_per_frame: int = 1,
     action_cond_mode: str = "cross_attn",
     skeleton_tokens: jnp.ndarray | None = None,
+    cam_action_alpha: float = 0.1,
 ):
     """One Euler flow-matching step with optional classifier-free guidance.
 
@@ -99,6 +106,10 @@ def _denoise_step(
     batch gets zeros either way, which is exactly the "skip the injection" state
     training's CFG mask produces.
 
+    In the ``cam_action*`` modes ``action_tokens`` are the camera-frame action
+    tokens and ``_route_cam_action_conditioning`` picks the site; their uncond
+    half is zero tokens, the same state training's CFG dropout produces.
+
     Returns the updated latents (clean history re-attached).
     """
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
@@ -114,14 +125,22 @@ def _denoise_step(
     )
 
     def _route(tokens, skel):
+        """``(encoder_hidden_states, action_hidden_states, additive_bias)`` for
+        one CFG half."""
         # text_tokens=None: this script is action-only. run_wan_ctrl_world_inference
         # refuses to start on a use_task_instructions=True config rather than
         # silently evaluating a text-trained checkpoint without its instruction.
-        return _route_action_conditioning(
+        if _is_cam_action_mode(action_cond_mode):
+            return _route_cam_action_conditioning(
+                model, tokens, action_cond_mode, cond_tokens_per_frame,
+                F_lat, H_lat, W_lat, alpha=cam_action_alpha,
+            )
+        enc, adaln = _route_action_conditioning(
             tokens, model.action_adaln_proj, action_cond_mode,
             cond_tokens_per_frame, H_lat, W_lat, text_tokens=None,
             skeleton_tokens=skel,
         )
+        return enc, adaln, _skeleton_bias(action_cond_mode, skel)
 
     if guidance_scale > 1.0:
         # Double-batch: [uncond, cond] in a single forward pass. The uncond half
@@ -130,8 +149,8 @@ def _denoise_step(
         # tensor of the same shape to stack, and zeros there leave temb untouched,
         # which is the same no-conditioning state training's CFG mask produces.
         skel_uncond = jnp.zeros_like(skeleton_tokens) if skeleton_tokens is not None else None
-        enc_uncond, adaln_uncond = _route(uncond_action_tokens, skel_uncond)
-        enc_cond, adaln_cond = _route(action_tokens, skeleton_tokens)
+        enc_uncond, adaln_uncond, add_uncond = _route(uncond_action_tokens, skel_uncond)
+        enc_cond, adaln_cond, add_cond = _route(action_tokens, skeleton_tokens)
         latents_2x = jnp.concatenate([latents, latents], axis=0)
         tokens_2x  = jnp.concatenate([enc_uncond, enc_cond], axis=0)
         t_2d       = jnp.concatenate([timestep_2d, timestep_2d], axis=0)
@@ -139,16 +158,15 @@ def _denoise_step(
         action_hidden_states_2x = (
             jnp.concatenate([adaln_uncond, adaln_cond], axis=0) if adaln_cond is not None else None
         )
-        skeleton_2x = (
-            jnp.concatenate([skel_uncond, skeleton_tokens], axis=0)
-            if skeleton_tokens is not None else None
+        additive_2x = (
+            jnp.concatenate([add_uncond, add_cond], axis=0) if add_cond is not None else None
         )
         pred_2x = model.transformer(
             hidden_states=latents_2x,
             timestep=t_2d,
             encoder_hidden_states=tokens_2x,
             action_hidden_states=action_hidden_states_2x,
-            skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_2x),
+            skeleton_hidden_states=additive_2x,
             deterministic=True,
             frame_level_cond=_frame_level_cond(action_cond_mode),
             cond_tokens_per_frame=xattn_tpf,
@@ -159,13 +177,13 @@ def _denoise_step(
         pred_cond   = pred_2x[b:]
         model_pred  = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
     else:
-        enc_tokens, action_hidden_states = _route(action_tokens, skeleton_tokens)
+        enc_tokens, action_hidden_states, additive_bias = _route(action_tokens, skeleton_tokens)
         model_pred = model.transformer(
             hidden_states=latents,
             timestep=timestep_2d,
             encoder_hidden_states=enc_tokens,
             action_hidden_states=action_hidden_states,
-            skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
+            skeleton_hidden_states=additive_bias,
             deterministic=True,
             frame_level_cond=_frame_level_cond(action_cond_mode),
             cond_tokens_per_frame=xattn_tpf,
@@ -194,6 +212,27 @@ def _encode_actions(
     model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
     actions_grouped = _group_actions(actions, F_lat)  # (B, F_lat, 4, 7)
     return model.action_encoder(actions_grouped, None) # (B, F_lat, 4096)
+
+
+def _encode_cam_actions(
+    params: nnx.State,
+    graphdef: nnx.GraphDef,
+    rest_of_state: nnx.State,
+    data: dict,
+    F_lat: int,
+    n_hist: int,
+    cam_stats,
+) -> jnp.ndarray:
+    """Camera-frame action tokens for one window, re-anchored to that window.
+
+    ``data`` holds the window's ``cam_pose`` / ``ee_cartesian`` / ``action`` /
+    ``frame_positions`` slices. Called once per AR chunk, so every chunk is
+    anchored at its own last history frame exactly as a training window is.
+    """
+    model: WanCtrlWorldModel = nnx.merge(graphdef, params, rest_of_state)
+    return _cam_action_tokens(
+        model.cam_action_encoder, data, data["action"].shape[0], F_lat, n_hist, cam_stats
+    )
 
 
 def _encode_skeleton_tokens(
@@ -249,6 +288,10 @@ def run_ar_denoising(
     all_skeleton: jnp.ndarray | None = None,
     p_encode_skeleton=None,
     wan_text_dim: int = 4096,
+    all_cam_pose: jnp.ndarray | None = None,
+    all_ee_cartesian: jnp.ndarray | None = None,
+    p_encode_cam=None,
+    cam_action_alpha: float = 0.1,
 ) -> jnp.ndarray:
     """Auto-regressive denoising: generate ar_num_chunks * ar_chunk_size future frames.
 
@@ -272,6 +315,11 @@ def run_ar_denoising(
     ``[pos_start, pos_start + window_F_lat)`` window as ``all_frame_positions``,
     since skeleton latents are per-latent-frame just like the RoPE positions.
 
+    In the ``cam_action*`` modes ``all_cam_pose`` / ``all_ee_cartesian`` cover the
+    same raw slots as ``all_actions`` and are sliced with it; ``p_encode_cam``
+    re-anchors each chunk at that chunk's last history frame, so the wrist's
+    ego-motion is always measured from the view the model is looking at.
+
     Returns predicted future latents: (B, C, ar_num_chunks * ar_chunk_size, H, W).
     """
     if _is_skeleton_mode(action_cond_mode) and (all_skeleton is None or p_encode_skeleton is None):
@@ -279,6 +327,13 @@ def run_ar_denoising(
             f"action_cond_mode={action_cond_mode!r} needs all_skeleton and "
             "p_encode_skeleton; without them the rollout would run entirely "
             "unconditioned."
+        )
+    if _is_cam_action_mode(action_cond_mode) and (
+        all_cam_pose is None or all_ee_cartesian is None or p_encode_cam is None
+    ):
+        raise ValueError(
+            f"action_cond_mode={action_cond_mode!r} needs all_cam_pose, "
+            "all_ee_cartesian and p_encode_cam."
         )
     window_F_lat = n_hist + ar_chunk_size
     current_hist = initial_hist
@@ -307,6 +362,18 @@ def run_ar_denoising(
             )
             skeleton_chunk = all_skeleton[:, :, pos_start:pos_start + window_F_lat]
             skeleton_tokens = p_encode_skeleton(params, skeleton=skeleton_chunk)
+        elif _is_cam_action_mode(action_cond_mode):
+            action_tokens = p_encode_cam(
+                params,
+                data={
+                    "cam_pose": all_cam_pose[:, act_start:act_end],
+                    "ee_cartesian": all_ee_cartesian[:, act_start:act_end],
+                    "action": actions_chunk,
+                    "frame_positions": positions_chunk,
+                },
+                F_lat=window_F_lat,
+            )
+            skeleton_tokens = None
         else:
             action_tokens = p_encode(params, actions=actions_chunk, F_lat=window_F_lat)
             skeleton_tokens = None
@@ -321,6 +388,7 @@ def run_ar_denoising(
             cond_tokens_per_frame=cond_tokens_per_frame,
             action_cond_mode=action_cond_mode,
             skeleton_tokens=skeleton_tokens,
+            cam_action_alpha=cam_action_alpha,
         )  # (B, C, ar_chunk_size, H, W)
 
         generated_chunks.append(gen_chunk)
@@ -363,6 +431,7 @@ def _get_denoise_step(
     scheduler,
     cond_tokens_per_frame: int,
     action_cond_mode: str,
+    cam_action_alpha: float = 0.1,
 ):
     """``jax.jit(_denoise_step)`` memoised on its static signature.
 
@@ -388,6 +457,7 @@ def _get_denoise_step(
         float(guidance_scale),
         int(cond_tokens_per_frame),
         action_cond_mode,
+        float(cam_action_alpha),
     )
     fn = _DENOISE_STEP_CACHE.get(key)
     if fn is None:
@@ -401,6 +471,7 @@ def _get_denoise_step(
                 scheduler=scheduler,
                 cond_tokens_per_frame=cond_tokens_per_frame,
                 action_cond_mode=action_cond_mode,
+                cam_action_alpha=cam_action_alpha,
             )
         )
         _DENOISE_STEP_CACHE[key] = fn
@@ -426,6 +497,7 @@ def run_denoising(
     cond_tokens_per_frame: int = 1,
     action_cond_mode: str = "cross_attn",
     skeleton_tokens: jnp.ndarray | None = None,
+    cam_action_alpha: float = 0.1,
 ) -> jnp.ndarray:
     """Denoise future latent frames from random noise, conditioned on history + actions.
 
@@ -463,6 +535,7 @@ def run_denoising(
         scheduler=scheduler,
         cond_tokens_per_frame=cond_tokens_per_frame,
         action_cond_mode=action_cond_mode,
+        cam_action_alpha=cam_action_alpha,
     )
 
     timesteps_np = np.array(sched_state.timesteps)
@@ -621,11 +694,13 @@ def run(argv: Sequence[str]) -> None:
             f"action_cond_mode={action_cond_mode!r} is not one of {VALID_ACTION_COND_MODES}."
         )
     skeleton_mode = _is_skeleton_mode(action_cond_mode)
+    cam_mode = _is_cam_action_mode(action_cond_mode)
     # The module set must match what the training run checkpointed exactly, or the
     # orbax restore below hits a structure mismatch — skeleton-mode checkpoints
     # have exactly one skeleton module (skeleton_embed for `skeleton`,
-    # skeleton_adaln_embed for `skeleton_adaln`) and no action_encoder at all.
-    action_encoder = None if skeleton_mode else NNXWanActionEncoder(
+    # skeleton_adaln_embed for `skeleton_adaln`) and no action_encoder at all,
+    # and cam_action checkpoints have the camera-frame encoder instead.
+    action_encoder = None if (skeleton_mode or cam_mode) else NNXWanActionEncoder(
         rngs=nnx.Rngs(jax.random.key(config.seed)),
         action_dim=config.action_dim,
         num_actions=4,
@@ -693,10 +768,24 @@ def run(argv: Sequence[str]) -> None:
             weights_dtype=weights_dtype,
         )
 
+    # Same builder the trainer uses (seeds included), so the restore template
+    # matches the checkpoint by construction. Nones outside the cam_action modes.
+    cam_encoder, cam_adaln_proj, cam_add_proj = _build_cam_action_modules(
+        config, pipeline.transformer.config
+    )
+    cam_stats = (
+        load_cam_action_stats(max_utils.config_get(config, "cam_action_stats_path", ""))
+        if cam_mode else None
+    )
+    cam_alpha = _cam_action_alpha(config)
+
     with pipeline.mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
         combined = WanCtrlWorldModel(
             pipeline.transformer, action_encoder, action_adaln_proj,
             skeleton_embed, skeleton_adaln_embed, skeleton_xattn_embed,
+            cam_action_encoder=cam_encoder,
+            cam_action_adaln_proj=cam_adaln_proj,
+            cam_action_add_proj=cam_add_proj,
         )
         graphdef, params, rest_of_state = nnx.split(combined, nnx.Param, ...)
 
@@ -761,6 +850,7 @@ def run(argv: Sequence[str]) -> None:
         shuffle=False,
         shard_for_training=False,
         load_skeleton=skeleton_mode,
+        load_cam_pose=cam_mode,
         first_window_only=autoregressive,
         pad_short_episodes=pad_short and autoregressive,
         min_latent_frames=int(max_utils.config_get(config, "eval_min_latent_frames", 0)),
@@ -773,7 +863,7 @@ def run(argv: Sequence[str]) -> None:
         )
 
     # ── Precompile conditioning encoders ──────────────────────────────────────
-    p_encode = None if skeleton_mode else jax.jit(
+    p_encode = None if (skeleton_mode or cam_mode) else jax.jit(
         functools.partial(
             _encode_actions,
             graphdef=graphdef,
@@ -789,6 +879,16 @@ def run(argv: Sequence[str]) -> None:
             action_cond_mode=action_cond_mode,
         ),
     ) if skeleton_mode else None
+    p_encode_cam = jax.jit(
+        functools.partial(
+            _encode_cam_actions,
+            graphdef=graphdef,
+            rest_of_state=rest_of_state,
+            n_hist=n_hist,
+            cam_stats=cam_stats,
+        ),
+        static_argnames=["F_lat"],
+    ) if cam_mode else None
 
     # ── Inference loop ────────────────────────────────────────────────────────
     output_dir = os.path.join(config.output_dir, "inference_videos")
@@ -808,6 +908,10 @@ def run(argv: Sequence[str]) -> None:
         skeleton = (
             jnp.array(batch["skeleton"]).astype(weights_dtype) if skeleton_mode else None
         )
+        # Per-slot camera-frame poses and base-frame cartesian, same slots as
+        # `actions`. Kept float32: they are re-anchored geometrically.
+        cam_pose = jnp.array(batch["cam_pose"], dtype=jnp.float32) if cam_mode else None
+        ee_cartesian = jnp.array(batch["ee_cartesian"], dtype=jnp.float32) if cam_mode else None
 
         _, _, F_lat, _, _ = latent.shape
         clean_hist = latent[:, :, :n_hist, :, :]                        # (1, C, n_hist, H, Wl)
@@ -832,6 +936,10 @@ def run(argv: Sequence[str]) -> None:
                 all_skeleton=skeleton,
                 p_encode_skeleton=p_encode_skeleton,
                 wan_text_dim=config.wan_text_dim,
+                all_cam_pose=cam_pose,
+                all_ee_cartesian=ee_cartesian,
+                p_encode_cam=p_encode_cam,
+                cam_action_alpha=cam_alpha,
             )
         else:
             # Encode the conditioning once — constant across denoising steps.
@@ -841,6 +949,18 @@ def run(argv: Sequence[str]) -> None:
                     config.wan_text_dim, weights_dtype,
                 )
                 skeleton_tokens = p_encode_skeleton(params, skeleton=skeleton)
+            elif cam_mode:
+                action_tokens = p_encode_cam(
+                    params,
+                    data={
+                        "cam_pose": cam_pose,
+                        "ee_cartesian": ee_cartesian,
+                        "action": actions,
+                        "frame_positions": frame_positions,
+                    },
+                    F_lat=F_lat,
+                )  # (1, F_lat*3*K, 4096)
+                skeleton_tokens = None
             else:
                 action_tokens = p_encode(
                     params, actions=actions,
@@ -859,6 +979,7 @@ def run(argv: Sequence[str]) -> None:
                 cond_tokens_per_frame=action_tokens_per_frame,
                 action_cond_mode=action_cond_mode,
                 skeleton_tokens=skeleton_tokens,
+                cam_action_alpha=cam_alpha,
             )
 
         rollout_s = time.perf_counter() - t_vid

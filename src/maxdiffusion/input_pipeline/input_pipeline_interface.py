@@ -174,6 +174,12 @@ def _ctrl_world_is_skeleton_mode(config) -> bool:
   return _is_skeleton_mode(getattr(config, "action_cond_mode", "cross_attn"))
 
 
+def _ctrl_world_is_cam_action_mode(config) -> bool:
+  """Whether the SVD run conditions on camera-frame actions (needs ee_pose_cam*)."""
+  from maxdiffusion.models.svd.ctrl_world_flax import _is_cam_action_mode
+  return _is_cam_action_mode(getattr(config, "action_cond_mode", "cross_attn"))
+
+
 def _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training: bool, seed=None):
   """TFRecord iterator for action-conditioned SVD (Ctrl-World) training.
 
@@ -214,6 +220,7 @@ def _make_ctrl_world_iterator(config, mesh, global_batch_size, is_training: bool
       # action_cond_mode is active. The feature spec is assembled per-instance,
       # so a non-skeletal dataset still parses when this is False.
       load_skeleton=_ctrl_world_is_skeleton_mode(config),
+      load_cam_pose=_ctrl_world_is_cam_action_mode(config),
   )
   return multihost_dataloading.MultiHostDataLoadIterator(dataset_obj.dataset, mesh)
 

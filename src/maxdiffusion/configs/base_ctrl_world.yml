@@ -323,6 +323,33 @@ ctrl_his_cond_zero: False
 # preview, and generate_ctrl_world.py rollout inference. The eval/inference
 # dataset must carry the skeleton features too — the skeleton IS the
 # conditioning signal at inference time, it is not generated.
+#   'cam_action' / 'cam_action_adaln' / 'cam_action_cross_attn'
+#                           — the 7-dim action re-expressed in each CAMERA's frame
+#                             (camera_frame_actions.py): EEF position + 6D rotation
+#                             + gripper, per camera, anchored at the conditioning
+#                             frame (frame_now) so the wrist view gets its
+#                             ego-motion rather than a constant. One token per
+#                             (frame, camera), and the three sites are the
+#                             skeleton ones:
+#                               cam_action            -> each camera's token,
+#                                                        projected to conv_in's width
+#                                                        and x cam_action_embed_alpha,
+#                                                        ADDED onto that camera's rows
+#                               cam_action_adaln      -> the 3 tokens concatenated and
+#                                                        summed into t_emb. Spatially
+#                                                        blind for the same reason as
+#                                                        skeleton_adaln (t_emb has no
+#                                                        spatial axis), so the camera
+#                                                        split is NOT kept here, unlike
+#                                                        the WAN arm.
+#                               cam_action_cross_attn -> SPATIAL cross-attention K/V,
+#                                                        locked per camera: each view's
+#                                                        rows attend only to [text,
+#                                                        that view's action] (the text
+#                                                        key is all-zero when text is
+#                                                        off, as in skeleton_cross_attn)
+#                             Requires shards with ee_pose_cam0/1/2 and
+#                             cam_action_stats_path. No action_encoder is built.
 action_cond_mode: 'cross_attn'
 
 # Additive skeleton route only ('skeleton'). Fixed scale on the bias added onto
@@ -339,6 +366,16 @@ skeleton_embed_alpha: 0.1
 # keys/frame, which at the shallowest stage is roughly a quarter of a
 # self-attention. Must divide the latent height and width.
 skeleton_cross_attn_stride: 4
+
+# Camera-frame actions (the three 'cam_action*' modes). Per-camera p01/p99 of the
+# anchored EEF position (JSON: xyz_01 / xyz_99, 3 cameras x 3), written once per
+# dataset by src/maxdiffusion/compute_cam_action_stats.py with this yml.
+cam_action_stats_path: ''
+# Training windows compute_cam_action_stats.py samples for the percentiles.
+cam_action_stats_windows: 4000
+# 'cam_action' (additive) only: fixed scale on the per-camera bias added onto
+# conv_in's output, the counterpart of skeleton_embed_alpha.
+cam_action_embed_alpha: 0.1
 
 # Whether the DROID task instruction (the pre-computed CLIP text embedding in
 # the batch) reaches the model at all. False makes the run action-only.

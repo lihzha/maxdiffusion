@@ -11,6 +11,10 @@ Yielded sample (batched along axis 0 by ``.batch(batch_size)``):
     latent:      [num_history+num_frames, 4, H_lat_stacked, W_lat]  float32
     action:      [num_history+num_frames, action_dim]               float32 in [-1, 1]
     text_embeds: [text_embed_dim]                                   float32
+and, with ``load_cam_pose=True`` (gathered at the same 15 Hz state indices as
+``action``; see ``camera_frame_actions`` for the feature contract):
+    cam_pose:     [num_history+num_frames, 3, 12]                   float32
+    ee_cartesian: [num_history+num_frames, 6]                       float32, unnormalised
 """
 
 from __future__ import annotations
@@ -23,6 +27,8 @@ import jax
 import numpy as np
 import psutil
 import tensorflow as tf
+
+from maxdiffusion.input_pipeline.robot.camera_frame_actions import EE_POSE_KEYS
 
 AUTOTUNE = tf.data.AUTOTUNE
 
@@ -52,6 +58,19 @@ _SKEL_FEATURES = {
     "skeleton_cam2": tf.io.FixedLenFeature([], tf.string),
 }
 _SKEL_KEYS = ("skeleton_cam0", "skeleton_cam1", "skeleton_cam2")
+
+# Only present in datasets built with the camera-frame-action pass: per camera,
+# the EEF pose in that camera's frame, one (3, 4) row per 15 Hz `cartesian` row.
+_CAM_POSE_FEATURES = {k: tf.io.FixedLenFeature([], tf.string) for k in EE_POSE_KEYS}
+
+
+def _feature_spec(load_skeleton: bool, load_cam_pose: bool) -> dict:
+    spec = dict(_FEATURE_DESCRIPTION)
+    if load_skeleton:
+        spec.update(_SKEL_FEATURES)
+    if load_cam_pose:
+        spec.update(_CAM_POSE_FEATURES)
+    return spec
 
 
 def _configure_tf_for_jax() -> None:
@@ -107,6 +126,9 @@ class CtrlWorldDroidLatentDataset:
       shuffle:          Whether to shuffle file ordering and post-window samples.
       shuffle_buffer:   Post-window shuffle buffer in samples.
       shard_for_training: If True, shard files across JAX processes.
+      load_skeleton:    Read ``skeleton_cam*`` and emit ``skeleton``.
+      load_cam_pose:    Read ``ee_pose_cam*`` and emit ``cam_pose`` +
+                        ``ee_cartesian``. Required by the ``cam_action*`` modes.
     """
 
     def __init__(
@@ -129,6 +151,7 @@ class CtrlWorldDroidLatentDataset:
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
         load_skeleton: bool = False,
+        load_cam_pose: bool = False,
     ):
         _configure_tf_for_jax()
         tf.random.set_seed(seed)
@@ -138,9 +161,8 @@ class CtrlWorldDroidLatentDataset:
         # additive and adaln routes are not well defined — see
         # models/svd/skeleton_encoder_flax.
         self._load_skeleton = load_skeleton
-        self._feature_description = dict(_FEATURE_DESCRIPTION)
-        if load_skeleton:
-            self._feature_description.update(_SKEL_FEATURES)
+        self._load_cam_pose = load_cam_pose
+        self._feature_description = _feature_spec(load_skeleton, load_cam_pose)
 
         self.num_history = num_history
         self.num_frames = num_frames
@@ -234,7 +256,34 @@ class CtrlWorldDroidLatentDataset:
         }
         if skeleton_stacked is not None:
             out["skeleton_stacked"] = skeleton_stacked
+        if self._load_cam_pose:
+            poses = [
+                tf.reshape(tf.io.parse_tensor(f[k], out_type=tf.float32), [-1, 12])
+                for k in EE_POSE_KEYS
+            ]
+            cam_pose = tf.stack(poses, axis=1)                            # (T_15hz, 3, 12)
+            # One pose row per 15 Hz cartesian row; anything else misaligns silently.
+            with tf.control_dependencies([tf.debugging.assert_equal(
+                tf.shape(cam_pose)[0], tf.shape(cart)[0],
+                message="ee_pose_cam* needs exactly one row per cartesian row",
+            )]):
+                out["cam_pose"] = tf.identity(cam_pose)
         return out
+
+    def _gather_cam_pose(self, traj: dict, state_id: tf.Tensor, out: dict) -> None:
+        """Add ``cam_pose`` / ``ee_cartesian`` at the action's own 15 Hz indices.
+
+        The cartesian stays unnormalised: the model step re-anchors it
+        geometrically, which percentile-clipped values would corrupt.
+        """
+        if not self._load_cam_pose:
+            return
+        cam_pose = tf.gather(traj["cam_pose"], state_id, axis=0)            # (T, 3, 12)
+        ee_cartesian = tf.gather(traj["state"][:, :6], state_id, axis=0)    # (T, 6)
+        cam_pose.set_shape([state_id.shape[0], 3, 12])
+        ee_cartesian.set_shape([state_id.shape[0], 6])
+        out["cam_pose"] = cam_pose
+        out["ee_cartesian"] = ee_cartesian
 
     # ── Trajectory → windows ───────────────────────────────────────────────────
 
@@ -320,6 +369,7 @@ class CtrlWorldDroidLatentDataset:
             skeleton = tf.gather(traj["skeleton_stacked"], rgb_id, axis=0)
             skeleton.set_shape([T_static, None, None, None])
             out["skeleton"] = skeleton
+        self._gather_cam_pose(traj, state_id, out)
         return out
 
     # ── Iterator protocol ──────────────────────────────────────────────────────
@@ -372,15 +422,15 @@ class CtrlWorldDroidRolloutDataset(CtrlWorldDroidLatentDataset):
         batch_size: int = 1,
         min_traj_len_5hz: int = 2,
         load_skeleton: bool = False,
+        load_cam_pose: bool = False,
     ):
         _configure_tf_for_jax()
 
         # This class defines its own __init__ rather than calling the base one,
-        # so the skeleton feature spec has to be assembled here too.
+        # so the optional feature spec has to be assembled here too.
         self._load_skeleton = load_skeleton
-        self._feature_description = dict(_FEATURE_DESCRIPTION)
-        if load_skeleton:
-            self._feature_description.update(_SKEL_FEATURES)
+        self._load_cam_pose = load_cam_pose
+        self._feature_description = _feature_spec(load_skeleton, load_cam_pose)
 
         if window_frames <= 0:
             raise ValueError("window_frames must be > 0")
@@ -454,4 +504,5 @@ class CtrlWorldDroidRolloutDataset(CtrlWorldDroidLatentDataset):
             skeleton = tf.gather(traj["skeleton_stacked"], rgb_id, axis=0)
             skeleton.set_shape([W, None, None, None])
             out["skeleton"] = skeleton
+        self._gather_cam_pose(traj, state_id, out)
         return out

@@ -64,6 +64,10 @@ from absl import app
 from flax.traverse_util import flatten_dict, unflatten_dict
 
 from maxdiffusion import max_logging, max_utils, pyconfig
+from maxdiffusion.input_pipeline.robot.camera_frame_actions import (
+    CAM_ACTION_DIM,
+    load_cam_action_stats,
+)
 from maxdiffusion.input_pipeline.robot.ctrl_world_droid_dataset import (
     CtrlWorldDroidRolloutDataset,
 )
@@ -71,7 +75,9 @@ from maxdiffusion.models.svd.action_encoder_flax import (
     FlaxActionAdaLNProjector,
     FlaxActionEncoder,
 )
+from maxdiffusion.models.svd.camera_action_encoder_flax import build_cam_action_modules
 from maxdiffusion.models.svd.ctrl_world_flax import (
+    _is_cam_action_mode,
     _is_skeleton_mode,
     _skeleton_apply_key,
 )
@@ -199,7 +205,10 @@ def _restore_params(ckpt_dir: str, step, template: dict):
             "different subtree — cross_attn: action_encoder; adaln: + "
             "action_adaln_proj; skeleton / skeleton_adaln / skeleton_cross_attn: "
             "skeleton_embed / skeleton_adaln_proj / skeleton_cross_attn_embed and NO "
-            "action_encoder at all — so pass the mode the checkpoint was trained with "
+            "action_encoder at all; cam_action / cam_action_adaln / "
+            "cam_action_cross_attn: cam_action_encoder (+ cam_action_add_proj / "
+            "cam_action_adaln_proj) and NO action_encoder — so pass the mode the "
+            "checkpoint was trained with "
             "(or point checkpoint_dir at the matching run). Running one route's "
             "weights through another would silently drop the conditioning signal."
         )
@@ -261,13 +270,14 @@ def _load_modules(config, mesh, dtype, weights_dtype):
         )
 
     skeleton_mode = _is_skeleton_mode(config.action_cond_mode)
+    cam_mode = _is_cam_action_mode(config.action_cond_mode)
 
-    # No action encoder in the skeleton modes — the conditioning is the rendered
-    # skeleton video and the vector actions are unused, so the trained checkpoint
-    # carries no action_encoder subtree to restore into one. Must mirror
-    # CtrlWorldTrainer._load_modules, which gates it off the same way.
+    # No action encoder in the skeleton or cam_action modes — the conditioning is
+    # the rendered skeleton video or the camera-frame action, so the trained
+    # checkpoint carries no action_encoder subtree to restore into one. Must
+    # mirror CtrlWorldTrainer._load_modules, which gates it off the same way.
     action_encoder, ae_params = None, None
-    if not skeleton_mode:
+    if not (skeleton_mode or cam_mode):
         action_encoder = FlaxActionEncoder(
             action_dim=config.action_dim,
             hidden_size=config.hidden_size,
@@ -313,6 +323,22 @@ def _load_modules(config, mesh, dtype, weights_dtype):
             skel_mod,
             skel_mod.init_weights(jax.random.PRNGKey(config.seed + 2)),
         )
+
+    # Same builder as the trainer, so the template matches the checkpoint; the
+    # values are overwritten by the restore anyway.
+    cond_extras.update(
+        build_cam_action_modules(
+            config.action_cond_mode,
+            action_dim=CAM_ACTION_DIM,
+            hidden_size=config.hidden_size,
+            num_views=config.num_views,
+            time_embed_dim=unet.block_out_channels[0] * 4,
+            model_channels=unet.block_out_channels[0],
+            seed=config.seed,
+            dtype=dtype,
+            weights_dtype=weights_dtype,
+        )
+    )
 
     adaln = config.action_cond_mode == "adaln"
     if adaln:
@@ -459,10 +485,11 @@ def run(argv: Sequence[str]) -> None:
     # ── Restore trained weights ───────────────────────────────────────────────
     adaln = config.action_cond_mode == "adaln"
     skeleton_mode = _is_skeleton_mode(config.action_cond_mode)
+    cam_mode = _is_cam_action_mode(config.action_cond_mode)
     skel_key = _skeleton_apply_key(config.action_cond_mode)
     ckpt_dir = config.checkpoint_dir or os.path.join(config.output_dir, "checkpoints")
     template = {"unet": unet_params}
-    if not skeleton_mode:
+    if ae_params is not None:
         template["action_encoder"] = ae_params
     for name, (_mod, mod_params) in cond_extras.items():
         template[name] = mod_params
@@ -482,6 +509,10 @@ def run(argv: Sequence[str]) -> None:
         prediction_type=config.diffusion_scheduler_config["prediction_type"],
         dtype=weights_dtype,
     )
+    cam_xyz_lo, cam_xyz_hi = (
+        load_cam_action_stats(max_utils.config_get(config, "cam_action_stats_path", ""))
+        if cam_mode else (None, None)
+    )
     pipeline = FlaxCtrlWorldPipeline(
         vae=vae,
         unet=unet,
@@ -489,6 +520,14 @@ def run(argv: Sequence[str]) -> None:
         action_adaln_proj=cond_extras.get("action_adaln_proj", (None, None))[0],
         skeleton_module=cond_extras.get(skel_key, (None, None))[0] if skel_key else None,
         skeleton_params_key=skel_key,
+        cam_action_modules={
+            k: m for k, (m, _p) in cond_extras.items() if k.startswith("cam_action")
+        },
+        cam_action_xyz_lo=cam_xyz_lo,
+        cam_action_xyz_hi=cam_xyz_hi,
+        cam_action_embed_alpha=float(
+            max_utils.config_get(config, "cam_action_embed_alpha", 0.1)
+        ),
         # The skeleton modes have no action encoder, so the pipeline cannot read
         # the cross-attention / text widths off it — hand them over explicitly.
         cross_attn_dim=config.hidden_size,
@@ -536,6 +575,8 @@ def run(argv: Sequence[str]) -> None:
         # The skeleton modes condition on the rendered-skeleton video, so the
         # records must carry skeleton_cam0/1/2 and the loader must read them.
         load_skeleton=skeleton_mode,
+        # Likewise the cam_action modes need ee_pose_cam0/1/2.
+        load_cam_pose=cam_mode,
     )
 
     max_logging.log(
@@ -573,6 +614,11 @@ def run(argv: Sequence[str]) -> None:
             if skeleton_mode
             else None
         )
+        # (horizon, 3, 12) / (horizon, 6) — per-frame camera-frame EEF poses and
+        # base-frame cartesian, indexed like `actions`. Float32 regardless of
+        # weights_dtype: they are re-anchored geometrically inside the pipeline.
+        cam_pose_ep = jnp.asarray(batch["cam_pose"][0], dtype=jnp.float32) if cam_mode else None
+        ee_cart_ep = jnp.asarray(batch["ee_cartesian"][0], dtype=jnp.float32) if cam_mode else None
         # use_task_instructions=False must reproduce the action-only training
         # setup, so drop the instruction here rather than inside the pipeline.
         text_embeds = (
@@ -620,6 +666,11 @@ def run(argv: Sequence[str]) -> None:
                 if skeleton_mode
                 else None
             )
+            # Same gather again; the pipeline re-anchors each chunk at its own
+            # conditioning frame (slot num_history = frame_now).
+            window_ids = jnp.asarray(np.concatenate([hist_ids, fut_ids]))
+            cam_pose_window = cam_pose_ep[window_ids][None] if cam_mode else None
+            ee_cart_window = ee_cart_ep[window_ids][None] if cam_mode else None
 
             # Conditioning image = the current observation, i.e. the newest frame
             # in the buffer. Matches training, where the concat stream is built
@@ -643,6 +694,8 @@ def run(argv: Sequence[str]) -> None:
                     history=history,
                     text_embeds=text_embeds,
                     skeleton=skeleton_window,
+                    cam_pose=cam_pose_window,
+                    ee_cartesian=ee_cart_window,
                     num_frames=num_frames,
                     num_history=num_history,
                     num_inference_steps=num_inference_steps,

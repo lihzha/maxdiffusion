@@ -46,6 +46,10 @@ from safetensors.torch import load_file as load_torch_safetensors
 
 from maxdiffusion import max_logging, max_utils
 from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
+from maxdiffusion.input_pipeline.robot.camera_frame_actions import (
+    CAM_ACTION_DIM,
+    load_cam_action_stats,
+)
 from maxdiffusion.models.svd.skeleton_encoder_flax import (
     FlaxSkeletonPatchEmbed,
     FlaxSkeletonAdaLNProjector,
@@ -55,9 +59,11 @@ from maxdiffusion.models.svd.action_encoder_flax import (
     FlaxActionAdaLNProjector,
     FlaxActionEncoder,
 )
+from maxdiffusion.models.svd.camera_action_encoder_flax import build_cam_action_modules
 from maxdiffusion.models.svd.ctrl_world_flax import (
     CtrlWorldTrainConfig,
     action_world_train_step,
+    _is_cam_action_mode,
     _is_skeleton_mode,
     _skeleton_apply_key,
 )
@@ -68,6 +74,12 @@ from maxdiffusion.models.svd.video_unet_flax import FlaxVideoUNet
 
 
 def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
+    mode = max_utils.config_get(config, "action_cond_mode", "cross_attn")
+    xyz_lo = xyz_hi = None
+    if _is_cam_action_mode(mode):
+        xyz_lo, xyz_hi = load_cam_action_stats(
+            max_utils.config_get(config, "cam_action_stats_path", "")
+        )
     return CtrlWorldTrainConfig(
         num_history=config.num_history,
         num_frames=config.num_frames,
@@ -94,6 +106,12 @@ def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
         skeleton_cross_attn_stride=int(
             max_utils.config_get(config, "skeleton_cross_attn_stride", 4)
         ),
+        cam_action_embed_alpha=float(
+            max_utils.config_get(config, "cam_action_embed_alpha", 0.1)
+        ),
+        cam_action_xyz_lo=xyz_lo,
+        cam_action_xyz_hi=xyz_hi,
+        num_views=int(max_utils.config_get(config, "num_views", 3)),
         use_task_instructions=max_utils.config_get(config, "use_task_instructions", True),
     )
 
@@ -101,8 +119,8 @@ def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
 def _unet_model_channels(config) -> int:
     """``block_out_channels[0]`` (320 for base SVD) — conv_in's output width.
 
-    Read only by the additive skeleton route, whose embedded output is added onto
-    conv_in's result and so has to be exactly this wide.
+    Read only by the additive routes (skeleton, cam_action), whose embedded output
+    is added onto conv_in's result and so has to be exactly this wide.
     """
     boc = max_utils.config_get(config, "block_out_channels", None)
     return boc[0] if boc else 320
@@ -124,6 +142,9 @@ VALID_ACTION_COND_MODES = (
     "skeleton",
     "skeleton_adaln",
     "skeleton_cross_attn",
+    "cam_action",
+    "cam_action_adaln",
+    "cam_action_cross_attn",
 )
 
 
@@ -426,13 +447,15 @@ class CtrlWorldTrainer:
 
         mode = self.train_cfg.action_cond_mode
         skeleton_mode = _is_skeleton_mode(mode)
+        cam_mode = _is_cam_action_mode(mode)
 
-        # No action encoder in the skeleton modes: the conditioning is the
-        # rendered skeleton video, so an encoder here would receive zero gradient
-        # forever — dead weights in the checkpoint and dead optimizer moments in
-        # HBM. Mirrors WanCtrlWorldTrainer._build_action_encoder.
+        # No base-frame action encoder in the skeleton or cam_action modes: the
+        # conditioning is the rendered skeleton video or the camera-frame action,
+        # so an encoder here would receive zero gradient forever — dead weights
+        # in the checkpoint and dead optimizer moments in HBM. Mirrors
+        # WanCtrlWorldTrainer._build_action_encoder.
         action_encoder, ae_params = None, None
-        if skeleton_mode:
+        if skeleton_mode or cam_mode:
             if self.config.action_encoder_init_path:
                 raise ValueError(
                     f"action_cond_mode={mode!r} builds no action encoder, so "
@@ -440,8 +463,10 @@ class CtrlWorldTrainer:
                     "a vector-action mode."
                 )
             max_logging.log(
-                f"[ctrl_world] action_cond_mode={mode}: no action encoder "
-                "(conditioning is the rendered skeleton video; vector actions unused)"
+                f"[ctrl_world] action_cond_mode={mode}: no base-frame action encoder "
+                + ("(conditioning is the rendered skeleton video; vector actions unused)"
+                   if skeleton_mode else
+                   "(conditioning is the camera-frame action, one token per camera)")
             )
         else:
             action_encoder = FlaxActionEncoder(
@@ -518,6 +543,42 @@ class CtrlWorldTrainer:
                 skel_mod.init_weights(jax.random.PRNGKey(self.config.seed + 2)),
             )
 
+        if cam_mode:
+            cond_extras.update(
+                build_cam_action_modules(
+                    mode,
+                    action_dim=CAM_ACTION_DIM,
+                    hidden_size=self.config.hidden_size,
+                    num_views=self.train_cfg.num_views,
+                    time_embed_dim=self.train_cfg.time_embed_dim,
+                    model_channels=self.train_cfg.model_channels,
+                    seed=self.config.seed,
+                    dtype=self.dtype,
+                    weights_dtype=self.weights_dtype,
+                )
+            )
+            site = {
+                "cam_action": (
+                    f"projected per camera to conv_in's width "
+                    f"({self.train_cfg.model_channels}), x alpha="
+                    f"{self.train_cfg.cam_action_embed_alpha}, and ADDED onto that "
+                    "camera's rows of conv_in's output"
+                ),
+                "cam_action_adaln": (
+                    f"concatenated over cameras and summed into t_emb (width "
+                    f"{self.train_cfg.time_embed_dim}); t_emb has no spatial axis, so "
+                    "unlike the WAN arm the camera split cannot be kept here"
+                ),
+                "cam_action_cross_attn": (
+                    "the spatial cross-attention K/V, locked per camera (each view's "
+                    "rows attend only to [text, that view's action])"
+                ),
+            }[mode]
+            max_logging.log(
+                f"[ctrl_world] action_cond_mode={mode}: EEF pose in each camera's frame, "
+                f"anchored at the conditioning frame, one token per camera; {site}"
+            )
+
         adaln = mode == "adaln"
         adaln_proj, adaln_params = None, None
         if adaln:
@@ -554,7 +615,9 @@ class CtrlWorldTrainer:
                 # tokens because its K/V is frame-locked by reshape — the full
                 # text token simply rides alongside the skeleton grid.
                 route = "one extra cross-attention key alongside the skeleton grid"
-            elif adaln or skeleton_mode:
+            elif mode == "cam_action_cross_attn":
+                route = "one extra cross-attention key beside each camera's action"
+            elif adaln or skeleton_mode or cam_mode:
                 route = "the cross-attention context"
             else:
                 route = "tiled into the action tokens"
@@ -715,6 +778,7 @@ class CtrlWorldTrainer:
             cond_extras.get("action_adaln_proj", (None, None))[0],
             cond_extras.get(skel_key, (None, None))[0] if skel_key else None,
             skel_key,
+            {k: m for k, (m, _p) in cond_extras.items() if k.startswith("cam_action")},
         )
         self._cond_extra_names = tuple(cond_extras)
         tx, lr_schedule = self._build_optimizer(config.max_train_steps)
@@ -742,6 +806,9 @@ class CtrlWorldTrainer:
         # (or vice versa) is a trace-time structure mismatch, not a warning.
         if _is_skeleton_mode(self.train_cfg.action_cond_mode):
             data_shardings["skeleton"] = batch_pspec
+        if _is_cam_action_mode(self.train_cfg.action_cond_mode):
+            data_shardings["cam_pose"] = batch_pspec
+            data_shardings["ee_cartesian"] = batch_pspec
 
         train_step_fn = self._build_train_step(apply_fns, state_shardings, data_shardings)
         eval_step_fn = self._build_eval_step(apply_fns, state_shardings, data_shardings)
@@ -973,7 +1040,7 @@ class CtrlWorldTrainer:
                 use_safetensors=True,
             )
         sched = config.diffusion_scheduler_config
-        unet, action_encoder, adaln_proj, skel_mod, skel_key = self._video_modules
+        unet, action_encoder, adaln_proj, skel_mod, skel_key, cam_modules = self._video_modules
         self._video_pipeline = FlaxCtrlWorldPipeline(
             vae=vae,
             unet=unet,
@@ -981,6 +1048,10 @@ class CtrlWorldTrainer:
             action_adaln_proj=adaln_proj,
             skeleton_module=skel_mod,
             skeleton_params_key=skel_key,
+            cam_action_modules=cam_modules,
+            cam_action_xyz_lo=self.train_cfg.cam_action_xyz_lo,
+            cam_action_xyz_hi=self.train_cfg.cam_action_xyz_hi,
+            cam_action_embed_alpha=self.train_cfg.cam_action_embed_alpha,
             # No action encoder in the skeleton modes, so the pipeline cannot
             # read the cross-attention / text widths off it.
             cross_attn_dim=config.hidden_size,
@@ -1085,6 +1156,9 @@ class CtrlWorldTrainer:
             if _is_skeleton_mode(config.action_cond_mode)
             else None
         )
+        cam_mode = _is_cam_action_mode(config.action_cond_mode)
+        cam_pose = batch["cam_pose"][:n] if cam_mode else None
+        ee_cartesian = batch["ee_cartesian"][:n] if cam_mode else None
 
         t_start = datetime.datetime.now()
         guidance = float(max_utils.config_get(config, "wandb_video_guidance_scale", 1.0))
@@ -1099,6 +1173,8 @@ class CtrlWorldTrainer:
                 history=latent[:, :t_hist],
                 text_embeds=text_embeds,
                 skeleton=skeleton,
+                cam_pose=cam_pose,
+                ee_cartesian=ee_cartesian,
                 num_frames=config.num_frames,
                 num_history=t_hist,
                 num_inference_steps=int(

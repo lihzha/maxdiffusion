@@ -83,12 +83,36 @@ transformer:
   second sequence, so the instruction is pooled onto the skeleton tokens exactly
   as ``"cross_attn"`` pools it onto the action tokens.
 
-These two axes are independent in principle — an action *representation* (vector
-actions or rendered-skeleton latents) crossed with a conditioning *site*
-(cross-attention K/V, AdaLN modulation, additive in video-token space) — and the
-five modes above are five of those six cells. The one not implemented is
-vector-actions-as-additive (needs a broadcast from a 7-dim vector to the latent
-grid).
+* ``"cam_action"``, ``"cam_action_adaln"``, ``"cam_action_cross_attn"``: the
+  action expressed in each CAMERA's frame instead of the robot base frame (see
+  ``camera_frame_actions``), re-anchored to the window's last history frame so
+  the wrist view gets its ego-motion rather than a constant. The three views are
+  stacked along H, so camera ``v`` owns one contiguous run of every latent
+  frame's video tokens, and each site hands camera ``v``'s action to that run
+  only — the camera-granularity analogue of the skeleton's token-for-token
+  alignment:
+
+  - ``cam_action`` (additive): projected per (frame, camera), scaled by
+    ``cam_action_embed_alpha`` and added onto that camera's video tokens — the
+    ``skeleton`` site, reached through the same ``skeleton_hidden_states``
+    argument. This is the cell the base-frame vector actions never had: a 7-dim
+    base-frame vector has no natural place on the grid, a per-camera one does.
+  - ``cam_action_adaln``: projected per (frame, camera) and summed into that
+    camera's per-token time embedding — the ``adaln`` / ``skeleton_adaln`` site.
+  - ``cam_action_cross_attn``: the per-camera action tokens are the
+    cross-attention K/V, locked per frame AND per camera. That needs no
+    transformer change: with the tokens ordered (frame, camera, k),
+    ``WanTransformerBlock``'s frame-locking reshape sees ``F_lat * 3`` "frames"
+    and each group of queries is exactly one camera's patch of one frame.
+
+  Requires a dataset carrying ``ee_pose_cam*`` features (``load_cam_pose``) and
+  ``cam_action_stats_path``. No vector ``action_encoder`` is built.
+
+These axes are independent in principle — an action *representation* (base-frame
+vector actions, rendered-skeleton latents, camera-frame vector actions) crossed
+with a conditioning *site* (cross-attention K/V, AdaLN modulation, additive in
+video-token space). The one cell not implemented is base-frame-vector-as-additive
+(a base-frame vector has no natural broadcast onto the latent grid).
 
 The modes are mutually exclusive and none of their checkpoints are compatible
 with each other.
@@ -119,9 +143,18 @@ from flax.training import train_state
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 from maxdiffusion import max_logging, max_utils
+from maxdiffusion.input_pipeline.robot.camera_frame_actions import (
+    CAM_ACTION_DIM,
+    NUM_VIEWS,
+    WAN_ACTIONS_PER_LATENT,
+    camera_action_features,
+    load_cam_action_stats,
+    wan_anchor_and_valid,
+)
 from maxdiffusion.models.wan.action_encoder_wan import (
     NNXWanActionEncoder,
     NNXWanActionAdaLNProjector,
+    NNXWanCameraActionEncoder,
     NNXWanSkeletonPatchEmbed,
     NNXWanSkeletonAdaLNEmbed,
     NNXWanSkeletonCrossAttnEmbed,
@@ -170,6 +203,12 @@ class WanCtrlWorldModel(nnx.Module):
       module's output width is ``wan_text_dim`` rather than ``inner_dim`` (it
       passes through the transformer's pretrained ``text_embedder``), so its
       shape differs from the other two skeleton modules as well as its path.
+    * ``"cam_action"`` — ``cam_action_encoder`` + ``cam_action_add_proj``.
+    * ``"cam_action_adaln"`` — ``cam_action_encoder`` + ``cam_action_adaln_proj``.
+    * ``"cam_action_cross_attn"`` — ``cam_action_encoder`` only. None of the three
+      builds the base-frame ``action_encoder``; the camera-frame encoder is a
+      separate attribute (different input width, plus a view embedding), so its
+      checkpoints never alias the vector-action ones.
 
     Every submodule other than the transformer lives here rather than inside
     ``WanModel`` because ``create_sharded_logical_transformer`` materialises the
@@ -186,6 +225,9 @@ class WanCtrlWorldModel(nnx.Module):
         skeleton_embed: NNXWanSkeletonPatchEmbed | None = None,
         skeleton_adaln_embed: NNXWanSkeletonAdaLNEmbed | None = None,
         skeleton_cross_attn_embed: NNXWanSkeletonCrossAttnEmbed | None = None,
+        cam_action_encoder: NNXWanCameraActionEncoder | None = None,
+        cam_action_adaln_proj: NNXWanActionAdaLNProjector | None = None,
+        cam_action_add_proj: NNXWanActionAdaLNProjector | None = None,
     ):
         self.transformer = transformer
         self.action_encoder = action_encoder if action_encoder is not None else nnx.data(None)
@@ -196,6 +238,15 @@ class WanCtrlWorldModel(nnx.Module):
         )
         self.skeleton_cross_attn_embed = (
             skeleton_cross_attn_embed if skeleton_cross_attn_embed is not None else nnx.data(None)
+        )
+        self.cam_action_encoder = (
+            cam_action_encoder if cam_action_encoder is not None else nnx.data(None)
+        )
+        self.cam_action_adaln_proj = (
+            cam_action_adaln_proj if cam_action_adaln_proj is not None else nnx.data(None)
+        )
+        self.cam_action_add_proj = (
+            cam_action_add_proj if cam_action_add_proj is not None else nnx.data(None)
         )
 
 
@@ -268,16 +319,16 @@ def _text_routes(
     """
     if not use_task_instructions or text_embeds is None:
         return None, None
-    if action_cond_mode in ("adaln", "skeleton", "skeleton_adaln"):
-        # All three leave cross-attention free (adaln moves the action to the
-        # timestep embedding; skeleton moves it to the video tokens;
-        # skeleton_adaln to the AdaLN site), so the instruction can be the full
-        # T5 sequence rather than a pooled bias.
+    if action_cond_mode in ("adaln", "skeleton", "skeleton_adaln", "cam_action", "cam_action_adaln"):
+        # All of these leave cross-attention free (adaln and cam_action_adaln
+        # move the action to the timestep embedding; skeleton and cam_action to
+        # the video tokens; skeleton_adaln to the AdaLN site), so the instruction
+        # can be the full T5 sequence rather than a pooled bias.
         #
-        # skeleton_cross_attn is deliberately NOT in this list: it occupies
-        # cross-attention with the skeleton grid and locks it per frame, so like
-        # the vector `cross_attn` route it has no room for a second K/V sequence
-        # and falls through to the pooled bias below.
+        # skeleton_cross_attn and cam_action_cross_attn are deliberately NOT in
+        # this list: they occupy cross-attention and lock it per frame (and per
+        # camera), so like the vector `cross_attn` route they have no room for a
+        # second K/V sequence and fall through to the pooled bias below.
         return None, text_embeds
     return _pool_text_tokens(text_embeds), None
 
@@ -302,14 +353,16 @@ def _add_text_bias(action_tokens: jnp.ndarray, text_bias: jnp.ndarray | None) ->
 def _frame_level_cond(action_cond_mode: str) -> bool:
     """Whether cross-attention should be locked per latent frame.
 
-    Two modes put a per-frame sequence in the K/V and so want the
+    Three modes put a per-frame sequence in the K/V and so want the
     ``(B*F_lat, K, D)`` reshape: ``cross_attn`` (a handful of action tokens per
-    frame) and ``skeleton_cross_attn`` (a full spatial grid per frame).
-    ``adaln``, ``skeleton`` and ``skeleton_adaln`` leave cross-attention carrying
-    a single shared sequence (the instruction, or all-zero tokens), where the
-    reshape is a pure waste — a B*F_lat batch expansion over identical K/V.
+    frame), ``skeleton_cross_attn`` (a full spatial grid per frame) and
+    ``cam_action_cross_attn`` (a handful of action tokens per frame PER CAMERA —
+    the reshape then sees ``F_lat * 3`` groups, one per camera patch of a frame).
+    The remaining modes leave cross-attention carrying a single shared sequence
+    (the instruction, or all-zero tokens), where the reshape is a pure waste — a
+    B*F_lat batch expansion over identical K/V.
     """
-    return action_cond_mode in ("cross_attn", "skeleton_cross_attn")
+    return action_cond_mode in ("cross_attn", "skeleton_cross_attn", "cam_action_cross_attn")
 
 
 def _xattn_tokens_per_frame(
@@ -545,6 +598,168 @@ def _route_action_conditioning(
     return action_tokens, None
 
 
+def _is_cam_action_mode(action_cond_mode: str) -> bool:
+    """Whether the conditioning is the camera-frame action (all three sites)."""
+    return action_cond_mode in ("cam_action", "cam_action_adaln", "cam_action_cross_attn")
+
+
+def _video_tokens_per_view(H_lat: int, W_lat: int, patch_hw: int = 2) -> int:
+    """Video tokens one camera owns in one latent frame.
+
+    The views are stacked along H, so with row-major patch order view ``v`` of a
+    frame is the contiguous run of ``(rows // NUM_VIEWS) * cols`` tokens starting
+    at ``v`` times that — which is what makes a plain ``jnp.repeat`` over
+    ``(frame, view)`` land each camera's action on its own tokens.
+    """
+    rows = H_lat // patch_hw
+    if rows % NUM_VIEWS:
+        raise ValueError(
+            f"camera-frame actions need the {NUM_VIEWS} stacked views to split the "
+            f"patch grid evenly, but H_lat={H_lat} gives {rows} patch rows"
+        )
+    return (rows // NUM_VIEWS) * (W_lat // patch_hw)
+
+
+def _cam_action_tokens(
+    cam_action_encoder: NNXWanCameraActionEncoder,
+    data: dict,
+    bsz: int,
+    F_lat: int,
+    n_hist: int,
+    cam_stats,
+    cfg_rng: jax.Array | None = None,
+    drop_prob: float = 0.0,
+) -> jnp.ndarray:
+    """Encode a window's camera-frame actions: ``(B, F_lat*V*K, wan_text_dim)``.
+
+    Re-anchors ``cam_pose`` to this window's own last history frame (see
+    ``camera_frame_actions``), so the same call serves a training window and
+    every chunk of an AR rollout. ``data`` needs ``cam_pose``, ``ee_cartesian``,
+    ``action`` (for the gripper) and ``frame_positions`` (which marks episode
+    frame 0's padded slots and so picks the anchor).
+
+    CFG dropout, when ``cfg_rng`` is given, zeroes the encoder output for a
+    ``drop_prob`` fraction of samples — BEFORE any projection, as the vector
+    routes do, so the adaln/additive uncond branch is ``proj(0)`` and the
+    projection bias cancels out of the CFG delta.
+    """
+    anchor, valid = wan_anchor_and_valid(data["frame_positions"][:bsz], n_hist)
+    feats = camera_action_features(
+        data["cam_pose"][:bsz],
+        data["ee_cartesian"][:bsz],
+        data["action"][:bsz, :, 6],
+        anchor,
+        *cam_stats,
+        valid=valid,
+    )                                                                # (B, 4F, V, D)
+    b, _, v, d = feats.shape
+    feats = feats.reshape(b, F_lat, WAN_ACTIONS_PER_LATENT, v, d).transpose(0, 1, 3, 2, 4)
+    tokens = cam_action_encoder(feats)                               # (B, F*V*K, 4096)
+    if cfg_rng is not None and drop_prob > 0.0:
+        tokens = _apply_cfg_dropout(cfg_rng, tokens, drop_prob)
+    return tokens
+
+
+def _route_cam_action_conditioning(
+    model,
+    cam_tokens: jnp.ndarray,
+    action_cond_mode: str,
+    tokens_per_frame_k: int,
+    F_lat: int,
+    H_lat: int,
+    W_lat: int,
+    text_tokens: jnp.ndarray | None = None,
+    text_bias: jnp.ndarray | None = None,
+    alpha: float = 0.1,
+) -> tuple[jnp.ndarray, jnp.ndarray | None, jnp.ndarray | None]:
+    """Route camera-frame action tokens to their site.
+
+    Returns ``(encoder_hidden_states, action_hidden_states, additive_bias)``,
+    the last two being ``WanModel``'s AdaLN and additive (``skeleton_hidden_states``)
+    arguments. In every mode camera ``v``'s tokens reach camera ``v``'s video
+    tokens only:
+
+    * ``cam_action_cross_attn``: the tokens ARE the K/V, pooled instruction added
+      (after CFG dropout, so it is never dropped and cancels out of the CFG
+      delta). The caller sets ``frame_level_cond=True`` with
+      ``cond_tokens_per_frame=K``; the transformer then derives ``F_lat*3``
+      frame-and-camera groups from the sequence length.
+    * ``cam_action_adaln``: each (frame, camera)'s K tokens are projected to one
+      ``inner_dim`` vector and repeated over that camera's tokens, then summed
+      into the per-token time embedding.
+    * ``cam_action``: same projection (a separate module), scaled by ``alpha``,
+      repeated the same way and added onto the video tokens.
+
+    The last two leave cross-attention free for the full instruction, or the
+    all-zero placeholder the other free-cross-attention modes feed.
+    """
+    b, _, d = cam_tokens.shape
+    if action_cond_mode == "cam_action_cross_attn":
+        enc = cam_tokens
+        if text_bias is not None:
+            enc = enc + text_bias[:, None, :].astype(enc.dtype)
+        return enc, None, None
+    if text_tokens is not None:
+        enc = text_tokens.astype(cam_tokens.dtype)
+    else:
+        enc = _placeholder_action_tokens(b, F_lat, tokens_per_frame_k, d, cam_tokens.dtype)
+    grouped = cam_tokens.reshape(b, F_lat * NUM_VIEWS, tokens_per_frame_k, d)
+    per_view = _video_tokens_per_view(H_lat, W_lat)
+    if action_cond_mode == "cam_action_adaln":
+        temb = model.cam_action_adaln_proj(grouped)                  # (B, F*V, inner)
+        return enc, jnp.repeat(temb, per_view, axis=1), None
+    bias = alpha * model.cam_action_add_proj(grouped)                # (B, F*V, inner)
+    return enc, None, jnp.repeat(bias, per_view, axis=1)
+
+
+def _build_cam_action_modules(config, transformer_config):
+    """``(encoder, adaln_proj, add_proj)`` for the cam_action modes, else Nones.
+
+    The encoder is the vector-action MLP fed the 10-dim camera-frame
+    features, with the same ``action_tokens_per_latent_frame`` grouping, so
+    the K/V count per (frame, camera) in ``cam_action_cross_attn`` equals the
+    per-frame count of the vector ``cross_attn`` route. The adaln and additive
+    projections are ``NNXWanActionAdaLNProjector``s — the vector adaln route's
+    own adapter, reused so the two sites differ only in where the result is
+    summed. ``inner_dim`` comes from the loaded transformer config, as in
+    ``_build_action_adaln_proj``.
+    """
+    mode = getattr(config, "action_cond_mode", "cross_attn")
+    if not _is_cam_action_mode(mode):
+        return None, None, None
+    tokens_per_frame = getattr(config, "action_tokens_per_latent_frame", 1)
+    encoder = NNXWanCameraActionEncoder(
+        rngs=nnx.Rngs(jax.random.key(config.seed + 5)),
+        num_views=NUM_VIEWS,
+        action_dim=CAM_ACTION_DIM,
+        num_actions=WAN_ACTIONS_PER_LATENT,
+        hidden_dim=config.wan_action_encoder_hidden_dim,
+        out_dim=config.wan_text_dim,
+        tokens_per_frame=tokens_per_frame,
+        dtype=_dtype(config.activations_dtype),
+        weights_dtype=_dtype(config.weights_dtype),
+    )
+    inner_dim = transformer_config.num_attention_heads * transformer_config.attention_head_dim
+
+    def _proj(seed_offset):
+        return NNXWanActionAdaLNProjector(
+            rngs=nnx.Rngs(jax.random.key(config.seed + seed_offset)),
+            tokens_per_frame=tokens_per_frame,
+            wan_text_dim=config.wan_text_dim,
+            inner_dim=inner_dim,
+            dtype=_dtype(config.activations_dtype),
+            weights_dtype=_dtype(config.weights_dtype),
+        )
+
+    adaln_proj = _proj(6) if mode == "cam_action_adaln" else None
+    add_proj = _proj(7) if mode == "cam_action" else None
+    return encoder, adaln_proj, add_proj
+
+
+def _cam_action_alpha(config) -> float:
+    return float(getattr(config, "cam_action_embed_alpha", 0.1))
+
+
 def _build_per_token_timestep(
     timesteps: jnp.ndarray,
     F_lat: int,
@@ -668,11 +883,14 @@ def _attn_param_layer_stats(params) -> dict:
 
 
 def _train_step(state: TrainState, data: dict, rng: jax.Array,
-                scheduler_state, scheduler, config) -> tuple:
+                scheduler_state, scheduler, config, cam_stats=None) -> tuple:
     """
     When grad_accum_steps == 1 (default): data leaves have shape [bsz, ...].
     When grad_accum_steps > 1: data leaves have shape [grad_accum_steps, bsz, ...];
     gradients are accumulated via jax.lax.scan before a single optimizer update.
+
+    ``cam_stats`` is the ``(xyz_lo, xyz_hi)`` pair the cam_action modes normalise
+    the anchored position with (``None`` in every other mode).
     """
     _, noise_rng, timestep_rng, drop_rng, new_rng = jax.random.split(rng, 5)
 
@@ -735,33 +953,48 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         )
         cfg_rng, do_rng = jax.random.split(d_rng)
 
-        if _is_skeleton_mode(action_cond_mode):
-            # No action encoder in these modes; the conditioning is the skeleton
-            # video, patch-embedded and injected inside the transformer (into the
-            # video tokens for `skeleton`, into the shared AdaLN slot for
-            # `skeleton_adaln`). CFG drops the SKELETON here, which is what the
-            # rollout's uncond branch also drops.
-            action_tokens = _placeholder_action_tokens(
-                b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
+        if _is_cam_action_mode(action_cond_mode):
+            # Camera-frame actions, re-anchored to this window and encoded per
+            # camera; the route owns the text bias and all three sites. CFG drops
+            # the encoded action, as in the vector modes.
+            cam_tokens = _cam_action_tokens(
+                model.cam_action_encoder, micro_data, bsz, F_lat, n_hist, cam_stats,
+                cfg_rng, config.ctrl_cfg_drop_prob,
             )
-            skeleton_tokens = _encode_skeleton(
-                _skeleton_module(model, action_cond_mode),
-                micro_data["skeleton"][:bsz],
-                cfg_rng,
-                config.ctrl_cfg_drop_prob,
-                weights_dtype,
+            enc_tokens, action_hidden_states, additive_bias = _route_cam_action_conditioning(
+                model, cam_tokens, action_cond_mode, cond_tokens_per_frame,
+                F_lat, H_lat, W_lat, text_tokens=text_tokens, text_bias=text_bias,
+                alpha=_cam_action_alpha(config),
             )
         else:
-            action_tokens = model.action_encoder(actions_grouped, None)  # (B, F_lat*K, 4096)
-            action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
-            skeleton_tokens = None
-        action_tokens = _add_text_bias(action_tokens, text_bias)  # after dropout — never dropped
+            if _is_skeleton_mode(action_cond_mode):
+                # No action encoder in these modes; the conditioning is the skeleton
+                # video, patch-embedded and injected inside the transformer (into the
+                # video tokens for `skeleton`, into the shared AdaLN slot for
+                # `skeleton_adaln`). CFG drops the SKELETON here, which is what the
+                # rollout's uncond branch also drops.
+                action_tokens = _placeholder_action_tokens(
+                    b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
+                )
+                skeleton_tokens = _encode_skeleton(
+                    _skeleton_module(model, action_cond_mode),
+                    micro_data["skeleton"][:bsz],
+                    cfg_rng,
+                    config.ctrl_cfg_drop_prob,
+                    weights_dtype,
+                )
+            else:
+                action_tokens = model.action_encoder(actions_grouped, None)  # (B, F_lat*K, 4096)
+                action_tokens = _apply_cfg_dropout(cfg_rng, action_tokens, config.ctrl_cfg_drop_prob)
+                skeleton_tokens = None
+            action_tokens = _add_text_bias(action_tokens, text_bias)  # after dropout — never dropped
 
-        enc_tokens, action_hidden_states = _route_action_conditioning(
-            action_tokens, model.action_adaln_proj, action_cond_mode,
-            cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
-            skeleton_tokens=skeleton_tokens, text_bias=text_bias,
-        )
+            enc_tokens, action_hidden_states = _route_action_conditioning(
+                action_tokens, model.action_adaln_proj, action_cond_mode,
+                cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
+                skeleton_tokens=skeleton_tokens, text_bias=text_bias,
+            )
+            additive_bias = _skeleton_bias(action_cond_mode, skeleton_tokens)
 
         want_attn_diag = bool(getattr(config, "log_attn_activation_stats", False))
         transformer_out = model.transformer(
@@ -769,7 +1002,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
             timestep=timestep_2d,           # (B, seq_len) → per-token AdaLN
             encoder_hidden_states=enc_tokens,
             action_hidden_states=action_hidden_states,
-            skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
+            skeleton_hidden_states=additive_bias,
             deterministic=False,
             rngs=nnx.Rngs(dropout=do_rng),
             # Per-frame cross-attn locking only applies when action tokens flow
@@ -933,6 +1166,9 @@ VALID_ACTION_COND_MODES = (
     "skeleton",
     "skeleton_adaln",
     "skeleton_cross_attn",
+    "cam_action",
+    "cam_action_adaln",
+    "cam_action_cross_attn",
 )
 
 
@@ -946,6 +1182,13 @@ class WanCtrlWorldTrainer:
             raise ValueError(
                 f"action_cond_mode={mode!r} is not one of {VALID_ACTION_COND_MODES}."
             )
+        # Per-camera p01/p99 of the anchored EEF position, baked into the jitted
+        # steps as constants. Loaded up front so a missing file fails before the
+        # multi-minute pipeline load rather than at the first trace.
+        self._cam_stats = (
+            load_cam_action_stats(getattr(config, "cam_action_stats_path", ""))
+            if _is_cam_action_mode(mode) else None
+        )
 
     # ── Scheduler ─────────────────────────────────────────────────────────────
 
@@ -978,6 +1221,7 @@ class WanCtrlWorldTrainer:
             shuffle=is_training,
             shard_for_training=jax.process_count() > 1,
             load_skeleton=_is_skeleton_mode(getattr(config, "action_cond_mode", "cross_attn")),
+            load_cam_pose=_is_cam_action_mode(getattr(config, "action_cond_mode", "cross_attn")),
             # Eval windows are anchored at the episode start (history = frame 0
             # repeated), matching a deployment-style cold-start rollout.
             first_window_only=not is_training,
@@ -996,13 +1240,15 @@ class WanCtrlWorldTrainer:
         return pipeline
 
     def _build_action_encoder(self) -> NNXWanActionEncoder | None:
-        """The vector-action encoder, or None in the skeleton modes.
+        """The base-frame vector-action encoder, or None in the skeleton and
+        cam_action modes.
 
-        Those modes condition on the rendered-skeleton video instead, so an
-        encoder here would receive zero gradient forever — dead weights in the
-        checkpoint and dead optimizer moments in HBM.
+        Those modes condition on the rendered-skeleton video or the camera-frame
+        action instead, so an encoder here would receive zero gradient forever —
+        dead weights in the checkpoint and dead optimizer moments in HBM.
         """
-        if _is_skeleton_mode(getattr(self.config, "action_cond_mode", "cross_attn")):
+        mode = getattr(self.config, "action_cond_mode", "cross_attn")
+        if _is_skeleton_mode(mode) or _is_cam_action_mode(mode):
             return None
         return NNXWanActionEncoder(
             rngs=nnx.Rngs(jax.random.key(self.config.seed)),
@@ -1119,6 +1365,9 @@ class WanCtrlWorldTrainer:
             weights_dtype=_dtype(self.config.weights_dtype),
         )
 
+    def _build_cam_action_modules(self, transformer_config):
+        return _build_cam_action_modules(self.config, transformer_config)
+
     # ── Checkpointing ─────────────────────────────────────────────────────────
 
     def _build_checkpoint_manager(self, ckpt_dir: str) -> ocp.CheckpointManager:
@@ -1229,6 +1478,9 @@ class WanCtrlWorldTrainer:
         # (or vice versa) is a trace-time structure mismatch, not a warning.
         if _is_skeleton_mode(getattr(self.config, "action_cond_mode", "cross_attn")):
             shardings["skeleton"] = pspec
+        if _is_cam_action_mode(getattr(self.config, "action_cond_mode", "cross_attn")):
+            shardings["cam_pose"] = pspec
+            shardings["ee_cartesian"] = pspec
         return shardings
 
     # ── Main training entry point ─────────────────────────────────────────────
@@ -1257,9 +1509,15 @@ class WanCtrlWorldTrainer:
         skeleton_embed = self._build_skeleton_embed(pipeline.transformer.config)
         skeleton_adaln_embed = self._build_skeleton_adaln_embed(pipeline.transformer.config)
         skeleton_xattn_embed = self._build_skeleton_cross_attn_embed(pipeline.transformer.config)
+        cam_encoder, cam_adaln_proj, cam_add_proj = self._build_cam_action_modules(
+            pipeline.transformer.config
+        )
         combined = WanCtrlWorldModel(
             pipeline.transformer, action_encoder, action_adaln_proj,
             skeleton_embed, skeleton_adaln_embed, skeleton_xattn_embed,
+            cam_action_encoder=cam_encoder,
+            cam_action_adaln_proj=cam_adaln_proj,
+            cam_action_add_proj=cam_add_proj,
         )
 
         # 3. Split combined model into (graphdef, params, rest_of_state)
@@ -1313,7 +1571,9 @@ class WanCtrlWorldTrainer:
 
         # 9. Compile train step
         p_train_step = jax.jit(
-            functools.partial(_train_step, scheduler=scheduler, config=config),
+            functools.partial(
+                _train_step, scheduler=scheduler, config=config, cam_stats=self._cam_stats
+            ),
             in_shardings=(state_shardings, data_shardings, None, None),
             out_shardings=(state_shardings, None, None, None),
             donate_argnums=(0,),
@@ -1353,13 +1613,34 @@ class WanCtrlWorldTrainer:
                     "video token, per latent frame) with 3D RoPE on the cross-attn "
                     "Q/K so the grids line up cell for cell; vector actions unused"
                 )
+            elif _is_cam_action_mode(_acm):
+                _site = {
+                    "cam_action": (
+                        f"added (alpha={_cam_action_alpha(config)}) onto that camera's "
+                        "video tokens, the 'skeleton' site"
+                    ),
+                    "cam_action_adaln": (
+                        "summed into that camera's per-token timestep embedding, "
+                        "the 'adaln' site"
+                    ),
+                    "cam_action_cross_attn": (
+                        "the cross-attention K/V, locked per latent frame AND per "
+                        "camera, the 'cross_attn' site"
+                    ),
+                }[_acm]
+                max_logging.log(
+                    f"  Action conditioning: {_acm} — EEF pose in each camera's frame "
+                    "(re-anchored to the window's last history frame; the wrist gets "
+                    f"its ego-motion), encoded per camera and {_site}; base-frame "
+                    "vector actions unused except the gripper"
+                )
             else:
                 max_logging.log(f"  Action conditioning: {_acm} — 7-dim vector actions")
             if max_utils.config_get(config, "use_task_instructions", False):
                 # cross_attn is the only mode that pools; adaln and skeleton both
                 # leave cross-attention free for the full T5 sequence (see
                 # _text_routes).
-                if _acm == "cross_attn":
+                if _acm in ("cross_attn", "cam_action_cross_attn"):
                     _route = "pooled into the action tokens"
                 elif _acm == "skeleton_cross_attn":
                     # Same constraint as cross_attn: the K/V is frame-locked, so
@@ -1607,7 +1888,9 @@ class WanCtrlWorldTrainer:
         if not hasattr(self, "_p_eval_step"):
             eval_data_shardings = self._data_shardings(mesh, for_eval=True)
             self._p_eval_step = jax.jit(
-                functools.partial(_eval_step, scheduler=scheduler, config=config),
+                functools.partial(
+                    _eval_step, scheduler=scheduler, config=config, cam_stats=self._cam_stats
+                ),
                 in_shardings=(state_shardings, eval_data_shardings, None, None),
                 out_shardings=None,
             )
@@ -1704,6 +1987,7 @@ class WanCtrlWorldTrainer:
                     num_samples=int(getattr(config, "wandb_video_samples", 1)),
                     lat_mean=lat_mean,
                     lat_std=lat_std,
+                    cam_stats=self._cam_stats,
                 ),
                 in_shardings=(state_shardings, self._data_shardings(mesh, for_eval=True), None),
                 out_shardings=None,
@@ -1744,7 +2028,7 @@ class WanCtrlWorldTrainer:
 
 
 def _eval_step(state: TrainState, data: dict, rng: jax.Array,
-               scheduler_state, scheduler, config) -> jax.Array:
+               scheduler_state, scheduler, config, cam_stats=None) -> jax.Array:
     """Eval-only forward pass — no gradient computation, same per-token scheme."""
     _, noise_rng, timestep_rng = jax.random.split(rng, 3)
     bsz = config.global_batch_size_to_train_on
@@ -1784,31 +2068,42 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
         action_cond_mode, cond_tokens_per_frame, H_lat, W_lat
     )
     # No CFG dropout on the eval path, so this is just the plain conditional.
-    if _is_skeleton_mode(action_cond_mode):
-        action_tokens = _placeholder_action_tokens(
-            b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
+    if _is_cam_action_mode(action_cond_mode):
+        cam_tokens = _cam_action_tokens(
+            model.cam_action_encoder, data, bsz, F_lat, n_hist, cam_stats
         )
-        skeleton_tokens = _encode_skeleton(
-            _skeleton_module(model, action_cond_mode),
-            data["skeleton"][:bsz], None, 0.0, weights_dtype,
+        enc_tokens, action_hidden_states, additive_bias = _route_cam_action_conditioning(
+            model, cam_tokens, action_cond_mode, cond_tokens_per_frame,
+            F_lat, H_lat, W_lat, text_tokens=text_tokens, text_bias=text_bias,
+            alpha=_cam_action_alpha(config),
         )
     else:
-        action_tokens = model.action_encoder(actions_grouped, None)  # (B, F_lat*K, 4096)
-        skeleton_tokens = None
-    action_tokens = _add_text_bias(action_tokens, text_bias)
+        if _is_skeleton_mode(action_cond_mode):
+            action_tokens = _placeholder_action_tokens(
+                b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
+            )
+            skeleton_tokens = _encode_skeleton(
+                _skeleton_module(model, action_cond_mode),
+                data["skeleton"][:bsz], None, 0.0, weights_dtype,
+            )
+        else:
+            action_tokens = model.action_encoder(actions_grouped, None)  # (B, F_lat*K, 4096)
+            skeleton_tokens = None
+        action_tokens = _add_text_bias(action_tokens, text_bias)
 
-    enc_tokens, action_hidden_states = _route_action_conditioning(
-        action_tokens, model.action_adaln_proj, action_cond_mode,
-        cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
-        skeleton_tokens=skeleton_tokens, text_bias=text_bias,
-    )
+        enc_tokens, action_hidden_states = _route_action_conditioning(
+            action_tokens, model.action_adaln_proj, action_cond_mode,
+            cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
+            skeleton_tokens=skeleton_tokens, text_bias=text_bias,
+        )
+        additive_bias = _skeleton_bias(action_cond_mode, skeleton_tokens)
 
     model_pred = model.transformer(
         hidden_states=noisy_latents,
         timestep=timestep_2d,
         encoder_hidden_states=enc_tokens,
         action_hidden_states=action_hidden_states,
-        skeleton_hidden_states=_skeleton_bias(action_cond_mode, skeleton_tokens),
+        skeleton_hidden_states=additive_bias,
         deterministic=True,
         frame_level_cond=_frame_level_cond(action_cond_mode),
         cond_tokens_per_frame=xattn_tokens_per_frame,
@@ -1825,7 +2120,8 @@ def _eval_step(state: TrainState, data: dict, rng: jax.Array,
 
 def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
                    scheduler, config, num_steps: int, guidance_scale: float,
-                   num_samples: int, lat_mean: jnp.ndarray, lat_std: jnp.ndarray) -> tuple:
+                   num_samples: int, lat_mean: jnp.ndarray, lat_std: jnp.ndarray,
+                   cam_stats=None) -> tuple:
     """Euler rollout for W&B video logging.
 
     History latent frames stay clean; future frames are denoised from pure
@@ -1858,7 +2154,15 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
         action_cond_mode, cond_tokens_per_frame, H_lat, W_lat
     )
 
-    if _is_skeleton_mode(action_cond_mode):
+    cam_mode = _is_cam_action_mode(action_cond_mode)
+    if cam_mode:
+        # Text is added inside _route_cam_action_conditioning, so these stay the
+        # bare encoder output and the uncond branch below is simply zeros.
+        action_tokens = _cam_action_tokens(
+            model.cam_action_encoder, data, bsz, F_lat, n_hist, cam_stats
+        )
+        skel_tokens = None
+    elif _is_skeleton_mode(action_cond_mode):
         action_tokens = _placeholder_action_tokens(
             b, F_lat, cond_tokens_per_frame, config.wan_text_dim, latents.dtype
         )
@@ -1869,7 +2173,8 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
     else:
         action_tokens = model.action_encoder(actions_grouped, None)
         skel_tokens = None
-    action_tokens = _add_text_bias(action_tokens, text_bias)
+    if not cam_mode:
+        action_tokens = _add_text_bias(action_tokens, text_bias)
 
     num_train_t = scheduler.config.num_train_timesteps
     # Shift-warped sigma schedule — the same warp FlaxFlowMatchScheduler.set_timesteps
@@ -1896,17 +2201,25 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
         ts_2d = jax.lax.with_sharding_constraint(ts_2d, P(("data", "fsdp", "context"), None))
 
         def _velocity(tokens, skel):
-            enc_tokens, action_hidden_states = _route_action_conditioning(
-                tokens, model.action_adaln_proj, action_cond_mode,
-                cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
-                skeleton_tokens=skel, text_bias=text_bias,
-            )
+            if cam_mode:
+                enc_tokens, action_hidden_states, additive_bias = _route_cam_action_conditioning(
+                    model, tokens, action_cond_mode, cond_tokens_per_frame,
+                    F_lat, H_lat, W_lat, text_tokens=text_tokens, text_bias=text_bias,
+                    alpha=_cam_action_alpha(config),
+                )
+            else:
+                enc_tokens, action_hidden_states = _route_action_conditioning(
+                    tokens, model.action_adaln_proj, action_cond_mode,
+                    cond_tokens_per_frame, H_lat, W_lat, text_tokens=text_tokens,
+                    skeleton_tokens=skel, text_bias=text_bias,
+                )
+                additive_bias = _skeleton_bias(action_cond_mode, skel)
             return model.transformer(
                 hidden_states=roll_input,
                 timestep=ts_2d,
                 encoder_hidden_states=enc_tokens,
                 action_hidden_states=action_hidden_states,
-                skeleton_hidden_states=_skeleton_bias(action_cond_mode, skel),
+                skeleton_hidden_states=additive_bias,
                 deterministic=True,
                 frame_level_cond=_frame_level_cond(action_cond_mode),
                 cond_tokens_per_frame=xattn_tokens_per_frame,
@@ -1925,7 +2238,10 @@ def _video_rollout(state: TrainState, data: dict, rng: jax.Array,
             # zeros_like alone would also blank the pooled text baked into them,
             # guiding on action+text and putting the uncond branch out of
             # distribution.
-            if _is_skeleton_mode(action_cond_mode):
+            if cam_mode:
+                # Zero camera-action tokens; the route re-adds the pooled text.
+                v_uncond = _velocity(jnp.zeros_like(action_tokens), None)
+            elif _is_skeleton_mode(action_cond_mode):
                 v_uncond = _velocity(action_tokens, None)
             else:
                 v_uncond = _velocity(

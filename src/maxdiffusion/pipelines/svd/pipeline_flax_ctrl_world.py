@@ -45,6 +45,11 @@ from flax.core.frozen_dict import FrozenDict
 from PIL import Image
 
 from maxdiffusion.models.svd.action_encoder_flax import tile_text_to_hidden
+from maxdiffusion.models.svd.ctrl_world_flax import (
+    _is_cam_action_mode,
+    encode_cam_actions,
+    route_cam_actions,
+)
 
 from ...models.embeddings_flax import svd_micro_cond_embed
 from ...schedulers.scheduling_edm_euler_flax import (
@@ -75,6 +80,10 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         action_adaln_proj: Any = None,
         skeleton_module: Any = None,
         skeleton_params_key: Optional[str] = None,
+        cam_action_modules: Optional[dict] = None,
+        cam_action_xyz_lo: Any = None,
+        cam_action_xyz_hi: Any = None,
+        cam_action_embed_alpha: float = 0.1,
         cross_attn_dim: Optional[int] = None,
         text_embed_dim: Optional[int] = None,
         image_encoder: Any = None,
@@ -106,6 +115,13 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         # ``ctrl_world_flax._skeleton_apply_key`` returns for the mode).
         self.skeleton_module = skeleton_module
         self.skeleton_params_key = skeleton_params_key
+        # Non-empty only in the three cam_action modes: {params_key: module} for
+        # the camera-frame encoder and its projection, plus the anchored-position
+        # normalisation stats and additive alpha the run trained with.
+        self.cam_action_modules = cam_action_modules or {}
+        self.cam_action_xyz_lo = cam_action_xyz_lo
+        self.cam_action_xyz_hi = cam_action_xyz_hi
+        self.cam_action_embed_alpha = cam_action_embed_alpha
         # Cross-attention width and text-embedding width. Normally read straight
         # off the action encoder, but the skeleton modes have none, so the caller
         # passes them in; keeping them on the instance means the conditioning
@@ -201,6 +217,8 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         skeleton_mode: bool,
         frame_level_cond: bool,
         num_inference_steps: int,
+        cam_mode: bool = False,
+        cross_attn_views: int = 1,
         min_guidance_scale: float,
         max_guidance_scale: float,
     ):
@@ -262,14 +280,18 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
                 added_cond_kwargs={"adm_vector": adm_vec_all},
                 image_only_indicator=image_only_indicator,
                 num_frames=t_total,
-                # adaln and all three skeleton routes hand cross-attention a
-                # context that is already flattened to (B*T, S, C); mirrors
-                # action_world_train_step's ``not (adaln or skeleton_mode)``.
+                # adaln, the skeleton routes and the cam_action routes hand
+                # cross-attention a context that is already flattened to
+                # (B*T, S, C); mirrors action_world_train_step's
+                # ``not (adaln or skeleton_mode or cam_mode)``.
                 frame_level_cond=(
-                    False if (adaln or skeleton_mode) else frame_level_cond
+                    False if (adaln or skeleton_mode or cam_mode) else frame_level_cond
                 ),
                 action_hidden_states=action_hidden_states_all,
                 skeleton_hidden_states=skeleton_hidden_states_all,
+                cross_attention_kwargs=(
+                    {"cross_attn_views": cross_attn_views} if cross_attn_views > 1 else None
+                ),
             ).sample  # (b_all*T, 4, H, W)
             v_pred = v_pred.reshape((b_all, t_total) + v_pred.shape[1:])
 
@@ -335,6 +357,8 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         history: Optional[jnp.ndarray] = None,
         text_embeds: Optional[jnp.ndarray] = None,
         skeleton: Optional[jnp.ndarray] = None,
+        cam_pose: Optional[jnp.ndarray] = None,
+        ee_cartesian: Optional[jnp.ndarray] = None,
         num_frames: int = 5,
         num_history: int = 6,
         height: int = 192 * 3,
@@ -364,6 +388,11 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
         ignored entirely and ``skeleton`` — the VAE-encoded rendered-skeleton
         video, shape ``(B, num_history + num_frames, 4, H/8, W/8)`` — is the
         conditioning signal instead.
+
+        In the three ``cam_action*`` modes ``cam_pose`` ``(B, T, 3, 12)`` and
+        ``ee_cartesian`` ``(B, T, 6)`` — the same slots as ``action``, which then
+        supplies only the gripper — are re-anchored at the conditioning frame
+        (slot ``num_history``) and encoded once per camera.
 
         ``history``, when provided, has shape
         ``(B, num_history, 4, H/8, W/8)`` and is prepended on the frame
@@ -396,11 +425,58 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
                 "constructed with skeleton_module=<the module this mode trained> "
                 "and skeleton_params_key=<its params key>."
             )
-        # Set by the skeleton routes only; the vector routes leave conv_in alone.
+        cam_mode = _is_cam_action_mode(action_cond_mode)
+        if cam_mode and not self.cam_action_modules:
+            raise ValueError(
+                f"action_cond_mode={action_cond_mode!r} needs the pipeline to be "
+                "constructed with cam_action_modules=<{params_key: module}> and the "
+                "cam_action_xyz_lo/hi stats the run trained with."
+            )
+        # Set by the skeleton and cam_action routes only; the vector routes leave
+        # conv_in alone.
         skeleton_hidden_states_all = None
+        cross_attn_views = 1
         # 1. Action conditioning. Mirrors action_world_train_step exactly — any
         #    divergence here silently degrades generation rather than erroring.
-        if skeleton_mode:
+        if cam_mode:
+            if cam_pose is None or ee_cartesian is None:
+                raise ValueError(
+                    f"action_cond_mode={action_cond_mode!r} needs cam_pose=<(B, T, 3, 12)> "
+                    "and ee_cartesian=<(B, T, 6)>; build the dataset with load_cam_pose=True."
+                )
+            cam_apply = {k: m.apply for k, m in self.cam_action_modules.items()}
+            cam_hidden = encode_cam_actions(
+                cam_apply, params, cam_pose, ee_cartesian, action, t_history,
+                self.cam_action_xyz_lo, self.cam_action_xyz_hi,
+            )                                                       # (B, T, V, C)
+            b = cam_hidden.shape[0]
+            if text_embeds is not None and self.text_embed_dim is not None:
+                text_ctx = tile_text_to_hidden(
+                    text_embeds, self.cross_attn_dim, self.text_embed_dim
+                )                                                   # (B, 1, C)
+            else:
+                text_ctx = jnp.zeros((b, 1, self.cross_attn_dim), dtype=cam_hidden.dtype)
+            if do_cfg:
+                # Uncond = zero camera-action tokens, projected — the state
+                # training's CFG dropout produces (it drops before the
+                # projection). Text rides on both branches and cancels out.
+                cam_hidden = jnp.concatenate([jnp.zeros_like(cam_hidden), cam_hidden], axis=0)
+                text_ctx = jnp.concatenate([text_ctx, text_ctx], axis=0)
+            latent_hw = (
+                tuple(image_latent.shape[-2:]) if image_latent is not None
+                else (height // 8, width // 8)
+            )
+            routed = route_cam_actions(
+                cam_apply, params, action_cond_mode, cam_hidden, text_ctx,
+                latent_hw, self.cam_action_embed_alpha,
+            )
+            action_hidden_all = routed["encoder_hidden_states"]
+            action_hidden_states_all = routed.get("action_hidden_states")
+            skeleton_hidden_states_all = routed.get("skeleton_hidden_states")
+            cross_attn_views = int(
+                (routed.get("cross_attention_kwargs") or {}).get("cross_attn_views", 1)
+            )
+        elif skeleton_mode:
             if skeleton is None:
                 raise ValueError(
                     f"action_cond_mode={action_cond_mode!r} needs skeleton=<(B, T, 4, "
@@ -594,6 +670,8 @@ class FlaxCtrlWorldPipeline(FlaxStableVideoDiffusionPipeline):
             skeleton_mode=skeleton_mode,
             frame_level_cond=frame_level_cond,
             num_inference_steps=num_inference_steps,
+            cam_mode=cam_mode,
+            cross_attn_views=cross_attn_views,
             min_guidance_scale=float(min_guidance_scale),
             max_guidance_scale=float(max_guidance_scale),
         )

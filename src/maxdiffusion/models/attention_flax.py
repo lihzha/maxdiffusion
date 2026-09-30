@@ -2004,9 +2004,30 @@ class FlaxBasicTransformerBlock(nn.Module):
 
     # cross attention
     residual = hidden_states
-    hidden_states = self.attn2(
-        self.norm2(hidden_states), context, deterministic=deterministic, cross_attention_kwargs=cross_attention_kwargs
-    )
+    views = int((cross_attention_kwargs or {}).get("cross_attn_views", 1))
+    if views > 1:
+      # View-locked cross-attention (Ctrl-World cam_action_cross_attn): the
+      # queries are an H-stacked multi-camera grid flattened row-major, so view v
+      # is one contiguous run of L // views tokens, and the context holds each
+      # view's keys in the same order. Folding views into the batch lets view v's
+      # queries attend only to view v's keys. Self-attention above still spans
+      # every view.
+      b, length, dim = hidden_states.shape
+      if length % views or context.shape[1] % views:
+        raise ValueError(
+            f"cross_attn_views={views} must divide the query length {length} and the "
+            f"context length {context.shape[1]}"
+        )
+      hidden_states = self.attn2(
+          self.norm2(hidden_states).reshape(b * views, length // views, dim),
+          context.reshape(b * views, context.shape[1] // views, context.shape[2]),
+          deterministic=deterministic,
+          cross_attention_kwargs=cross_attention_kwargs,
+      ).reshape(b, length, dim)
+    else:
+      hidden_states = self.attn2(
+          self.norm2(hidden_states), context, deterministic=deterministic, cross_attention_kwargs=cross_attention_kwargs
+      )
     hidden_states = hidden_states + residual
 
     # feed forward

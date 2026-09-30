@@ -18,10 +18,15 @@ One module per ``action_cond_mode`` route:
   ``adaln`` route, so "adaln" means one site regardless of representation. Also
   does not use the vector actions.
 
-The two axes these modules span are independent: an action *representation*
-(vector actions vs. rendered-skeleton latents) and a *conditioning site*
-(cross-attention K/V, AdaLN modulation, or additive in video-token space).
-``action_cond_mode`` currently names four of the six combinations.
+* ``NNXWanCameraActionEncoder`` (``cam_action``, ``cam_action_adaln``,
+  ``cam_action_cross_attn``) — the action encoder for actions expressed in each
+  camera's own frame, one token set per camera. The adaln and additive routes
+  reuse ``NNXWanActionAdaLNProjector`` on its output.
+
+The axes these modules span are independent: an action *representation*
+(base-frame vector actions, rendered-skeleton latents, or camera-frame vector
+actions) and a *conditioning site* (cross-attention K/V, AdaLN modulation, or
+additive in video-token space).
 
 The action-encoder docs below apply to the first two modes.
 
@@ -157,6 +162,63 @@ class NNXWanActionEncoder(nnx.Module):
             # Tile (B, out_dim) → (B*F*K, out_dim): repeat each sample F*K times.
             x = x + jnp.repeat(text_embed, F * K, axis=0).astype(x.dtype)
         return x.reshape(B, F * K, -1)     # (B, F_lat * tokens_per_frame, out_dim)
+
+
+class NNXWanCameraActionEncoder(NNXWanActionEncoder):
+    """``NNXWanActionEncoder`` for camera-frame actions, one token set per camera.
+
+    Used by the three ``cam_action*`` modes. The input is the anchored
+    camera-frame representation from ``camera_frame_actions`` — per raw slot and
+    per camera, position + 6D rotation + gripper — so each latent frame carries
+    ``num_views`` action sequences instead of one::
+
+        (B, F_lat, num_views, num_actions, action_dim) -> (B, F_lat*num_views*K, out_dim)
+
+    Output order is ``(frame, view, k)``. That order is what lets every site
+    stay structural: the 3 cameras are stacked along H, so within a latent frame
+    view ``v`` owns one contiguous run of video tokens, and a ``(frame, view)``
+    grouping of these tokens lines up with that run for the per-camera
+    broadcast (adaln, additive) and for the frame-and-camera-locked
+    cross-attention reshape (``F`` in ``WanTransformerBlock`` becomes
+    ``F_lat * num_views``).
+
+    Same MLP, slot embedding and zero-init output as the parent, plus a learned
+    view embedding added at the same point as the slot embedding. The sites
+    already keep each camera's tokens inside its own region, so the view
+    embedding is not needed for routing; it lets the shared MLP encode the
+    anchored wrist ego-motion and the static exterior-camera poses differently.
+    """
+
+    def __init__(self, rngs: nnx.Rngs, num_views: int = 3, **kwargs):
+        super().__init__(rngs=rngs, **kwargs)
+        self.num_views = num_views
+        hidden_dim = self.linear_1.out_features
+        self.view_embed = nnx.Param(
+            jax.random.normal(
+                rngs.params(), (num_views, hidden_dim), dtype=self.linear_1.param_dtype
+            )
+            * (hidden_dim**-0.5)
+        )
+
+    def __call__(self, action: jax.Array, text_embed: jax.Array | None = None) -> jax.Array:
+        """``(B, F_lat, V, num_actions, action_dim)`` -> ``(B, F_lat*V*K, out_dim)``.
+
+        ``text_embed`` must be None: the cam_action routes add the instruction
+        after CFG dropout, in the trainer, exactly like the vector routes.
+        """
+        if text_embed is not None:
+            raise ValueError("NNXWanCameraActionEncoder takes no text_embed")
+        B, F, V, _, A = action.shape
+        K = self.tokens_per_frame
+        x = action.reshape(B * F * V * K, self.actions_per_token * A).astype(self.dtype)
+        x = jax.nn.silu(self.linear_1(x))                        # rows ordered (b, f, v, k)
+        if self.slot_embed is not None:
+            x = x + jnp.tile(self.slot_embed.value.astype(x.dtype), (B * F * V, 1))
+        view = jnp.repeat(self.view_embed.value.astype(x.dtype), K, axis=0)  # (V*K, hidden)
+        x = x + jnp.tile(view, (B * F, 1))
+        x = jax.nn.silu(self.linear_2(x))
+        x = self.linear_3(x)
+        return x.reshape(B, F * V * K, -1)
 
 
 class NNXWanActionAdaLNProjector(nnx.Module):

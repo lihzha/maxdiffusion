@@ -26,6 +26,15 @@ Only datasets built with the skeleton pass have them, so the feature spec is
 selected by the flag rather than always requested: ``FixedLenFeature`` on a
 missing key fails at parse time for every record.
 
+Camera-frame-action datasets (``load_cam_pose=True``) carry, per camera, the
+end-effector pose expressed in that camera's frame, one row per ``action`` row:
+
+    ee_pose_cam0/1/2: (T_ep, 3, 4) float32
+
+See ``camera_frame_actions`` for the exact contract. The window re-anchors them
+to its own last history frame inside the model step, not here, because the
+autoregressive rollout has to re-anchor per chunk from the same inputs.
+
 Each trajectory yields one window per pass: frame_now is sampled uniformly from
 valid positions. History frames are picked with a random stride going backwards
 from frame_now (ctrl-world style); future frames are contiguous from frame_now.
@@ -40,6 +49,10 @@ Each yielded batch contains:
     text_embeds: (B, 512, 4096)             float32
 and, with ``load_skeleton=True``:
     skeleton:    (B, C, W, H_lat*3, W_lat)  float32  — same window, same layout
+and, with ``load_cam_pose=True`` (same 4-slots-per-latent layout as ``action``,
+episode frame 0's three padding slots zeroed):
+    cam_pose:     (B, 4*W, 3, 12)           float32  — ee_pose_cam*, flattened 3x4
+    ee_cartesian: (B, 4*W, 6)               float32  — raw (unnormalised) cartesian
 """
 
 from __future__ import annotations
@@ -52,6 +65,8 @@ import jax
 import numpy as np
 import psutil
 import tensorflow as tf
+
+from maxdiffusion.input_pipeline.robot.camera_frame_actions import EE_POSE_KEYS
 
 AUTOTUNE = tf.data.AUTOTUNE
 
@@ -70,6 +85,11 @@ _SKELETON_FEATURE_DESCRIPTION = {
     "skeleton_cam0": tf.io.FixedLenFeature([], tf.string),
     "skeleton_cam1": tf.io.FixedLenFeature([], tf.string),
     "skeleton_cam2": tf.io.FixedLenFeature([], tf.string),
+}
+
+# Only present in datasets built with the camera-frame-action pass.
+_CAM_POSE_FEATURE_DESCRIPTION = {
+    k: tf.io.FixedLenFeature([], tf.string) for k in EE_POSE_KEYS
 }
 
 _CAM_KEYS = ("cam0", "cam1", "cam2")
@@ -132,6 +152,10 @@ class WanCtrlWorldDroidDataset:
                             ``action_cond_mode='skeleton'``; only valid on a
                             dataset built with the skeleton pass (e.g.
                             ``droid_wan_skeletal_192_320``).
+        load_cam_pose:      Also read the ``ee_pose_cam*`` features and emit
+                            ``cam_pose`` + ``ee_cartesian`` alongside ``action``,
+                            gathered with the same slot layout. Required by the
+                            ``cam_action*`` modes.
         pad_short_episodes: Keep episodes shorter than ``max_latent_frames``
                             instead of filtering them out, padding the window by
                             repeating the last real action and latent frame while
@@ -167,6 +191,7 @@ class WanCtrlWorldDroidDataset:
         shuffle_buffer: int = 512,
         shard_for_training: bool = True,
         load_skeleton: bool = False,
+        load_cam_pose: bool = False,
         first_window_only: bool = False,
         pad_short_episodes: bool = False,
         min_latent_frames: int = 0,
@@ -186,9 +211,12 @@ class WanCtrlWorldDroidDataset:
         self._is_train = split == "train"
         self._emit_n_real_frames = pad_short_episodes
         self._load_skeleton = load_skeleton
+        self._load_cam_pose = load_cam_pose
         self._feature_description = dict(_FEATURE_DESCRIPTION)
         if load_skeleton:
             self._feature_description.update(_SKELETON_FEATURE_DESCRIPTION)
+        if load_cam_pose:
+            self._feature_description.update(_CAM_POSE_FEATURE_DESCRIPTION)
         self.n_hist = n_hist
         self.n_fut = max_latent_frames - n_hist
         self.max_latent_frames = max_latent_frames
@@ -297,6 +325,19 @@ class WanCtrlWorldDroidDataset:
         if self._load_skeleton:
             for key, cam in zip(_SKEL_KEYS, _cams("skeleton")):
                 out[key] = cam
+        if self._load_cam_pose:
+            poses = []
+            for key in EE_POSE_KEYS:
+                pose = tf.io.parse_tensor(f[key], out_type=tf.float32)   # (T_ep, 3, 4)
+                poses.append(tf.reshape(pose, [-1, 12]))
+            cam_pose_raw = tf.stack(poses, axis=1)                        # (T_ep, 3, 12)
+            # One pose row per action row is the whole contract; a writer that
+            # skipped the rgb_skip subsampling would otherwise misalign silently.
+            with tf.control_dependencies([tf.debugging.assert_equal(
+                tf.shape(cam_pose_raw)[0], tf.shape(action)[0],
+                message="ee_pose_cam* needs exactly one row per action row",
+            )]):
+                out["cam_pose_raw"] = tf.identity(cam_pose_raw)
         return out
 
     # ── Trajectory → windows ───────────────────────────────────────────────────
@@ -385,6 +426,24 @@ class WanCtrlWorldDroidDataset:
         )                                                             # (4*W,)
         action = tf.gather(action_padded, padded_indices, axis=0)    # (4*W, action_dim)
 
+        cam_pose = ee_cartesian = None
+        if self._load_cam_pose:
+            # Same zero-padded layout as the actions, so slot i of `cam_pose` and
+            # `ee_cartesian` is the same raw frame as slot i of `action`. Kept
+            # unnormalised: the model step re-anchors them geometrically, which
+            # percentile-clipped values would corrupt.
+            def _pad_like_action(x):
+                return tf.concat(
+                    [x[0:1], tf.zeros(tf.concat([[3], tf.shape(x)[1:]], 0), x.dtype), x[1:]],
+                    axis=0,
+                )
+            cam_pose = tf.gather(_pad_like_action(traj["cam_pose_raw"]), padded_indices, axis=0)
+            ee_cartesian = tf.gather(
+                _pad_like_action(traj["action_raw"][:, :6]), padded_indices, axis=0
+            )
+            cam_pose.set_shape([4 * W, 3, 12])
+            ee_cartesian.set_shape([4 * W, 6])
+
         # Set static shapes for downstream tracing.
         latent.set_shape([None, W, None, None])
         if skeleton is not None:
@@ -404,6 +463,9 @@ class WanCtrlWorldDroidDataset:
         }
         if skeleton is not None:
             out["skeleton"] = skeleton
+        if cam_pose is not None:
+            out["cam_pose"] = cam_pose
+            out["ee_cartesian"] = ee_cartesian
         if self._emit_n_real_frames:
             # Window frames backed by real episode data; the remaining W - n_real
             # are repeat-the-last-action padding, so consumers can tell where

@@ -255,15 +255,40 @@ action_tokens_per_latent_frame: 4
 #                             costs: ~8% of a self-attention per block, and the
 #                             pretrained to_q/to_k were trained on T5 text, so a
 #                             spatial key grid is off-distribution for them.
-# The two axes here are independent in principle: an action REPRESENTATION (vector
-# actions or rendered-skeleton latents) crossed with a conditioning SITE (cross-
-# attention K/V, AdaLN modulation, additive in video-token space). The five modes
-# above are five of those six cells; vector-actions-as-additive is not implemented.
+#   'cam_action' / 'cam_action_adaln' / 'cam_action_cross_attn'
+#                           — the 7-dim action re-expressed in each CAMERA's frame
+#                             (camera_frame_actions.py): EEF position + 6D rotation
+#                             + gripper, per camera, re-anchored to the window's last
+#                             history frame so the wrist view gets its ego-motion
+#                             rather than a constant. The 3 views are stacked on H,
+#                             so camera v owns one contiguous run of every latent
+#                             frame's video tokens (60 of 180 at 192x320), and each
+#                             mode hands camera v's action to that run only:
+#                               cam_action            -> projected per (frame, cam),
+#                                                        x cam_action_embed_alpha,
+#                                                        ADDED onto that camera's
+#                                                        video tokens ('skeleton' site)
+#                               cam_action_adaln      -> projected per (frame, cam) and
+#                                                        summed into that camera's
+#                                                        per-token temb ('adaln' site)
+#                               cam_action_cross_attn -> K/V locked per frame AND per
+#                                                        camera ('cross_attn' site); the
+#                                                        existing frame-lock reshape
+#                                                        does it, with F_lat*3 groups
+#                             action_tokens_per_latent_frame keeps its meaning (tokens
+#                             per latent frame, now per camera). Requires shards with
+#                             ee_pose_cam0/1/2 and cam_action_stats_path. No base-frame
+#                             action_encoder is built.
+# The axes here are independent in principle: an action REPRESENTATION (base-frame
+# vector actions, rendered-skeleton latents, camera-frame vector actions) crossed
+# with a conditioning SITE (cross-attention K/V, AdaLN modulation, additive in
+# video-token space). Only base-frame-vector-as-additive is not implemented.
 # NOTE: changing this is not checkpoint-compatible — each mode trains a different
 # set of extra modules ('adaln' has action_adaln_proj, 'skeleton' has
 # skeleton_embed, 'skeleton_adaln' has skeleton_adaln_embed,
-# 'skeleton_cross_attn' has skeleton_cross_attn_embed, and all three skeleton
-# modes have no action_encoder at all).
+# 'skeleton_cross_attn' has skeleton_cross_attn_embed, the cam_action modes have
+# cam_action_encoder plus cam_action_add_proj / cam_action_adaln_proj, and the
+# skeleton and cam_action modes have no action_encoder at all).
 action_cond_mode: 'cross_attn'
 
 # ── Skeleton conditioning (action_cond_mode: 'skeleton') ───────────────────────
@@ -279,6 +304,20 @@ action_cond_mode: 'cross_attn'
 # how fast the skeleton path ramps up out of zero. 0.1 is OSCAR's value
 # (additional_embed_alpha), where it was paired with a xavier init instead.
 skeleton_embed_alpha: 0.1
+
+# ── Camera-frame actions (action_cond_mode: 'cam_action*') ─────────────────────
+# Per-camera p01/p99 of the anchored EEF position (JSON with xyz_01 / xyz_99, each
+# 3 cameras x 3), written once per dataset by
+#   python src/maxdiffusion/compute_cam_action_stats.py <this yml> train_data_dir=...
+#       action_stats_path=... cam_action_stats_path=<out.json>
+# Required by all three cam_action modes; ignored otherwise.
+cam_action_stats_path: ''
+# Training windows compute_cam_action_stats.py samples for the percentiles.
+cam_action_stats_windows: 4000
+# 'cam_action' (additive) only. Fixed scale on the per-camera bias added onto the
+# video tokens, the counterpart of skeleton_embed_alpha. The encoder output is
+# zero-init, so step 0 is exactly the pretrained model whatever this is.
+cam_action_embed_alpha: 0.1
 
 # Windowing in latent space. Each latent frame corresponds to 4 raw frames.
 # num_predicted_latents = number of future (predicted) latent frames;

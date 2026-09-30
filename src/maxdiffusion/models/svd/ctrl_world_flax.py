@@ -42,6 +42,7 @@ from typing import Any, Dict, Optional
 import jax
 import jax.numpy as jnp
 
+from ...input_pipeline.robot.camera_frame_actions import camera_action_features
 from ...models.embeddings_flax import svd_micro_cond_embed
 from .action_encoder_flax import FlaxActionEncoder, tile_text_to_hidden
 
@@ -102,9 +103,21 @@ class CtrlWorldTrainConfig:
     #                            K/V grid for the SPATIAL cross-attention, with a
     #                            learned positional embedding standing in for the
     #                            rotary embeddings SVD does not have.
+    #   'cam_action' / 'cam_action_adaln' / 'cam_action_cross_attn'
+    #                          — the action in each CAMERA's frame, anchored at the
+    #                            conditioning frame (camera_frame_actions.py),
+    #                            encoded once per camera (FlaxCameraActionEncoder).
+    #                            View v's token drives only view v's rows of the
+    #                            H-stacked grid: added onto conv_in's output
+    #                            ('skeleton' site), or the view-locked spatial
+    #                            cross-attention K/V ('skeleton_cross_attn' site).
+    #                            The adaln route sums into t_emb ('skeleton_adaln'
+    #                            site), which has no spatial axis, so it
+    #                            concatenates the views instead.
     # Not checkpoint-compatible across modes: each adds a different parameter
     # subtree ('adaln' -> action_adaln_proj, the three skeleton modes -> one
-    # skeleton_* module each and NO action_encoder at all).
+    # skeleton_* module each, the cam_action modes -> cam_action_encoder plus
+    # their projection, and neither family has an action_encoder at all).
     action_cond_mode: str = "cross_attn"
     # UNet timestep-embedding width; read in 'adaln' and 'skeleton_adaln' modes
     # (block_out_channels[0]*4).
@@ -118,6 +131,14 @@ class CtrlWorldTrainConfig:
     # Spatial downsample of the skeleton K/V grid; 'skeleton_cross_attn' only.
     # 4 -> 180 keys per frame at 72x40, matching the WAN route's per-frame count.
     skeleton_cross_attn_stride: int = 4
+    # Fixed scale on the additive per-camera bias; 'cam_action' only.
+    cam_action_embed_alpha: float = 0.1
+    # Per-camera (num_views, 3) p01/p99 of the anchored EEF position; the three
+    # cam_action modes only (from load_cam_action_stats).
+    cam_action_xyz_lo: Any = None
+    cam_action_xyz_hi: Any = None
+    # Camera views stacked along the latent H axis.
+    num_views: int = 3
 
     # Whether the DROID task instruction (the pre-computed CLIP text embedding)
     # is fed to the model at all. False makes the run action-only, which is what
@@ -155,6 +176,110 @@ def _skeleton_apply_key(action_cond_mode: str) -> str | None:
         "skeleton_adaln":      "skeleton_adaln_proj",
         "skeleton_cross_attn": "skeleton_cross_attn_embed",
     }.get(action_cond_mode)
+
+
+def _is_cam_action_mode(action_cond_mode: str) -> bool:
+    """Whether the conditioning is the camera-frame action (all three sites)."""
+    return action_cond_mode in ("cam_action", "cam_action_adaln", "cam_action_cross_attn")
+
+
+def _cam_action_param_keys(action_cond_mode: str) -> tuple:
+    """The ``apply_fns``/``params`` keys a cam_action mode trains besides the UNet."""
+    return {
+        "cam_action":            ("cam_action_encoder", "cam_action_add_proj"),
+        "cam_action_adaln":      ("cam_action_encoder", "cam_action_adaln_proj"),
+        "cam_action_cross_attn": ("cam_action_encoder",),
+    }.get(action_cond_mode, ())
+
+
+def encode_cam_actions(
+    apply_fns: Dict[str, Any],
+    params: Dict[str, Any],
+    cam_pose: jnp.ndarray,
+    ee_cartesian: jnp.ndarray,
+    action: jnp.ndarray,
+    num_history: int,
+    xyz_lo,
+    xyz_hi,
+) -> jnp.ndarray:
+    """Per-camera action tokens ``(B, T, V, hidden)`` for one window.
+
+    Anchored at slot ``num_history`` — ``frame_now``, the conditioning frame the
+    concat stream is built from — in training and in every rollout chunk alike,
+    so the wrist's ego-motion is measured from the view the model is given.
+    ``action`` supplies only the normalised gripper (dim 6).
+    """
+    b = cam_pose.shape[0]
+    feats = camera_action_features(
+        cam_pose, ee_cartesian, action[..., 6],
+        jnp.full((b,), num_history, dtype=jnp.int32), xyz_lo, xyz_hi,
+    )                                                                   # (B, T, V, D)
+    return apply_fns["cam_action_encoder"](
+        {"params": params["cam_action_encoder"]}, feats.astype(action.dtype)
+    )
+
+
+def route_cam_actions(
+    apply_fns: Dict[str, Any],
+    params: Dict[str, Any],
+    action_cond_mode: str,
+    cam_hidden: jnp.ndarray,
+    text_ctx: jnp.ndarray,
+    latent_hw: tuple,
+    alpha: float,
+) -> Dict[str, Any]:
+    """UNet conditioning kwargs for a cam_action mode.
+
+    ``cam_hidden`` is ``(B, T, V, C)`` (already CFG-masked by the caller),
+    ``text_ctx`` the ``(B, 1, C)`` tiled instruction or zeros. Returns the
+    ``encoder_hidden_states`` plus whichever of ``action_hidden_states`` /
+    ``skeleton_hidden_states`` / ``cross_attention_kwargs`` the site needs; the
+    UNet must be called with ``frame_level_cond=False`` (everything here is
+    already flattened to ``(B*T, ...)``).
+
+    * ``cam_action_cross_attn``: per view, ``[text, action]`` keys; the context is
+      view-major, and ``cross_attn_views`` makes the spatial blocks fold views
+      into the batch so view v's queries (a contiguous run of rows) only see view
+      v's two keys. The text key is kept even when text is off — it is then the
+      all-zero key the skeleton cross-attention route also carries, which keeps
+      the softmax over more than one key and so query-dependent.
+    * ``cam_action_adaln``: the V tokens are concatenated and projected into
+      ``t_emb``'s width — SVD's t_emb is per (sample, frame), with no spatial
+      axis to put a per-camera vector in.
+    * ``cam_action``: each view's token is projected to conv_in's width, scaled
+      by ``alpha`` and broadcast over that view's rows.
+    """
+    b, t, v, c = cam_hidden.shape
+    if action_cond_mode == "cam_action_cross_attn":
+        text = jnp.broadcast_to(
+            text_ctx.astype(cam_hidden.dtype)[:, None, None], (b, t, v, 1, c)
+        )
+        ctx = jnp.concatenate([text, cam_hidden[:, :, :, None]], axis=3)   # (B, T, V, 2, C)
+        return {
+            "encoder_hidden_states": ctx.reshape(b * t, v * 2, c),
+            "cross_attention_kwargs": {"cross_attn_views": v},
+        }
+    text_flat = jnp.repeat(text_ctx.astype(cam_hidden.dtype), t, axis=0)   # (B*T, 1, C)
+    if action_cond_mode == "cam_action_adaln":
+        temb = apply_fns["cam_action_adaln_proj"](
+            {"params": params["cam_action_adaln_proj"]}, cam_hidden.reshape(b, t, v * c)
+        )                                                                  # (B, T, time_embed_dim)
+        return {
+            "encoder_hidden_states": text_flat,
+            "action_hidden_states": temb.reshape(b * t, -1),
+        }
+    h, w = latent_hw
+    if h % v:
+        raise ValueError(f"latent height {h} does not split into {v} camera views")
+    bias = alpha * apply_fns["cam_action_add_proj"](
+        {"params": params["cam_action_add_proj"]}, cam_hidden
+    )                                                                      # (B, T, V, model_ch)
+    ch = bias.shape[-1]
+    bias = jnp.broadcast_to(bias[:, :, :, None, None, :], (b, t, v, h // v, w, ch))
+    return {
+        "encoder_hidden_states": text_flat,
+        "skeleton_hidden_states": bias.reshape(b * t, h, w, ch),
+    }
 
 
 def _encode_skeleton(
@@ -319,9 +444,34 @@ def action_world_train_step(
 
     # 2. Per-frame action embedding, routed by action_cond_mode.
     skeleton_mode = _is_skeleton_mode(cfg.action_cond_mode)
+    cam_mode = _is_cam_action_mode(cfg.action_cond_mode)
     adaln = cfg.action_cond_mode == "adaln"
     skeleton_hidden_states = None
-    if skeleton_mode:
+    cross_attention_kwargs = None
+    if cam_mode:
+        # Camera-frame action, one token per (frame, camera). CFG drops the
+        # encoder output before any projection, as the vector routes do, so the
+        # uncond branch is proj(0) in both training and inference. The
+        # instruction, when enabled, is tiled exactly as the other routes tile it
+        # and is never dropped.
+        cam_hidden = encode_cam_actions(
+            apply_fns, params, batch["cam_pose"], batch["ee_cartesian"], actions,
+            t_history, cfg.cam_action_xyz_lo, cfg.cam_action_xyz_hi,
+        )                                                                  # (B, T, V, hidden)
+        cam_hidden = _apply_cfg_dropout(rng_action_drop, cam_hidden, cfg.cfg_drop_prob)
+        if text_embeds is not None and cfg.text_embed_dim is not None:
+            text_ctx = tile_text_to_hidden(text_embeds, cfg.hidden_size, cfg.text_embed_dim)
+        else:
+            text_ctx = jnp.zeros((b, 1, cfg.hidden_size), dtype=cam_hidden.dtype)
+        routed = route_cam_actions(
+            apply_fns, params, cfg.action_cond_mode, cam_hidden, text_ctx,
+            latents.shape[-2:], cfg.cam_action_embed_alpha,
+        )
+        encoder_hidden_states = routed["encoder_hidden_states"]
+        action_hidden_states = routed.get("action_hidden_states")
+        skeleton_hidden_states = routed.get("skeleton_hidden_states")
+        cross_attention_kwargs = routed.get("cross_attention_kwargs")
+    elif skeleton_mode:
         # No action encoder in these modes — the conditioning is the rendered
         # skeleton video, and the vector actions are unused. CFG drops the
         # SKELETON here, which is what a guided rollout's uncond branch drops too.
@@ -463,12 +613,13 @@ def action_world_train_step(
         added_cond_kwargs={"adm_vector": adm_vec},
         image_only_indicator=image_only_indicator,
         num_frames=t_total,
-        # adaln and all three skeleton modes hand cross-attention a context that
-        # is ALREADY flattened to (B*T, S, C), so the per-frame reshape must be
-        # off; only the vector cross_attn route still needs it.
-        frame_level_cond=not (adaln or skeleton_mode),
+        # adaln, the skeleton modes and the cam_action modes hand cross-attention a
+        # context that is ALREADY flattened to (B*T, S, C), so the per-frame
+        # reshape must be off; only the vector cross_attn route still needs it.
+        frame_level_cond=not (adaln or skeleton_mode or cam_mode),
         action_hidden_states=action_hidden_states,
         skeleton_hidden_states=skeleton_hidden_states,
+        cross_attention_kwargs=cross_attention_kwargs,
     ).sample  # (B*F, 4, H, W)
     v_pred = v_pred.reshape((b, t_total) + v_pred.shape[1:])
 
