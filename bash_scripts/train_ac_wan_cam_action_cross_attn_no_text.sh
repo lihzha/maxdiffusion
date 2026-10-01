@@ -93,7 +93,7 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 # checkpoints and wandb projects never collide.
 
 # Camera-pose shards (ee_pose_cam0/1/2) — point at wherever that build is uploaded.
-CAM_DATA=gs://v6_east1d/datasets/droid_wan_2.2_cam_pose_192_320
+CAM_DATA=gs://v6_east1d/datasets/droid_wan_2.2_skeleton_192_320_cam_action
 
 source ./maxdiffusion_venv/bin/activate
 ulimit -n 65536
