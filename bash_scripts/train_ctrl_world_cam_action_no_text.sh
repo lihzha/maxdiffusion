@@ -82,7 +82,7 @@ echo "OUTPUT_DIR=$OUTPUT_DIR"
 
 # --- 4. Data paths (camera-pose shards: ee_pose_cam0/1/2) ---
 # Point CAM_DATA at wherever the camera-pose build is uploaded.
-export CAM_DATA="gs://$GCS_BUCKET/datasets/droid_wan_2.2_skeleton_192_320_cam_action"
+export CAM_DATA="gs://$GCS_BUCKET/datasets/droid_ctrl_world_skeleton_cam_action"
 export TRAIN_DATA_DIR="$CAM_DATA/train"
 export EVAL_DATA_DIR="$CAM_DATA/val"
 export STATS_PATH="$CAM_DATA/stats.json"
