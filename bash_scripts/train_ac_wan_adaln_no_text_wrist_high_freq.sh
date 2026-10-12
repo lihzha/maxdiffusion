@@ -67,13 +67,13 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 # --- 5. Launch training ---
 #
 # Same as train_ac_wan_adaln_no_text.sh, plus per-view temporal-frequency loss
-# weighting (src/maxdiffusion/temporal_freq_loss.py) that doubles the WRIST
-# view's fast-change (high temporal frequency) error. Sibling of
-# train_ac_wan_adaln_no_text_wrist_low_freq.sh, which doubles its slow error.
+# weighting (src/maxdiffusion/temporal_freq_loss.py) that up-weights the WRIST
+# view's fast-change (high temporal frequency) error 1.5x. Sibling of
+# train_ac_wan_adaln_no_text_wrist_low_freq.sh, which up-weights its slow error.
 #
 # Weights are per view in the TFRecords' stored camera order (wrist, ext1, ext2).
 # Every weight is >= 1, so the original full-frequency loss is kept intact and
-# the wrist high band is added on top (1 + 1 x wrist high band). The split is a
+# the wrist high band is added on top (1 + 0.5 x wrist high band). The split is a
 # Gaussian low-pass with sigma 0.2 cycles per latent slot (0.8 s), i.e. ~0.25 Hz,
 # over the whole 12-latent window (7 history + 5 future). The history's error is
 # zero (it is ground truth), so only the future predictions are penalized, and a
@@ -82,8 +82,8 @@ export LIBTPU_INIT_ARGS='--xla_tpu_enable_async_collective_fusion_fuse_all_gathe
 # baseline on eval/loss.
 #
 # Same architecture and params as the baseline (checkpoint-compatible); its own
-# run_name keeps checkpoints apart, and the shared wandb project overlays the
-# curves with ac_wan_droid_adaln_no_text.
+# run_name and wandb project keep checkpoints and curves apart from
+# ac_wan_droid_adaln_no_text.
 
 source ./maxdiffusion_venv/bin/activate
 ulimit -n 65536
@@ -134,7 +134,7 @@ python src/maxdiffusion/train_wan.py \
     hardware='tpu' \
     log_attn_param_stats=False \
     log_attn_activation_stats=False \
-    wandb_project='wan-ac-adaln-no-text' \
+    wandb_project='wan-ac-adaln-no-text-wrist-high-freq' \
     wandb_video_every=1000 \
     wandb_video_samples=1 \
     wandb_video_inference_steps=20 \
