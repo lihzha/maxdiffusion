@@ -247,6 +247,22 @@ ctrl_motion_bucket_id: 127.0
 ctrl_noise_aug_strength: 0.0
 ctrl_his_cond_zero: False
 
+# Per-view temporal-frequency loss weighting (src/maxdiffusion/temporal_freq_loss.py).
+# The x0 error over the whole window (history + future slots; zero on the history,
+# which is ground truth, so only the future is penalized) is split along the
+# frame axis by a Gaussian low-pass with std freq_loss_sigma in cycles per slot;
+# each view's slow / fast error is
+# weighted by its entry in freq_loss_low_weights / freq_loss_high_weights, in the
+# stored camera order (DROID TFRecords: wrist, ext1, ext2). All weights 1 is
+# exactly the plain loss; the weights also scale the loss, so keep their mean
+# near 1 to leave the effective learning rate alone. Training loss only — eval
+# loss stays the plain MSE.
+freq_loss_weighting: False
+freq_loss_sigma: 0.2
+freq_loss_low_weights: [1.0, 1.0, 1.0]
+freq_loss_high_weights: [1.0, 1.0, 1.0]
+freq_loss_zero_history: True   # False: mirror the future slots alone (no seam term)
+
 # How the action signal reaches the UNet.
 #   'cross_attn' — one action token per frame is the UNet's cross-attention
 #                  context (Ctrl-World's original frame-locked conditioning).

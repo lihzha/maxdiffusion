@@ -44,6 +44,7 @@ import jax.numpy as jnp
 
 from ...input_pipeline.robot.camera_frame_actions import camera_action_features
 from ...models.embeddings_flax import svd_micro_cond_embed
+from ...temporal_freq_loss import apply_band_weights, band_weight_matrices
 from .action_encoder_flax import FlaxActionEncoder, tile_text_to_hidden
 
 
@@ -139,6 +140,10 @@ class CtrlWorldTrainConfig:
     cam_action_xyz_hi: Any = None
     # Camera views stacked along the latent H axis.
     num_views: int = 3
+    # Per-view temporal-frequency loss weighting (temporal_freq_loss.FreqLossSettings),
+    # or None for the plain MSE. Training loss only; train=False keeps the plain
+    # MSE so eval loss stays comparable across runs.
+    freq_loss: Any = None
 
     # Whether the DROID task instruction (the pre-computed CLIP text embedding)
     # is fed to the model at all. False makes the run action-only, which is what
@@ -639,7 +644,12 @@ def action_world_train_step(
 
     # Loss on future slots only. `loss_weight` is (B,1,1,1,1) so broadcast.
     diff = predict_x0[:, t_history:] - latents[:, t_history:]
-    loss = jnp.mean((diff ** 2) * loss_weight)
+    if train and cfg.freq_loss is not None:
+        q = band_weight_matrices(t_history, t_future, *cfg.freq_loss)
+        sq = diff * apply_band_weights(diff, q, frame_axis=1, view_axis=3)
+    else:
+        sq = diff ** 2
+    loss = jnp.mean(sq * loss_weight)
     return loss
 
 

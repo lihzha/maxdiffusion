@@ -44,7 +44,7 @@ from flax.training import train_state
 from jax.sharding import NamedSharding, PartitionSpec as P
 from safetensors.torch import load_file as load_torch_safetensors
 
-from maxdiffusion import max_logging, max_utils
+from maxdiffusion import max_logging, max_utils, temporal_freq_loss
 from maxdiffusion.input_pipeline.input_pipeline_interface import make_data_iterator
 from maxdiffusion.input_pipeline.robot.camera_frame_actions import (
     CAM_ACTION_DIM,
@@ -112,6 +112,9 @@ def _build_ctrl_world_train_config(config) -> CtrlWorldTrainConfig:
         cam_action_xyz_lo=xyz_lo,
         cam_action_xyz_hi=xyz_hi,
         num_views=int(max_utils.config_get(config, "num_views", 3)),
+        freq_loss=temporal_freq_loss.settings_from_config(
+            config, int(max_utils.config_get(config, "num_views", 3))
+        ),
         use_task_instructions=max_utils.config_get(config, "use_task_instructions", True),
     )
 

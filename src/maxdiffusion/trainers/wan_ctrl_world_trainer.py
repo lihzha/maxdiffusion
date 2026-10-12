@@ -142,7 +142,7 @@ from flax.linen import partitioning as nn_partitioning
 from flax.training import train_state
 from jax.sharding import NamedSharding, PartitionSpec as P
 
-from maxdiffusion import max_logging, max_utils
+from maxdiffusion import max_logging, max_utils, temporal_freq_loss
 from maxdiffusion.input_pipeline.robot.camera_frame_actions import (
     CAM_ACTION_DIM,
     NUM_VIEWS,
@@ -898,6 +898,7 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
     weights_dtype = _dtype(config.weights_dtype)
     n_hist = config.num_history_latent_frames
     grad_accum_steps = getattr(config, "grad_accum_steps", 1)
+    freq_settings = temporal_freq_loss.settings_from_config(config, NUM_VIEWS)
 
     def compute_loss(params, micro_data, n_rng, t_rng, d_rng):
         model: WanCtrlWorldModel = nnx.merge(state.graphdef, params, state.rest_of_state)
@@ -1022,12 +1023,20 @@ def _train_step(state: TrainState, data: dict, rng: jax.Array,
         model_pred, attn_diags = transformer_out if want_attn_diag else (transformer_out, None)
 
         diff = target_future - model_pred[:, :, n_hist:]
-        sq = diff ** 2
-        # d(loss)/d(pred) = -2*diff*weight; its per-sample L2 norm is the cheap
+        if freq_settings is None:
+            weighted_diff = diff
+        else:
+            # Per-view temporal-frequency weighting (temporal_freq_loss): the
+            # future latents share one sigma per sample, so weighting the velocity
+            # error equals weighting the x0 error up to sigma^2.
+            q = temporal_freq_loss.band_weight_matrices(n_hist, F_lat - n_hist, *freq_settings)
+            weighted_diff = temporal_freq_loss.apply_band_weights(diff, q, frame_axis=2, view_axis=3)
+        sq = diff * weighted_diff
+        # d(loss)/d(pred) = -2*Q*diff*weight; its per-sample L2 norm is the cheap
         # causal proxy for how much each episode drives the parameter gradient
         # (shared Jacobian d(pred)/d(params) cancels out of the ranking), unlike
         # latent_absmax which only measures input magnitude.
-        outgrad = 2.0 * diff
+        outgrad = 2.0 * weighted_diff
         if not config.disable_training_weights:
             w = jnp.expand_dims(training_weight, (1, 2, 3, 4))
             sq = sq * w
